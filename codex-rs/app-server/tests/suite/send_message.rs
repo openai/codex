@@ -1,6 +1,7 @@
-use std::path::Path;
-
+use app_test_support::ConfigBuilder;
+use app_test_support::DEFAULT_READ_TIMEOUT;
 use app_test_support::McpProcess;
+use app_test_support::MockProviderConfig;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_chat_completions_server;
 use app_test_support::to_response;
@@ -19,8 +20,6 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
 #[tokio::test]
 async fn test_send_message_success() {
     // Spin up a mock completions server that immediately ends the Codex turn.
@@ -33,7 +32,11 @@ async fn test_send_message_success() {
 
     // Create a temporary Codex home with config pointing at the mock server.
     let codex_home = TempDir::new().expect("create temp dir");
-    create_config_toml(codex_home.path(), &server.uri()).expect("write config.toml");
+    ConfigBuilder::default()
+        .with_defaults()
+        .with_mock_provider(MockProviderConfig::new(format!("{}/v1", server.uri())))
+        .write(codex_home.path())
+        .expect("write config.toml");
 
     // Start MCP server process and initialize.
     let mut mcp = McpProcess::new(codex_home.path())
@@ -161,26 +164,3 @@ async fn test_send_message_session_not_found() {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "chat"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
-    )
-}

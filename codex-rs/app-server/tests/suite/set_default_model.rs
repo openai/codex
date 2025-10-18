@@ -1,5 +1,5 @@
-use std::path::Path;
-
+use app_test_support::ConfigBuilder;
+use app_test_support::DEFAULT_READ_TIMEOUT;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -11,12 +11,14 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn set_default_model_persists_overrides() {
     let codex_home = TempDir::new().expect("create tempdir");
-    create_config_toml(codex_home.path()).expect("write config.toml");
+    ConfigBuilder::default()
+        .model("gpt-5-codex")
+        .extra_line(r#"model_reasoning_effort = "medium""#)
+        .write(codex_home.path())
+        .expect("write config.toml");
 
     let mut mcp = McpProcess::new(codex_home.path())
         .await
@@ -61,16 +63,4 @@ async fn set_default_model_persists_overrides() {
         },
         config_toml,
     );
-}
-
-// Helper to create a config.toml; mirrors create_conversation.rs
-fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        r#"
-model = "gpt-5-codex"
-model_reasoning_effort = "medium"
-"#,
-    )
 }

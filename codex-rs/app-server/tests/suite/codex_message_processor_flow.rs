@@ -1,6 +1,7 @@
-use std::path::Path;
-
+use app_test_support::ConfigBuilder;
+use app_test_support::DEFAULT_READ_TIMEOUT;
 use app_test_support::McpProcess;
+use app_test_support::MockProviderConfig;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_chat_completions_server;
 use app_test_support::create_shell_sse_response;
@@ -36,8 +37,6 @@ use std::env;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_codex_jsonrpc_conversation_flow() {
     if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
@@ -68,7 +67,13 @@ async fn test_codex_jsonrpc_conversation_flow() {
             .expect("create final assistant message"),
     ];
     let server = create_mock_chat_completions_server(responses).await;
-    create_config_toml(&codex_home, &server.uri()).expect("write config");
+    ConfigBuilder::default()
+        .with_defaults()
+        .approval_policy(AskForApproval::UnlessTrusted)
+        .sandbox_mode(None)
+        .with_mock_provider(MockProviderConfig::new(format!("{}/v1", server.uri())))
+        .write(&codex_home)
+        .expect("write config");
 
     // Start MCP server and initialize.
     let mut mcp = McpProcess::new(&codex_home).await.expect("spawn mcp");
@@ -222,7 +227,13 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
             .expect("create final assistant message 2"),
     ];
     let server = create_mock_chat_completions_server(responses).await;
-    create_config_toml(&codex_home, &server.uri()).expect("write config");
+    ConfigBuilder::default()
+        .with_defaults()
+        .approval_policy(AskForApproval::UnlessTrusted)
+        .sandbox_mode(None)
+        .with_mock_provider(MockProviderConfig::new(format!("{}/v1", server.uri())))
+        .write(&codex_home)
+        .expect("write config");
 
     // Start MCP server and initialize.
     let mut mcp = McpProcess::new(&codex_home).await.expect("spawn mcp");
@@ -425,7 +436,13 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() {
             .expect("create second final assistant message"),
     ];
     let server = create_mock_chat_completions_server(responses).await;
-    create_config_toml(&codex_home, &server.uri()).expect("write config");
+    ConfigBuilder::default()
+        .with_defaults()
+        .approval_policy(AskForApproval::UnlessTrusted)
+        .sandbox_mode(None)
+        .with_mock_provider(MockProviderConfig::new(format!("{}/v1", server.uri())))
+        .write(&codex_home)
+        .expect("write config");
 
     let mut mcp = McpProcess::new(&codex_home)
         .await
@@ -602,26 +619,4 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() {
     .await
     .expect("task_complete 2 timeout")
     .expect("task_complete 2 notification");
-}
-
-fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "untrusted"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "chat"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
-    )
 }

@@ -5,6 +5,7 @@ members = [
     "async-utils",
     "app-server",
     "app-server-protocol",
+    "app-server-test-client",
     "apply-patch",
     "arg0",
     "feedback",
@@ -54,6 +55,7 @@ codex-app-server = { path = "app-server" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
+codex-backend-client = { path = "backend-client" }
 codex-chatgpt = { path = "chatgpt" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }

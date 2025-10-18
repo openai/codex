@@ -1,6 +1,5 @@
-use std::time::Duration;
-
 use anyhow::Context;
+use app_test_support::DEFAULT_READ_TIMEOUT;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use base64::Engine;
@@ -17,8 +16,6 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
-
-const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_info_returns_email_from_auth_json() {

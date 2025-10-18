@@ -1,8 +1,6 @@
 #![cfg(unix)]
 // Support code lives in the `app_test_support` crate under tests/common.
 
-use std::path::Path;
-
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::InterruptConversationResponse;
@@ -17,12 +15,13 @@ use core_test_support::skip_if_no_network;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
+use app_test_support::ConfigBuilder;
+use app_test_support::DEFAULT_READ_TIMEOUT;
 use app_test_support::McpProcess;
+use app_test_support::MockProviderConfig;
 use app_test_support::create_mock_chat_completions_server;
 use app_test_support::create_shell_sse_response;
 use app_test_support::to_response;
-
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_shell_command_interruption() {
@@ -63,7 +62,10 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
         "call_sleep",
     )?])
     .await;
-    create_config_toml(&codex_home, server.uri())?;
+    ConfigBuilder::default()
+        .with_defaults()
+        .with_mock_provider(MockProviderConfig::new(format!("{}/v1", server.uri())))
+        .write(&codex_home)?;
 
     // Start MCP server and initialize.
     let mut mcp = McpProcess::new(&codex_home).await?;
@@ -129,31 +131,4 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
     assert_eq!(TurnAbortReason::Interrupted, abort_reason);
 
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn create_config_toml(codex_home: &Path, server_uri: String) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "chat"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
-    )
 }

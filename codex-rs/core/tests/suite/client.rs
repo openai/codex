@@ -761,15 +761,16 @@ async fn token_count_includes_rate_limits_snapshot() {
     let server = MockServer::start().await;
 
     let sse_body = responses::sse(vec![responses::ev_completed_with_tokens("resp_rate", 123)]);
-
+    let primary_reset_iso = "2050-01-01T00:30:00Z";
+    let secondary_reset_iso = "2050-01-01T02:00:00Z";
     let response = ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
         .insert_header("x-codex-primary-used-percent", "12.5")
         .insert_header("x-codex-secondary-used-percent", "40.0")
         .insert_header("x-codex-primary-window-minutes", "10")
         .insert_header("x-codex-secondary-window-minutes", "60")
-        .insert_header("x-codex-primary-reset-at", "2024-01-01T00:30:00Z")
-        .insert_header("x-codex-secondary-reset-at", "2024-01-01T02:00:00Z")
+        .insert_header("x-codex-primary-reset-at", primary_reset_iso)
+        .insert_header("x-codex-secondary-reset-at", secondary_reset_iso)
         .set_body_raw(sse_body, "text/event-stream");
 
     Mock::given(method("POST"))
@@ -818,12 +819,12 @@ async fn token_count_includes_rate_limits_snapshot() {
                 "primary": {
                     "used_percent": 12.5,
                     "window_minutes": 10,
-                    "resets_at": "2024-01-01T00:30:00Z"
+                    "resets_at": primary_reset_iso
                 },
                 "secondary": {
                     "used_percent": 40.0,
                     "window_minutes": 60,
-                    "resets_at": "2024-01-01T02:00:00Z"
+                    "resets_at": secondary_reset_iso
                 }
             }
         })
@@ -865,12 +866,12 @@ async fn token_count_includes_rate_limits_snapshot() {
                 "primary": {
                     "used_percent": 12.5,
                     "window_minutes": 10,
-                    "resets_at": "2024-01-01T00:30:00Z"
+                    "resets_at": primary_reset_iso
                 },
                 "secondary": {
                     "used_percent": 40.0,
                     "window_minutes": 60,
-                    "resets_at": "2024-01-01T02:00:00Z"
+                    "resets_at": secondary_reset_iso
                 }
             }
         })
@@ -889,13 +890,24 @@ async fn token_count_includes_rate_limits_snapshot() {
             .map(|window| window.used_percent),
         Some(12.5)
     );
-    assert_eq!(
-        final_snapshot
-            .primary
-            .as_ref()
-            .and_then(|window| window.resets_at.as_deref()),
-        Some("2024-01-01T00:30:00Z")
-    );
+    let primary_window = final_snapshot
+        .primary
+        .as_ref()
+        .expect("primary rate limit window should be present");
+    let primary_resets_at = primary_window
+        .resets_at
+        .as_deref()
+        .expect("primary resets_at should be present");
+    let secondary_window = final_snapshot
+        .secondary
+        .as_ref()
+        .expect("secondary rate limit window should be present");
+    let secondary_resets_at = secondary_window
+        .resets_at
+        .as_deref()
+        .expect("secondary resets_at should be present");
+    assert_eq!(primary_resets_at, primary_reset_iso);
+    assert_eq!(secondary_resets_at, secondary_reset_iso);
 
     wait_for_event(&codex, |msg| matches!(msg, EventMsg::TaskComplete(_))).await;
 }

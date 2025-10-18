@@ -182,7 +182,11 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "base64",
+ "chrono",
  "codex-app-server-protocol",
+ "codex-core",
+ "codex-protocol",
  "serde",
  "serde_json",
  "tokio",
@@ -834,8 +838,10 @@ dependencies = [
  "app_test_support",
  "assert_cmd",
  "base64",
+ "chrono",
  "codex-app-server-protocol",
  "codex-arg0",
+ "codex-backend-client",
  "codex-common",
  "codex-core",
  "codex-file-search",
@@ -868,6 +874,19 @@ dependencies = [
  "serde_json",
  "strum_macros 0.27.2",
  "ts-rs",
+ "uuid",
+]
+
+[[package]]
+name = "codex-app-server-test-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-app-server-protocol",
+ "codex-protocol",
+ "serde",
+ "serde_json",
  "uuid",
 ]
 
@@ -927,6 +946,7 @@ version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
+ "serde_with",
 ]
 
 [[package]]
