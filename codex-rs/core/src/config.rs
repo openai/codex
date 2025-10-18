@@ -2643,6 +2643,7 @@ model_verbosity = "high"
             base_url: Some("https://api.openai.com/v1".to_string()),
             env_key: Some("OPENAI_API_KEY".to_string()),
             wire_api: crate::WireApi::Chat,
+            force_responses_api_store_reasoning_ids: None,
             env_key_instructions: None,
             query_params: None,
             http_headers: None,

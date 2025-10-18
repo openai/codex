@@ -39,6 +39,7 @@ async fn responses_stream_includes_task_type_header() {
         env_key: None,
         env_key_instructions: None,
         wire_api: WireApi::Responses,
+        force_responses_api_store_reasoning_ids: None,
         query_params: None,
         http_headers: None,
         env_http_headers: None,

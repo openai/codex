@@ -633,6 +633,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         env_key: None,
         env_key_instructions: None,
         wire_api: WireApi::Responses,
+        force_responses_api_store_reasoning_ids: None,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -1116,6 +1117,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         )])),
         env_key_instructions: None,
         wire_api: WireApi::Responses,
+        force_responses_api_store_reasoning_ids: None,
         http_headers: Some(std::collections::HashMap::from([(
             "Custom-Header".to_string(),
             "Value".to_string(),
@@ -1193,6 +1195,7 @@ async fn env_var_overrides_loaded_auth() {
         )])),
         env_key_instructions: None,
         wire_api: WireApi::Responses,
+        force_responses_api_store_reasoning_ids: None,
         http_headers: Some(std::collections::HashMap::from([(
             "Custom-Header".to_string(),
             "Value".to_string(),
