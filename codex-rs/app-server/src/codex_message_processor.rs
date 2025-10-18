@@ -1329,6 +1329,7 @@ async fn derive_config_from_params(
 ) -> std::io::Result<Config> {
     let NewConversationParams {
         model,
+        review_model,
         profile,
         cwd,
         approval_policy,
@@ -1340,7 +1341,7 @@ async fn derive_config_from_params(
     } = params;
     let overrides = ConfigOverrides {
         model,
-        review_model: None,
+        review_model,
         config_profile: profile,
         cwd: cwd.map(PathBuf::from),
         approval_policy,

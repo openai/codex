@@ -7,6 +7,8 @@ use codex_core::REVIEW_PROMPT;
 use codex_core::ResponseItem;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
+use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
@@ -334,6 +336,101 @@ async fn review_uses_custom_review_model_from_config() {
     let request = &server.received_requests().await.unwrap()[0];
     let body = request.body_json::<serde_json::Value>().unwrap();
     assert_eq!(body["model"].as_str().unwrap(), "gpt-5");
+
+    server.verify().await;
+}
+
+/// Ensure that when a custom `review_model` is set in a profile, the review
+/// request uses that model (and not the main chat model or top-level config value).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_uses_custom_review_model_from_profile() {
+    skip_if_no_network!();
+
+    // Minimal stream: just a completed event
+    let sse_raw = r#"[
+        {"type":"response.completed", "response": {"id": "__ID__"}}
+    ]"#;
+    let server = start_responses_server_with_sse(sse_raw, 1).await;
+    let codex_home = TempDir::new().unwrap();
+
+    // Create a config.toml file with a profile that has a custom review_model
+    let config_path = codex_home.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+model = "gpt-4.1"
+review_model = "gpt-5-codex"
+
+[profiles.test-profile]
+model = "gpt-5"
+review_model = "gpt-4.1"
+"#,
+    )
+    .unwrap();
+
+    // Load the config from the file with profile override
+    let config_toml = load_config_as_toml_with_cli_overrides(
+        codex_home.path(),
+        vec![(
+            "config_profile".to_string(),
+            toml::Value::String("test-profile".to_string()),
+        )],
+    )
+    .await
+    .expect("load config with profile");
+
+    let mut config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides {
+            config_profile: Some("test-profile".to_string()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )
+    .expect("create config from loaded toml");
+
+    // Override the model provider to use our test server
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    config.model_provider = model_provider;
+
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create conversation")
+        .conversation;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                prompt: "use profile review model".to_string(),
+                user_facing_hint: "use profile review model".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+
+    // Wait for completion
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    let _closed = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+                review_output: None
+            })
+        )
+    })
+    .await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    // Assert the request body model equals the profile's review model
+    let request = &server.received_requests().await.unwrap()[0];
+    let body = request.body_json::<serde_json::Value>().unwrap();
+    assert_eq!(body["model"].as_str().unwrap(), "gpt-4.1");
 
     server.verify().await;
 }
