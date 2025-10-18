@@ -219,6 +219,11 @@ where
     /// of the screen.
     pub fn resize(&mut self, screen_size: Size) -> io::Result<()> {
         self.last_known_screen_size = screen_size;
+        // Resize buffers to match new screen size
+        let new_area = Rect::new(0, 0, screen_size.width, screen_size.height);
+        self.buffers[0].resize(new_area);
+        self.buffers[1].resize(new_area);
+        self.viewport_area = new_area;  // Critical!
         Ok(())
     }
 
