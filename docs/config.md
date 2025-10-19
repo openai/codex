@@ -310,7 +310,7 @@ This is reasonable to use if Codex is running in an environment that provides it
 
 Though using this option may also be necessary if you try to use Codex in environments where its native sandboxing mechanisms are unsupported, such as older Linux kernels or on Windows.
 
-### tools.*
+### tools.\*
 
 Use the optional `[tools]` table to toggle built-in tools that the agent may call. Both keys default to `false` (tools stay disabled) unless you opt in:
 
