@@ -1028,7 +1028,6 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-core",
  "codex-protocol",
- "pretty_assertions",
  "serde",
  "toml",
 ]

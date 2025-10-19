@@ -14,12 +14,6 @@ mod sandbox_mode_cli_arg;
 pub use sandbox_mode_cli_arg::SandboxModeCliArg;
 
 #[cfg(feature = "cli")]
-mod additional_dirs;
-
-#[cfg(feature = "cli")]
-pub use additional_dirs::add_dir_warning_message;
-
-#[cfg(feature = "cli")]
 pub mod format_env_display;
 
 #[cfg(any(feature = "cli", test))]

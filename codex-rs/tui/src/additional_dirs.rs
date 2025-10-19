@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 /// Returns a warning describing why `--add-dir` entries will be ignored for the
 /// resolved sandbox policy. The caller is responsible for presenting the
-/// warning to the user (e.g. printing to stderr).
+/// warning to the user (for example, printing to stderr).
 pub fn add_dir_warning_message(
     additional_dirs: &[PathBuf],
     sandbox_policy: &SandboxPolicy,
@@ -14,18 +14,18 @@ pub fn add_dir_warning_message(
 
     match sandbox_policy {
         SandboxPolicy::WorkspaceWrite { .. } | SandboxPolicy::DangerFullAccess => None,
-        SandboxPolicy::ReadOnly => Some(format_warning(additional_dirs, "read-only")),
+        SandboxPolicy::ReadOnly => Some(format_warning(additional_dirs)),
     }
 }
 
-fn format_warning(additional_dirs: &[PathBuf], sandbox_label: &str) -> String {
+fn format_warning(additional_dirs: &[PathBuf]) -> String {
     let joined_paths = additional_dirs
         .iter()
         .map(|path| path.to_string_lossy())
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "Ignoring --add-dir ({joined_paths}) because the effective sandbox mode is {sandbox_label}. Switch to workspace-write to allow additional writable roots."
+        "Ignoring --add-dir ({joined_paths}) because the effective sandbox mode is read-only. Switch to workspace-write or danger-full-access to allow additional writable roots."
     )
 }
 
@@ -44,6 +44,13 @@ mod tests {
     }
 
     #[test]
+    fn returns_none_for_danger_full_access() {
+        let sandbox = SandboxPolicy::DangerFullAccess;
+        let dirs = vec![PathBuf::from("/tmp/example")];
+        assert_eq!(add_dir_warning_message(&dirs, &sandbox), None);
+    }
+
+    #[test]
     fn warns_for_read_only() {
         let sandbox = SandboxPolicy::ReadOnly;
         let dirs = vec![PathBuf::from("relative"), PathBuf::from("/abs")];
@@ -51,14 +58,7 @@ mod tests {
             .expect("expected warning for read-only sandbox");
         assert_eq!(
             message,
-            "Ignoring --add-dir (relative, /abs) because the effective sandbox mode is read-only. Switch to workspace-write to allow additional writable roots."
+            "Ignoring --add-dir (relative, /abs) because the effective sandbox mode is read-only. Switch to workspace-write or danger-full-access to allow additional writable roots."
         );
-    }
-
-    #[test]
-    fn warns_for_danger_full_access() {
-        let sandbox = SandboxPolicy::DangerFullAccess;
-        let dirs = vec![PathBuf::from("/tmp/abs")];
-        assert_eq!(add_dir_warning_message(&dirs, &sandbox), None);
     }
 }
