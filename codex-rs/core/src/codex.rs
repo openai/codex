@@ -125,7 +125,6 @@ use codex_async_utils::OrCancelExt;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
@@ -1461,12 +1460,15 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::ListCustomPrompts => {
                 let sub_id = sub.id.clone();
 
-                let custom_prompts: Vec<CustomPrompt> =
-                    if let Some(dir) = crate::custom_prompts::default_prompts_dir() {
-                        crate::custom_prompts::discover_prompts_in(&dir).await
-                    } else {
-                        Vec::new()
-                    };
+                // Merge prompts from both global and project-local directories
+                let global_dir = crate::custom_prompts::default_prompts_dir();
+                let local_dir = crate::custom_prompts::project_prompts_dir_for(&config.cwd);
+
+                let custom_prompts = crate::custom_prompts::discover_prompts_merged(
+                    global_dir.as_deref(),
+                    Some(&local_dir),
+                )
+                .await;
 
                 let event = Event {
                     id: sub_id,

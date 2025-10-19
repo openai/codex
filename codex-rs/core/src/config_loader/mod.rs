@@ -21,6 +21,7 @@ pub(crate) struct LoadedConfigLayers {
 #[derive(Debug, Default)]
 pub(crate) struct LoaderOverrides {
     pub managed_config_path: Option<PathBuf>,
+    pub project_config_path: Option<PathBuf>,
     #[cfg(target_os = "macos")]
     pub managed_preferences_base64: Option<String>,
 }
@@ -38,7 +39,14 @@ pub(crate) struct LoaderOverrides {
 //                    ^
 //                    |
 //        +-------------------------+
-//        |    config.toml (base)   |
+//        | ./.codex/config.toml   |
+//        |    (project-local)     |
+//        +-------------------------+
+//                    ^
+//                    |
+//        +-------------------------+
+//        | ~/.codex/config.toml   |
+//        |  (user global base)    |
 //        +-------------------------+
 //
 // (*) Only available on macOS via managed device profiles.
@@ -73,19 +81,30 @@ async fn load_config_layers_internal(
     #[cfg(target_os = "macos")]
     let LoaderOverrides {
         managed_config_path,
+        project_config_path,
         managed_preferences_base64,
     } = overrides;
 
     #[cfg(not(target_os = "macos"))]
     let LoaderOverrides {
         managed_config_path,
+        project_config_path,
     } = overrides;
 
     let managed_config_path =
         managed_config_path.unwrap_or_else(|| managed_config_default_path(codex_home));
 
+    // Compute project-local config path
+    let project_config_path = project_config_path.unwrap_or_else(|| {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(".codex")
+            .join(CONFIG_TOML_FILE)
+    });
+
     let user_config_path = codex_home.join(CONFIG_TOML_FILE);
     let user_config = read_config_from_path(&user_config_path, true).await?;
+    let project_config = read_config_from_path(&project_config_path, false).await?;
     let managed_config = read_config_from_path(&managed_config_path, false).await?;
 
     #[cfg(target_os = "macos")]
@@ -95,8 +114,14 @@ async fn load_config_layers_internal(
     #[cfg(not(target_os = "macos"))]
     let managed_preferences = load_managed_admin_config_layer(None).await?;
 
+    // Merge project config onto user config to create base layer
+    let mut base = user_config.unwrap_or_else(default_empty_table);
+    if let Some(project) = project_config {
+        merge_toml_values(&mut base, &project);
+    }
+
     Ok(LoadedConfigLayers {
-        base: user_config.unwrap_or_else(default_empty_table),
+        base,
         managed_config,
         managed_preferences,
     })
@@ -205,6 +230,7 @@ extra = true
 
         let overrides = LoaderOverrides {
             managed_config_path: Some(managed_path),
+            project_config_path: None,
             #[cfg(target_os = "macos")]
             managed_preferences_base64: None,
         };
@@ -232,6 +258,7 @@ extra = true
         let managed_path = tmp.path().join("managed_config.toml");
         let overrides = LoaderOverrides {
             managed_config_path: Some(managed_path),
+            project_config_path: None,
             #[cfg(target_os = "macos")]
             managed_preferences_base64: None,
         };
@@ -292,6 +319,7 @@ flag = true
 
         let overrides = LoaderOverrides {
             managed_config_path: Some(managed_path),
+            project_config_path: None,
             managed_preferences_base64: Some(encoded),
         };
 
@@ -307,5 +335,109 @@ flag = true
             Some(&TomlValue::String("managed".to_string()))
         );
         assert_eq!(nested.get("flag"), Some(&TomlValue::Boolean(false)));
+    }
+
+    #[tokio::test]
+    async fn merges_project_overrides_user() {
+        let tmp = tempdir().expect("tempdir");
+        let project_config = tmp.path().join("project_config.toml");
+
+        std::fs::write(
+            tmp.path().join(CONFIG_TOML_FILE),
+            r#"foo = 1
+
+[nested]
+value = "base"
+"#,
+        )
+        .expect("write user config");
+        std::fs::write(
+            &project_config,
+            r#"foo = 2
+
+[nested]
+value = "project"
+extra = true
+"#,
+        )
+        .expect("write project config");
+
+        let overrides = LoaderOverrides {
+            managed_config_path: None,
+            project_config_path: Some(project_config),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: None,
+        };
+
+        let loaded = load_config_as_toml_with_overrides(tmp.path(), overrides)
+            .await
+            .expect("load config");
+        let table = loaded.as_table().expect("top-level table expected");
+
+        assert_eq!(table.get("foo"), Some(&TomlValue::Integer(2)));
+        let nested = table
+            .get("nested")
+            .and_then(|v| v.as_table())
+            .expect("nested");
+        assert_eq!(
+            nested.get("value"),
+            Some(&TomlValue::String("project".to_string()))
+        );
+        assert_eq!(nested.get("extra"), Some(&TomlValue::Boolean(true)));
+    }
+
+    #[tokio::test]
+    async fn managed_overrides_project() {
+        let tmp = tempdir().expect("tempdir");
+        let managed_path = tmp.path().join("managed_config.toml");
+        let project_config = tmp.path().join("project_config.toml");
+
+        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), r#"foo = 1"#).expect("write user config");
+        std::fs::write(&project_config, r#"foo = 2"#).expect("write project config");
+        std::fs::write(&managed_path, r#"foo = 3"#).expect("write managed config");
+
+        let overrides = LoaderOverrides {
+            managed_config_path: Some(managed_path),
+            project_config_path: Some(project_config),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: None,
+        };
+
+        let loaded = load_config_as_toml_with_overrides(tmp.path(), overrides)
+            .await
+            .expect("load config");
+        let table = loaded.as_table().expect("top-level table expected");
+
+        assert_eq!(
+            table.get("foo"),
+            Some(&TomlValue::Integer(3)),
+            "managed should override both project and user"
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_project_is_ok() {
+        let tmp = tempdir().expect("tempdir");
+        let missing_project = tmp.path().join("nonexistent_project.toml");
+
+        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), r#"foo = 1"#).expect("write user config");
+
+        let overrides = LoaderOverrides {
+            managed_config_path: None,
+            project_config_path: Some(missing_project),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: None,
+        };
+
+        let loaded = load_config_as_toml_with_overrides(tmp.path(), overrides)
+            .await
+            .expect("load config");
+        let table = loaded.as_table().expect("top-level table expected");
+
+        assert_eq!(
+            table.get("foo"),
+            Some(&TomlValue::Integer(1)),
+            "user config should be used when project config missing"
+        );
     }
 }

@@ -12,8 +12,24 @@ Codex supports several mechanisms for setting config values:
     - In the first case, the value is the TOML string `"o3"`, while in the second the value is `o3`, which is not valid TOML and therefore treated as the TOML string `"o3"`.
     - Because quotes are interpreted by one's shell, `-c key="true"` will be correctly interpreted in TOML as `key = true` (a boolean) and not `key = "true"` (a string). If for some reason you needed the string `"true"`, you would need to use `-c key='"true"'` (note the two sets of quotes).
 - The `$CODEX_HOME/config.toml` configuration file where the `CODEX_HOME` environment value defaults to `~/.codex`. (Note `CODEX_HOME` will also be where logs and other Codex-related information are stored.)
+- A project-local `./.codex/config.toml` file in your current working directory.
 
-Both the `--config` flag and the `config.toml` file support the following options:
+## Config sources and precedence
+
+Codex loads configuration from multiple sources and merges them with the following precedence (highest to lowest):
+
+1. **CLI key=value overrides** (e.g., `--config model=o3`, `--model o3`)
+2. **Managed preferences** (macOS only, via device management profiles)
+3. **Managed config file** (e.g., `/etc/codex/managed_config.toml` on Unix)
+4. **Project-local config** (`./.codex/config.toml` relative to your working directory)
+5. **Global user config** (`$CODEX_HOME/config.toml`, typically `~/.codex/config.toml`)
+6. **Built-in defaults**
+
+When the same key appears in multiple sources, the higher-precedence source wins. For nested tables (like `[model_providers]`), the values are merged recursively, with higher-precedence sources overriding specific keys.
+
+**Note:** `CODEX_HOME` continues to control where Codex stores state, logs, history, and credentials. The project-local config only affects configuration values, not storage locations.
+
+Both the `--config` flag and the `config.toml` files (global and project-local) support the following options:
 
 ## model
 

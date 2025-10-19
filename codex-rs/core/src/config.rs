@@ -1837,6 +1837,7 @@ approve_all = true
 
         let overrides = crate::config_loader::LoaderOverrides {
             managed_config_path: Some(managed_path.clone()),
+            project_config_path: None,
             #[cfg(target_os = "macos")]
             managed_preferences_base64: None,
         };
@@ -1941,6 +1942,7 @@ approve_all = true
 
         let overrides = crate::config_loader::LoaderOverrides {
             managed_config_path: Some(managed_path),
+            project_config_path: None,
             #[cfg(target_os = "macos")]
             managed_preferences_base64: None,
         };
