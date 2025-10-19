@@ -34,8 +34,10 @@ async fn get_user_agent_returns_current_codex_user_agent() {
     .expect("getUserAgent response");
 
     let os_info = os_info::get();
+    let originator = codex_core::default_client::originator();
     let user_agent = format!(
-        "codex_cli_rs/0.0.0 ({} {}; {}) {} (codex-app-server-tests; 0.1.0)",
+        "{}/0.0.0 ({} {}; {}) {} (codex-app-server-tests; 0.1.0)",
+        originator.value.as_str(),
         os_info.os_type(),
         os_info.version(),
         os_info.architecture().unwrap_or("unknown"),

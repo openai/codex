@@ -1,5 +1,6 @@
 use crate::types::CodeTaskDetailsResponse;
 use crate::types::PaginatedListTaskListItem;
+use crate::types::RateLimitStatusPayload;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
 use reqwest::header::AUTHORIZATION;
@@ -136,6 +137,16 @@ impl Client {
                 anyhow::bail!("Decode error for {url}: {e}; content-type={ct}; body={body}");
             }
         }
+    }
+
+    pub async fn get_rate_limits(&self) -> Result<RateLimitStatusPayload> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/usage", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/usage", self.base_url),
+        };
+        let req = self.http.get(&url).headers(self.headers());
+        let (body, ct) = self.exec_request(req, "GET", &url).await?;
+        self.decode_json::<RateLimitStatusPayload>(&url, &ct, &body)
     }
 
     pub async fn list_tasks(
