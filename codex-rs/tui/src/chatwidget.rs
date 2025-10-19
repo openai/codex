@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -101,9 +102,13 @@ use self::agent::spawn_agent_from_existing;
 mod session_header;
 use self::session_header::SessionHeader;
 use crate::streaming::controller::StreamController;
+use std::fmt::Write;
 use std::path::Path;
+use std::time::SystemTime;
 
+use chrono::DateTime;
 use chrono::Local;
+use chrono::Utc;
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
@@ -119,6 +124,11 @@ use codex_git_tooling::GhostCommit;
 use codex_git_tooling::GitToolingError;
 use codex_git_tooling::create_ghost_commit;
 use codex_git_tooling::restore_ghost_commit;
+use codex_multi_agent::AgentId;
+use codex_multi_agent::DelegateSessionMode;
+use codex_multi_agent::DelegateSessionSummary;
+use codex_multi_agent::DetachedRunStatusSummary;
+use codex_multi_agent::DetachedRunSummary;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
@@ -227,6 +237,18 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) feedback: codex_feedback::CodexFeedback,
 }
 
+#[derive(Clone, Debug)]
+pub struct DelegateDisplayLabel {
+    pub depth: usize,
+    pub base_label: String,
+}
+
+#[derive(Clone)]
+pub struct DelegatePickerSession {
+    pub summary: DelegateSessionSummary,
+    pub run_id: Option<String>,
+}
+
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -272,6 +294,15 @@ pub(crate) struct ChatWidget {
     // Whether to add a final message separator after the last message
     needs_final_message_separator: bool,
 
+    delegate_run: Option<String>,
+    delegate_runs_with_stream: HashSet<String>,
+    delegate_status_owner: Option<String>,
+    delegate_previous_status_header: Option<String>,
+    delegate_context: Option<DelegateSessionSummary>,
+    delegate_user_frames: Vec<InputItem>,
+    delegate_agent_frames: Vec<String>,
+    pending_delegate_context: Vec<String>,
+
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
@@ -280,6 +311,18 @@ pub(crate) struct ChatWidget {
 struct UserMessage {
     text: String,
     image_paths: Vec<PathBuf>,
+}
+
+#[derive(Default)]
+pub(crate) struct DelegateCapture {
+    pub user_inputs: Vec<InputItem>,
+    pub agent_outputs: Vec<String>,
+}
+
+impl DelegateCapture {
+    fn is_empty(&self) -> bool {
+        self.user_inputs.is_empty() && self.agent_outputs.is_empty()
+    }
 }
 
 impl From<String> for UserMessage {
@@ -350,6 +393,79 @@ impl ChatWidget {
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn set_delegate_context(&mut self, summary: Option<DelegateSessionSummary>) {
+        let label = summary
+            .as_ref()
+            .map(|s| format!("#{}", s.agent_id.as_str()));
+        self.bottom_pane.set_delegate_label(label);
+        self.delegate_context = summary;
+        self.delegate_user_frames.clear();
+        self.delegate_agent_frames.clear();
+    }
+
+    pub(crate) fn take_delegate_capture(&mut self) -> Option<DelegateCapture> {
+        if self.delegate_user_frames.is_empty() && self.delegate_agent_frames.is_empty() {
+            return None;
+        }
+        Some(DelegateCapture {
+            user_inputs: std::mem::take(&mut self.delegate_user_frames),
+            agent_outputs: std::mem::take(&mut self.delegate_agent_frames),
+        })
+    }
+
+    pub(crate) fn apply_delegate_summary(
+        &mut self,
+        summary: &DelegateSessionSummary,
+        capture: DelegateCapture,
+    ) {
+        if capture.is_empty() {
+            self.add_info_message(
+                format!(
+                    "Returned from #{} (no new messages)",
+                    summary.agent_id.as_str()
+                ),
+                None,
+            );
+            return;
+        }
+
+        let mut context = String::new();
+        let _ = writeln!(
+            context,
+            "Context from #{} (cwd: {})",
+            summary.agent_id.as_str(),
+            summary.cwd.display()
+        );
+
+        for item in capture.user_inputs {
+            if let InputItem::Text { text } = item {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    let _ = writeln!(context, "You → {trimmed}");
+                }
+            }
+        }
+
+        for message in capture.agent_outputs {
+            let trimmed = message.trim();
+            if !trimmed.is_empty() {
+                let _ = writeln!(context, "{} → {trimmed}", summary.agent_id.as_str());
+            }
+        }
+
+        let context = context.trim().to_string();
+        if context.is_empty() {
+            return;
+        }
+
+        self.pending_delegate_context.push(context.clone());
+        self.add_to_history(history_cell::new_info_event(
+            format!("Returned from #{}", summary.agent_id.as_str()),
+            Some("Queued delegate context for next prompt.".to_string()),
+        ));
+        self.add_to_history(history_cell::new_info_event(context, None));
     }
 
     fn on_agent_message(&mut self, message: String) {
@@ -424,11 +540,19 @@ impl ChatWidget {
         self.running_commands.clear();
         self.request_redraw();
 
+        if self.delegate_context.is_some()
+            && let Some(message) = last_agent_message.as_ref()
+            && !message.trim().is_empty()
+        {
+            self.delegate_agent_frames.push(message.clone());
+        }
+
+        let notification_response = last_agent_message.unwrap_or_default();
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
         // Emit a notification when the turn completes (suppressed if focused).
         self.notify(Notification::AgentTurnComplete {
-            response: last_agent_message.unwrap_or_default(),
+            response: notification_response,
         });
     }
 
@@ -966,6 +1090,14 @@ impl ChatWidget {
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
+            delegate_run: None,
+            delegate_runs_with_stream: HashSet::new(),
+            delegate_status_owner: None,
+            delegate_previous_status_header: None,
+            delegate_context: None,
+            delegate_user_frames: Vec::new(),
+            delegate_agent_frames: Vec::new(),
+            pending_delegate_context: Vec::new(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
         }
@@ -1033,6 +1165,14 @@ impl ChatWidget {
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
+            delegate_run: None,
+            delegate_runs_with_stream: HashSet::new(),
+            delegate_status_owner: None,
+            delegate_previous_status_header: None,
+            delegate_context: None,
+            delegate_user_frames: Vec::new(),
+            delegate_agent_frames: Vec::new(),
+            pending_delegate_context: Vec::new(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
         }
@@ -1217,6 +1357,9 @@ impl ChatWidget {
             SlashCommand::Mention => {
                 self.insert_str("@");
             }
+            SlashCommand::Agent => {
+                self.app_event_tx.send(AppEvent::OpenDelegatePicker);
+            }
             SlashCommand::Status => {
                 self.add_status_output();
             }
@@ -1307,12 +1450,47 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
-        let UserMessage { text, image_paths } = user_message;
+        let UserMessage {
+            mut text,
+            image_paths,
+        } = user_message;
         if text.is_empty() && image_paths.is_empty() {
             return;
         }
 
+        let display_text = text.clone();
+
+        if self.delegate_context.is_some()
+            && !display_text.trim().is_empty()
+            && image_paths.is_empty()
+        {
+            self.delegate_user_frames.push(InputItem::Text {
+                text: display_text.clone(),
+            });
+        }
+
+        // Intercept explicit delegation commands (only support text-only submissions).
+        if image_paths.is_empty() && !text.is_empty() && self.try_delegate_shortcut(&text) {
+            return;
+        }
+
         self.capture_ghost_snapshot();
+
+        if self.delegate_context.is_none()
+            && !self.pending_delegate_context.is_empty()
+            && !text.trim().is_empty()
+        {
+            let mut prefix = self.pending_delegate_context.join("\n\n");
+            self.pending_delegate_context.clear();
+            if !prefix.is_empty() {
+                if !prefix.ends_with('\n') {
+                    prefix.push('\n');
+                }
+                prefix.push('\n');
+            }
+            prefix.push_str(&text);
+            text = prefix;
+        }
 
         let mut items: Vec<InputItem> = Vec::new();
 
@@ -1324,24 +1502,20 @@ impl ChatWidget {
             items.push(InputItem::LocalImage { path });
         }
 
-        self.codex_op_tx
-            .send(Op::UserInput { items })
-            .unwrap_or_else(|e| {
-                tracing::error!("failed to send message: {e}");
-            });
-
-        // Persist the text to cross-session message history.
-        if !text.is_empty() {
-            self.codex_op_tx
-                .send(Op::AddToHistory { text: text.clone() })
-                .unwrap_or_else(|e| {
-                    tracing::error!("failed to send AddHistory op: {e}");
-                });
+        if let Err(e) = self.codex_op_tx.send(Op::UserInput { items }) {
+            tracing::error!("failed to send message: {e}");
         }
 
-        // Only show the text portion in conversation history.
-        if !text.is_empty() {
-            self.add_to_history(history_cell::new_user_prompt(text));
+        if !text.is_empty()
+            && let Err(e) = self
+                .codex_op_tx
+                .send(Op::AddToHistory { text: text.clone() })
+        {
+            tracing::error!("failed to send AddHistory op: {e}");
+        }
+
+        if !display_text.is_empty() {
+            self.add_to_history(history_cell::new_user_prompt(display_text));
         }
         self.needs_final_message_separator = false;
     }
@@ -1575,7 +1749,7 @@ impl ChatWidget {
         }
     }
 
-    fn request_redraw(&mut self) {
+    pub(crate) fn request_redraw(&mut self) {
         self.frame_requester.schedule_frame();
     }
 
@@ -1838,6 +2012,152 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
+    }
+
+    pub(crate) fn open_delegate_picker(
+        &mut self,
+        mut sessions: Vec<DelegatePickerSession>,
+        detached_runs: Vec<DetachedRunSummary>,
+        active_delegate: Option<&str>,
+    ) {
+        if sessions.is_empty() && detached_runs.is_empty() {
+            self.add_info_message(
+                "No delegate sessions available.".to_string(),
+                Some("Ask the main agent to delegate a task first.".to_string()),
+            );
+            return;
+        }
+
+        sessions.sort_by(|a, b| {
+            b.summary
+                .last_interacted_at
+                .cmp(&a.summary.last_interacted_at)
+        });
+
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        if active_delegate.is_some() {
+            let actions: Vec<SelectionAction> =
+                vec![Box::new(|tx| tx.send(AppEvent::ExitDelegateSession))];
+            items.push(SelectionItem {
+                name: "Return to main agent".to_string(),
+                description: None,
+                is_current: false,
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        for entry in sessions {
+            let summary = entry.summary;
+            let run_id = entry.run_id;
+            let conversation_id = summary.conversation_id.clone();
+            let prefix = if summary.mode == DelegateSessionMode::Detached {
+                "Detached · "
+            } else {
+                ""
+            };
+            let label = format!(
+                "{prefix}#{} · {}",
+                summary.agent_id.as_str(),
+                Self::format_delegate_timestamp(summary.last_interacted_at)
+            );
+            let description = Some(summary.cwd.display().to_string());
+            let is_current = active_delegate == Some(conversation_id.as_str());
+            let conversation_id_for_action = conversation_id.clone();
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::EnterDelegateSession(
+                    conversation_id_for_action.clone(),
+                ));
+            })];
+            items.push(SelectionItem {
+                name: label,
+                description,
+                is_current,
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+
+            if summary.mode == DelegateSessionMode::Detached
+                && let Some(run_id) = run_id.clone()
+            {
+                let dismiss_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::DismissDetachedRun(run_id.clone()));
+                })];
+                items.push(SelectionItem {
+                    name: format!("  Dismiss detached run for #{}", summary.agent_id.as_str()),
+                    description: Some("Remove this detached run from the list.".to_string()),
+                    is_current: false,
+                    actions: dismiss_actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                });
+            }
+        }
+
+        for detached in detached_runs {
+            let run_id = detached.run_id.clone();
+            let status = detached.status.clone();
+            let label = match &status {
+                DetachedRunStatusSummary::Pending => format!(
+                    "Pending · #{} (started {})",
+                    detached.agent_id.as_str(),
+                    Self::format_delegate_timestamp(detached.started_at)
+                ),
+                DetachedRunStatusSummary::Failed { .. } => {
+                    format!("Failed · #{}", detached.agent_id.as_str())
+                }
+            };
+            let description = match &status {
+                DetachedRunStatusSummary::Pending => {
+                    let mut text = String::from(
+                        "Run is still executing; you'll be able to dismiss it once it finishes.",
+                    );
+                    if let Some(preview) = detached.prompt_preview.as_ref() {
+                        text.push_str("\nPrompt: ");
+                        text.push_str(preview);
+                    }
+                    Some(text)
+                }
+                DetachedRunStatusSummary::Failed { error, .. } => Some(format!("Error: {error}")),
+            };
+            let (actions, dismiss_on_select): (Vec<SelectionAction>, bool) = match status {
+                DetachedRunStatusSummary::Pending => (Vec::new(), false),
+                DetachedRunStatusSummary::Failed { .. } => {
+                    let run_id_clone = run_id.clone();
+                    (
+                        vec![Box::new(move |tx: &AppEventSender| {
+                            tx.send(AppEvent::DismissDetachedRun(run_id_clone.clone()));
+                        }) as SelectionAction],
+                        true,
+                    )
+                }
+            };
+            items.push(SelectionItem {
+                name: label,
+                description,
+                is_current: false,
+                actions,
+                dismiss_on_select,
+                ..Default::default()
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Switch agent".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn format_delegate_timestamp(time: SystemTime) -> String {
+        let utc: DateTime<Utc> = time.into();
+        utc.with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string()
     }
 
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
@@ -2252,6 +2572,9 @@ impl ChatWidget {
         if text.is_empty() {
             return;
         }
+        if self.try_delegate_shortcut(&text) {
+            return;
+        }
         self.submit_user_message(text.into());
     }
 
@@ -2264,6 +2587,188 @@ impl ChatWidget {
 
     pub(crate) fn conversation_id(&self) -> Option<ConversationId> {
         self.conversation_id
+    }
+
+    pub(crate) fn add_delegate_completion(
+        &mut self,
+        response: Option<&str>,
+        duration_hint: Option<String>,
+        label: &DelegateDisplayLabel,
+    ) {
+        let header = format!("{} completed", label.base_label);
+        self.add_info_message(header, duration_hint);
+
+        if label.depth > 0 {
+            return;
+        }
+
+        let Some(text) = response.map(str::trim).filter(|s| !s.is_empty()) else {
+            return;
+        };
+
+        self.flush_answer_stream_with_separator();
+        self.flush_active_cell();
+
+        let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+        append_markdown(text, None, &mut lines, &self.config);
+        let cell = AgentMessageCell::new(lines, true);
+        self.add_to_history(cell);
+        self.request_redraw();
+    }
+
+    pub(crate) fn on_delegate_started(
+        &mut self,
+        run_id: &str,
+        agent_id: &AgentId,
+        prompt: &str,
+        label: DelegateDisplayLabel,
+        claim_status: bool,
+        mode: DelegateSessionMode,
+    ) {
+        if claim_status {
+            self.set_delegate_status_owner_internal(run_id, agent_id);
+        }
+        if label.depth == 0 {
+            self.delegate_user_frames.clear();
+            self.delegate_agent_frames.clear();
+        }
+        self.delegate_runs_with_stream.remove(run_id);
+        self.delegate_run = Some(run_id.to_string());
+        let trimmed = prompt.trim();
+        let hint = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+        let mut info_label = label.base_label;
+        if mode == DelegateSessionMode::Detached {
+            info_label = format!("{info_label} (detached)");
+        }
+        self.add_info_message(format!("{info_label}…"), hint);
+        self.request_redraw();
+    }
+
+    pub(crate) fn on_delegate_delta(&mut self, run_id: &str, chunk: &str) {
+        if self.delegate_run.as_deref() != Some(run_id) {
+            self.delegate_run = Some(run_id.to_string());
+        }
+        self.delegate_runs_with_stream.insert(run_id.to_string());
+        self.handle_streaming_delta(chunk.to_string());
+    }
+
+    pub(crate) fn on_delegate_completed(
+        &mut self,
+        run_id: &str,
+        label: &DelegateDisplayLabel,
+    ) -> bool {
+        let had_stream = self.delegate_runs_with_stream.remove(run_id);
+        if self.delegate_run.as_deref() == Some(run_id) {
+            if had_stream {
+                self.flush_answer_stream_with_separator();
+                self.handle_stream_finished();
+                self.app_event_tx.send(AppEvent::StopCommitAnimation);
+            }
+            self.delegate_run = None;
+        }
+        label.depth == 0 && had_stream
+    }
+
+    pub(crate) fn show_detached_completion_actions(
+        &mut self,
+        agent_id: &AgentId,
+        run_id: &str,
+        output: Option<&str>,
+    ) {
+        let mut items: Vec<SelectionItem> = Vec::new();
+        if let Some(text) = output.map(str::trim).filter(|s| !s.is_empty()) {
+            let preview = truncate_text(text, 200);
+            let run_id_insert = run_id.to_string();
+            let text_insert = text.to_string();
+            items.push(SelectionItem {
+                name: format!("Use output from #{}", agent_id.as_str()),
+                description: Some(preview),
+                is_current: false,
+                actions: vec![Box::new(move |tx: &AppEventSender| {
+                    tx.send(AppEvent::InsertUserTextMessage(text_insert.clone()));
+                    tx.send(AppEvent::DismissDetachedRun(run_id_insert.clone()));
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        let run_id_dismiss = run_id.to_string();
+        items.push(SelectionItem {
+            name: format!("Dismiss detached run #{}", agent_id.as_str()),
+            description: Some("Remove this run from the list".to_string()),
+            is_current: false,
+            actions: vec![Box::new(move |tx: &AppEventSender| {
+                tx.send(AppEvent::DismissDetachedRun(run_id_dismiss.clone()));
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(format!("#{} finished", agent_id.as_str())),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn on_delegate_failed(
+        &mut self,
+        run_id: &str,
+        label: &DelegateDisplayLabel,
+        error: &str,
+    ) {
+        let _ = self.on_delegate_completed(run_id, label);
+        self.add_error_message(format!("{} failed: {error}", label.base_label));
+    }
+
+    pub(crate) fn notify_detached_completion(&mut self, label: &DelegateDisplayLabel) {
+        self.notify(Notification::DetachedRunFinished {
+            label: label.base_label.clone(),
+        });
+    }
+
+    pub(crate) fn notify_detached_failure(&mut self, label: &DelegateDisplayLabel, error: &str) {
+        self.notify(Notification::DetachedRunFailed {
+            label: label.base_label.clone(),
+            error: error.to_string(),
+        });
+    }
+
+    pub(crate) fn set_delegate_status_owner(&mut self, run_id: &str, agent_id: &AgentId) {
+        self.set_delegate_status_owner_internal(run_id, agent_id);
+    }
+
+    pub(crate) fn clear_delegate_status_owner(&mut self) {
+        if self.delegate_status_owner.take().is_some() {
+            if let Some(previous) = self.delegate_previous_status_header.take() {
+                self.set_status_header(previous);
+            }
+            self.bottom_pane.set_task_running(false);
+        }
+    }
+
+    fn set_delegate_status_owner_internal(&mut self, run_id: &str, agent_id: &AgentId) {
+        let is_same = self.delegate_status_owner.as_deref() == Some(run_id);
+        if !is_same && self.delegate_status_owner.is_none() {
+            if self.delegate_previous_status_header.is_none() {
+                self.delegate_previous_status_header = Some(self.current_status_header.clone());
+            }
+            if self.bottom_pane.status_widget().is_none() {
+                self.bottom_pane.set_task_running(true);
+            }
+        }
+        self.delegate_status_owner = Some(run_id.to_string());
+        self.set_status_header(format!("Delegating to #{}", agent_id.as_str()));
+    }
+
+    fn try_delegate_shortcut(&mut self, _text: &str) -> bool {
+        false
     }
 
     /// Return a reference to the widget's current config (includes any
@@ -2306,6 +2811,8 @@ enum Notification {
     AgentTurnComplete { response: String },
     ExecApprovalRequested { command: String },
     EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
+    DetachedRunFinished { label: String },
+    DetachedRunFailed { label: String, error: String },
 }
 
 impl Notification {
@@ -2329,6 +2836,13 @@ impl Notification {
                     }
                 )
             }
+            Notification::DetachedRunFinished { label } => {
+                format!("Detached delegate finished {label}")
+            }
+            Notification::DetachedRunFailed { label, error } => {
+                let preview = truncate_text(error, 60);
+                format!("Detached delegate failed {label}: {preview}")
+            }
         }
     }
 
@@ -2337,6 +2851,8 @@ impl Notification {
             Notification::AgentTurnComplete { .. } => "agent-turn-complete",
             Notification::ExecApprovalRequested { .. }
             | Notification::EditApprovalRequested { .. } => "approval-requested",
+            Notification::DetachedRunFinished { .. } => "detached-run-finished",
+            Notification::DetachedRunFailed { .. } => "detached-run-failed",
         }
     }
 

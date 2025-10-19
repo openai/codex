@@ -6,6 +6,7 @@
 use app::App;
 pub use app::AppExitInfo;
 use codex_app_server_protocol::AuthMode;
+use codex_common::CliConfigOverrides;
 use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::CodexAuth;
@@ -15,11 +16,17 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::protocol::AskForApproval;
+use codex_core::protocol::SessionSource;
+use codex_multi_agent::AgentContext;
+use codex_multi_agent::AgentId;
+use codex_multi_agent::AgentOrchestrator;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::fs::OpenOptions;
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
@@ -105,6 +112,62 @@ mod wrapping;
 #[cfg(test)]
 pub mod test_backend;
 
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+    use codex_core::auth::AuthDotJson;
+    use codex_core::auth::write_auth_json;
+    use codex_core::config::ConfigOverrides;
+    use codex_core::config::ConfigToml;
+    use tempfile::tempdir;
+
+    #[test]
+    fn login_status_uses_parent_codex_home_for_auth() {
+        let global_home = tempdir().expect("tempdir");
+        let auth_path = global_home.path().join("auth.json");
+        write_auth_json(
+            &auth_path,
+            &AuthDotJson {
+                openai_api_key: Some("sk-test".to_string()),
+                tokens: None,
+                last_refresh: None,
+            },
+        )
+        .expect("write auth.json");
+
+        let agent_home = tempdir().expect("tempdir");
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            agent_home.path().to_path_buf(),
+        )
+        .expect("config");
+        config.model_provider.requires_openai_auth = true;
+
+        let status = get_login_status(&config, global_home.path());
+        assert!(matches!(status, LoginStatus::AuthMode(AuthMode::ApiKey)));
+    }
+
+    #[test]
+    fn shared_auth_manager_reads_parent_auth() {
+        let global_home = tempdir().expect("tempdir");
+        let auth_path = global_home.path().join("auth.json");
+        write_auth_json(
+            &auth_path,
+            &AuthDotJson {
+                openai_api_key: Some("sk-test".to_string()),
+                tokens: None,
+                last_refresh: None,
+            },
+        )
+        .expect("write auth.json");
+
+        let manager = AuthManager::shared(global_home.path().to_path_buf(), false);
+        let auth = manager.auth().expect("auth loaded");
+        assert!(matches!(auth.mode, AuthMode::ApiKey));
+    }
+}
+
 #[cfg(not(debug_assertions))]
 mod updates;
 
@@ -173,14 +236,19 @@ pub async fn run_main(
         codex_linux_sandbox_exe,
         base_instructions: None,
         include_plan_tool: Some(true),
+        include_delegate_tool: Some(true),
         include_apply_patch_tool: None,
         include_view_image_tool: None,
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: cli.web_search.then_some(true),
     };
+    let mut delegate_config_overrides = overrides.clone();
+    delegate_config_overrides.include_delegate_tool = None;
+    let delegate_cli_overrides = cli.config_overrides.clone();
+
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
     let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
-    let cli_kv_overrides = match overrides_cli.parse_overrides() {
+    let _cli_kv_overrides = match overrides_cli.parse_overrides() {
         Ok(v) => v,
         #[allow(clippy::print_stderr)]
         Err(e) => {
@@ -189,7 +257,15 @@ pub async fn run_main(
         }
     };
 
-    let config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
+    let agent_context = load_agent_context_or_exit(
+        cli.agent.as_deref(),
+        &cli.config_overrides,
+        overrides.clone(),
+    )
+    .await;
+    let allowed_agents = agent_context.allowed_agents().to_vec();
+    let global_codex_home = agent_context.global_codex_home().to_path_buf();
+    let config = agent_context.into_config();
 
     let active_profile = config.active_profile.clone();
     let log_dir = codex_core::config::log_dir(&config)?;
@@ -273,9 +349,12 @@ pub async fn run_main(
         cli,
         config,
         overrides,
-        cli_kv_overrides,
         active_profile,
         feedback,
+        global_codex_home,
+        delegate_cli_overrides,
+        delegate_config_overrides,
+        allowed_agents,
     )
     .await
     .map_err(|err| std::io::Error::other(err.to_string()))
@@ -285,11 +364,16 @@ async fn run_ratatui_app(
     cli: Cli,
     initial_config: Config,
     overrides: ConfigOverrides,
-    cli_kv_overrides: Vec<(String, toml::Value)>,
     active_profile: Option<String>,
     feedback: codex_feedback::CodexFeedback,
+    global_codex_home: PathBuf,
+    delegate_cli_overrides: CliConfigOverrides,
+    delegate_config_overrides: ConfigOverrides,
+    allowed_agents: Vec<AgentId>,
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
+    let mut global_codex_home = global_codex_home;
+    let mut allowed_agents = allowed_agents;
 
     // Forward panic reports through tracing so they appear in the UI status
     // line, but do not swallow the default/color-eyre panic handler.
@@ -378,8 +462,8 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
 
-    let auth_manager = AuthManager::shared(initial_config.codex_home.clone(), false);
-    let login_status = get_login_status(&initial_config);
+    let mut auth_manager = AuthManager::shared(global_codex_home.clone(), false);
+    let login_status = get_login_status(&initial_config, &global_codex_home);
     let should_show_trust_screen = should_show_trust_screen(&initial_config);
     let should_show_windows_wsl_screen =
         cfg!(target_os = "windows") && !initial_config.windows_wsl_setup_acknowledged;
@@ -416,20 +500,39 @@ async fn run_ratatui_app(
                 update_action: None,
             });
         }
-        // if the user acknowledged windows or made an explicit decision ato trust the directory, reload the config accordingly
+        // if the user acknowledged windows or made an explicit decision to trust the directory, reload the config accordingly
         if should_show_windows_wsl_screen
             || onboarding_result
                 .directory_trust_decision
                 .map(|d| d == TrustDirectorySelection::Trust)
                 .unwrap_or(false)
         {
-            load_config_or_exit(cli_kv_overrides, overrides).await
+            let context = load_agent_context_or_exit(
+                cli.agent.as_deref(),
+                &delegate_cli_overrides,
+                overrides.clone(),
+            )
+            .await;
+            allowed_agents = context.allowed_agents().to_vec();
+            global_codex_home = context.global_codex_home().to_path_buf();
+            auth_manager = AuthManager::shared(global_codex_home.clone(), false);
+            context.into_config()
         } else {
             initial_config
         }
     } else {
         initial_config
     };
+
+    let delegate_orchestrator = Arc::new(AgentOrchestrator::new(
+        global_codex_home.clone(),
+        auth_manager.clone(),
+        SessionSource::Cli,
+        delegate_cli_overrides,
+        delegate_config_overrides,
+        allowed_agents,
+        config.multi_agent.max_concurrent_delegates,
+    ));
 
     // Determine resume behavior: explicit id, then resume last, then picker.
     let resume_selection = if let Some(id_str) = cli.resume_session_id.as_deref() {
@@ -491,6 +594,7 @@ async fn run_ratatui_app(
     let app_result = App::run(
         &mut tui,
         auth_manager,
+        delegate_orchestrator,
         config,
         active_profile,
         prompt,
@@ -566,12 +670,11 @@ pub enum LoginStatus {
     NotAuthenticated,
 }
 
-fn get_login_status(config: &Config) -> LoginStatus {
+fn get_login_status(config: &Config, auth_codex_home: &Path) -> LoginStatus {
     if config.model_provider.requires_openai_auth {
         // Reading the OpenAI API key is an async operation because it may need
         // to refresh the token. Block on it.
-        let codex_home = config.codex_home.clone();
-        match CodexAuth::from_codex_home(&codex_home) {
+        match CodexAuth::from_codex_home(auth_codex_home) {
             Ok(Some(auth)) => LoginStatus::AuthMode(auth.mode),
             Ok(None) => LoginStatus::NotAuthenticated,
             Err(err) => {
@@ -584,13 +687,14 @@ fn get_login_status(config: &Config) -> LoginStatus {
     }
 }
 
-async fn load_config_or_exit(
-    cli_kv_overrides: Vec<(String, toml::Value)>,
+async fn load_agent_context_or_exit(
+    agent_slug: Option<&str>,
+    cli_overrides: &CliConfigOverrides,
     overrides: ConfigOverrides,
-) -> Config {
+) -> AgentContext {
     #[allow(clippy::print_stderr)]
-    match Config::load_with_cli_overrides(cli_kv_overrides, overrides).await {
-        Ok(config) => config,
+    match codex_multi_agent::load_agent_context(agent_slug, cli_overrides, overrides).await {
+        Ok(context) => context,
         Err(err) => {
             eprintln!("Error loading configuration: {err}");
             std::process::exit(1);

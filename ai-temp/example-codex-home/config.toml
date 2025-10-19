@@ -1,0 +1,14 @@
+model = "gpt-5"
+sandbox_mode = "workspace-write"
+
+[history]
+persistence = "save-all"
+
+[multi_agent]
+agents = ["request_summarizer", "ideas_provider", "critic"]
+
+notify = ["./scripts/log-notification.sh"]
+
+[tui]
+show_task_summary = true
+notifications = true

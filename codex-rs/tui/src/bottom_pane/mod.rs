@@ -71,6 +71,7 @@ pub(crate) struct BottomPane {
     /// Queued user messages to show under the status indicator.
     queued_user_messages: Vec<String>,
     context_window_percent: Option<u8>,
+    delegate_label: Option<String>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -104,6 +105,7 @@ impl BottomPane {
             queued_user_messages: Vec::new(),
             esc_backtrack_hint: false,
             context_window_percent: None,
+            delegate_label: None,
         }
     }
 
@@ -365,6 +367,16 @@ impl BottomPane {
         self.context_window_percent = percent;
         self.composer.set_context_window_percent(percent);
         self.request_redraw();
+    }
+
+    pub(crate) fn set_delegate_label(&mut self, label: Option<String>) {
+        if self.delegate_label == label {
+            return;
+        }
+        self.delegate_label = label.clone();
+        if self.composer.set_delegate_label(label) {
+            self.request_redraw();
+        }
     }
 
     /// Show a generic list selection view with the provided items.

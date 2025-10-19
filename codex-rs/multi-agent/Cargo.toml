@@ -1,0 +1,23 @@
+[package]
+name = "codex-multi-agent"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+anyhow.workspace = true
+codex-common = { workspace = true, features = ["cli"] }
+codex-core.workspace = true
+serde.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
+uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

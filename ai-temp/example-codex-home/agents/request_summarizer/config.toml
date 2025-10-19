@@ -1,0 +1,10 @@
+model = "gpt-5"
+sandbox_mode = "workspace-write"
+approval_policy = "never"
+
+[history]
+persistence = "save-all"
+
+[multi_agent]
+agents = []
+
