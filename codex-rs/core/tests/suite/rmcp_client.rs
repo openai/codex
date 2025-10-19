@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fs;
 use std::net::TcpListener;
@@ -35,6 +36,7 @@ use tokio::time::sleep;
 use wiremock::matchers::any;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(mcp_test_value)]
 async fn stdio_server_round_trip() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -86,6 +88,8 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
                             "MCP_TEST_VALUE".to_string(),
                             expected_env_value.to_string(),
                         )])),
+                        env_vars: Vec::new(),
+                        cwd: None,
                     },
                     enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
@@ -106,7 +110,143 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
             final_output_json_schema: None,
             cwd: fixture.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    let begin_event = wait_for_event_with_timeout(
+        &fixture.codex,
+        |ev| matches!(ev, EventMsg::McpToolCallBegin(_)),
+        Duration::from_secs(10),
+    )
+    .await;
+
+    let EventMsg::McpToolCallBegin(begin) = begin_event else {
+        unreachable!("event guard guarantees McpToolCallBegin");
+    };
+    assert_eq!(begin.invocation.server, server_name);
+    assert_eq!(begin.invocation.tool, "echo");
+
+    let end_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallEnd(_))
+    })
+    .await;
+    let EventMsg::McpToolCallEnd(end) = end_event else {
+        unreachable!("event guard guarantees McpToolCallEnd");
+    };
+
+    let result = end
+        .result
+        .as_ref()
+        .expect("rmcp echo tool should return success");
+    assert_eq!(result.is_error, Some(false));
+    assert!(
+        result.content.is_empty(),
+        "content should default to an empty array"
+    );
+
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("structured content");
+    let Value::Object(map) = structured else {
+        panic!("structured content should be an object: {structured:?}");
+    };
+    let echo_value = map
+        .get("echo")
+        .and_then(Value::as_str)
+        .expect("echo payload present");
+    assert_eq!(echo_value, "ECHOING: ping");
+    let env_value = map
+        .get("env")
+        .and_then(Value::as_str)
+        .expect("env snapshot inserted");
+    assert_eq!(env_value, expected_env_value);
+
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    server.verify().await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(mcp_test_value)]
+async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+
+    let call_id = "call-1234";
+    let server_name = "rmcp_whitelist";
+    let tool_name = format!("{server_name}__echo");
+
+    mount_sse_once_match(
+        &server,
+        any(),
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, &tool_name, "{\"message\":\"ping\"}"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        any(),
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "rmcp echo tool completed successfully."),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let expected_env_value = "propagated-env-from-whitelist";
+    let _guard = EnvVarGuard::set("MCP_TEST_VALUE", OsStr::new(expected_env_value));
+    let rmcp_test_server_bin = CargoBuild::new()
+        .package("codex-rmcp-client")
+        .bin("test_stdio_server")
+        .run()?
+        .path()
+        .to_string_lossy()
+        .into_owned();
+
+    let fixture = test_codex()
+        .with_config(move |config| {
+            config.features.enable(Feature::RmcpClient);
+            config.mcp_servers.insert(
+                server_name.to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: None,
+                        env_vars: vec!["MCP_TEST_VALUE".to_string()],
+                        cwd: None,
+                    },
+                    enabled: true,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                },
+            );
+        })
+        .build(&server)
+        .await?;
+    let session_model = fixture.session_configured.model.clone();
+
+    fixture
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![InputItem::Text {
+                text: "call the rmcp echo tool".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: fixture.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
@@ -235,6 +375,8 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
                     transport: McpServerTransportConfig::StreamableHttp {
                         url: server_url,
                         bearer_token_env_var: None,
+                        http_headers: None,
+                        env_http_headers: None,
                     },
                     enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
@@ -255,7 +397,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
             final_output_json_schema: None,
             cwd: fixture.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            sandbox_policy: SandboxPolicy::ReadOnly,
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
@@ -416,6 +558,8 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
                     transport: McpServerTransportConfig::StreamableHttp {
                         url: server_url,
                         bearer_token_env_var: None,
+                        http_headers: None,
+                        env_http_headers: None,
                     },
                     enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
@@ -436,7 +580,7 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
             final_output_json_schema: None,
             cwd: fixture.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            sandbox_policy: SandboxPolicy::ReadOnly,
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,

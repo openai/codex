@@ -26,6 +26,7 @@ pub(crate) struct TextArea {
     wrap_cache: RefCell<Option<WrapCache>>,
     preferred_col: Option<usize>,
     elements: Vec<TextElement>,
+    kill_buffer: String,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +49,7 @@ impl TextArea {
             wrap_cache: RefCell::new(None),
             preferred_col: None,
             elements: Vec::new(),
+            kill_buffer: String::new(),
         }
     }
 
@@ -57,6 +59,7 @@ impl TextArea {
         self.wrap_cache.replace(None);
         self.preferred_col = None;
         self.elements.clear();
+        self.kill_buffer.clear();
     }
 
     pub fn text(&self) -> &str {
@@ -305,6 +308,13 @@ impl TextArea {
             } => {
                 self.kill_to_end_of_line();
             }
+            KeyEvent {
+                code: KeyCode::Char('y'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.yank();
+            }
 
             // Cursor movement
             KeyEvent {
@@ -437,7 +447,7 @@ impl TextArea {
 
     pub fn delete_backward_word(&mut self) {
         let start = self.beginning_of_previous_word();
-        self.replace_range(start..self.cursor_pos, "");
+        self.kill_range(start..self.cursor_pos);
     }
 
     /// Delete text to the right of the cursor using "word" semantics.
@@ -448,30 +458,61 @@ impl TextArea {
     pub fn delete_forward_word(&mut self) {
         let end = self.end_of_next_word();
         if end > self.cursor_pos {
-            self.replace_range(self.cursor_pos..end, "");
+            self.kill_range(self.cursor_pos..end);
         }
     }
 
     pub fn kill_to_end_of_line(&mut self) {
         let eol = self.end_of_current_line();
-        if self.cursor_pos == eol {
+        let range = if self.cursor_pos == eol {
             if eol < self.text.len() {
-                self.replace_range(self.cursor_pos..eol + 1, "");
+                Some(self.cursor_pos..eol + 1)
+            } else {
+                None
             }
         } else {
-            self.replace_range(self.cursor_pos..eol, "");
+            Some(self.cursor_pos..eol)
+        };
+
+        if let Some(range) = range {
+            self.kill_range(range);
         }
     }
 
     pub fn kill_to_beginning_of_line(&mut self) {
         let bol = self.beginning_of_current_line();
-        if self.cursor_pos == bol {
-            if bol > 0 {
-                self.replace_range(bol - 1..bol, "");
-            }
+        let range = if self.cursor_pos == bol {
+            if bol > 0 { Some(bol - 1..bol) } else { None }
         } else {
-            self.replace_range(bol..self.cursor_pos, "");
+            Some(bol..self.cursor_pos)
+        };
+
+        if let Some(range) = range {
+            self.kill_range(range);
         }
+    }
+
+    pub fn yank(&mut self) {
+        if self.kill_buffer.is_empty() {
+            return;
+        }
+        let text = self.kill_buffer.clone();
+        self.insert_str(&text);
+    }
+
+    fn kill_range(&mut self, range: Range<usize>) {
+        let range = self.expand_range_to_element_boundaries(range);
+        if range.start >= range.end {
+            return;
+        }
+
+        let removed = self.text[range.clone()].to_string();
+        if removed.is_empty() {
+            return;
+        }
+
+        self.kill_buffer = removed;
+        self.replace_range_raw(range, "");
     }
 
     /// Move the cursor left by a single grapheme cluster.
@@ -1196,6 +1237,39 @@ mod tests {
         t.delete_forward_word();
         assert_eq!(t.text(), "prefix  tail");
         assert_eq!(t.cursor(), elem_range.start);
+    }
+
+    #[test]
+    fn yank_restores_last_kill() {
+        let mut t = ta_with("hello");
+        t.set_cursor(0);
+        t.kill_to_end_of_line();
+        assert_eq!(t.text(), "");
+        assert_eq!(t.cursor(), 0);
+
+        t.yank();
+        assert_eq!(t.text(), "hello");
+        assert_eq!(t.cursor(), 5);
+
+        let mut t = ta_with("hello world");
+        t.set_cursor(t.text().len());
+        t.delete_backward_word();
+        assert_eq!(t.text(), "hello ");
+        assert_eq!(t.cursor(), 6);
+
+        t.yank();
+        assert_eq!(t.text(), "hello world");
+        assert_eq!(t.cursor(), 11);
+
+        let mut t = ta_with("hello");
+        t.set_cursor(5);
+        t.kill_to_beginning_of_line();
+        assert_eq!(t.text(), "");
+        assert_eq!(t.cursor(), 0);
+
+        t.yank();
+        assert_eq!(t.text(), "hello");
+        assert_eq!(t.cursor(), 5);
     }
 
     #[test]

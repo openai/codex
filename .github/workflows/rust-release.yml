@@ -206,6 +206,69 @@ jobs:
             codesign --force --options runtime --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$path"
           done
 
+      - if: ${{ matrix.runner == 'macos-14' }}
+        name: Notarize macOS binaries
+        shell: bash
+        env:
+          APPLE_NOTARIZATION_KEY_P8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+
+          for var in APPLE_NOTARIZATION_KEY_P8 APPLE_NOTARIZATION_KEY_ID APPLE_NOTARIZATION_ISSUER_ID; do
+            if [[ -z "${!var:-}" ]]; then
+              echo "$var is required for notarization"
+              exit 1
+            fi
+          done
+
+          notary_key_path="${RUNNER_TEMP}/notarytool.key.p8"
+          echo "$APPLE_NOTARIZATION_KEY_P8" | base64 -d > "$notary_key_path"
+          cleanup_notary() {
+            rm -f "$notary_key_path"
+          }
+          trap cleanup_notary EXIT
+
+          notarize_binary() {
+            local binary="$1"
+            local source_path="target/${{ matrix.target }}/release/${binary}"
+            local archive_path="${RUNNER_TEMP}/${binary}.zip"
+
+            if [[ ! -f "$source_path" ]]; then
+              echo "Binary $source_path not found"
+              exit 1
+            fi
+
+            rm -f "$archive_path"
+            ditto -c -k --keepParent "$source_path" "$archive_path"
+
+            submission_json=$(xcrun notarytool submit "$archive_path" \
+              --key "$notary_key_path" \
+              --key-id "$APPLE_NOTARIZATION_KEY_ID" \
+              --issuer "$APPLE_NOTARIZATION_ISSUER_ID" \
+              --output-format json \
+              --wait)
+
+            status=$(printf '%s\n' "$submission_json" | jq -r '.status // "Unknown"')
+            submission_id=$(printf '%s\n' "$submission_json" | jq -r '.id // ""')
+
+            if [[ -z "$submission_id" ]]; then
+              echo "Failed to retrieve submission ID for $binary"
+              exit 1
+            fi
+
+            echo "::notice title=Notarization::$binary submission ${submission_id} completed with status ${status}"
+
+            if [[ "$status" != "Accepted" ]]; then
+              echo "Notarization failed for ${binary} (submission ${submission_id}, status ${status})"
+              exit 1
+            fi
+          }
+
+          notarize_binary "codex"
+          notarize_binary "codex-responses-api-proxy"
+
       - name: Stage artifacts
         shell: bash
         run: |
