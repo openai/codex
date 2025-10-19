@@ -83,30 +83,11 @@ For more information on how to use AGENTS.md, see the [official AGENTS.md docume
 
 Typing `@` triggers a fuzzy-filename search over the workspace root. Use up/down to select among the results and Tab or Enter to replace the `@` with the selected path. You can use Esc to cancel the search.
 
-#### Image input
-
-Paste images directly into the composer (Ctrl+V / Cmd+V) to attach them to your prompt. You can also attach files via the CLI using `-i/--image` (comma‑separated):
-
-```bash
-codex -i screenshot.png "Explain this error"
-codex --image img1.png,img2.jpg "Summarize these diagrams"
-```
-
 #### Esc–Esc to edit a previous message
 
 When the chat composer is empty, press Esc to prime “backtrack” mode. Press Esc again to open a transcript preview highlighting the last user message; press Esc repeatedly to step to older user messages. Press Enter to confirm and Codex will fork the conversation from that point, trim the visible transcript accordingly, and pre‑fill the composer with the selected user message so you can edit and resubmit it.
 
 In the transcript preview, the footer shows an `Esc edit prev` hint while editing is active.
-
-#### Shell completions
-
-Generate shell completion scripts via:
-
-```shell
-codex completion bash
-codex completion zsh
-codex completion fish
-```
 
 #### `--cd`/`-C` flag
 
@@ -121,3 +102,22 @@ codex --cd apps/frontend --add-dir ../backend --add-dir ../shared
 ```
 
 Codex can then inspect and edit files in each listed directory without leaving the primary workspace.
+
+#### Shell completions
+
+Generate shell completion scripts via:
+
+```shell
+codex completion bash
+codex completion zsh
+codex completion fish
+```
+
+#### Image input
+
+Paste images directly into the composer (Ctrl+V / Cmd+V) to attach them to your prompt. You can also attach files via the CLI using `-i/--image` (comma‑separated):
+
+```bash
+codex -i screenshot.png "Explain this error"
+codex --image img1.png,img2.jpg "Summarize these diagrams"
+```
