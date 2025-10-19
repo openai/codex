@@ -411,6 +411,18 @@ experimental_use_rmcp_client = true
 …
 ```
 
+Project-scoped MCP servers can be defined in your project's `.codex/config.toml`:
+
+```toml
+# <project>/.codex/config.toml
+[mcp_servers.docs]
+command = "npx"
+args = ["-y", "docs-server"]
+env = { TOKEN = "secret" }
+```
+
+You can also manage these entries from the CLI [experimental]:
+
 ### MCP CLI commands
 
 ```shell
@@ -419,6 +431,10 @@ codex mcp --help
 
 # Add a server (env can be repeated; `--` separates the launcher command)
 codex mcp add docs -- docs-server --port 4000
+
+# Add/remove a server scoped to the current project (writes to ./.codex/config.toml)
+codex mcp add docs --project -- docs-server --port 4000
+codex mcp remove docs --project
 
 # List configured servers (pretty table or JSON)
 codex mcp list

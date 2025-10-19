@@ -263,13 +263,17 @@ impl Config {
     ) -> std::io::Result<Self> {
         let codex_home = find_codex_home()?;
 
-        let root_value = load_resolved_config(
+        let mut layers = load_config_layers_with_overrides(
             &codex_home,
-            cli_overrides,
             crate::config_loader::LoaderOverrides::default(),
         )
         .await?;
 
+        if let Some(project_value) = load_project_config_as_toml_from_overrides(&overrides)? {
+            merge_toml_values(&mut layers.base, &project_value);
+        }
+
+        let root_value = apply_overlays(layers, cli_overrides);
         let cfg: ConfigToml = root_value.try_into().map_err(|e| {
             tracing::error!("Failed to deserialize overridden config: {e}");
             std::io::Error::new(std::io::ErrorKind::InvalidData, e)
@@ -296,6 +300,56 @@ pub async fn load_config_as_toml_with_cli_overrides(
     })?;
 
     Ok(cfg)
+}
+
+/// Attempt to load a project-local `.codex/config.toml` using cwd hints from
+/// `ConfigOverrides` (if any). Returns `Ok(Some(toml))` when found and parsed,
+/// `Ok(None)` when missing.
+fn load_project_config_as_toml_from_overrides(
+    overrides: &ConfigOverrides,
+) -> std::io::Result<Option<TomlValue>> {
+    let preliminary_cwd = match overrides.cwd.as_ref() {
+        None => std::env::current_dir()?,
+        Some(p) if p.is_absolute() => p.clone(),
+        Some(p) => {
+            let mut current = std::env::current_dir()?;
+            current.push(p);
+            current
+        }
+    };
+
+    load_project_config_as_toml(&preliminary_cwd)
+}
+
+/// Try to load `.codex/config.toml` from the project directory.
+/// Search order:
+///   1. If inside a git worktree: `<git-root>/.codex/config.toml`
+///   2. Fallback: `<cwd>/.codex/config.toml`
+fn load_project_config_as_toml(cwd: &Path) -> std::io::Result<Option<TomlValue>> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(root) = resolve_root_git_project_for_trust(cwd) {
+        candidates.push(root.join(".codex").join(CONFIG_TOML_FILE));
+    }
+    candidates.push(cwd.join(".codex").join(CONFIG_TOML_FILE));
+
+    for path in candidates {
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
+                Ok(val) => return Ok(Some(val)),
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to parse project .codex/config.toml at {}: {e}",
+                        path.display()
+                    );
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e));
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        }
+    }
+
+    Ok(None)
 }
 
 async fn load_resolved_config(
@@ -365,6 +419,116 @@ fn ensure_no_inline_bearer_tokens(value: &TomlValue) -> std::io::Result<()> {
     Ok(())
 }
 
+fn write_mcp_servers_to_document(
+    doc: &mut DocumentMut,
+    servers: &BTreeMap<String, McpServerConfig>,
+) {
+    doc.as_table_mut().remove("mcp_servers");
+
+    if servers.is_empty() {
+        return;
+    }
+
+    let mut table = TomlTable::new();
+    table.set_implicit(true);
+    doc["mcp_servers"] = TomlItem::Table(table);
+
+    for (name, config) in servers {
+        let mut entry = TomlTable::new();
+        entry.set_implicit(false);
+        match &config.transport {
+            McpServerTransportConfig::Stdio {
+                command,
+                args,
+                env,
+                env_vars,
+                cwd,
+            } => {
+                entry["command"] = toml_edit::value(command.clone());
+
+                if !args.is_empty() {
+                    let mut args_array = TomlArray::new();
+                    for arg in args {
+                        args_array.push(arg.clone());
+                    }
+                    entry["args"] = TomlItem::Value(args_array.into());
+                }
+
+                if let Some(env) = env
+                    && !env.is_empty()
+                {
+                    let mut env_table = TomlTable::new();
+                    env_table.set_implicit(false);
+                    let mut pairs: Vec<_> = env.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    for (key, value) in pairs {
+                        env_table.insert(key, toml_edit::value(value.clone()));
+                    }
+                    entry["env"] = TomlItem::Table(env_table);
+                }
+
+                if !env_vars.is_empty() {
+                    entry["env_vars"] =
+                        TomlItem::Value(env_vars.iter().collect::<TomlArray>().into());
+                }
+
+                if let Some(cwd) = cwd {
+                    entry["cwd"] = toml_edit::value(cwd.to_string_lossy().to_string());
+                }
+            }
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                bearer_token_env_var,
+                http_headers,
+                env_http_headers,
+            } => {
+                entry["url"] = toml_edit::value(url.clone());
+                if let Some(env_var) = bearer_token_env_var {
+                    entry["bearer_token_env_var"] = toml_edit::value(env_var.clone());
+                }
+                if let Some(headers) = http_headers
+                    && !headers.is_empty()
+                {
+                    let mut table = TomlTable::new();
+                    table.set_implicit(false);
+                    let mut pairs: Vec<_> = headers.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    for (key, value) in pairs {
+                        table.insert(key, toml_edit::value(value.clone()));
+                    }
+                    entry["http_headers"] = TomlItem::Table(table);
+                }
+                if let Some(headers) = env_http_headers
+                    && !headers.is_empty()
+                {
+                    let mut table = TomlTable::new();
+                    table.set_implicit(false);
+                    let mut pairs: Vec<_> = headers.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    for (key, value) in pairs {
+                        table.insert(key, toml_edit::value(value.clone()));
+                    }
+                    entry["env_http_headers"] = TomlItem::Table(table);
+                }
+            }
+        }
+
+        if !config.enabled {
+            entry["enabled"] = toml_edit::value(false);
+        }
+
+        if let Some(timeout) = config.startup_timeout_sec {
+            entry["startup_timeout_sec"] = toml_edit::value(timeout.as_secs_f64());
+        }
+
+        if let Some(timeout) = config.tool_timeout_sec {
+            entry["tool_timeout_sec"] = toml_edit::value(timeout.as_secs_f64());
+        }
+
+        doc["mcp_servers"][name.as_str()] = TomlItem::Table(entry);
+    }
+}
+
 pub fn write_global_mcp_servers(
     codex_home: &Path,
     servers: &BTreeMap<String, McpServerConfig>,
@@ -378,114 +542,65 @@ pub fn write_global_mcp_servers(
         Err(e) => return Err(e),
     };
 
-    doc.as_table_mut().remove("mcp_servers");
-
-    if !servers.is_empty() {
-        let mut table = TomlTable::new();
-        table.set_implicit(true);
-        doc["mcp_servers"] = TomlItem::Table(table);
-
-        for (name, config) in servers {
-            let mut entry = TomlTable::new();
-            entry.set_implicit(false);
-            match &config.transport {
-                McpServerTransportConfig::Stdio {
-                    command,
-                    args,
-                    env,
-                    env_vars,
-                    cwd,
-                } => {
-                    entry["command"] = toml_edit::value(command.clone());
-
-                    if !args.is_empty() {
-                        let mut args_array = TomlArray::new();
-                        for arg in args {
-                            args_array.push(arg.clone());
-                        }
-                        entry["args"] = TomlItem::Value(args_array.into());
-                    }
-
-                    if let Some(env) = env
-                        && !env.is_empty()
-                    {
-                        let mut env_table = TomlTable::new();
-                        env_table.set_implicit(false);
-                        let mut pairs: Vec<_> = env.iter().collect();
-                        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-                        for (key, value) in pairs {
-                            env_table.insert(key, toml_edit::value(value.clone()));
-                        }
-                        entry["env"] = TomlItem::Table(env_table);
-                    }
-
-                    if !env_vars.is_empty() {
-                        entry["env_vars"] =
-                            TomlItem::Value(env_vars.iter().collect::<TomlArray>().into());
-                    }
-
-                    if let Some(cwd) = cwd {
-                        entry["cwd"] = toml_edit::value(cwd.to_string_lossy().to_string());
-                    }
-                }
-                McpServerTransportConfig::StreamableHttp {
-                    url,
-                    bearer_token_env_var,
-                    http_headers,
-                    env_http_headers,
-                } => {
-                    entry["url"] = toml_edit::value(url.clone());
-                    if let Some(env_var) = bearer_token_env_var {
-                        entry["bearer_token_env_var"] = toml_edit::value(env_var.clone());
-                    }
-                    if let Some(headers) = http_headers
-                        && !headers.is_empty()
-                    {
-                        let mut table = TomlTable::new();
-                        table.set_implicit(false);
-                        let mut pairs: Vec<_> = headers.iter().collect();
-                        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-                        for (key, value) in pairs {
-                            table.insert(key, toml_edit::value(value.clone()));
-                        }
-                        entry["http_headers"] = TomlItem::Table(table);
-                    }
-                    if let Some(headers) = env_http_headers
-                        && !headers.is_empty()
-                    {
-                        let mut table = TomlTable::new();
-                        table.set_implicit(false);
-                        let mut pairs: Vec<_> = headers.iter().collect();
-                        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-                        for (key, value) in pairs {
-                            table.insert(key, toml_edit::value(value.clone()));
-                        }
-                        entry["env_http_headers"] = TomlItem::Table(table);
-                    }
-                }
-            }
-
-            if !config.enabled {
-                entry["enabled"] = toml_edit::value(false);
-            }
-
-            if let Some(timeout) = config.startup_timeout_sec {
-                entry["startup_timeout_sec"] = toml_edit::value(timeout.as_secs_f64());
-            }
-
-            if let Some(timeout) = config.tool_timeout_sec {
-                entry["tool_timeout_sec"] = toml_edit::value(timeout.as_secs_f64());
-            }
-
-            doc["mcp_servers"][name.as_str()] = TomlItem::Table(entry);
-        }
-    }
+    write_mcp_servers_to_document(&mut doc, servers);
 
     std::fs::create_dir_all(codex_home)?;
     let tmp_file = NamedTempFile::new_in(codex_home)?;
     std::fs::write(tmp_file.path(), doc.to_string())?;
     tmp_file.persist(config_path).map_err(|err| err.error)?;
 
+    Ok(())
+}
+
+pub fn load_project_mcp_servers(
+    project_root: &Path,
+) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
+    let config_path = project_root.join(".codex").join(CONFIG_TOML_FILE);
+    let contents = match std::fs::read_to_string(&config_path) {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(e) => return Err(e),
+    };
+
+    let root_value: TomlValue = if contents.trim().is_empty() {
+        TomlValue::Table(Default::default())
+    } else {
+        toml::from_str(&contents)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
+    };
+
+    let Some(servers_value) = root_value.get("mcp_servers") else {
+        return Ok(BTreeMap::new());
+    };
+
+    ensure_no_inline_bearer_tokens(servers_value)?;
+
+    servers_value
+        .clone()
+        .try_into()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+pub fn write_project_mcp_servers(
+    project_root: &Path,
+    servers: &BTreeMap<String, McpServerConfig>,
+) -> std::io::Result<()> {
+    let codex_dir = project_root.join(".codex");
+    let config_path = codex_dir.join(CONFIG_TOML_FILE);
+    let mut doc = match std::fs::read_to_string(&config_path) {
+        Ok(contents) => contents
+            .parse::<DocumentMut>()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(e) => return Err(e),
+    };
+
+    write_mcp_servers_to_document(&mut doc, servers);
+
+    std::fs::create_dir_all(&codex_dir)?;
+    let tmp_file = NamedTempFile::new_in(&codex_dir)?;
+    std::fs::write(tmp_file.path(), doc.to_string())?;
+    tmp_file.persist(config_path).map_err(|err| err.error)?;
     Ok(())
 }
 
@@ -1497,6 +1612,7 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use crate::config_types::HistoryPersistence;
+    use crate::config_types::McpServerTransportConfig;
     use crate::config_types::Notifications;
     use crate::features::Feature;
 
@@ -3149,6 +3265,69 @@ trust_level = "trusted"
 trust_level = "trusted"
 "#;
         assert_eq!(contents, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn project_local_codex_config_overrides_globals() -> std::io::Result<()> {
+        use std::fs;
+
+        // Arrange global config value in-memory
+        let global = r#"
+[mcp_servers.shared]
+command = "echo"
+args = ["global"]
+
+[mcp_servers.only-global]
+command = "true"
+"#;
+        let mut global_val: TomlValue = toml::from_str(global).unwrap();
+
+        // Arrange project `.codex/config.toml` on disk so loader can find it
+        let project_dir = TempDir::new()?;
+        let proj_codex_dir = project_dir.path().join(".codex");
+        fs::create_dir_all(&proj_codex_dir)?;
+        let project_toml = r#"
+[mcp_servers.shared]
+command = "echo"
+args = ["project"]
+
+[mcp_servers.only-project]
+command = "false"
+"#;
+        fs::write(proj_codex_dir.join(CONFIG_TOML_FILE), project_toml)?;
+
+        // Load project-local config and merge with global
+        let project_val = load_project_config_as_toml(project_dir.path())?
+            .expect("project config should be found");
+        merge_toml_values(&mut global_val, &project_val);
+
+        // Deserialize to ConfigToml and finish loading Config
+        let config_toml: ConfigToml = global_val.try_into().unwrap();
+        let overrides = ConfigOverrides {
+            cwd: Some(project_dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        let cfg = Config::load_from_base_config_with_overrides(
+            config_toml,
+            overrides,
+            TempDir::new()?.keep(),
+        )?;
+
+        // shared should be overridden by project
+        let shared_server = cfg
+            .mcp_servers
+            .get("shared")
+            .expect("shared server should exist");
+        match &shared_server.transport {
+            McpServerTransportConfig::Stdio { args, .. } => {
+                assert_eq!(args, &["project".to_string()]);
+            }
+            transport => panic!("expected stdio transport, got {transport:?}"),
+        }
+        assert!(cfg.mcp_servers.contains_key("only-project"));
+        assert!(cfg.mcp_servers.contains_key("only-global"));
 
         Ok(())
     }

@@ -11,10 +11,13 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
+use codex_core::config::load_project_mcp_servers;
 use codex_core::config::write_global_mcp_servers;
+use codex_core::config::write_project_mcp_servers;
 use codex_core::config_types::McpServerConfig;
 use codex_core::config_types::McpServerTransportConfig;
 use codex_core::features::Feature;
+use codex_core::git_info::resolve_root_git_project_for_trust;
 use codex_core::mcp::auth::compute_auth_statuses;
 use codex_core::protocol::McpAuthStatus;
 use codex_rmcp_client::delete_oauth_tokens;
@@ -85,6 +88,10 @@ pub struct AddArgs {
 
     #[command(flatten)]
     pub transport_args: AddMcpTransportArgs,
+
+    /// Write this server to the project's `.codex/config.toml` instead of global config.
+    #[arg(long)]
+    pub project: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -108,19 +115,12 @@ pub struct AddMcpTransportArgs {
 pub struct AddMcpStdioArgs {
     /// Command to launch the MCP server.
     /// Use --url for a streamable HTTP server.
-    #[arg(
-            trailing_var_arg = true,
-            num_args = 0..,
-        )]
+    #[arg(trailing_var_arg = true, num_args = 1..)]
     pub command: Vec<String>,
 
     /// Environment variables to set when launching the server.
     /// Only valid with stdio servers.
-    #[arg(
-        long,
-        value_parser = parse_env_pair,
-        value_name = "KEY=VALUE",
-    )]
+    #[arg(long, value_parser = parse_env_pair, value_name = "KEY=VALUE")]
     pub env: Vec<(String, String)>,
 }
 
@@ -144,6 +144,10 @@ pub struct AddMcpStreamableHttpArgs {
 pub struct RemoveArgs {
     /// Name of the MCP server configuration to remove.
     pub name: String,
+
+    /// Remove from the project's `.codex/config.toml` instead of global config.
+    #[arg(long)]
+    pub project: bool,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -200,14 +204,10 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
     let AddArgs {
         name,
         transport_args,
+        project,
     } = add_args;
 
     validate_server_name(&name)?;
-
-    let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
-    let mut servers = load_global_mcp_servers(&codex_home)
-        .await
-        .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
 
     let transport = match transport_args {
         AddMcpTransportArgs {
@@ -255,6 +255,28 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         tool_timeout_sec: None,
     };
 
+    if project {
+        let cwd = std::env::current_dir().context("failed to get current directory")?;
+        let project_root = resolve_root_git_project_for_trust(&cwd).unwrap_or(cwd);
+        let config_path = project_root.join(".codex").join("config.toml");
+        let mut servers = load_project_mcp_servers(&project_root).with_context(|| {
+            format!("failed to load MCP servers from {}", config_path.display())
+        })?;
+        servers.insert(name.clone(), new_entry);
+        write_project_mcp_servers(&project_root, &servers)
+            .with_context(|| format!("failed to write MCP servers to {}", config_path.display()))?;
+        println!(
+            "Added project MCP server '{name}' in {}/.codex.",
+            project_root.display()
+        );
+        return Ok(());
+    }
+
+    let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
+    let mut servers = load_global_mcp_servers(&codex_home)
+        .await
+        .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
+
     servers.insert(name.clone(), new_entry);
 
     write_global_mcp_servers(&codex_home, &servers)
@@ -288,9 +310,31 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveArgs) -> Result<()> {
     config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
 
-    let RemoveArgs { name } = remove_args;
+    let RemoveArgs { name, project } = remove_args;
 
     validate_server_name(&name)?;
+
+    if project {
+        let cwd = std::env::current_dir().context("failed to get current directory")?;
+        let project_root = resolve_root_git_project_for_trust(&cwd).unwrap_or(cwd);
+        let config_path = project_root.join(".codex").join("config.toml");
+        let mut servers = load_project_mcp_servers(&project_root).with_context(|| {
+            format!("failed to load MCP servers from {}", config_path.display())
+        })?;
+        let removed = servers.remove(&name).is_some();
+        if removed {
+            write_project_mcp_servers(&project_root, &servers).with_context(|| {
+                format!("failed to write MCP servers to {}", config_path.display())
+            })?;
+            println!(
+                "Removed project MCP server '{name}' in {}/.codex.",
+                project_root.display()
+            );
+        } else {
+            println!("No MCP server named '{name}' found.");
+        }
+        return Ok(());
+    }
 
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let mut servers = load_global_mcp_servers(&codex_home)
