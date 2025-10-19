@@ -1,5 +1,7 @@
 ## Sandbox & approvals
 
+Codex guards your machine through a combination of **sandbox modes** (what the assistant is allowed to touch) and **approval policies** (when you must confirm an action). This page explains the options, how they interact, and how the sandbox behaves on each platform.
+
 ### Approval modes
 
 We've chosen a powerful default for how Codex works on your computer: `Auto`. In this approval mode, Codex can read files, make edits, and run commands in the working directory automatically. However, Codex will need your approval to work outside the working directory or access network.
@@ -63,9 +65,18 @@ approval_policy = "never"
 sandbox_mode    = "read-only"
 ```
 
+### Sandbox mechanics by platform {#platform-sandboxing-details}
+
+The mechanism Codex uses to enforce the sandbox policy depends on your OS:
+
+- **macOS 12+** uses **Apple Seatbelt**. Codex invokes `sandbox-exec` with a profile that corresponds to the selected `--sandbox` mode, constraining filesystem and network access at the OS level.
+- **Linux** combines **Landlock** and **seccomp** APIs to approximate the same guarantees. Kernel support is required; older kernels may not expose the necessary features.
+
+In containerized Linux environments (for example Docker), sandboxing may not work when the host or container configuration does not expose Landlock/seccomp. In those cases, configure the container to provide the isolation you need and run Codex with `--sandbox danger-full-access` (or the shorthand `--dangerously-bypass-approvals-and-sandbox`) inside that container.
+
 ### Experimenting with the Codex Sandbox
 
-To test to see what happens when a command is run under the sandbox provided by Codex, we provide the following subcommands in Codex CLI:
+To test how commands behave under Codex's sandbox, use the CLI helpers:
 
 ```
 # macOS
@@ -78,12 +89,3 @@ codex sandbox linux [--full-auto] [COMMAND]...
 codex debug seatbelt [--full-auto] [COMMAND]...
 codex debug landlock [--full-auto] [COMMAND]...
 ```
-
-### Platform sandboxing details
-
-The mechanism Codex uses to implement the sandbox policy depends on your OS:
-
-- **macOS 12+** uses **Apple Seatbelt** and runs commands using `sandbox-exec` with a profile (`-p`) that corresponds to the `--sandbox` that was specified.
-- **Linux** uses a combination of Landlock/seccomp APIs to enforce the `sandbox` configuration.
-
-Note that when running Linux in a containerized environment such as Docker, sandboxing may not work if the host/container configuration does not support the necessary Landlock/seccomp APIs. In such cases, we recommend configuring your Docker container so that it provides the sandbox guarantees you are looking for and then running `codex` with `--sandbox danger-full-access` (or, more simply, the `--dangerously-bypass-approvals-and-sandbox` flag) within your container.
