@@ -61,4 +61,11 @@ mod tests {
             "Ignoring --add-dir (relative, /abs) because the effective sandbox mode is read-only. Switch to workspace-write or danger-full-access to allow additional writable roots."
         );
     }
+
+    #[test]
+    fn returns_none_when_no_additional_dirs() {
+        let sandbox = SandboxPolicy::ReadOnly;
+        let dirs: Vec<PathBuf> = Vec::new();
+        assert_eq!(add_dir_warning_message(&dirs, &sandbox), None);
+    }
 }
