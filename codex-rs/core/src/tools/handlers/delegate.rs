@@ -344,28 +344,31 @@ async fn wait_for_completion(
     let mut collected = String::new();
 
     while let Some(event) = events.recv().await {
-        if event_run_id(&event) != run.run_id {
+        if event_run_id(&event)
+            .map(|id| id != run.run_id.as_str())
+            .unwrap_or(true)
+        {
             continue;
         }
 
-        match event {
+        match &event {
             DelegateToolEvent::Delta { chunk, .. } => {
-                collected.push_str(&chunk);
+                collected.push_str(chunk);
             }
             DelegateToolEvent::Completed {
                 output, duration, ..
             } => {
-                let summary = output.or_else(|| {
+                let summary = output.clone().or_else(|| {
                     if collected.trim().is_empty() {
                         None
                     } else {
                         Some(collected.clone())
                     }
                 });
-                return Ok((summary, Some(duration)));
+                return Ok((summary, Some(*duration)));
             }
             DelegateToolEvent::Failed { error, .. } => {
-                return Err(error);
+                return Err(error.clone());
             }
             _ => {}
         }
@@ -374,12 +377,13 @@ async fn wait_for_completion(
     Err("delegate run ended unexpectedly".to_string())
 }
 
-fn event_run_id(event: &DelegateToolEvent) -> &str {
+fn event_run_id(event: &DelegateToolEvent) -> Option<&str> {
     match event {
         DelegateToolEvent::Started { run_id, .. }
         | DelegateToolEvent::Delta { run_id, .. }
         | DelegateToolEvent::Completed { run_id, .. }
-        | DelegateToolEvent::Failed { run_id, .. } => run_id,
+        | DelegateToolEvent::Failed { run_id, .. } => Some(run_id),
+        DelegateToolEvent::Info { .. } => None,
     }
 }
 
@@ -423,20 +427,27 @@ async fn handle_batch_entries(
             FunctionCallError::RespondToModel("delegate run ended unexpectedly".to_string())
         })?;
 
-        let run_id = event_run_id(&event).to_string();
-        if !interested.contains(&run_id) {
+        let Some(run_id) = event_run_id(&event) else {
+            continue;
+        };
+        if !interested.contains(run_id) {
             continue;
         }
 
-        match event {
+        let run_id_owned = run_id.to_string();
+
+        match &event {
             DelegateToolEvent::Delta { chunk, .. } => {
-                collected.entry(run_id).or_default().push_str(&chunk);
+                collected
+                    .entry(run_id_owned.clone())
+                    .or_default()
+                    .push_str(chunk);
             }
             DelegateToolEvent::Completed {
                 output, duration, ..
             } => {
-                let summary = output.or_else(|| {
-                    collected.remove(&run_id).and_then(|text| {
+                let summary = output.clone().or_else(|| {
+                    collected.remove(&run_id_owned).and_then(|text| {
                         if text.trim().is_empty() {
                             None
                         } else {
@@ -444,11 +455,11 @@ async fn handle_batch_entries(
                         }
                     })
                 });
-                summaries.insert(run_id.clone(), (summary, Some(duration)));
-                interested.remove(&run_id);
+                summaries.insert(run_id_owned.clone(), (summary, Some(*duration)));
+                interested.remove(run_id);
             }
             DelegateToolEvent::Failed { error, .. } => {
-                return Err(FunctionCallError::RespondToModel(error));
+                return Err(FunctionCallError::RespondToModel(error.clone()));
             }
             _ => {}
         }
@@ -495,18 +506,21 @@ async fn monitor_detached_run(
     let mut collected = String::new();
 
     while let Some(event) = events.recv().await {
-        if event_run_id(&event) != run_id.as_str() {
+        if event_run_id(&event)
+            .map(|id| id != run_id.as_str())
+            .unwrap_or(true)
+        {
             continue;
         }
 
-        match event {
+        match &event {
             DelegateToolEvent::Delta { chunk, .. } => {
-                collected.push_str(&chunk);
+                collected.push_str(chunk);
             }
             DelegateToolEvent::Completed {
                 output, duration, ..
             } => {
-                let summary = output.or_else(|| {
+                let summary = output.clone().or_else(|| {
                     if collected.trim().is_empty() {
                         None
                     } else {
@@ -539,7 +553,7 @@ async fn monitor_detached_run(
                         conversation_id: Some(session.conversation_id().to_string()),
                         summary,
                         duration_ms: None,
-                        error: Some(error),
+                        error: Some(error.clone()),
                     });
                 break;
             }

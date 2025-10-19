@@ -1,4 +1,3 @@
-use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::history_cell;
 use crate::history_cell::PlainHistoryCell;
@@ -36,29 +35,34 @@ impl FeedbackView {
         let thread_id = snapshot.thread_id.clone();
 
         let upload_action_tread_id = thread_id.clone();
-        let upload_action: SelectionAction = Box::new(move |tx: &AppEventSender| {
-            match snapshot.upload_to_sentry() {
-                Ok(()) => {
-                    let issue_url = format!(
-                        "{BASE_ISSUE_URL}&steps=Uploaded%20thread:%20{upload_action_tread_id}",
-                    );
-                    tx.send(AppEvent::InsertHistoryCell(Box::new(PlainHistoryCell::new(vec![
+        let upload_action: SelectionAction =
+            Box::new(
+                move |tx: &AppEventSender| match snapshot.upload_to_sentry() {
+                    Ok(()) => {
+                        let issue_url = format!(
+                            "{BASE_ISSUE_URL}&steps=Uploaded%20thread:%20{upload_action_tread_id}",
+                        );
+                        tx.send_history_cell(Box::new(PlainHistoryCell::new(vec![
                         Line::from(
                             "• Codex logs uploaded. Please open an issue using the following URL:",
                         ),
                         "".into(),
                         Line::from(vec!["  ".into(), issue_url.cyan().underlined()]),
                         "".into(),
-                        Line::from(vec!["  Or mention your thread ID ".into(), upload_action_tread_id.clone().bold(),  " in an existing issue.".into()])
-                    ]))));
-                }
-                Err(e) => {
-                    tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_error_event(format!("Failed to upload logs: {e}")),
-                    )));
-                }
-            }
-        });
+                        Line::from(vec![
+                            "  Or mention your thread ID ".into(),
+                            upload_action_tread_id.clone().bold(),
+                            " in an existing issue.".into(),
+                        ]),
+                    ])));
+                    }
+                    Err(e) => {
+                        tx.send_history_cell(Box::new(history_cell::new_error_event(format!(
+                            "Failed to upload logs: {e}"
+                        ))));
+                    }
+                },
+            );
 
         let upload_item = SelectionItem {
             name: "Yes".to_string(),
@@ -74,19 +78,17 @@ impl FeedbackView {
         let no_action: SelectionAction = Box::new(move |tx: &AppEventSender| {
             let issue_url = format!("{BASE_ISSUE_URL}&steps=Thread%20ID:%20{thread_id}",);
 
-            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                PlainHistoryCell::new(vec![
-                    Line::from("• Please open an issue using the following URL:"),
-                    "".into(),
-                    Line::from(vec!["  ".into(), issue_url.cyan().underlined()]),
-                    "".into(),
-                    Line::from(vec![
-                        "  Or mention your thread ID ".into(),
-                        thread_id.clone().bold(),
-                        " in an existing issue.".into(),
-                    ]),
+            tx.send_history_cell(Box::new(PlainHistoryCell::new(vec![
+                Line::from("• Please open an issue using the following URL:"),
+                "".into(),
+                Line::from(vec!["  ".into(), issue_url.cyan().underlined()]),
+                "".into(),
+                Line::from(vec![
+                    "  Or mention your thread ID ".into(),
+                    thread_id.clone().bold(),
+                    " in an existing issue.".into(),
                 ]),
-            )));
+            ])));
         });
 
         let no_item = SelectionItem {

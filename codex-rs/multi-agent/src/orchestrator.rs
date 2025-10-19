@@ -18,6 +18,7 @@ use codex_core::delegate_tool::DelegateToolError;
 use codex_core::delegate_tool::DelegateToolEvent as CoreDelegateToolEvent;
 use codex_core::delegate_tool::DelegateToolRequest;
 use codex_core::delegate_tool::DelegateToolRun;
+use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
@@ -26,10 +27,20 @@ use codex_core::protocol::SessionSource;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::task::JoinHandle;
+use tracing::error;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::AgentConfigLoader;
 use crate::AgentId;
+use crate::shadow::ShadowConfig;
+use crate::shadow::ShadowManager;
+use crate::shadow::ShadowMetrics;
+use crate::shadow::ShadowSessionSummary;
+use crate::shadow::ShadowSnapshot;
 
 fn prompt_preview(text: &str) -> Option<String> {
     let trimmed = text.trim();
@@ -52,6 +63,7 @@ pub struct DelegateRequest {
     pub user_initial: Vec<InputItem>,
     pub parent_run_id: Option<DelegateRunId>,
     pub mode: DelegateInvocationMode,
+    pub caller_conversation_id: Option<String>,
 }
 
 /// The prompt content forwarded to the sub-agent.
@@ -66,12 +78,39 @@ impl DelegatePrompt {
     }
 }
 
+struct SessionEventBroadcaster {
+    subscribers: Mutex<Vec<UnboundedSender<Event>>>,
+}
+
+impl SessionEventBroadcaster {
+    fn new() -> Self {
+        Self {
+            subscribers: Mutex::new(Vec::new()),
+        }
+    }
+
+    async fn subscribe(&self, initial: Option<Event>) -> UnboundedReceiver<Event> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        if let Some(event) = initial {
+            let _ = tx.send(event);
+        }
+        self.subscribers.lock().await.push(tx);
+        rx
+    }
+
+    async fn broadcast(&self, event: &Event) {
+        let mut subscribers = self.subscribers.lock().await;
+        subscribers.retain(|tx| tx.send(event.clone()).is_ok());
+    }
+}
+
 /// Progress and completion updates emitted by the orchestrator.
 #[derive(Debug, Clone)]
 pub enum DelegateEvent {
     Started {
         run_id: DelegateRunId,
         agent_id: AgentId,
+        owner_conversation_id: String,
         prompt: String,
         started_at: SystemTime,
         parent_run_id: Option<DelegateRunId>,
@@ -80,11 +119,13 @@ pub enum DelegateEvent {
     Delta {
         run_id: DelegateRunId,
         agent_id: AgentId,
+        owner_conversation_id: String,
         chunk: String,
     },
     Completed {
         run_id: DelegateRunId,
         agent_id: AgentId,
+        owner_conversation_id: String,
         output: Option<String>,
         duration: Duration,
         mode: DelegateSessionMode,
@@ -92,8 +133,14 @@ pub enum DelegateEvent {
     Failed {
         run_id: DelegateRunId,
         agent_id: AgentId,
+        owner_conversation_id: String,
         error: String,
         mode: DelegateSessionMode,
+    },
+    Info {
+        agent_id: AgentId,
+        conversation_id: String,
+        message: String,
     },
 }
 
@@ -148,12 +195,14 @@ pub enum DetachedRunStatusSummary {
 }
 
 /// Payload returned when entering an existing delegate session.
-#[derive(Clone)]
 pub struct ActiveDelegateSession {
     pub summary: DelegateSessionSummary,
     pub conversation: Arc<CodexConversation>,
     pub session_configured: Arc<SessionConfiguredEvent>,
     pub config: Config,
+    pub event_rx: UnboundedReceiver<Event>,
+    pub shadow_snapshot: Option<ShadowSnapshot>,
+    pub shadow_summary: Option<ShadowSessionSummary>,
 }
 
 /// Lightweight controller that spins up sub-agent conversations on demand and
@@ -172,6 +221,8 @@ pub struct AgentOrchestrator {
     conversation_runs: Mutex<HashMap<String, DelegateRunId>>,
     detached_runs: Mutex<HashMap<DelegateRunId, DetachedRunRecord>>,
     max_concurrent_runs: usize,
+    shadow_manager: Arc<ShadowManager>,
+    run_owner_conversations: Mutex<HashMap<DelegateRunId, String>>,
 }
 
 impl AgentOrchestrator {
@@ -183,6 +234,7 @@ impl AgentOrchestrator {
         config_overrides: ConfigOverrides,
         allowed_agents: Vec<AgentId>,
         max_concurrent_runs: usize,
+        shadow_config: ShadowConfig,
     ) -> Self {
         let loader = AgentConfigLoader::new(global_codex_home.into());
         Self {
@@ -199,6 +251,8 @@ impl AgentOrchestrator {
             conversation_runs: Mutex::new(HashMap::new()),
             detached_runs: Mutex::new(HashMap::new()),
             max_concurrent_runs: max_concurrent_runs.max(1),
+            shadow_manager: Arc::new(ShadowManager::new(shadow_config)),
+            run_owner_conversations: Mutex::new(HashMap::new()),
         }
     }
 
@@ -224,6 +278,7 @@ impl AgentOrchestrator {
         if let Some(conversation_id) = self.run_conversations.lock().await.remove(run_id) {
             self.conversation_runs.lock().await.remove(&conversation_id);
         }
+        self.run_owner_conversations.lock().await.remove(run_id);
     }
 
     pub async fn parent_run_for_conversation(
@@ -270,9 +325,29 @@ impl AgentOrchestrator {
 
         let parent_run_id = request.parent_run_id.clone();
         let prompt_text = request.prompt.text.clone();
+        let owner_conversation = if let Some(owner) = request.caller_conversation_id.clone() {
+            Some(owner)
+        } else if let Some(parent) = parent_run_id.as_ref() {
+            let guard = self.run_owner_conversations.lock().await;
+            guard.get(parent).cloned()
+        } else {
+            None
+        };
+        if let Some(owner) = owner_conversation.clone() {
+            self.run_owner_conversations
+                .lock()
+                .await
+                .insert(run_id.clone(), owner);
+        }
+        let owner_conversation_id = owner_conversation.clone().unwrap_or_default();
+        if owner_conversation_id.is_empty() {
+            tracing::warn!(run_id = %run_id, "delegate run missing owner conversation id");
+        }
+
         self.emit(DelegateEvent::Started {
             run_id: run_id.clone(),
             agent_id: request.agent_id.clone(),
+            owner_conversation_id: owner_conversation_id.clone(),
             prompt: prompt_text,
             started_at: SystemTime::now(),
             parent_run_id: parent_run_id.clone(),
@@ -314,6 +389,7 @@ impl AgentOrchestrator {
                         .emit(DelegateEvent::Completed {
                             run_id: run_id_clone.clone(),
                             agent_id,
+                            owner_conversation_id: owner_conversation_id.clone(),
                             output: message,
                             duration,
                             mode: output.mode,
@@ -328,6 +404,7 @@ impl AgentOrchestrator {
                         .emit(DelegateEvent::Failed {
                             run_id: run_id_clone.clone(),
                             agent_id: err.agent_id,
+                            owner_conversation_id: owner_conversation_id.clone(),
                             error: err.error,
                             mode: err.mode,
                         })
@@ -351,6 +428,68 @@ impl AgentOrchestrator {
         listeners.retain(|tx| tx.send(event.clone()).is_ok());
     }
 
+    pub async fn owner_conversation_for_run(&self, run_id: &DelegateRunId) -> Option<String> {
+        self.run_owner_conversations
+            .lock()
+            .await
+            .get(run_id)
+            .cloned()
+    }
+
+    async fn record_shadow_user_inputs(
+        &self,
+        agent_id: Option<&AgentId>,
+        conversation_id: &str,
+        inputs: &[InputItem],
+    ) {
+        if inputs.is_empty() {
+            return;
+        }
+        let Some(agent_id) = agent_id else { return };
+        if let Err(err) = self
+            .shadow_manager
+            .record_user_inputs(conversation_id, agent_id, inputs)
+            .await
+        {
+            error!(error = %err, conversation_id, "failed to record shadow user inputs");
+        }
+    }
+
+    async fn record_shadow_event(
+        &self,
+        agent_id: Option<&AgentId>,
+        conversation_id: &str,
+        event: &Event,
+    ) {
+        let Some(agent_id) = agent_id else { return };
+        if let Err(err) = self
+            .shadow_manager
+            .record_event(conversation_id, agent_id, event)
+            .await
+        {
+            error!(error = %err, conversation_id, "failed to record shadow event");
+        }
+    }
+
+    async fn record_shadow_agent_outputs(
+        &self,
+        agent_id: Option<&AgentId>,
+        conversation_id: &str,
+        outputs: &[String],
+    ) {
+        if outputs.is_empty() {
+            return;
+        }
+        let Some(agent_id) = agent_id else { return };
+        if let Err(err) = self
+            .shadow_manager
+            .record_agent_outputs(conversation_id, agent_id, outputs)
+            .await
+        {
+            error!(error = %err, conversation_id, "failed to record shadow output");
+        }
+    }
+
     /// Return the list of configured agent ids available for delegation.
     pub fn allowed_agents(&self) -> &[AgentId] {
         &self.allowed_agents
@@ -365,6 +504,51 @@ impl AgentOrchestrator {
             .collect();
         summaries.sort_by(|a, b| b.last_interacted_at.cmp(&a.last_interacted_at));
         summaries
+    }
+
+    pub async fn shadow_snapshot(&self, conversation_id: &str) -> Option<ShadowSnapshot> {
+        self.shadow_manager.snapshot(conversation_id).await
+    }
+
+    pub async fn shadow_metrics(&self) -> ShadowMetrics {
+        self.shadow_manager.metrics().await
+    }
+
+    pub async fn shadow_session_summary(
+        &self,
+        conversation_id: &str,
+    ) -> Option<ShadowSessionSummary> {
+        self.shadow_manager.session_summary(conversation_id).await
+    }
+
+    pub async fn push_shadow_event(
+        &self,
+        agent_id: Option<&AgentId>,
+        conversation_id: &str,
+        event: &Event,
+    ) {
+        self.record_shadow_event(agent_id, conversation_id, event)
+            .await;
+    }
+
+    pub async fn push_shadow_user_inputs(
+        &self,
+        agent_id: Option<&AgentId>,
+        conversation_id: &str,
+        inputs: &[InputItem],
+    ) {
+        self.record_shadow_user_inputs(agent_id, conversation_id, inputs)
+            .await;
+    }
+
+    pub async fn push_shadow_outputs(
+        &self,
+        agent_id: Option<&AgentId>,
+        conversation_id: &str,
+        outputs: &[String],
+    ) {
+        self.record_shadow_agent_outputs(agent_id, conversation_id, outputs)
+            .await;
     }
 
     /// Return detached runs that are not yet ready to attach or have failed.
@@ -433,23 +617,50 @@ impl AgentOrchestrator {
         &self,
         conversation_id: &str,
     ) -> Result<ActiveDelegateSession, OrchestratorError> {
-        let mut sessions = self.sessions.lock().await;
-        let entry = sessions
-            .get_mut(conversation_id)
-            .ok_or_else(|| OrchestratorError::SessionNotFound(conversation_id.to_string()))?;
-        entry.summary.last_interacted_at = SystemTime::now();
+        let (summary, conversation, session_configured, config, events) = {
+            let mut sessions = self.sessions.lock().await;
+            let entry = sessions
+                .get_mut(conversation_id)
+                .ok_or_else(|| OrchestratorError::SessionNotFound(conversation_id.to_string()))?;
+            entry.summary.last_interacted_at = SystemTime::now();
+            (
+                entry.summary.clone(),
+                entry.conversation.clone(),
+                entry.session_configured.clone(),
+                entry.config.clone(),
+                Arc::clone(&entry.events),
+            )
+        };
+
+        let initial_event = Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured((*session_configured).clone()),
+        };
+        let event_rx = events.subscribe(Some(initial_event)).await;
+        let shadow_snapshot = self.shadow_manager.snapshot(conversation_id).await;
+        let shadow_summary = self.shadow_manager.session_summary(conversation_id).await;
+
         Ok(ActiveDelegateSession {
-            summary: entry.summary.clone(),
-            conversation: entry.conversation.clone(),
-            session_configured: entry.session_configured.clone(),
-            config: entry.config.clone(),
+            summary,
+            conversation,
+            session_configured,
+            config,
+            event_rx,
+            shadow_snapshot,
+            shadow_summary,
         })
     }
 
     /// Remove a delegate session – used when the conversation is closed or no longer usable.
     pub async fn remove_session(&self, conversation_id: &str) {
         let mut sessions = self.sessions.lock().await;
-        sessions.remove(conversation_id);
+        if let Some(session) = sessions.remove(conversation_id)
+            && let Some(task) = session.event_task
+        {
+            task.abort();
+        }
+        drop(sessions);
+        self.shadow_manager.remove_session(conversation_id).await;
     }
 
     /// Refresh the session's last-interacted timestamp without opening it.
@@ -458,10 +669,12 @@ impl AgentOrchestrator {
         if let Some(entry) = sessions.get_mut(conversation_id) {
             entry.summary.last_interacted_at = SystemTime::now();
         }
+        drop(sessions);
+        self.shadow_manager.touch(conversation_id).await;
     }
 
-    async fn store_session(&self, success: &DelegateSuccess) {
-        let mut sessions = self.sessions.lock().await;
+    async fn store_session(self: &Arc<Self>, success: &DelegateSuccess) {
+        let events = Arc::new(SessionEventBroadcaster::new());
         let summary = DelegateSessionSummary {
             conversation_id: success.conversation_id.clone(),
             agent_id: success.agent_id.clone(),
@@ -469,15 +682,63 @@ impl AgentOrchestrator {
             cwd: success.cwd.clone(),
             mode: success.mode,
         };
-        sessions.insert(
+
+        let mut sessions = self.sessions.lock().await;
+        if let Some(previous) = sessions.insert(
             success.conversation_id.clone(),
             StoredDelegateSession {
                 summary,
                 conversation: success.conversation.clone(),
                 session_configured: success.session_configured.clone(),
                 config: success.config.clone(),
+                events: Arc::clone(&events),
+                event_task: None,
             },
-        );
+        ) && let Some(task) = previous.event_task
+        {
+            task.abort();
+        }
+        drop(sessions);
+
+        let orchestrator = Arc::clone(self);
+        let conversation = success.conversation.clone();
+        let conversation_id = success.conversation_id.clone();
+        let agent_id = success.agent_id.clone();
+        let session_configured = success.session_configured.clone();
+        let events_clone = Arc::clone(&events);
+        let event_task = tokio::spawn(async move {
+            let session_configured_event = Event {
+                id: String::new(),
+                msg: EventMsg::SessionConfigured((*session_configured).clone()),
+            };
+            orchestrator
+                .record_shadow_event(Some(&agent_id), &conversation_id, &session_configured_event)
+                .await;
+
+            loop {
+                match conversation.next_event().await {
+                    Ok(event) => {
+                        orchestrator
+                            .record_shadow_event(Some(&agent_id), &conversation_id, &event)
+                            .await;
+                        events_clone.broadcast(&event).await;
+                    }
+                    Err(err) => {
+                        warn!(
+                            error = %err,
+                            conversation_id,
+                            "delegate conversation event stream ended"
+                        );
+                        break;
+                    }
+                }
+            }
+        });
+
+        let mut sessions = self.sessions.lock().await;
+        if let Some(entry) = sessions.get_mut(&success.conversation_id) {
+            entry.event_task = Some(event_task);
+        }
     }
 
     async fn mark_detached_ready(&self, run_id: &DelegateRunId, success: &DelegateSuccess) {
@@ -553,6 +814,19 @@ impl AgentOrchestrator {
         let session_configured = Arc::new(conversation_bundle.session_configured);
         let conversation = conversation_bundle.conversation;
 
+        if let Err(err) = self
+            .shadow_manager
+            .register_session(&conversation_id, &agent_id)
+            .await
+        {
+            error!(
+                error = %err,
+                conversation_id,
+                agent = %agent_id.as_str(),
+                "failed to initialize shadow session"
+            );
+        }
+
         let mut items = Vec::new();
         items.extend(request.user_initial.clone());
         if !request.prompt.text.trim().is_empty() {
@@ -569,6 +843,23 @@ impl AgentOrchestrator {
                 mode: session_mode,
             })?;
 
+        self.record_shadow_user_inputs(Some(&agent_id), &conversation_id, &request.user_initial)
+            .await;
+        if !request.prompt.text.trim().is_empty() {
+            self.record_shadow_user_inputs(
+                Some(&agent_id),
+                &conversation_id,
+                &[InputItem::Text {
+                    text: request.prompt.text.clone(),
+                }],
+            )
+            .await;
+        }
+
+        let owner_conversation_id = self
+            .owner_conversation_for_run(&run_id)
+            .await
+            .unwrap_or_default();
         let mut aggregated = String::new();
         loop {
             let event = conversation
@@ -580,6 +871,9 @@ impl AgentOrchestrator {
                     mode: session_mode,
                 })?;
 
+            self.record_shadow_event(Some(&agent_id), &conversation_id, &event)
+                .await;
+
             match event.msg {
                 EventMsg::AgentMessage(msg) => {
                     if aggregated.is_empty() {
@@ -587,6 +881,7 @@ impl AgentOrchestrator {
                         self.emit(DelegateEvent::Delta {
                             run_id: run_id.clone(),
                             agent_id: agent_id.clone(),
+                            owner_conversation_id: owner_conversation_id.clone(),
                             chunk: msg.message,
                         })
                         .await;
@@ -599,6 +894,7 @@ impl AgentOrchestrator {
                     self.emit(DelegateEvent::Delta {
                         run_id: run_id.clone(),
                         agent_id: agent_id.clone(),
+                        owner_conversation_id: owner_conversation_id.clone(),
                         chunk: delta.delta,
                     })
                     .await;
@@ -608,6 +904,15 @@ impl AgentOrchestrator {
                     let message = task_complete
                         .last_agent_message
                         .or_else(|| (!aggregated.is_empty()).then_some(aggregated.clone()));
+
+                    if let Some(output) = message.as_ref() {
+                        self.record_shadow_agent_outputs(
+                            Some(&agent_id),
+                            &conversation_id,
+                            &[output.clone()],
+                        )
+                        .await;
+                    }
 
                     return Ok(DelegateSuccess {
                         agent_id,
@@ -671,6 +976,8 @@ struct StoredDelegateSession {
     conversation: Arc<CodexConversation>,
     session_configured: Arc<SessionConfiguredEvent>,
     config: Config,
+    events: Arc<SessionEventBroadcaster>,
+    event_task: Option<JoinHandle<()>>,
 }
 
 struct DetachedRunRecord {
@@ -709,6 +1016,7 @@ impl MultiAgentDelegateAdapter {
             DelegateEvent::Started {
                 run_id,
                 agent_id,
+                owner_conversation_id: _,
                 prompt,
                 started_at,
                 parent_run_id,
@@ -723,6 +1031,7 @@ impl MultiAgentDelegateAdapter {
             DelegateEvent::Delta {
                 run_id,
                 agent_id,
+                owner_conversation_id: _,
                 chunk,
             } => CoreDelegateToolEvent::Delta {
                 run_id,
@@ -732,6 +1041,7 @@ impl MultiAgentDelegateAdapter {
             DelegateEvent::Completed {
                 run_id,
                 agent_id,
+                owner_conversation_id: _,
                 output,
                 duration,
                 mode: _,
@@ -744,12 +1054,21 @@ impl MultiAgentDelegateAdapter {
             DelegateEvent::Failed {
                 run_id,
                 agent_id,
+                owner_conversation_id: _,
                 error,
                 mode: _,
             } => CoreDelegateToolEvent::Failed {
                 run_id,
                 agent_id: agent_id.as_str().to_string(),
                 error,
+            },
+            DelegateEvent::Info {
+                agent_id,
+                conversation_id: _,
+                message,
+            } => CoreDelegateToolEvent::Info {
+                agent_id: agent_id.as_str().to_string(),
+                message,
             },
         }
     }
@@ -816,6 +1135,7 @@ impl DelegateToolAdapter for MultiAgentDelegateAdapter {
                 user_initial: Vec::new(),
                 parent_run_id,
                 mode,
+                caller_conversation_id,
             })
             .await
             .map_err(Self::map_error)?;

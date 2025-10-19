@@ -1009,9 +1009,9 @@ impl ChatComposer {
                             let message = format!(
                                 r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
                             );
-                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            self.app_event_tx.send_history_cell(Box::new(
                                 history_cell::new_info_event(message, None),
-                            )));
+                            ));
                             self.textarea.set_text(&original_input);
                             self.textarea.set_cursor(original_input.len());
                             return (InputResult::None, true);
@@ -1022,9 +1022,9 @@ impl ChatComposer {
                 let expanded_prompt = match expand_custom_prompt(&text, &self.custom_prompts) {
                     Ok(expanded) => expanded,
                     Err(err) => {
-                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        self.app_event_tx.send_history_cell(Box::new(
                             history_cell::new_error_event(err.user_message()),
-                        )));
+                        ));
                         self.textarea.set_text(&original_input);
                         self.textarea.set_cursor(original_input.len());
                         return (InputResult::None, true);
@@ -3064,7 +3064,7 @@ mod tests {
 
         let mut found_error = false;
         while let Ok(event) = rx.try_recv() {
-            if let AppEvent::InsertHistoryCell(cell) = event {
+            if let AppEvent::InsertHistoryCell { cell, .. } = event {
                 let message = cell
                     .display_lines(80)
                     .into_iter()
@@ -3110,7 +3110,7 @@ mod tests {
 
         let mut found_error = false;
         while let Ok(event) = rx.try_recv() {
-            if let AppEvent::InsertHistoryCell(cell) = event {
+            if let AppEvent::InsertHistoryCell { cell, .. } = event {
                 let message = cell
                     .display_lines(80)
                     .into_iter()

@@ -76,15 +76,25 @@ pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
 pub struct MultiAgentConfig {
     pub agents: Vec<String>,
     pub max_concurrent_delegates: usize,
+    pub enable_shadow_cache: bool,
+    pub max_shadow_sessions: Option<usize>,
+    pub max_shadow_memory_bytes: Option<usize>,
+    pub compress_shadows: bool,
 }
 
 pub const DEFAULT_MAX_CONCURRENT_DELEGATES: usize = 5;
+pub const DEFAULT_MAX_SHADOW_SESSIONS: usize = 5;
+pub const DEFAULT_MAX_SHADOW_MEMORY_BYTES: usize = 100 * 1024 * 1024; // 100 MiB
 
 impl Default for MultiAgentConfig {
     fn default() -> Self {
         Self {
             agents: Vec::new(),
             max_concurrent_delegates: DEFAULT_MAX_CONCURRENT_DELEGATES,
+            enable_shadow_cache: true,
+            max_shadow_sessions: Some(DEFAULT_MAX_SHADOW_SESSIONS),
+            max_shadow_memory_bytes: Some(DEFAULT_MAX_SHADOW_MEMORY_BYTES),
+            compress_shadows: false,
         }
     }
 }
@@ -1026,6 +1036,14 @@ pub struct MultiAgentToml {
     pub agents: Vec<String>,
     #[serde(default)]
     pub max_concurrent_delegates: Option<usize>,
+    #[serde(default)]
+    pub enable_shadow_cache: Option<bool>,
+    #[serde(default)]
+    pub max_shadow_sessions: Option<usize>,
+    #[serde(default)]
+    pub max_shadow_memory_bytes: Option<usize>,
+    #[serde(default)]
+    pub compress_shadows: Option<bool>,
 }
 
 impl ConfigToml {
@@ -1268,6 +1286,32 @@ impl Config {
             .unwrap_or(DEFAULT_MAX_CONCURRENT_DELEGATES)
             .max(1);
 
+        let enable_shadow_cache = cfg
+            .multi_agent
+            .as_ref()
+            .and_then(|ma| ma.enable_shadow_cache)
+            .unwrap_or(true);
+
+        let max_shadow_sessions = cfg
+            .multi_agent
+            .as_ref()
+            .and_then(|ma| ma.max_shadow_sessions)
+            .map(|value| if value == 0 { None } else { Some(value) })
+            .unwrap_or(Some(DEFAULT_MAX_SHADOW_SESSIONS));
+
+        let max_shadow_memory_bytes = cfg
+            .multi_agent
+            .as_ref()
+            .and_then(|ma| ma.max_shadow_memory_bytes)
+            .map(|value| if value == 0 { None } else { Some(value) })
+            .unwrap_or(Some(DEFAULT_MAX_SHADOW_MEMORY_BYTES));
+
+        let compress_shadows = cfg
+            .multi_agent
+            .as_ref()
+            .and_then(|ma| ma.compress_shadows)
+            .unwrap_or(false);
+
         let multi_agent = MultiAgentConfig {
             agents: normalize_multi_agent_agents(
                 cfg.multi_agent
@@ -1276,6 +1320,10 @@ impl Config {
                     .unwrap_or_default(),
             ),
             max_concurrent_delegates,
+            enable_shadow_cache,
+            max_shadow_sessions,
+            max_shadow_memory_bytes,
+            compress_shadows,
         };
 
         let include_plan_tool_flag = features.enabled(Feature::PlanTool);

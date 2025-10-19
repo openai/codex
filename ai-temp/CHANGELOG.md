@@ -2,6 +2,12 @@
 
 > Keep this file current; it documents the evolution of the multi-agent design work. An outdated changelog breaks the orchestrator timeline.
 
+## 2025-10-19
+- Reworked delegate event fan-in so each conversation feeds a dedicated `spawn_event_forwarder` and surfaces updates through `AppEvent::CodexEvent { conversation_id, event }`, keeping history rendering scoped to the active session.
+- Added shadow-session plumbing to the orchestrator (`ShadowManager`, per-session metrics, user/agent capture forwarding) and exposed the new telemetry through the TUI status panel.
+- Expanded the delegate app events (`DelegateShadow*`, `InsertHistoryCell { conversation_id, ... }`) and updated the TUI’s `SessionHandle` storage to hydrate from snapshots instead of replaying global history.
+- Refreshed `ai-temp/agents-shadow-client.md`, `ai-temp/orchestration-integration.md`, and the sample Codex home (`example-codex-home/AGENTS.md`) to describe per-session streams, `DelegateEvent::{Started,Delta,Completed,Failed}`, and the tightened coordinator instructions.
+
 ## 2025-10-16
 - Added batched delegate execution: the core handler now accepts `batch` payloads, launches every child run concurrently (respecting the orchestrator’s concurrency cap), and returns per-agent summaries in a single response.
 - Updated the TUI delegate tree to indent siblings (two spaces per depth) and keep the status banner aligned while multiple children stream at once; adjusted snapshot/unit coverage accordingly.

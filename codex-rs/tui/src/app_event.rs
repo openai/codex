@@ -4,6 +4,7 @@ use codex_common::approval_presets::ApprovalPreset;
 use codex_common::model_presets::ModelPreset;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
+use codex_core::protocol::InputItem;
 use codex_file_search::FileMatch;
 use codex_multi_agent::DelegateEvent;
 
@@ -17,7 +18,10 @@ use codex_core::protocol_config_types::ReasoningEffort;
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
-    CodexEvent(Event),
+    CodexEvent {
+        conversation_id: String,
+        event: Event,
+    },
 
     /// Start a new session.
     NewSession,
@@ -31,6 +35,27 @@ pub(crate) enum AppEvent {
 
     /// Update emitted from the orchestrator about delegate progress/completion.
     DelegateUpdate(DelegateEvent),
+
+    /// Forward delegate conversation events back to the orchestrator for shadow caching.
+    DelegateShadowEvent {
+        conversation_id: String,
+        event: Event,
+    },
+
+    /// Record user inputs submitted while inside a delegate session.
+    DelegateShadowUserInput {
+        conversation_id: String,
+        inputs: Vec<InputItem>,
+    },
+
+    /// Record agent outputs captured from the delegate session (e.g., summary blocks).
+    DelegateShadowAgentOutput {
+        conversation_id: String,
+        outputs: Vec<String>,
+    },
+
+    /// Request the app to gather and render `/status` information.
+    ShowStatus,
 
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there
@@ -47,7 +72,10 @@ pub(crate) enum AppEvent {
     /// Result of computing a `/diff` command.
     DiffResult(String),
 
-    InsertHistoryCell(Box<dyn HistoryCell>),
+    InsertHistoryCell {
+        conversation_id: Option<String>,
+        cell: Box<dyn HistoryCell>,
+    },
 
     StartCommitAnimation,
     StopCommitAnimation,

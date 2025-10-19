@@ -25,7 +25,7 @@ This document describes how to wire true sub-agent orchestration into the Codex 
   Sub-agent sessions use the same `ConversationManager` entry points. The orchestrator calls `ConversationManager::new_conversation` with the agent-specific `Config` so all persistence automatically lands in `~/.codex/agents/<id>/` (per §2.2).
 
 - **Primary session**  
-  Unchanged: `tui::App` (`codex-rs/tui/src/app.rs:78`) continues to own a `ConversationManager` for the main agent. The orchestrator is injected so it can spawn additional conversations on demand.
+  Unchanged: `tui::App` (`codex-rs/tui/src/app.rs`) continues to own a `ConversationManager` for the main agent. The orchestrator is injected so it can spawn additional conversations on demand while keeping each conversation’s event stream isolated.
 
 ### 1.2 Execution Flow
 
@@ -45,10 +45,10 @@ This document describes how to wire true sub-agent orchestration into the Codex 
    - The orchestrator forwards the translated prompt into the sub-agent conversation (`conversation.submit`).  
    - Streamed `Event` values are intercepted before they reach the UI. For every event:
      - Persist to the sub-agent transcript as normal (handled by core).
-     - Convert to orchestrator messages (`DelegateProgress`, `DelegateOutput`), then forward to the primary session via a new `AppEvent::DelegateUpdate`. Nested runs simply push additional `Started` events with greater depth.
+     - Convert to orchestrator messages (`DelegateEvent::Started` / `Delta` / `Completed` / `Failed`) that always carry the owning conversation id. The TUI routes those updates to the matching session regardless of which tab the user is viewing. Nested runs emit additional `Started` events with increasing depth.
 
 5. **Completion and summary**  
-   - When `EventMsg::TaskComplete` fires, the orchestrator synthesizes a summary cell (e.g., `history_cell::AgentMessageCell`) and injects it into the primary transcript via `AppEvent::InsertHistoryCell`.
+   - When `EventMsg::TaskComplete` fires, the orchestrator emits `DelegateEvent::Completed` with the owning conversation id. The TUI enqueues the child’s summary for its parent session, then renders it when the parent becomes active so siblings never see each other’s output.
    - Store a compact record (duration, exit status) for `/status` display and optional audit logging (`~/.codex/log/multi-agent.log` per `ai-temp/persistence-design.md`).
 
 6. **Cleanup**  
@@ -64,18 +64,18 @@ This document describes how to wire true sub-agent orchestration into the Codex 
 | --- | --- | --- |
 | Orchestrator instantiation | `codex-rs/tui/src/app.rs:82` | Inject an `AgentOrchestrator` alongside the existing `ConversationManager`. |
 | Slash-command parsing | `codex-rs/tui/src/slash_command.rs` & `codex-rs/tui/src/chatwidget.rs:1126` | Add `/delegate` (or `/agent`) command to open a delegate picker or dispatch a delegate request. |
-| App event handling | `codex-rs/tui/src/app.rs:247` (`while let Some(event)`) | Route new `AppEvent::DelegateRequest` to `AgentOrchestrator::handle_request`. |
-| Event fan-in | `codex-rs/tui/src/app.rs:330` | Handle `AppEvent::DelegateUpdate` to mutate transcript/history cells. |
+| App event handling | `codex-rs/tui/src/app.rs:600` (`while let Some(event)`) | Match on `AppEvent::DelegateUpdate` / `AppEvent::DelegateShadow*` and push updates into the session identified by `conversation_id`. |
+| Event fan-in | `codex-rs/tui/src/app.rs:600` | Handle `AppEvent::CodexEvent` and `AppEvent::InsertHistoryCell` so each session only consumes its own stream. |
 | Status card | `codex-rs/tui/src/status/card.rs:68` | Pull orchestrator metrics (active agents, last run) to display in `/status`. |
 
 ### 2.2 Persistence
 
 - Sub-agent sessions reuse existing persistence automatically because `Config::codex_home` already points at `~/.codex/agents/<id>` once we load through `AgentConfigLoader`.
-- For the primary history: add summary inserts via `AppEvent::InsertHistoryCell` (`codex-rs/tui/src/app_event.rs:31`). No changes needed in core rollout recording.
+- For the primary history: emit `DelegateEvent::Completed` / `Failed` with the owning conversation id and let the TUI enqueue summaries for the parent session. No changes needed in core rollout recording.
 
 ### 2.3 Error Handling
 
-- Map orchestration errors to `AppEvent::InsertHistoryCell` with `history_cell::new_error_event` so failures surface in the main transcript.
+- Map orchestration errors to `DelegateEvent::Failed`; the TUI turns those into error cells for the parent session.
 - Log details with `tracing::error!` inside the orchestrator, aligning with the `ai-temp/error-handling.md` guidance.
 
 ---
@@ -95,7 +95,7 @@ This document describes how to wire true sub-agent orchestration into the Codex 
   - Show a header `↳ rust_test_writer (success in 23s)` and embed the sub-agent's final answer.  
   - Link to the sub-agent session path using the existing `SessionHeader` styling helpers (`codex-rs/tui/src/chatwidget/session_header.rs`).
 
-- While the sub-agent runs, insert a “progress” cell (spinner) similar to exec command cells (`codex-rs/tui/src/exec_cell/render.rs:157`). Update via `DelegateProgress` events.
+- While the sub-agent runs, insert a “progress” cell (spinner) similar to exec command cells (`codex-rs/tui/src/exec_cell/render.rs:157`). Update via `DelegateEvent::Delta` messages.
 
 ### 3.3 Status View
 
@@ -118,9 +118,9 @@ This document describes how to wire true sub-agent orchestration into the Codex 
      ```rust
      pub struct AgentOrchestrator { /* … */ }
      impl AgentOrchestrator {
-         pub async fn available_agents(&self) -> Result<Vec<AgentId>>;
-         pub async fn delegate(&self, request: DelegateRequest) -> Result<DelegateHandle>;
-         pub fn subscribe(&self) -> mpsc::UnboundedReceiver<DelegateUpdate>;
+        pub async fn available_agents(&self) -> Result<Vec<AgentId>>;
+        pub async fn delegate(&self, request: DelegateRequest) -> Result<DelegateRunId>;
+        pub fn subscribe(&self) -> mpsc::UnboundedReceiver<DelegateEvent>;
      }
      ```
    - This keeps the TUI glue thin and defers heavy logic to the crate that already knows how to load configs.

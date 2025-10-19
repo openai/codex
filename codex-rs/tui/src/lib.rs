@@ -20,6 +20,7 @@ use codex_core::protocol::SessionSource;
 use codex_multi_agent::AgentContext;
 use codex_multi_agent::AgentId;
 use codex_multi_agent::AgentOrchestrator;
+use codex_multi_agent::shadow::ShadowConfig;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
@@ -532,6 +533,12 @@ async fn run_ratatui_app(
         delegate_config_overrides,
         allowed_agents,
         config.multi_agent.max_concurrent_delegates,
+        ShadowConfig::apply_defaults(
+            config.multi_agent.enable_shadow_cache,
+            config.multi_agent.max_shadow_sessions,
+            config.multi_agent.max_shadow_memory_bytes,
+            config.multi_agent.compress_shadows,
+        ),
     ));
 
     // Determine resume behavior: explicit id, then resume last, then picker.

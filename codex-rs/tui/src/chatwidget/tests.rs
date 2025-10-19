@@ -240,9 +240,11 @@ async fn helpers_are_available_and_do_not_panic() {
         auth_manager,
         feedback: codex_feedback::CodexFeedback::new(),
     };
-    let mut w = ChatWidget::new(init, conversation_manager);
+    let ChatWidgetSession { mut widget, .. } = ChatWidget::new_session(init, conversation_manager)
+        .await
+        .expect("chat widget bootstrap");
     // Basic construction sanity.
-    let _ = &mut w;
+    let _ = &mut widget;
 }
 
 // --- Helpers for tests that need direct construction and event draining ---
@@ -302,6 +304,7 @@ fn make_chatwidget_manual() -> (
         delegate_user_frames: Vec::new(),
         delegate_agent_frames: Vec::new(),
         pending_delegate_context: Vec::new(),
+        shadow_updates_suppressed: false,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
     };
@@ -324,7 +327,7 @@ fn drain_insert_history(
 ) -> Vec<Vec<ratatui::text::Line<'static>>> {
     let mut out = Vec::new();
     while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = ev {
+        if let AppEvent::InsertHistoryCell { cell, .. } = ev {
             let mut lines = cell.display_lines(80);
             if !cell.is_stream_continuation() && !out.is_empty() && !lines.is_empty() {
                 lines.insert(0, "".into());
@@ -433,7 +436,7 @@ fn delegate_stream_deltas_and_restore_status() {
     chat.on_commit_tick();
     let mut saw_history_line = false;
     while let Ok(event) = rx.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = event {
+        if let AppEvent::InsertHistoryCell { cell, .. } = event {
             let text = lines_to_single_string(&cell.display_lines(80));
             if text.contains("First idea") {
                 saw_history_line = true;
@@ -501,7 +504,7 @@ fn nested_delegate_info_events_are_indented() {
 
     let mut messages = Vec::new();
     while let Ok(event) = rx.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = event {
+        if let AppEvent::InsertHistoryCell { cell, .. } = event {
             messages.push(lines_to_single_string(&cell.display_lines(120)));
         }
     }
@@ -1412,7 +1415,7 @@ async fn binary_size_transcript_snapshot() {
                     };
                     chat.handle_codex_event(ev);
                     while let Ok(app_ev) = rx.try_recv() {
-                        if let AppEvent::InsertHistoryCell(cell) = app_ev {
+                        if let AppEvent::InsertHistoryCell { cell, .. } = app_ev {
                             let mut lines = cell.display_lines(width);
                             if has_emitted_history
                                 && !cell.is_stream_continuation()
@@ -1433,7 +1436,7 @@ async fn binary_size_transcript_snapshot() {
                 {
                     chat.on_commit_tick();
                     while let Ok(app_ev) = rx.try_recv() {
-                        if let AppEvent::InsertHistoryCell(cell) = app_ev {
+                        if let AppEvent::InsertHistoryCell { cell, .. } = app_ev {
                             let mut lines = cell.display_lines(width);
                             if has_emitted_history
                                 && !cell.is_stream_continuation()
@@ -2565,7 +2568,7 @@ printf 'fenced within fenced\n'
             chat.on_commit_tick();
             let mut inserted_any = false;
             while let Ok(app_ev) = rx.try_recv() {
-                if let AppEvent::InsertHistoryCell(cell) = app_ev {
+                if let AppEvent::InsertHistoryCell { cell, .. } = app_ev {
                     let lines = cell.display_lines(width);
                     crate::insert_history::insert_history_lines(&mut term, lines);
                     inserted_any = true;

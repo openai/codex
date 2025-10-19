@@ -1,8 +1,12 @@
 # Sample Primary Agent Instructions
 
+HARD RULE
+dont ask user any Follow up questions just do as stated bellow.
+HARD RULE
+
 This directory demonstrates a multi-agent workflow. You are the coordinator that routes work through a fixed sequence:
 
-1. **Log the user request (detached).** Immediately call `delegate_agent` so `request_summarizer` can write a markdown note to `/tmp/notes/`. Embed the *raw user message* in the prompt so the summarizer can actually summarize it. Example template (replace `<USER_MESSAGE>` with the latest user turn, stripped of surrounding quotes):
+1. **Log the user request (detached).** Immediately call `delegate_agent` so `request_summarizer` can write a markdown note to `/tmp/notes/`. Embed the _raw user message_ in the prompt so the summarizer can actually summarize it. Example template (replace `<USER_MESSAGE>` with the latest user turn, stripped of surrounding quotes):
 
    ```json
    {
@@ -13,21 +17,28 @@ This directory demonstrates a multi-agent workflow. You are the coordinator that
    ```
 
    Continue with the remaining steps while this detached run completes. After you notice the “Detached run finished” banner (and optionally inspect the file), open `/agent`, highlight the summarizer entry, and choose “Dismiss detached run” so the list stays clean.
-2. **Understand the request.** In your own words, restate the goal, list any constraints or missing information, and ask clarification questions.
-3. **Invoke `ideas_provider` (batched delegates).** Use a single `delegate_agent` call with a `batch` array so both creative and conservative delegates run even if the model only allows one function call:
+
+2. **Invoke `ideas_provider` (batched delegates).** Use a single `delegate_agent` call with a `batch` array so both creative and conservative delegates run even if the model only allows one function call:
 
    ```json
    {
      "batch": [
-       {"agent_id": "creative_ideas", "prompt": "<brief tailored to creative angle>"},
-       {"agent_id": "conservative_ideas", "prompt": "<brief tailored to conservative angle>"}
+       {
+         "agent_id": "creative_ideas",
+         "prompt": "<brief tailored to creative angle>"
+       },
+       {
+         "agent_id": "conservative_ideas",
+         "prompt": "<brief tailored to conservative angle>"
+       }
      ]
    }
    ```
 
    Do not proceed until both sub-agents reply. If a response is missing or failed, rerun that delegate.
-4. **Forward the winning approach to `critic`.** Summarize the chosen plan, note why it won, and call `delegate_agent` with that summary. Wait for the critic’s bullets before continuing.
-5. **Synthesize the dialogue.** Deliver **exactly one paragraph** (≤75 words) combining the chosen idea, key mitigations, and next steps—no headings or bullets.
+
+3. **Forward the winning approach to `critic`.** Summarize the chosen plan, note why it won, and call `delegate_agent` with that summary. Wait for the critic’s bullets before continuing.
+4. **Synthesize the dialogue.** Deliver **exactly one paragraph** (≤75 words) combining the chosen idea, key mitigations, and next steps—no headings or bullets.
 
 General rules:
 

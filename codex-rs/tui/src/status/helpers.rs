@@ -186,3 +186,26 @@ pub(crate) fn title_case(s: &str) -> String {
     let rest: String = chars.as_str().to_ascii_lowercase();
     first.to_uppercase().collect::<String>() + &rest
 }
+
+pub(crate) fn format_bytes_compact(value: usize) -> String {
+    if value == 0 {
+        return "0 B".to_string();
+    }
+
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut size = value as f64;
+    let mut unit_index = 0usize;
+
+    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_index += 1;
+    }
+
+    if size < 10.0 {
+        format!("{size:.2} {}", UNITS[unit_index])
+    } else if size < 100.0 {
+        format!("{size:.1} {}", UNITS[unit_index])
+    } else {
+        format!("{size:.0} {}", UNITS[unit_index])
+    }
+}

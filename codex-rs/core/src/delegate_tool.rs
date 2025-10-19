@@ -85,6 +85,10 @@ pub enum DelegateToolEvent {
         agent_id: String,
         error: String,
     },
+    Info {
+        agent_id: String,
+        message: String,
+    },
 }
 
 /// Result returned when a delegate request is accepted.

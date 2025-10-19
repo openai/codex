@@ -21,6 +21,7 @@ use super::format::truncate_line_to_width;
 use super::helpers::compose_account_display;
 use super::helpers::compose_agents_summary;
 use super::helpers::compose_model_display;
+use super::helpers::format_bytes_compact;
 use super::helpers::format_directory_display;
 use super::helpers::format_tokens_compact;
 use super::rate_limits::RateLimitSnapshotDisplay;
@@ -44,6 +45,20 @@ pub(crate) struct StatusTokenUsageData {
     context_window: Option<StatusContextWindowData>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct StatusShadowData {
+    pub enabled: bool,
+    pub cached_sessions: usize,
+    pub max_sessions: Option<usize>,
+    pub total_events: usize,
+    pub total_user_inputs: usize,
+    pub total_agent_outputs: usize,
+    pub total_raw_bytes: usize,
+    pub total_compressed_bytes: usize,
+    pub memory_limit_bytes: Option<usize>,
+    pub compression_enabled: bool,
+}
+
 #[derive(Debug)]
 struct StatusHistoryCell {
     model_name: String,
@@ -56,6 +71,7 @@ struct StatusHistoryCell {
     session_id: Option<String>,
     token_usage: StatusTokenUsageData,
     rate_limits: StatusRateLimitData,
+    shadow: Option<StatusShadowData>,
 }
 
 pub(crate) fn new_status_output(
@@ -64,9 +80,17 @@ pub(crate) fn new_status_output(
     context_usage: Option<&TokenUsage>,
     session_id: &Option<ConversationId>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
+    shadow: Option<StatusShadowData>,
 ) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
-    let card = StatusHistoryCell::new(config, total_usage, context_usage, session_id, rate_limits);
+    let card = StatusHistoryCell::new(
+        config,
+        total_usage,
+        context_usage,
+        session_id,
+        rate_limits,
+        shadow,
+    );
 
     CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)])
 }
@@ -78,6 +102,7 @@ impl StatusHistoryCell {
         context_usage: Option<&TokenUsage>,
         session_id: &Option<ConversationId>,
         rate_limits: Option<&RateLimitSnapshotDisplay>,
+        shadow: Option<StatusShadowData>,
     ) -> Self {
         let config_entries = create_config_summary_entries(config);
         let (model_name, model_details) = compose_model_display(config, &config_entries);
@@ -121,6 +146,7 @@ impl StatusHistoryCell {
             session_id,
             token_usage,
             rate_limits,
+            shadow,
         }
     }
 
@@ -273,6 +299,13 @@ impl HistoryCell for StatusHistoryCell {
         if self.token_usage.context_window.is_some() {
             push_label(&mut labels, &mut seen, "Context window");
         }
+        if let Some(shadow) = self.shadow.as_ref() {
+            push_label(&mut labels, &mut seen, "Delegates");
+            if shadow.enabled {
+                push_label(&mut labels, &mut seen, "Delegate memory");
+                push_label(&mut labels, &mut seen, "Delegate events");
+            }
+        }
         self.collect_rate_limit_labels(&mut seen, &mut labels);
 
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
@@ -309,6 +342,51 @@ impl HistoryCell for StatusHistoryCell {
 
         if let Some(spans) = self.context_window_spans() {
             lines.push(formatter.line("Context window", spans));
+        }
+
+        if let Some(shadow) = self.shadow.as_ref() {
+            lines.push(Line::from(Vec::<Span<'static>>::new()));
+            if !shadow.enabled {
+                lines.push(
+                    formatter.line("Delegates", vec![Span::from("shadow cache disabled").dim()]),
+                );
+            } else {
+                let delegate_label = if let Some(limit) = shadow.max_sessions {
+                    format!("{} cached (limit {limit})", shadow.cached_sessions)
+                } else {
+                    format!("{} cached", shadow.cached_sessions)
+                };
+                lines.push(formatter.line("Delegates", vec![Span::from(delegate_label)]));
+
+                let mut memory_spans =
+                    vec![Span::from(format_bytes_compact(shadow.total_raw_bytes))];
+                memory_spans.push(Span::from(" raw").dim());
+                if shadow.compression_enabled && shadow.total_compressed_bytes > 0 {
+                    memory_spans.push(Span::from(" (").dim());
+                    memory_spans.push(
+                        Span::from(format!(
+                            "{} compressed",
+                            format_bytes_compact(shadow.total_compressed_bytes)
+                        ))
+                        .dim(),
+                    );
+                    memory_spans.push(Span::from(")").dim());
+                }
+                if let Some(limit) = shadow.memory_limit_bytes {
+                    memory_spans.push(Span::from(" / ").dim());
+                    memory_spans.push(Span::from(format_bytes_compact(limit)));
+                    memory_spans.push(Span::from(" limit").dim());
+                } else {
+                    memory_spans.push(Span::from(" (no limit)").dim());
+                }
+                lines.push(formatter.line("Delegate memory", memory_spans));
+
+                let event_summary = format!(
+                    "{} events · {} inputs · {} outputs",
+                    shadow.total_events, shadow.total_user_inputs, shadow.total_agent_outputs
+                );
+                lines.push(formatter.line("Delegate events", vec![Span::from(event_summary)]));
+            }
         }
 
         lines.extend(self.rate_limit_lines(available_inner_width, &formatter));

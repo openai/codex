@@ -9,10 +9,11 @@
 
 ### 1. Continuous Recording
 
-- Spin up a `ShadowRecorder` alongside each delegate conversation. It subscribes to the same `CodexConversation` stream as the UI.
-- Do not stop after the first `TaskComplete`. Continue recording until the delegate session is explicitly closed (or we evict the shadow).
+- Spin up a `ShadowRecorder` alongside every conversation _including the primary session_. Each recorder listens to its **own** `CodexConversation` event feed; there is no shared “global UI stream”.
+- Do not stop after the first `TaskComplete`. Continue recording until that conversation is explicitly closed (or we evict the shadow).
 - Record every `EventMsg`, merge deltas with the same `StreamController` logic the live ChatWidget uses, and build ready-to-render `HistoryCell`s. The recorder should output the _exact_ transcript the live widget would show.
-- Track delegate capture frames (user inputs, agent outputs), tool events, plan updates, etc., so `ChatWidget::apply_delegate_summary` remains accurate.
+- Inject synthetic `UserMessage` events for any text inputs we mirror into the delegate so the transcript always preserves the user’s prompt/context.
+- Track capture frames (user inputs, agent outputs), tool events, plan updates, etc., so `ChatWidget::apply_delegate_summary` remains accurate.
 - Maintain metrics per session: total events, total bytes (compressed + uncompressed), turn count, last updated timestamp.
 
 ### 2. Shadow Storage
@@ -39,17 +40,18 @@
 
 - `AgentOrchestrator` owns a `ShadowManager` alongside existing session maps.
 - `run_delegate_task` spawns the recorder task that feeds the manager; the recorder loop continues until `ShutdownComplete` and session removal.
+- Every conversation (primary and delegates) exposes a dedicated `event_rx` that yields only that session’s events. The orchestrator never multiplexes events across conversations.
 - `enter_session` returns:
   - `ActiveDelegateSession` with the live `CodexConversation`, `SessionConfigured`, `Config`.
   - Optional `ShadowSnapshot` (ready-to-render).
   - Latest `DelegateShadowMetrics`.
-- `active_sessions()`, `detached_runs()`, and new helper(s) provide structured metrics (session counts, bytes, events) for UI/telemetry.
+  - The per-session event receiver that the UI uses to drive rendering.
+- `active_sessions()`, `detached_runs()`, and helper(s) provide structured metrics (session counts, bytes, events) for UI/telemetry.
 
 ### 5. UI Integration
 
-- `App::activate_delegate_session`:
-  - If snapshot present → call `ChatWidget::hydrate_from_shadow(snapshot)` (no replay). Hydration should be O(1) with respect to the cached cells.
-  - If snapshot missing → show an info banner (“Loading #agent from rollout; shadow cache unavailable”), then fall back to `ConversationManager::resume_conversation_from_rollout`.
+- Each conversation gets its own `ChatWidget` + event receiver. The TUI keeps a `SessionHandle` map keyed by `conversation_id`; widgets never share a global history stream.
+- `App::activate_delegate_session` simply selects the appropriate handle. If a snapshot exists → call `ChatWidget::hydrate_from_shadow(snapshot)` so the transcript appears instantly. If snapshot missing → show an info banner (“Shadow cache unavailable; replaying from rollout”) and stream events from rollout.
 - `ChatWidget::hydrate_from_shadow` must:
   - Apply cached history cells directly.
   - Seed delegate capture queues.
@@ -61,6 +63,14 @@
 - Delegate picker entries:
   - Show shadow stats (bytes/events) when available.
   - Show an explicit “rollout replay required” marker when the snapshot is missing.
+- Live rendering always reads from the active session’s receiver; background sessions continue recording silently. No cross-session leakage is possible.
+
+### 6. Session Management & Rendering
+
+- `SessionHandle` (owned by `App`) stores the `ChatWidget`, cached history, shadow metadata, and recorder metrics for each `conversation_id`. Per-session receivers are consumed by `spawn_event_forwarder`, which converts them into `AppEvent::CodexEvent { conversation_id, event }` messages.
+- The main event loop listens for those `AppEvent::CodexEvent` messages and forwards each payload to the matching handle; background sessions keep receiving updates, but only the active widget redraws.
+- History rendering stays local: `ChatWidget::handle_codex_event` updates its own transcript, shadow state, and capture buffers in place, while shared inserts still flow through `AppEvent::InsertHistoryCell { conversation_id, cell }` so history never leaks across sessions.
+- Non-history UI signals (keyboard input, `/status`, delegate lifecycle commands, etc.) stay in the `AppEvent` bus but always carry the target `conversation_id` so the app can route them to the correct handle.
 
 ### 6. Observability
 
@@ -97,7 +107,7 @@
 
 1. Extract `ShadowRecorder` and shared rendering helpers (refactor out of `ChatWidget` into a reusable module).
 2. Implement `ShadowManager` with continuous recording, metrics tracking, and eviction.
-3. Update orchestrator APIs and events to consume the new manager.
-4. Rework TUI hydration, fallback messaging, `/status`, and delegate picker.
+3. Update orchestrator APIs to expose per-session event receivers + metrics.
+4. Rework the TUI to maintain `SessionHandle`s, hydrate from per-session shadows, and render strictly from session-scoped streams (no global history bus).
 5. Expand configuration, documentation, and telemetry.
 6. Add unit/integration tests, then roll out behind (optional) feature flag before removing old code paths.

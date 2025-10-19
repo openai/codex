@@ -26,6 +26,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use toml::Value as TomlValue;
 
+pub mod shadow;
+
 /// Identifier for a sub-agent directory under `~/.codex/agents`.
 ///
 /// The slug must be lowercase ASCII and may contain letters, numbers,
@@ -515,5 +517,65 @@ agents = ["ideas_provider", "critic"]
         assert_eq!(nested.get("value").unwrap().as_integer(), Some(2));
         assert_eq!(nested.get("extra").unwrap().as_bool(), Some(true));
         assert_eq!(base.get("new").unwrap().as_str(), Some("field"));
+    }
+
+    #[tokio::test]
+    async fn delegate_started_event_carries_owner() {
+        use crate::shadow::ShadowConfig;
+        use codex_core::delegate_tool::DelegateInvocationMode;
+        use codex_core::protocol::SessionSource;
+        use codex_core::{AuthManager, CodexAuth};
+        use std::sync::Arc;
+
+        let temp_home = tempdir().expect("tempdir");
+        let global = temp_home.path().join("global");
+        for dir in ["log", "sessions", "history", "mcp", "tmp"] {
+            fs::create_dir_all(global.join(dir)).expect("create dir");
+        }
+
+        let orchestrator = Arc::new(AgentOrchestrator::new(
+            &global,
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test")),
+            SessionSource::Cli,
+            CliConfigOverrides::default(),
+            ConfigOverrides::default(),
+            vec![AgentId::parse("critic").unwrap()],
+            1,
+            ShadowConfig::disabled(),
+        ));
+
+        let owner_id = "owner-conv".to_string();
+
+        let request = DelegateRequest {
+            agent_id: AgentId::parse("critic").unwrap(),
+            prompt: DelegatePrompt::new("hello"),
+            user_initial: Vec::new(),
+            parent_run_id: None,
+            mode: DelegateInvocationMode::Immediate,
+            caller_conversation_id: Some(owner_id.clone()),
+        };
+
+        let mut events = orchestrator.subscribe().await;
+        let run_id = orchestrator.delegate(request).await.unwrap();
+
+        while let Some(event) = events.recv().await {
+            if let DelegateEvent::Started {
+                run_id: started_run,
+                owner_conversation_id,
+                ..
+            } = event
+            {
+                assert_eq!(started_run, run_id);
+                assert_eq!(owner_conversation_id, owner_id);
+                assert_eq!(
+                    orchestrator
+                        .owner_conversation_for_run(&run_id)
+                        .await
+                        .as_deref(),
+                    Some(owner_conversation_id.as_str())
+                );
+                break;
+            }
+        }
     }
 }

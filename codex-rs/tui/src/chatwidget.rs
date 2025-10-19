@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_core::CodexConversation;
 use codex_core::config::Config;
 use codex_core::config_types::Notifications;
 use codex_core::git_info::current_branch_name;
@@ -34,16 +35,21 @@ use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
+use codex_core::protocol::USER_INSTRUCTIONS_CLOSE_TAG;
+use codex_core::protocol::USER_INSTRUCTIONS_OPEN_TAG;
 use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_multi_agent::shadow::ShadowSessionSummary;
+use codex_multi_agent::shadow::ShadowSnapshot;
 use codex_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyCode;
@@ -62,6 +68,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
 
@@ -92,11 +99,14 @@ use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
+use crate::status::StatusShadowData;
+use crate::status::format_bytes_compact;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
+use self::agent::AgentHandles;
 use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
 mod session_header;
@@ -247,6 +257,7 @@ pub struct DelegateDisplayLabel {
 pub struct DelegatePickerSession {
     pub summary: DelegateSessionSummary,
     pub run_id: Option<String>,
+    pub shadow: Option<ShadowSessionSummary>,
 }
 
 pub(crate) struct ChatWidget {
@@ -302,10 +313,17 @@ pub(crate) struct ChatWidget {
     delegate_user_frames: Vec<InputItem>,
     delegate_agent_frames: Vec<String>,
     pending_delegate_context: Vec<String>,
+    shadow_updates_suppressed: bool,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
+}
+
+pub(crate) struct ChatWidgetSession {
+    pub widget: ChatWidget,
+    pub conversation_id: ConversationId,
+    pub event_rx: UnboundedReceiver<Event>,
 }
 
 struct UserMessage {
@@ -351,6 +369,23 @@ impl ChatWidget {
         } else {
             None
         }
+    }
+
+    pub(crate) fn ensure_conversation_id(&mut self, conversation_id: &str) {
+        if let Some(current) = self.conversation_id.as_ref()
+            && current.to_string() == conversation_id
+        {
+            return;
+        }
+        if let Ok(parsed) = ConversationId::from_string(conversation_id) {
+            self.conversation_id = Some(parsed);
+            self.app_event_tx
+                .set_conversation_id(conversation_id.to_string());
+        }
+    }
+
+    fn emit_history_cell(&self, cell: Box<dyn HistoryCell>) {
+        self.app_event_tx.send_history_cell(cell);
     }
 
     fn flush_answer_stream_with_separator(&mut self) {
@@ -403,6 +438,50 @@ impl ChatWidget {
         self.delegate_context = summary;
         self.delegate_user_frames.clear();
         self.delegate_agent_frames.clear();
+        self.shadow_updates_suppressed = false;
+    }
+
+    fn delegate_conversation_id(&self) -> Option<&str> {
+        self.delegate_context
+            .as_ref()
+            .map(|summary| summary.conversation_id.as_str())
+    }
+
+    fn should_forward_shadow(&self) -> bool {
+        self.delegate_conversation_id().is_some() && !self.shadow_updates_suppressed
+    }
+
+    fn send_shadow_event(&self, event: Event) {
+        if let Some(conversation_id) = self.delegate_conversation_id() {
+            self.app_event_tx.send(AppEvent::DelegateShadowEvent {
+                conversation_id: conversation_id.to_string(),
+                event,
+            });
+        }
+    }
+
+    fn send_shadow_user_inputs(&self, inputs: Vec<InputItem>) {
+        if inputs.is_empty() {
+            return;
+        }
+        if let Some(conversation_id) = self.delegate_conversation_id() {
+            self.app_event_tx.send(AppEvent::DelegateShadowUserInput {
+                conversation_id: conversation_id.to_string(),
+                inputs,
+            });
+        }
+    }
+
+    fn send_shadow_outputs(&self, outputs: Vec<String>) {
+        if outputs.is_empty() {
+            return;
+        }
+        if let Some(conversation_id) = self.delegate_conversation_id() {
+            self.app_event_tx.send(AppEvent::DelegateShadowAgentOutput {
+                conversation_id: conversation_id.to_string(),
+                outputs,
+            });
+        }
     }
 
     pub(crate) fn take_delegate_capture(&mut self) -> Option<DelegateCapture> {
@@ -413,6 +492,29 @@ impl ChatWidget {
             user_inputs: std::mem::take(&mut self.delegate_user_frames),
             agent_outputs: std::mem::take(&mut self.delegate_agent_frames),
         })
+    }
+
+    pub(crate) fn hydrate_from_shadow(&mut self, snapshot: &ShadowSnapshot) {
+        self.shadow_updates_suppressed = true;
+        self.show_welcome_banner = false;
+        self.add_info_message(
+            format!(
+                "Attached to #{} (shadow snapshot)",
+                snapshot.agent_id.as_str()
+            ),
+            None,
+        );
+        for event in &snapshot.events {
+            self.dispatch_event_msg(Some(event.id.clone()), event.msg.clone(), true);
+        }
+        self.delegate_user_frames = snapshot.capture.user_inputs.clone();
+        self.delegate_agent_frames = snapshot.capture.agent_outputs.clone();
+        self.shadow_updates_suppressed = false;
+    }
+
+    pub(crate) fn clear_shadow_capture(&mut self) {
+        self.delegate_user_frames.clear();
+        self.delegate_agent_frames.clear();
     }
 
     pub(crate) fn apply_delegate_summary(
@@ -545,6 +647,9 @@ impl ChatWidget {
             && !message.trim().is_empty()
         {
             self.delegate_agent_frames.push(message.clone());
+            if self.should_forward_shadow() {
+                self.send_shadow_outputs(vec![message.clone()]);
+            }
         }
 
         let notification_response = last_agent_message.unwrap_or_default();
@@ -1032,83 +1137,40 @@ impl ChatWidget {
         .areas(area)
     }
 
-    pub(crate) fn new(
+    pub(crate) async fn new_session(
         common: ChatWidgetInit,
         conversation_manager: Arc<ConversationManager>,
-    ) -> Self {
-        let ChatWidgetInit {
-            config,
-            frame_requester,
-            app_event_tx,
-            initial_prompt,
-            initial_images,
-            enhanced_keys_supported,
-            auth_manager,
-            feedback,
-        } = common;
-        let mut rng = rand::rng();
-        let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
-        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
-
-        Self {
-            app_event_tx: app_event_tx.clone(),
-            frame_requester: frame_requester.clone(),
-            codex_op_tx,
-            bottom_pane: BottomPane::new(BottomPaneParams {
-                frame_requester,
-                app_event_tx,
-                has_input_focus: true,
-                enhanced_keys_supported,
-                placeholder_text: placeholder,
-                disable_paste_burst: config.disable_paste_burst,
-            }),
-            active_cell: None,
-            config: config.clone(),
-            auth_manager,
-            session_header: SessionHeader::new(config.model),
-            initial_user_message: create_initial_user_message(
-                initial_prompt.unwrap_or_default(),
-                initial_images,
-            ),
-            token_info: None,
-            rate_limit_snapshot: None,
-            rate_limit_warnings: RateLimitWarningState::default(),
-            stream_controller: None,
-            running_commands: HashMap::new(),
-            task_complete_pending: false,
-            interrupts: InterruptManager::new(),
-            reasoning_buffer: String::new(),
-            full_reasoning_buffer: String::new(),
-            current_status_header: String::from("Working"),
-            retry_status_header: None,
-            conversation_id: None,
-            queued_user_messages: VecDeque::new(),
-            show_welcome_banner: true,
-            suppress_session_configured_redraw: false,
-            pending_notification: None,
-            is_review_mode: false,
-            ghost_snapshots: Vec::new(),
-            ghost_snapshots_disabled: true,
-            needs_final_message_separator: false,
-            delegate_run: None,
-            delegate_runs_with_stream: HashSet::new(),
-            delegate_status_owner: None,
-            delegate_previous_status_header: None,
-            delegate_context: None,
-            delegate_user_frames: Vec::new(),
-            delegate_agent_frames: Vec::new(),
-            pending_delegate_context: Vec::new(),
-            last_rendered_width: std::cell::Cell::new(None),
-            feedback,
-        }
+    ) -> color_eyre::Result<ChatWidgetSession> {
+        let handles = spawn_agent(common.config.clone(), conversation_manager).await?;
+        Ok(Self::from_agent_handles(common, handles, false))
     }
 
     /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
-    pub(crate) fn new_from_existing(
+    pub(crate) fn new_session_from_existing(
         common: ChatWidgetInit,
-        conversation: std::sync::Arc<codex_core::CodexConversation>,
-        session_configured: codex_core::protocol::SessionConfiguredEvent,
-    ) -> Self {
+        conversation: Arc<CodexConversation>,
+        session_configured: SessionConfiguredEvent,
+    ) -> ChatWidgetSession {
+        let handles = spawn_agent_from_existing(conversation, session_configured);
+        Self::from_agent_handles(common, handles, true)
+    }
+
+    pub(crate) fn new_session_from_existing_with_events(
+        common: ChatWidgetInit,
+        conversation: Arc<CodexConversation>,
+        session_configured: Arc<SessionConfiguredEvent>,
+        event_rx: UnboundedReceiver<Event>,
+    ) -> ChatWidgetSession {
+        let handles =
+            agent::handles_from_existing_with_events(conversation, session_configured, event_rx);
+        Self::from_agent_handles(common, handles, true)
+    }
+
+    fn from_agent_handles(
+        common: ChatWidgetInit,
+        handles: AgentHandles,
+        suppress_session_configured_redraw: bool,
+    ) -> ChatWidgetSession {
         let ChatWidgetInit {
             config,
             frame_requester,
@@ -1122,13 +1184,18 @@ impl ChatWidget {
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
 
-        let codex_op_tx =
-            spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
+        let AgentHandles {
+            conversation_id,
+            op_tx,
+            event_rx,
+        } = handles;
 
-        Self {
+        app_event_tx.set_conversation_id(conversation_id.to_string());
+
+        let widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
-            codex_op_tx,
+            codex_op_tx: op_tx,
             bottom_pane: BottomPane::new(BottomPaneParams {
                 frame_requester,
                 app_event_tx,
@@ -1156,10 +1223,10 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
             retry_status_header: None,
-            conversation_id: None,
+            conversation_id: Some(conversation_id),
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
-            suppress_session_configured_redraw: true,
+            suppress_session_configured_redraw,
             pending_notification: None,
             is_review_mode: false,
             ghost_snapshots: Vec::new(),
@@ -1173,8 +1240,15 @@ impl ChatWidget {
             delegate_user_frames: Vec::new(),
             delegate_agent_frames: Vec::new(),
             pending_delegate_context: Vec::new(),
+            shadow_updates_suppressed: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
+        };
+
+        ChatWidgetSession {
+            widget,
+            conversation_id,
+            event_rx,
         }
     }
 
@@ -1361,7 +1435,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenDelegatePicker);
             }
             SlashCommand::Status => {
-                self.add_status_output();
+                self.app_event_tx.send(AppEvent::ShowStatus);
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -1374,35 +1448,42 @@ impl ChatWidget {
                 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
                 use codex_core::protocol::FileChange;
 
-                self.app_event_tx.send(AppEvent::CodexEvent(Event {
-                    id: "1".to_string(),
-                    // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-                    //     call_id: "1".to_string(),
-                    //     command: vec!["git".into(), "apply".into()],
-                    //     cwd: self.config.cwd.clone(),
-                    //     reason: Some("test".to_string()),
-                    // }),
-                    msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
-                        call_id: "1".to_string(),
-                        changes: HashMap::from([
-                            (
-                                PathBuf::from("/tmp/test.txt"),
-                                FileChange::Add {
-                                    content: "test".to_string(),
-                                },
-                            ),
-                            (
-                                PathBuf::from("/tmp/test2.txt"),
-                                FileChange::Update {
-                                    unified_diff: "+test\n-test2".to_string(),
-                                    move_path: None,
-                                },
-                            ),
-                        ]),
-                        reason: None,
-                        grant_root: Some(PathBuf::from("/tmp")),
-                    }),
-                }));
+                let conversation_id = self
+                    .conversation_id()
+                    .map(|id| id.to_string())
+                    .unwrap_or_default();
+                self.app_event_tx.send(AppEvent::CodexEvent {
+                    conversation_id,
+                    event: Event {
+                        id: "1".to_string(),
+                        // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+                        //     call_id: "1".to_string(),
+                        //     command: vec!["git".into(), "apply".into()],
+                        //     cwd: self.config.cwd.clone(),
+                        //     reason: Some("test".to_string()),
+                        // }),
+                        msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+                            call_id: "1".to_string(),
+                            changes: HashMap::from([
+                                (
+                                    PathBuf::from("/tmp/test.txt"),
+                                    FileChange::Add {
+                                        content: "test".to_string(),
+                                    },
+                                ),
+                                (
+                                    PathBuf::from("/tmp/test2.txt"),
+                                    FileChange::Update {
+                                        unified_diff: "+test\n-test2".to_string(),
+                                        move_path: None,
+                                    },
+                                ),
+                            ]),
+                            reason: None,
+                            grant_root: Some(PathBuf::from("/tmp")),
+                        }),
+                    },
+                });
             }
         }
     }
@@ -1432,7 +1513,7 @@ impl ChatWidget {
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
             self.needs_final_message_separator = true;
-            self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
+            self.emit_history_cell(active);
         }
     }
 
@@ -1446,7 +1527,7 @@ impl ChatWidget {
             self.flush_active_cell();
             self.needs_final_message_separator = true;
         }
-        self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+        self.emit_history_cell(cell);
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
@@ -1492,6 +1573,8 @@ impl ChatWidget {
             text = prefix;
         }
 
+        let forward_shadow = self.should_forward_shadow();
+
         let mut items: Vec<InputItem> = Vec::new();
 
         if !text.is_empty() {
@@ -1500,6 +1583,10 @@ impl ChatWidget {
 
         for path in image_paths {
             items.push(InputItem::LocalImage { path });
+        }
+
+        if forward_shadow {
+            self.send_shadow_user_inputs(items.clone());
         }
 
         if let Err(e) = self.codex_op_tx.send(Op::UserInput { items }) {
@@ -1587,8 +1674,16 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
+        let forward = if self.should_forward_shadow() {
+            Some(event.clone())
+        } else {
+            None
+        };
         let Event { id, msg } = event;
         self.dispatch_event_msg(Some(id), msg, false);
+        if let Some(event) = forward {
+            self.send_shadow_event(event);
+        }
     }
 
     /// Dispatch a protocol `EventMsg` to the appropriate handler.
@@ -1712,8 +1807,7 @@ impl ChatWidget {
                     let mut rendered: Vec<ratatui::text::Line<'static>> = vec!["".into()];
                     append_markdown(&explanation, None, &mut rendered, &self.config);
                     let body_cell = AgentMessageCell::new(rendered, false);
-                    self.app_event_tx
-                        .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
+                    self.app_event_tx.send_history_cell(Box::new(body_cell));
                 }
             } else {
                 let message_text =
@@ -1721,8 +1815,7 @@ impl ChatWidget {
                 let mut message_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
                 append_markdown(&message_text, None, &mut message_lines, &self.config);
                 let body_cell = AgentMessageCell::new(message_lines, true);
-                self.app_event_tx
-                    .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
+                self.app_event_tx.send_history_cell(Box::new(body_cell));
             }
         }
 
@@ -1736,9 +1829,20 @@ impl ChatWidget {
 
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
         match event.kind {
-            Some(InputMessageKind::EnvironmentContext)
-            | Some(InputMessageKind::UserInstructions) => {
-                // Skip XML‑wrapped context blocks in the transcript.
+            Some(InputMessageKind::EnvironmentContext) => {
+                // Environment context is primarily for the model; omit from transcript.
+            }
+            Some(InputMessageKind::UserInstructions) => {
+                let message = event.message.trim();
+                let cleaned = message
+                    .strip_prefix(USER_INSTRUCTIONS_OPEN_TAG)
+                    .and_then(|rest| rest.strip_suffix(USER_INSTRUCTIONS_CLOSE_TAG))
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .unwrap_or(message);
+                if !cleaned.is_empty() {
+                    self.add_to_history(history_cell::new_user_prompt(cleaned.to_string()));
+                }
             }
             Some(InputMessageKind::Plain) | None => {
                 let message = event.message.trim();
@@ -1810,7 +1914,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn add_status_output(&mut self) {
+    pub(crate) fn add_status_output(&mut self, shadow: Option<StatusShadowData>) {
         let default_usage = TokenUsage::default();
         let (total_usage, context_usage) = if let Some(ti) = &self.token_info {
             (&ti.total_token_usage, Some(&ti.last_token_usage))
@@ -1823,6 +1927,7 @@ impl ChatWidget {
             context_usage,
             &self.conversation_id,
             self.rate_limit_snapshot.as_ref(),
+            shadow,
         ));
     }
 
@@ -2058,12 +2163,43 @@ impl ChatWidget {
             } else {
                 ""
             };
+            let mut description_lines = vec![summary.cwd.display().to_string()];
+            let mut needs_replay = false;
+
+            if let Some(shadow) = entry.shadow {
+                let mut line = format!(
+                    "Shadow cache: {} raw",
+                    format_bytes_compact(shadow.raw_bytes)
+                );
+                if let Some(compressed) = shadow.compressed_bytes {
+                    line.push_str(&format!(
+                        " ({} compressed)",
+                        format_bytes_compact(compressed)
+                    ));
+                }
+                description_lines.push(line);
+                description_lines.push(format!(
+                    "Shadow events: {} · inputs {} · outputs {}",
+                    shadow.metrics.events, shadow.metrics.user_inputs, shadow.metrics.agent_outputs
+                ));
+            } else if self.config.multi_agent.enable_shadow_cache {
+                description_lines.push("Shadow cache unavailable; replay required".to_string());
+                needs_replay = true;
+            } else {
+                description_lines.push("Shadow cache disabled".to_string());
+            }
+
+            let replay_suffix = if needs_replay {
+                " · replay required"
+            } else {
+                ""
+            };
             let label = format!(
-                "{prefix}#{} · {}",
+                "{prefix}#{} · {}{replay_suffix}",
                 summary.agent_id.as_str(),
                 Self::format_delegate_timestamp(summary.last_interacted_at)
             );
-            let description = Some(summary.cwd.display().to_string());
+            let description = Some(description_lines.join("\n"));
             let is_current = active_delegate == Some(conversation_id.as_str());
             let conversation_id_for_action = conversation_id.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {

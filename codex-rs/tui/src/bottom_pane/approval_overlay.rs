@@ -160,7 +160,7 @@ impl ApprovalOverlay {
 
     fn handle_exec_decision(&self, id: &str, command: &[String], decision: ReviewDecision) {
         let cell = history_cell::new_approval_decision_cell(command.to_vec(), decision);
-        self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+        self.app_event_tx.send_history_cell(cell);
         self.app_event_tx.send(AppEvent::CodexOp(Op::ExecApproval {
             id: id.to_string(),
             decision,

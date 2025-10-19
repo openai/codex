@@ -125,7 +125,7 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
     }
 
     match event {
-        AppEvent::CodexEvent(ev) => {
+        AppEvent::CodexEvent { event: ev, .. } => {
             write_record("to_tui", "codex_event", ev);
         }
         AppEvent::NewSession => {
@@ -136,7 +136,7 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
             });
             LOGGER.write_json_line(value);
         }
-        AppEvent::InsertHistoryCell(cell) => {
+        AppEvent::InsertHistoryCell { cell, .. } => {
             let value = json!({
                 "ts": now_ts(),
                 "dir": "to_tui",

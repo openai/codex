@@ -5,14 +5,17 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ChatWidgetInit;
+use crate::chatwidget::ChatWidgetSession;
 use crate::chatwidget::DelegateDisplayLabel;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::resume_picker::ResumeSelection;
+use crate::status::StatusShadowData;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_ansi_escape::ansi_escape_line;
@@ -22,6 +25,7 @@ use codex_core::config::Config;
 use codex_core::config::persist_model_selection;
 use codex_core::config::set_hide_full_access_warning;
 use codex_core::model_family::find_family_for_model;
+use codex_core::protocol::Event;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
@@ -33,6 +37,9 @@ use codex_multi_agent::DelegateSessionMode;
 use codex_multi_agent::DelegateSessionSummary;
 use codex_multi_agent::DetachedRunSummary;
 use codex_multi_agent::delegate_tool_adapter;
+#[cfg(test)]
+use codex_multi_agent::shadow::ShadowConfig;
+use codex_multi_agent::shadow::ShadowSessionSummary;
 use codex_protocol::ConversationId;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -41,7 +48,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque, hash_map::Entry};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -50,6 +57,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::SystemTime;
 use tokio::select;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::unbounded_channel;
 // use uuid::Uuid;
 
@@ -60,10 +68,28 @@ pub struct AppExitInfo {
     pub update_action: Option<UpdateAction>,
 }
 
+fn spawn_event_forwarder(
+    app_event_tx: AppEventSender,
+    conversation_id: ConversationId,
+    mut event_rx: UnboundedReceiver<Event>,
+) {
+    tokio::spawn(async move {
+        let conversation_id = conversation_id.to_string();
+        while let Some(event) = event_rx.recv().await {
+            app_event_tx.send(AppEvent::CodexEvent {
+                conversation_id: conversation_id.clone(),
+                event,
+            });
+        }
+    });
+}
+
 pub(crate) struct App {
     pub(crate) server: Arc<ConversationManager>,
     pub(crate) app_event_tx: AppEventSender,
-    pub(crate) chat_widget: ChatWidget,
+    pub(crate) sessions: HashMap<String, SessionHandle>,
+    pub(crate) active_session_id: String,
+    pub(crate) primary_session_id: String,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) delegate_orchestrator: Arc<AgentOrchestrator>,
 
@@ -88,14 +114,9 @@ pub(crate) struct App {
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
     pub(crate) feedback: codex_feedback::CodexFeedback,
-    delegate_sessions: HashMap<String, DelegateSessionState>,
-    active_delegate: Option<String>,
-    active_delegate_summary: Option<DelegateSessionSummary>,
-    primary_chat_backup: Option<ChatWidget>,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
-    delegate_tree: DelegateTree,
-    delegate_status_owner: Option<String>,
+    run_parent_map: HashMap<String, String>,
 }
 
 #[derive(Default)]
@@ -114,6 +135,30 @@ struct DelegateNode {
 struct DelegateDisplay {
     depth: usize,
     label: DelegateDisplayLabel,
+}
+
+#[derive(Clone)]
+struct ChildCompletionSummary {
+    #[allow(dead_code)]
+    child_conversation_id: String,
+    label: DelegateDisplayLabel,
+    hint: Option<String>,
+    output: Option<String>,
+    #[allow(dead_code)]
+    mode: DelegateSessionMode,
+}
+
+#[derive(Clone)]
+enum ChildSummary {
+    Completion(ChildCompletionSummary),
+    Failure {
+        #[allow(dead_code)]
+        child_conversation_id: String,
+        label: DelegateDisplayLabel,
+        error: String,
+        #[allow(dead_code)]
+        mode: DelegateSessionMode,
+    },
 }
 
 impl DelegateTree {
@@ -231,19 +276,23 @@ impl App {
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
 
-        let chat_widget = match resume_selection {
+        let ChatWidgetSession {
+            widget: mut chat_widget,
+            conversation_id: primary_conversation_id,
+            event_rx: primary_event_rx,
+        } = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
-                    app_event_tx: app_event_tx.clone(),
+                    app_event_tx: app_event_tx.scoped(),
                     initial_prompt: initial_prompt.clone(),
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
                 };
-                ChatWidget::new(init, conversation_manager.clone())
+                ChatWidget::new_session(init, conversation_manager.clone()).await?
             }
             ResumeSelection::Resume(path) => {
                 let resumed = conversation_manager
@@ -259,14 +308,14 @@ impl App {
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
-                    app_event_tx: app_event_tx.clone(),
+                    app_event_tx: app_event_tx.scoped(),
                     initial_prompt: initial_prompt.clone(),
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
                 };
-                ChatWidget::new_from_existing(
+                ChatWidget::new_session_from_existing(
                     init,
                     resumed.conversation,
                     resumed.session_configured,
@@ -274,12 +323,29 @@ impl App {
             }
         };
 
+        let primary_session_id = primary_conversation_id.to_string();
+        chat_widget.ensure_conversation_id(&primary_session_id);
+
+        spawn_event_forwarder(
+            app_event_tx.clone(),
+            primary_conversation_id,
+            primary_event_rx,
+        );
+
+        let mut sessions = HashMap::new();
+        sessions.insert(
+            primary_session_id.clone(),
+            SessionHandle::new(chat_widget, None, DelegateSessionMode::Standard, None),
+        );
+
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
 
         let mut app = Self {
             server: conversation_manager,
             app_event_tx,
-            chat_widget,
+            sessions,
+            active_session_id: primary_session_id.clone(),
+            primary_session_id,
             auth_manager: auth_manager.clone(),
             delegate_orchestrator,
             config,
@@ -293,13 +359,8 @@ impl App {
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             feedback: feedback.clone(),
-            delegate_sessions: HashMap::new(),
-            active_delegate: None,
-            active_delegate_summary: None,
-            primary_chat_backup: None,
             pending_update_action: None,
-            delegate_tree: DelegateTree::default(),
-            delegate_status_owner: None,
+            run_parent_map: HashMap::new(),
         };
 
         let tui_events = tui.event_stream();
@@ -318,7 +379,7 @@ impl App {
         tui.terminal.clear()?;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
-            conversation_id: app.chat_widget.conversation_id(),
+            conversation_id: app.active_widget().and_then(ChatWidget::conversation_id),
             update_action: app.pending_update_action,
         })
     }
@@ -341,21 +402,25 @@ impl App {
                     // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
                     // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
                     let pasted = pasted.replace("\r", "\n");
-                    self.chat_widget.handle_paste(pasted);
+                    self.active_widget_mut().handle_paste(pasted);
                 }
                 TuiEvent::Draw => {
-                    self.chat_widget.maybe_post_pending_notification(tui);
+                    self.active_widget_mut()
+                        .maybe_post_pending_notification(tui);
                     if self
-                        .chat_widget
+                        .active_widget_mut()
                         .handle_paste_burst_tick(tui.frame_requester())
                     {
                         return Ok(true);
                     }
                     tui.draw(
-                        self.chat_widget.desired_height(tui.terminal.size()?.width),
+                        self.active_widget()
+                            .expect("active widget")
+                            .desired_height(tui.terminal.size()?.width),
                         |frame| {
-                            frame.render_widget_ref(&self.chat_widget, frame.area());
-                            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                            let widget = self.active_widget().expect("active widget");
+                            frame.render_widget_ref(widget, frame.area());
+                            if let Some((x, y)) = widget.cursor_pos(frame.area()) {
                                 frame.set_cursor_position((x, y));
                             }
                         },
@@ -366,49 +431,284 @@ impl App {
         Ok(true)
     }
 
+    pub(crate) fn active_widget(&self) -> Option<&ChatWidget> {
+        self.sessions
+            .get(&self.active_session_id)
+            .map(SessionHandle::widget)
+    }
+
+    pub(crate) fn active_widget_mut(&mut self) -> &mut ChatWidget {
+        self.sessions
+            .get_mut(&self.active_session_id)
+            .expect("active session handle")
+            .widget_mut()
+    }
+
+    fn render_history_cell(&mut self, cell: Arc<dyn HistoryCell>, tui: &mut tui::Tui) {
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+            t.insert_cell(cell.clone());
+            tui.frame_requester().schedule_frame();
+        }
+        self.transcript_cells.push(cell.clone());
+        let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+        if !display.is_empty() {
+            if !cell.is_stream_continuation() {
+                if self.has_emitted_history_lines {
+                    display.insert(0, Line::from(""));
+                } else {
+                    self.has_emitted_history_lines = true;
+                }
+            }
+            if self.overlay.is_some() {
+                self.deferred_history_lines.extend(display);
+            } else {
+                tui.insert_history_lines(display);
+            }
+        }
+    }
+
+    pub(crate) fn apply_active_history_from_handle(&mut self) {
+        if let Some(handle) = self.sessions.get(&self.active_session_id) {
+            self.transcript_cells = handle.history().to_vec();
+            self.has_emitted_history_lines = !self.transcript_cells.is_empty();
+        } else {
+            self.transcript_cells.clear();
+            self.has_emitted_history_lines = false;
+        }
+        self.deferred_history_lines.clear();
+    }
+
+    pub(crate) fn sync_active_handle_history(&mut self) {
+        if let Some(handle) = self.sessions.get_mut(&self.active_session_id) {
+            handle.set_history(self.transcript_cells.clone());
+        }
+    }
+
+    fn replay_active_session_from_last_user(&mut self, tui: &mut tui::Tui) {
+        let session_id = self.active_session_id.clone();
+        let width = tui.terminal.last_known_screen_size.width;
+
+        {
+            let Some(handle) = self.sessions.get_mut(&session_id) else {
+                return;
+            };
+            let header_label = handle
+                .summary
+                .as_ref()
+                .map(|summary| format!("#{}", summary.agent_id.as_str()))
+                .unwrap_or_else(|| "#main".to_string());
+
+            let header = format!("Attached to {header_label} (shadow snapshot)");
+            handle.widget_mut().add_info_message(header, None);
+            self.transcript_cells = handle.history().to_vec();
+            self.has_emitted_history_lines = !self.transcript_cells.is_empty();
+        }
+
+        let Some(handle) = self.sessions.get(&session_id) else {
+            return;
+        };
+        let history = handle.history();
+        if history.is_empty() {
+            return;
+        }
+
+        let replay_end = history.len().saturating_sub(1);
+        if replay_end == 0 {
+            return;
+        }
+
+        let mut start_idx = 0;
+        for idx in (0..replay_end).rev() {
+            if history[idx]
+                .as_any()
+                .downcast_ref::<UserHistoryCell>()
+                .is_some()
+            {
+                start_idx = idx;
+                break;
+            }
+        }
+
+        for cell in &history[start_idx..replay_end] {
+            let mut display = cell.display_lines(width);
+            if display.is_empty() {
+                continue;
+            }
+            if !cell.is_stream_continuation() {
+                if self.has_emitted_history_lines {
+                    display.insert(0, Line::from(""));
+                } else {
+                    self.has_emitted_history_lines = true;
+                }
+            }
+            tui.insert_history_lines(display);
+        }
+
+        self.flush_pending_child_summaries(&session_id);
+    }
+
+    fn enqueue_child_summary(&mut self, parent_id: &str, summary: ChildSummary) {
+        if let Some(parent) = self.sessions.get_mut(parent_id) {
+            if parent_id == self.active_session_id {
+                Self::render_child_summary_on_widget(parent.widget_mut(), summary);
+            } else {
+                parent.push_child_summary(summary);
+            }
+        } else {
+            tracing::warn!(
+                parent = %parent_id,
+                "unable to route delegate summary to parent conversation"
+            );
+        }
+    }
+
+    fn flush_pending_child_summaries(&mut self, session_id: &str) {
+        if let Some(handle) = self.sessions.get_mut(session_id) {
+            let summaries = handle.drain_child_summaries();
+            for summary in summaries {
+                Self::render_child_summary_on_widget(handle.widget_mut(), summary);
+            }
+        }
+    }
+
+    fn render_child_summary_on_widget(widget: &mut ChatWidget, summary: ChildSummary) {
+        match summary {
+            ChildSummary::Completion(data) => {
+                let ChildCompletionSummary {
+                    child_conversation_id: _,
+                    label,
+                    hint,
+                    output,
+                    mode: _,
+                } = data;
+                widget.add_delegate_completion(output.as_deref(), hint, &label);
+            }
+            ChildSummary::Failure {
+                child_conversation_id: _,
+                label,
+                error,
+                mode: _,
+            } => {
+                widget.add_error_message(format!("{} failed: {error}", label.base_label));
+            }
+        }
+    }
+
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
-                    app_event_tx: self.app_event_tx.clone(),
+                    app_event_tx: self.app_event_tx.scoped(),
                     initial_prompt: None,
                     initial_images: Vec::new(),
                     enhanced_keys_supported: self.enhanced_keys_supported,
                     auth_manager: self.auth_manager.clone(),
                     feedback: self.feedback.clone(),
                 };
-                self.chat_widget = ChatWidget::new(init, self.server.clone());
+                let mut session = ChatWidget::new_session(init, self.server.clone()).await?;
+                let session_conversation_id = session.conversation_id;
+                session
+                    .widget
+                    .ensure_conversation_id(&session_conversation_id.to_string());
+                spawn_event_forwarder(
+                    self.app_event_tx.clone(),
+                    session_conversation_id,
+                    session.event_rx,
+                );
+                self.sessions.insert(
+                    self.primary_session_id.clone(),
+                    SessionHandle::new(session.widget, None, DelegateSessionMode::Standard, None),
+                );
+                self.active_session_id = self.primary_session_id.clone();
+                self.apply_active_history_from_handle();
+                self.replay_active_session_from_last_user(tui);
+                self.sync_active_handle_history();
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::DelegateUpdate(update) => {
-                self.handle_delegate_update(update);
+                self.handle_delegate_update(update).await;
             }
-            AppEvent::InsertHistoryCell(cell) => {
+            AppEvent::DelegateShadowEvent {
+                conversation_id,
+                event,
+            } => {
+                let agent_id = self.agent_id_for_conversation(&conversation_id);
+                self.delegate_orchestrator
+                    .push_shadow_event(agent_id, &conversation_id, &event)
+                    .await;
+            }
+            AppEvent::DelegateShadowUserInput {
+                conversation_id,
+                inputs,
+            } => {
+                let agent_id = self.agent_id_for_conversation(&conversation_id);
+                self.delegate_orchestrator
+                    .push_shadow_user_inputs(agent_id, &conversation_id, &inputs)
+                    .await;
+            }
+            AppEvent::DelegateShadowAgentOutput {
+                conversation_id,
+                outputs,
+            } => {
+                let agent_id = self.agent_id_for_conversation(&conversation_id);
+                self.delegate_orchestrator
+                    .push_shadow_outputs(agent_id, &conversation_id, &outputs)
+                    .await;
+            }
+            AppEvent::ShowStatus => {
+                let metrics = self.delegate_orchestrator.shadow_metrics().await;
+                let ma = &self.config.multi_agent;
+                let shadow_data = if ma.enable_shadow_cache {
+                    Some(StatusShadowData {
+                        enabled: true,
+                        cached_sessions: metrics.session_count,
+                        max_sessions: ma.max_shadow_sessions,
+                        total_events: metrics.events,
+                        total_user_inputs: metrics.user_inputs,
+                        total_agent_outputs: metrics.agent_outputs,
+                        total_raw_bytes: metrics.total_bytes,
+                        total_compressed_bytes: metrics.total_compressed_bytes,
+                        memory_limit_bytes: ma.max_shadow_memory_bytes,
+                        compression_enabled: ma.compress_shadows,
+                    })
+                } else {
+                    Some(StatusShadowData {
+                        enabled: false,
+                        cached_sessions: metrics.session_count,
+                        max_sessions: ma.max_shadow_sessions,
+                        total_events: metrics.events,
+                        total_user_inputs: metrics.user_inputs,
+                        total_agent_outputs: metrics.agent_outputs,
+                        total_raw_bytes: metrics.total_bytes,
+                        total_compressed_bytes: metrics.total_compressed_bytes,
+                        memory_limit_bytes: ma.max_shadow_memory_bytes,
+                        compression_enabled: ma.compress_shadows,
+                    })
+                };
+                self.active_widget_mut().add_status_output(shadow_data);
+            }
+            AppEvent::InsertHistoryCell {
+                conversation_id,
+                cell,
+            } => {
+                let Some(target_id) = conversation_id else {
+                    tracing::error!("received history cell without conversation id; dropping");
+                    return Ok(true);
+                };
+
                 let cell: Arc<dyn HistoryCell> = cell.into();
-                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_cell(cell.clone());
-                    tui.frame_requester().schedule_frame();
-                }
-                self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-                if !display.is_empty() {
-                    // Only insert a separating blank line for new cells that are not
-                    // part of an ongoing stream. Streaming continuations should not
-                    // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
-                        if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
-                        } else {
-                            self.has_emitted_history_lines = true;
-                        }
+                if let Some(handle) = self.sessions.get_mut(&target_id) {
+                    handle.push_history(cell.clone());
+                    if target_id == self.active_session_id {
+                        self.render_history_cell(cell, tui);
                     }
-                    if self.overlay.is_some() {
-                        self.deferred_history_lines.extend(display);
-                    } else {
-                        tui.insert_history_lines(display);
-                    }
+                } else {
+                    tracing::warn!(
+                        conversation = %target_id,
+                        "received history cell for unknown conversation"
+                    );
                 }
             }
             AppEvent::StartCommitAnimation => {
@@ -431,10 +731,13 @@ impl App {
                 self.commit_anim_running.store(false, Ordering::Release);
             }
             AppEvent::CommitTick => {
-                self.chat_widget.on_commit_tick();
+                self.active_widget_mut().on_commit_tick();
             }
-            AppEvent::CodexEvent(event) => {
-                self.chat_widget.handle_codex_event(event);
+            AppEvent::CodexEvent {
+                conversation_id,
+                event,
+            } => {
+                self.handle_codex_event(&conversation_id, event);
             }
             AppEvent::ConversationHistory(ev) => {
                 self.on_conversation_history_for_backtrack(tui, ev).await?;
@@ -442,10 +745,10 @@ impl App {
             AppEvent::ExitRequest => {
                 return Ok(false);
             }
-            AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
+            AppEvent::CodexOp(op) => self.active_widget_mut().submit_op(op),
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
-                self.chat_widget.on_diff_complete();
+                self.active_widget_mut().on_diff_complete();
                 // Enter alternate screen using TUI helper and build pager lines
                 let _ = tui.enter_alt_screen();
                 let pager_lines: Vec<ratatui::text::Line<'static>> = if text.trim().is_empty() {
@@ -465,71 +768,74 @@ impl App {
                 }
             }
             AppEvent::FileSearchResult { query, matches } => {
-                self.chat_widget.apply_file_search_result(query, matches);
+                self.active_widget_mut()
+                    .apply_file_search_result(query, matches);
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
             }
             AppEvent::UpdateModel(model) => {
-                self.chat_widget.set_model(&model);
+                self.active_widget_mut().set_model(&model);
                 self.config.model = model.clone();
                 if let Some(family) = find_family_for_model(&model) {
                     self.config.model_family = family;
                 }
             }
             AppEvent::OpenReasoningPopup { model, presets } => {
-                self.chat_widget.open_reasoning_popup(model, presets);
+                self.active_widget_mut()
+                    .open_reasoning_popup(model, presets);
             }
             AppEvent::OpenFullAccessConfirmation { preset } => {
-                self.chat_widget.open_full_access_confirmation(preset);
+                self.active_widget_mut()
+                    .open_full_access_confirmation(preset);
             }
             AppEvent::PersistModelSelection { model, effort } => {
-                let profile = self.active_profile.as_deref();
-                match persist_model_selection(&self.config.codex_home, profile, &model, effort)
-                    .await
-                {
+                let profile = self.active_profile.clone();
+                let result = persist_model_selection(
+                    &self.config.codex_home,
+                    profile.as_deref(),
+                    &model,
+                    effort,
+                )
+                .await;
+
+                match result {
                     Ok(()) => {
                         let effort_label = effort
                             .map(|eff| format!(" with {eff} reasoning"))
                             .unwrap_or_else(|| " with default reasoning".to_string());
-                        if let Some(profile) = profile {
-                            self.chat_widget.add_info_message(
-                                format!(
-                                    "Model changed to {model}{effort_label} for {profile} profile"
-                                ),
-                                None,
-                            );
-                        } else {
-                            self.chat_widget.add_info_message(
-                                format!("Model changed to {model}{effort_label}"),
-                                None,
-                            );
-                        }
+                        let message = match profile.as_deref() {
+                            Some(profile) => format!(
+                                "Model changed to {model}{effort_label} for {profile} profile"
+                            ),
+                            None => format!("Model changed to {model}{effort_label}"),
+                        };
+                        self.active_widget_mut().add_info_message(message, None);
                     }
                     Err(err) => {
                         tracing::error!(
                             error = %err,
                             "failed to persist model selection"
                         );
-                        if let Some(profile) = profile {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to save model for profile `{profile}`: {err}"
-                            ));
-                        } else {
-                            self.chat_widget
-                                .add_error_message(format!("Failed to save default model: {err}"));
-                        }
+                        let message = match profile.as_deref() {
+                            Some(profile) => {
+                                format!("Failed to save model for profile `{profile}`: {err}")
+                            }
+                            None => format!("Failed to save default model: {err}"),
+                        };
+                        self.active_widget_mut().add_error_message(message);
                     }
                 }
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
-                self.chat_widget.set_approval_policy(policy);
+                self.active_widget_mut().set_approval_policy(policy);
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
-                self.chat_widget.set_sandbox_policy(policy);
+                self.active_widget_mut().set_sandbox_policy(policy);
             }
             AppEvent::UpdateFullAccessWarningAcknowledged(ack) => {
-                self.chat_widget.set_full_access_warning_acknowledged(ack);
+                self.active_widget_mut()
+                    .set_full_access_warning_acknowledged(ack);
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
                 if let Err(err) = set_hide_full_access_warning(&self.config.codex_home, true) {
@@ -537,13 +843,13 @@ impl App {
                         error = %err,
                         "failed to persist full access warning acknowledgement"
                     );
-                    self.chat_widget.add_error_message(format!(
+                    self.active_widget_mut().add_error_message(format!(
                         "Failed to save full access confirmation preference: {err}"
                     ));
                 }
             }
             AppEvent::OpenApprovalsPopup => {
-                self.chat_widget.open_approvals_popup();
+                self.active_widget_mut().open_approvals_popup();
             }
             AppEvent::OpenDelegatePicker => {
                 let sessions = self.delegate_orchestrator.active_sessions().await;
@@ -558,26 +864,39 @@ impl App {
                     } else {
                         None
                     };
-                    picker_sessions
-                        .push(crate::chatwidget::DelegatePickerSession { summary, run_id });
+                    let shadow = self
+                        .delegate_orchestrator
+                        .shadow_session_summary(summary.conversation_id.as_str())
+                        .await;
+                    picker_sessions.push(crate::chatwidget::DelegatePickerSession {
+                        summary,
+                        run_id,
+                        shadow,
+                    });
                 }
-                self.chat_widget.open_delegate_picker(
+                let active_delegate_id = if self.active_session_id != self.primary_session_id {
+                    Some(self.active_session_id.clone())
+                } else {
+                    None
+                };
+                let active_delegate = active_delegate_id.as_deref();
+                self.active_widget_mut().open_delegate_picker(
                     picker_sessions,
                     detached_runs,
-                    self.active_delegate.as_deref(),
+                    active_delegate,
                 );
             }
             AppEvent::EnterDelegateSession(conversation_id) => {
                 if let Err(err) = self.activate_delegate_session(tui, conversation_id).await {
                     tracing::error!("failed to enter delegate session: {err}");
-                    self.chat_widget
+                    self.active_widget_mut()
                         .add_error_message(format!("Failed to open delegate: {err}"));
                 }
             }
             AppEvent::ExitDelegateSession => {
                 if let Err(err) = self.return_to_primary(tui).await {
                     tracing::error!("failed to return to primary agent: {err}");
-                    self.chat_widget
+                    self.active_widget_mut()
                         .add_error_message(format!("Failed to return to main agent: {err}"));
                 }
             }
@@ -588,22 +907,26 @@ impl App {
                     .await
                 {
                     Ok(()) => self
-                        .chat_widget
+                        .active_widget_mut()
                         .add_info_message(format!("Dismissed detached run {run_id}"), None),
-                    Err(err) => self.chat_widget.add_error_message(err),
+                    Err(err) => self.active_widget_mut().add_error_message(err),
                 }
             }
             AppEvent::InsertUserTextMessage(text) => {
-                self.chat_widget.submit_text_message(text);
+                self.active_widget_mut().submit_text_message(text);
             }
             AppEvent::OpenReviewBranchPicker(cwd) => {
-                self.chat_widget.show_review_branch_picker(&cwd).await;
+                self.active_widget_mut()
+                    .show_review_branch_picker(&cwd)
+                    .await;
             }
             AppEvent::OpenReviewCommitPicker(cwd) => {
-                self.chat_widget.show_review_commit_picker(&cwd).await;
+                self.active_widget_mut()
+                    .show_review_commit_picker(&cwd)
+                    .await;
             }
             AppEvent::OpenReviewCustomPrompt => {
-                self.chat_widget.show_review_custom_prompt();
+                self.active_widget_mut().show_review_custom_prompt();
             }
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
@@ -628,106 +951,242 @@ impl App {
         Ok(true)
     }
 
-    fn handle_delegate_update(&mut self, event: DelegateEvent) {
+    async fn handle_delegate_update(&mut self, event: DelegateEvent) {
         match event {
-            DelegateEvent::Started {
-                run_id,
+            DelegateEvent::Info {
                 agent_id,
-                prompt,
-                parent_run_id,
-                mode,
-                ..
+                conversation_id,
+                message,
             } => {
-                let display = self.delegate_tree.insert(
-                    run_id.clone(),
-                    agent_id.clone(),
-                    parent_run_id.clone(),
-                );
-                let claim_status = parent_run_id.is_none() && self.delegate_status_owner.is_none();
-                if claim_status {
-                    self.delegate_status_owner = Some(run_id.clone());
-                    self.chat_widget
-                        .set_delegate_status_owner(&run_id, &agent_id);
-                }
-                self.chat_widget.on_delegate_started(
-                    &run_id,
-                    &agent_id,
-                    &prompt,
-                    display.label,
-                    claim_status,
-                    mode,
-                );
-            }
-            DelegateEvent::Delta { run_id, chunk, .. } => {
-                self.chat_widget.on_delegate_delta(&run_id, &chunk);
-            }
-            DelegateEvent::Completed {
-                run_id,
-                agent_id,
-                output,
-                duration,
-                mode,
-            } => {
-                let display = self.delegate_tree.display_for(&run_id, &agent_id);
-                self.delegate_tree.remove(&run_id);
-                if self.delegate_status_owner.as_deref() == Some(run_id.as_str()) {
-                    self.delegate_status_owner = None;
-                    if let Some((next_run_id, next_agent)) = self.delegate_tree.first_active_root()
-                    {
-                        self.delegate_status_owner = Some(next_run_id.clone());
-                        self.chat_widget
-                            .set_delegate_status_owner(&next_run_id, &next_agent);
-                    } else {
-                        self.chat_widget.clear_delegate_status_owner();
-                    }
-                }
-                let streamed = self
-                    .chat_widget
-                    .on_delegate_completed(&run_id, &display.label);
-                let hint = Some(format!(
-                    "finished in {}",
-                    Self::format_delegate_duration(duration)
-                ));
-                let response = if display.depth == 0 {
-                    output.as_deref().filter(|_| !streamed)
+                if let Some(handle) = self.sessions.get_mut(&conversation_id) {
+                    let label = format!("#{}", agent_id.as_str());
+                    handle
+                        .widget_mut()
+                        .add_info_message(format!("{label}: {message}"), None);
                 } else {
-                    None
-                };
-                self.chat_widget
-                    .add_delegate_completion(response, hint, &display.label);
-                if mode == DelegateSessionMode::Detached {
-                    self.chat_widget.notify_detached_completion(&display.label);
-                    self.chat_widget.show_detached_completion_actions(
-                        &agent_id,
-                        &run_id,
-                        output.as_deref(),
+                    tracing::warn!(
+                        agent = %agent_id.as_str(),
+                        conversation = %conversation_id,
+                        "received delegate info for unknown conversation"
                     );
                 }
             }
-            DelegateEvent::Failed {
-                run_id,
-                agent_id,
-                error,
-                mode,
-            } => {
-                let display = self.delegate_tree.display_for(&run_id, &agent_id);
-                self.delegate_tree.remove(&run_id);
-                if self.delegate_status_owner.as_deref() == Some(run_id.as_str()) {
-                    self.delegate_status_owner = None;
-                    if let Some((next_run_id, next_agent)) = self.delegate_tree.first_active_root()
-                    {
-                        self.delegate_status_owner = Some(next_run_id.clone());
-                        self.chat_widget
-                            .set_delegate_status_owner(&next_run_id, &next_agent);
-                    } else {
-                        self.chat_widget.clear_delegate_status_owner();
+            other => {
+                let (run_id, owner_conversation_id) = match &other {
+                    DelegateEvent::Started {
+                        run_id,
+                        owner_conversation_id,
+                        ..
                     }
+                    | DelegateEvent::Delta {
+                        run_id,
+                        owner_conversation_id,
+                        ..
+                    }
+                    | DelegateEvent::Completed {
+                        run_id,
+                        owner_conversation_id,
+                        ..
+                    }
+                    | DelegateEvent::Failed {
+                        run_id,
+                        owner_conversation_id,
+                        ..
+                    } => (run_id.clone(), owner_conversation_id.clone()),
+                    DelegateEvent::Info { .. } => unreachable!(),
+                };
+
+                let mut parent_forward: Option<(String, ChildSummary)> = None;
+
+                if let Some(handle) = self.sessions.get_mut(&owner_conversation_id) {
+                    match other {
+                        DelegateEvent::Started {
+                            run_id,
+                            agent_id,
+                            owner_conversation_id: _,
+                            prompt,
+                            parent_run_id,
+                            mode,
+                            ..
+                        } => {
+                            if let Some(parent_run_id) = parent_run_id.as_ref() {
+                                if let Some(parent_conversation) = self
+                                    .delegate_orchestrator
+                                    .owner_conversation_for_run(parent_run_id)
+                                    .await
+                                {
+                                    self.run_parent_map
+                                        .insert(run_id.clone(), parent_conversation.clone());
+                                    handle.set_parent_id(Some(parent_conversation));
+                                }
+                            } else {
+                                self.run_parent_map.remove(&run_id);
+                                handle.set_parent_id(None);
+                            }
+
+                            let display = handle.delegate_tree.insert(
+                                run_id.clone(),
+                                agent_id.clone(),
+                                parent_run_id.clone(),
+                            );
+                            let claim_status =
+                                parent_run_id.is_none() && handle.delegate_status_owner.is_none();
+                            if claim_status {
+                                handle.delegate_status_owner = Some(run_id.clone());
+                                handle
+                                    .widget_mut()
+                                    .set_delegate_status_owner(&run_id, &agent_id);
+                            }
+                            handle.widget_mut().on_delegate_started(
+                                &run_id,
+                                &agent_id,
+                                &prompt,
+                                display.label,
+                                claim_status,
+                                mode,
+                            );
+                        }
+                        DelegateEvent::Delta {
+                            run_id,
+                            owner_conversation_id: _,
+                            chunk,
+                            ..
+                        } => {
+                            handle.widget_mut().on_delegate_delta(&run_id, &chunk);
+                        }
+                        DelegateEvent::Completed {
+                            run_id,
+                            agent_id,
+                            owner_conversation_id: _,
+                            output,
+                            duration,
+                            mode,
+                            ..
+                        } => {
+                            let display = handle.delegate_tree.display_for(&run_id, &agent_id);
+                            handle.delegate_tree.remove(&run_id);
+                            if handle.delegate_status_owner.as_deref() == Some(run_id.as_str()) {
+                                handle.delegate_status_owner = None;
+                                if let Some((next_run_id, next_agent)) =
+                                    handle.delegate_tree.first_active_root()
+                                {
+                                    handle.delegate_status_owner = Some(next_run_id.clone());
+                                    handle
+                                        .widget_mut()
+                                        .set_delegate_status_owner(&next_run_id, &next_agent);
+                                } else {
+                                    handle.widget_mut().clear_delegate_status_owner();
+                                }
+                            }
+                            let streamed = handle
+                                .widget_mut()
+                                .on_delegate_completed(&run_id, &display.label);
+                            let hint = Some(format!(
+                                "finished in {}",
+                                Self::format_delegate_duration(duration)
+                            ));
+                            let forwarded_output = if display.depth == 0 && !streamed {
+                                output.clone()
+                            } else {
+                                None
+                            };
+                            let hint_for_widget = hint.clone();
+                            handle.widget_mut().add_delegate_completion(
+                                forwarded_output.as_deref(),
+                                hint_for_widget,
+                                &display.label,
+                            );
+                            if mode == DelegateSessionMode::Detached {
+                                handle
+                                    .widget_mut()
+                                    .notify_detached_completion(&display.label);
+                                handle.widget_mut().show_detached_completion_actions(
+                                    &agent_id,
+                                    &run_id,
+                                    output.as_deref(),
+                                );
+                            }
+                            let parent_id = self
+                                .run_parent_map
+                                .get(&run_id)
+                                .cloned()
+                                .or_else(|| handle.parent_id().cloned());
+                            if let Some(parent_id) = parent_id {
+                                parent_forward = Some((
+                                    parent_id,
+                                    ChildSummary::Completion(ChildCompletionSummary {
+                                        child_conversation_id: owner_conversation_id.clone(),
+                                        label: display.label.clone(),
+                                        hint,
+                                        output: forwarded_output,
+                                        mode,
+                                    }),
+                                ));
+                            }
+                            self.run_parent_map.remove(&run_id);
+                        }
+                        DelegateEvent::Failed {
+                            run_id,
+                            agent_id,
+                            owner_conversation_id: _,
+                            error,
+                            mode,
+                            ..
+                        } => {
+                            let display = handle.delegate_tree.display_for(&run_id, &agent_id);
+                            handle.delegate_tree.remove(&run_id);
+                            if handle.delegate_status_owner.as_deref() == Some(run_id.as_str()) {
+                                handle.delegate_status_owner = None;
+                                if let Some((next_run_id, next_agent)) =
+                                    handle.delegate_tree.first_active_root()
+                                {
+                                    handle.delegate_status_owner = Some(next_run_id.clone());
+                                    handle
+                                        .widget_mut()
+                                        .set_delegate_status_owner(&next_run_id, &next_agent);
+                                } else {
+                                    handle.widget_mut().clear_delegate_status_owner();
+                                }
+                            }
+                            handle
+                                .widget_mut()
+                                .on_delegate_failed(&run_id, &display.label, &error);
+                            if mode == DelegateSessionMode::Detached {
+                                handle
+                                    .widget_mut()
+                                    .notify_detached_failure(&display.label, &error);
+                            }
+                            let parent_id = self
+                                .run_parent_map
+                                .get(&run_id)
+                                .cloned()
+                                .or_else(|| handle.parent_id().cloned());
+                            if let Some(parent_id) = parent_id {
+                                parent_forward = Some((
+                                    parent_id,
+                                    ChildSummary::Failure {
+                                        child_conversation_id: owner_conversation_id.clone(),
+                                        label: display.label.clone(),
+                                        error: error.clone(),
+                                        mode,
+                                    },
+                                ));
+                            }
+                            self.run_parent_map.remove(&run_id);
+                        }
+                        DelegateEvent::Info { .. } => unreachable!(),
+                    }
+                } else {
+                    tracing::warn!(
+                        run_id = %run_id,
+                        conversation = %owner_conversation_id,
+                        "received delegate event for unknown conversation"
+                    );
+                    return;
                 }
-                self.chat_widget
-                    .on_delegate_failed(&run_id, &display.label, &error);
-                if mode == DelegateSessionMode::Detached {
-                    self.chat_widget
-                        .notify_detached_failure(&display.label, &error);
+
+                if let Some((parent_id, summary)) = parent_forward {
+                    self.enqueue_child_summary(&parent_id, summary);
                 }
             }
         }
@@ -738,53 +1197,118 @@ impl App {
         tui: &mut tui::Tui,
         conversation_id: String,
     ) -> Result<(), String> {
-        if self.active_delegate.as_deref() == Some(conversation_id.as_str()) {
+        if self.active_session_id == conversation_id {
             return Ok(());
         }
 
-        if self.active_delegate.is_some() {
-            self.stash_active_delegate();
+        self.sync_active_handle_history();
+        self.active_widget_mut().set_delegate_context(None);
+
+        let active = self
+            .delegate_orchestrator
+            .enter_session(&conversation_id)
+            .await
+            .map_err(|err| format!("{err}"))?;
+
+        use Entry::*;
+        match self.sessions.entry(conversation_id.clone()) {
+            Occupied(mut occ) => {
+                let handle = occ.get_mut();
+                handle.widget.ensure_conversation_id(&conversation_id);
+                handle.set_summary(Some(active.summary.clone()));
+                handle.set_mode(active.summary.mode);
+                handle.set_shadow_summary(active.shadow_summary.clone());
+                handle
+                    .widget
+                    .set_delegate_context(Some(active.summary.clone()));
+                if handle.history().is_empty() {
+                    if let Some(snapshot) = active.shadow_snapshot.as_ref() {
+                        handle.widget.hydrate_from_shadow(snapshot);
+                    } else {
+                        handle.widget.clear_shadow_capture();
+                        handle.widget.add_info_message(
+                            "Shadow cache unavailable; replaying from rollout.".to_string(),
+                            None,
+                        );
+                    }
+                }
+                drop(occ);
+                drop(active.event_rx);
+            }
+            Vacant(vacant) => {
+                let init = ChatWidgetInit {
+                    config: active.config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: self.app_event_tx.scoped(),
+                    initial_prompt: None,
+                    initial_images: Vec::new(),
+                    enhanced_keys_supported: self.enhanced_keys_supported,
+                    auth_manager: self.auth_manager.clone(),
+                    feedback: self.feedback.clone(),
+                };
+                let mut session = ChatWidget::new_session_from_existing_with_events(
+                    init,
+                    active.conversation.clone(),
+                    active.session_configured.clone(),
+                    active.event_rx,
+                );
+                session.widget.ensure_conversation_id(&conversation_id);
+                session
+                    .widget
+                    .set_delegate_context(Some(active.summary.clone()));
+                if let Some(snapshot) = active.shadow_snapshot.as_ref() {
+                    session.widget.hydrate_from_shadow(snapshot);
+                } else {
+                    session.widget.clear_shadow_capture();
+                    session.widget.add_info_message(
+                        "Shadow cache unavailable; replaying from rollout.".to_string(),
+                        None,
+                    );
+                }
+                spawn_event_forwarder(
+                    self.app_event_tx.clone(),
+                    session.conversation_id,
+                    session.event_rx,
+                );
+                vacant.insert(SessionHandle::new(
+                    session.widget,
+                    Some(active.summary.clone()),
+                    active.summary.mode,
+                    active.shadow_summary.clone(),
+                ));
+            }
         }
 
-        let state = if let Some(state) = self.delegate_sessions.remove(&conversation_id) {
-            state
-        } else {
-            let session = self
-                .delegate_orchestrator
-                .enter_session(&conversation_id)
+        let parent_conversation_id = if let Some(parent_run) = self
+            .delegate_orchestrator
+            .parent_run_for_conversation(&conversation_id)
+            .await
+        {
+            self.delegate_orchestrator
+                .owner_conversation_for_run(&parent_run)
                 .await
-                .map_err(|err| format!("{err}"))?;
-            let init = ChatWidgetInit {
-                config: session.config.clone(),
-                frame_requester: tui.frame_requester(),
-                app_event_tx: self.app_event_tx.clone(),
-                initial_prompt: None,
-                initial_images: Vec::new(),
-                enhanced_keys_supported: self.enhanced_keys_supported,
-                auth_manager: self.auth_manager.clone(),
-                feedback: self.feedback.clone(),
-            };
-            let session_configured = expect_unique_session_configured(session.session_configured);
-            let mut chat_widget =
-                ChatWidget::new_from_existing(init, session.conversation, session_configured);
-            chat_widget.set_delegate_context(Some(session.summary.clone()));
-            DelegateSessionState {
-                summary: session.summary,
-                chat_widget,
-            }
+        } else {
+            None
         };
 
-        let DelegateSessionState {
-            summary,
-            mut chat_widget,
-        } = state;
-        chat_widget.set_delegate_context(Some(summary.clone()));
-        let mut previous = std::mem::replace(&mut self.chat_widget, chat_widget);
-        previous.set_delegate_context(None);
-        self.primary_chat_backup = Some(previous);
-        self.active_delegate = Some(conversation_id.clone());
-        self.active_delegate_summary = Some(summary.clone());
-        self.chat_widget.set_delegate_context(Some(summary.clone()));
+        if let Some(handle) = self.sessions.get_mut(&conversation_id) {
+            handle.set_parent_id(parent_conversation_id.clone());
+        }
+        if let Some(parent_id) = parent_conversation_id.as_ref() {
+            if let Some(parent) = self.sessions.get_mut(parent_id) {
+                parent.add_child(conversation_id.clone());
+            }
+        }
+
+        self.active_session_id = conversation_id.clone();
+        if let Some(handle) = self.sessions.get_mut(&self.active_session_id)
+            && let Some(summary) = handle.summary.clone()
+        {
+            handle.widget.set_delegate_context(Some(summary));
+        }
+        self.apply_active_history_from_handle();
+        self.replay_active_session_from_last_user(tui);
+        self.sync_active_handle_history();
         self.delegate_orchestrator
             .touch_session(&conversation_id)
             .await;
@@ -792,59 +1316,57 @@ impl App {
         Ok(())
     }
 
-    fn stash_active_delegate(&mut self) {
-        if let Some(active_id) = self.active_delegate.take() {
-            let mut summary = match self.active_delegate_summary.take() {
-                Some(summary) => summary,
-                None => return,
-            };
-            let Some(main_chat) = self.primary_chat_backup.take() else {
-                self.active_delegate_summary = Some(summary);
-                return;
-            };
-            summary.last_interacted_at = SystemTime::now();
-            let mut delegate_chat = std::mem::replace(&mut self.chat_widget, main_chat);
-            delegate_chat.set_delegate_context(Some(summary.clone()));
-            self.chat_widget.set_delegate_context(None);
-            self.delegate_sessions.insert(
-                active_id,
-                DelegateSessionState {
-                    summary,
-                    chat_widget: delegate_chat,
-                },
-            );
+    fn agent_id_for_conversation(&self, conversation_id: &str) -> Option<&AgentId> {
+        self.sessions
+            .get(conversation_id)
+            .and_then(|handle| handle.summary.as_ref().map(|summary| &summary.agent_id))
+    }
+
+    fn handle_codex_event(&mut self, conversation_id: &str, event: Event) {
+        if let Some(handle) = self.sessions.get_mut(conversation_id) {
+            handle.widget.ensure_conversation_id(conversation_id);
+            handle.widget.handle_codex_event(event);
         }
     }
 
     async fn return_to_primary(&mut self, tui: &mut tui::Tui) -> Result<(), String> {
-        if let Some(active_id) = self.active_delegate.take() {
-            let Some(mut summary) = self.active_delegate_summary.take() else {
-                return Err("delegate summary missing".to_string());
-            };
-            let capture = self.chat_widget.take_delegate_capture();
-            let main_chat = self
-                .primary_chat_backup
-                .take()
-                .ok_or_else(|| "primary conversation unavailable".to_string())?;
-            summary.last_interacted_at = SystemTime::now();
-            let mut delegate_chat = std::mem::replace(&mut self.chat_widget, main_chat);
-            delegate_chat.set_delegate_context(Some(summary.clone()));
-            self.chat_widget.set_delegate_context(None);
-            self.delegate_sessions.insert(
-                active_id.clone(),
-                DelegateSessionState {
-                    summary: summary.clone(),
-                    chat_widget: delegate_chat,
-                },
-            );
-            self.delegate_orchestrator.touch_session(&active_id).await;
-            self.primary_chat_backup = None;
-            self.active_delegate_summary = None;
-            if let Some(capture) = capture {
-                self.chat_widget.apply_delegate_summary(&summary, capture);
-            }
-            tui.frame_requester().schedule_frame();
+        if self.active_session_id == self.primary_session_id {
+            return Ok(());
         }
+
+        self.sync_active_handle_history();
+
+        let active_id = self.active_session_id.clone();
+        let capture = if let Some(handle) = self.sessions.get_mut(&active_id) {
+            if let Some(summary) = handle.summary_mut() {
+                summary.last_interacted_at = SystemTime::now();
+            }
+            handle.widget.take_delegate_capture()
+        } else {
+            None
+        };
+
+        self.active_session_id = self.primary_session_id.clone();
+        self.apply_active_history_from_handle();
+        self.replay_active_session_from_last_user(tui);
+        if let Some(primary) = self.sessions.get_mut(&self.primary_session_id) {
+            primary.widget.set_delegate_context(None);
+        }
+
+        if let Some(handle) = self.sessions.get_mut(&active_id)
+            && let Some(summary) = handle.summary.clone()
+        {
+            handle.widget.set_delegate_context(Some(summary.clone()));
+            if let Some(capture) = capture
+                && let Some(primary) = self.sessions.get_mut(&self.primary_session_id)
+            {
+                primary.widget.apply_delegate_summary(&summary, capture);
+            }
+        }
+
+        self.delegate_orchestrator.touch_session(&active_id).await;
+        self.sync_active_handle_history();
+        tui.frame_requester().schedule_frame();
         Ok(())
     }
 
@@ -861,11 +1383,13 @@ impl App {
     }
 
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
-        self.chat_widget.token_usage()
+        self.active_widget()
+            .map(ChatWidget::token_usage)
+            .unwrap_or_default()
     }
 
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
-        self.chat_widget.set_reasoning_effort(effort);
+        self.active_widget_mut().set_reasoning_effort(effort);
         self.config.model_reasoning_effort = effort;
     }
 
@@ -891,12 +1415,13 @@ impl App {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
-                if self.chat_widget.is_normal_backtrack_mode()
-                    && self.chat_widget.composer_is_empty()
+                if self
+                    .active_widget()
+                    .is_some_and(|w| w.is_normal_backtrack_mode() && w.composer_is_empty())
                 {
                     self.handle_backtrack_esc_key(tui);
                 } else {
-                    self.chat_widget.handle_key_event(key_event);
+                    self.active_widget_mut().handle_key_event(key_event);
                 }
             }
             // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
@@ -906,7 +1431,9 @@ impl App {
                 ..
             } if self.backtrack.primed
                 && self.backtrack.nth_user_message != usize::MAX
-                && self.chat_widget.composer_is_empty() =>
+                && self
+                    .active_widget()
+                    .is_some_and(super::chatwidget::ChatWidget::composer_is_empty) =>
             {
                 // Delegate to helper for clarity; preserves behavior.
                 self.confirm_backtrack_from_main();
@@ -921,7 +1448,7 @@ impl App {
                 if key_event.code != KeyCode::Esc && self.backtrack.primed {
                     self.reset_backtrack_state();
                 }
-                self.chat_widget.handle_key_event(key_event);
+                self.active_widget_mut().handle_key_event(key_event);
             }
             _ => {
                 // Ignore Release key events.
@@ -930,11 +1457,127 @@ impl App {
     }
 }
 
-struct DelegateSessionState {
-    summary: DelegateSessionSummary,
-    chat_widget: ChatWidget,
+pub(crate) struct SessionHandle {
+    widget: ChatWidget,
+    summary: Option<DelegateSessionSummary>,
+    mode: DelegateSessionMode,
+    history: Vec<Arc<dyn HistoryCell>>,
+    shadow: Option<ShadowSessionSummary>,
+    delegate_tree: DelegateTree,
+    delegate_status_owner: Option<String>,
+    parent_conversation_id: Option<String>,
+    #[allow(dead_code)]
+    child_conversations: HashSet<String>,
+    pending_child_summaries: VecDeque<ChildSummary>,
 }
 
+impl SessionHandle {
+    fn new(
+        widget: ChatWidget,
+        summary: Option<DelegateSessionSummary>,
+        mode: DelegateSessionMode,
+        shadow: Option<ShadowSessionSummary>,
+    ) -> Self {
+        Self {
+            widget,
+            summary,
+            mode,
+            history: Vec::new(),
+            shadow,
+            delegate_tree: DelegateTree::default(),
+            delegate_status_owner: None,
+            parent_conversation_id: None,
+            child_conversations: HashSet::new(),
+            pending_child_summaries: VecDeque::new(),
+        }
+    }
+
+    fn summary_mut(&mut self) -> Option<&mut DelegateSessionSummary> {
+        self.summary.as_mut()
+    }
+
+    pub(crate) fn replace(
+        &mut self,
+        widget: ChatWidget,
+        summary: Option<DelegateSessionSummary>,
+        mode: DelegateSessionMode,
+        history: Option<Vec<Arc<dyn HistoryCell>>>,
+        shadow: Option<ShadowSessionSummary>,
+    ) {
+        self.widget = widget;
+        self.summary = summary;
+        self.mode = mode;
+        if let Some(history) = history {
+            self.history = history;
+        }
+        self.shadow = shadow;
+    }
+
+    pub(crate) fn widget(&self) -> &ChatWidget {
+        &self.widget
+    }
+
+    pub(crate) fn widget_mut(&mut self) -> &mut ChatWidget {
+        &mut self.widget
+    }
+
+    pub(crate) fn push_history(&mut self, cell: Arc<dyn HistoryCell>) {
+        self.history.push(cell);
+    }
+
+    pub(crate) fn set_history(&mut self, history: Vec<Arc<dyn HistoryCell>>) {
+        self.history = history;
+    }
+
+    pub(crate) fn history(&self) -> &[Arc<dyn HistoryCell>] {
+        &self.history
+    }
+
+    pub(crate) fn set_summary(&mut self, summary: Option<DelegateSessionSummary>) {
+        self.summary = summary;
+    }
+
+    pub(crate) fn set_mode(&mut self, mode: DelegateSessionMode) {
+        self.mode = mode;
+    }
+
+    pub(crate) fn set_shadow_summary(&mut self, shadow: Option<ShadowSessionSummary>) {
+        self.shadow = shadow;
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn parent_id(&self) -> Option<&String> {
+        self.parent_conversation_id.as_ref()
+    }
+
+    pub(crate) fn set_parent_id(&mut self, parent: Option<String>) {
+        self.parent_conversation_id = parent;
+    }
+
+    pub(crate) fn add_child(&mut self, conversation_id: String) {
+        self.child_conversations.insert(conversation_id);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn remove_child(&mut self, conversation_id: &str) {
+        self.child_conversations.remove(conversation_id);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn child_conversations(&self) -> impl Iterator<Item = &String> {
+        self.child_conversations.iter()
+    }
+
+    fn push_child_summary(&mut self, summary: ChildSummary) {
+        self.pending_child_summaries.push_back(summary);
+    }
+
+    fn drain_child_summaries(&mut self) -> Vec<ChildSummary> {
+        self.pending_child_summaries.drain(..).collect()
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 fn expect_unique_session_configured(
     session_configured: Arc<SessionConfiguredEvent>,
 ) -> SessionConfiguredEvent {
@@ -969,8 +1612,10 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     fn make_test_app() -> App {
-        let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender();
+        let (mut chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender();
         let config = chat_widget.config_ref().clone();
+        let session_id = ConversationId::new().to_string();
+        chat_widget.ensure_conversation_id(&session_id);
 
         let server = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
             "Test API Key",
@@ -1002,12 +1647,21 @@ mod tests {
             },
             Vec::new(),
             config.multi_agent.max_concurrent_delegates,
+            ShadowConfig::disabled(),
         ));
+
+        let mut sessions = HashMap::new();
+        sessions.insert(
+            session_id.clone(),
+            SessionHandle::new(chat_widget, None, DelegateSessionMode::Standard, None),
+        );
 
         App {
             server,
             app_event_tx,
-            chat_widget,
+            sessions,
+            active_session_id: session_id.clone(),
+            primary_session_id: session_id,
             auth_manager,
             delegate_orchestrator,
             config,
@@ -1021,13 +1675,8 @@ mod tests {
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             feedback: codex_feedback::CodexFeedback::new(),
-            delegate_sessions: HashMap::new(),
-            active_delegate: None,
-            active_delegate_summary: None,
-            primary_chat_backup: None,
             pending_update_action: None,
-            delegate_tree: DelegateTree::default(),
-            delegate_status_owner: None,
+            run_parent_map: HashMap::new(),
         }
     }
 
@@ -1035,7 +1684,10 @@ mod tests {
     fn update_reasoning_effort_updates_config() {
         let mut app = make_test_app();
         app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Medium);
-        app.chat_widget
+        app.sessions
+            .get_mut(&app.active_session_id)
+            .unwrap()
+            .widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
 
         app.on_update_reasoning_effort(Some(ReasoningEffortConfig::High));
@@ -1045,9 +1697,106 @@ mod tests {
             Some(ReasoningEffortConfig::High)
         );
         assert_eq!(
-            app.chat_widget.config_ref().model_reasoning_effort,
+            app.sessions
+                .get(&app.active_session_id)
+                .unwrap()
+                .widget
+                .config_ref()
+                .model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
         );
+    }
+
+    #[tokio::test]
+    async fn delegate_events_route_to_owner_only() {
+        let mut app = make_test_app();
+
+        let child_conversation_id = "child".to_string();
+        let parent_conversation_id = app.active_session_id.clone();
+
+        let (mut child_widget, _, _, _) = make_chatwidget_manual_with_sender();
+        child_widget.ensure_conversation_id(&child_conversation_id);
+        let child_handle =
+            SessionHandle::new(child_widget, None, DelegateSessionMode::Standard, None);
+        app.sessions
+            .insert(child_conversation_id.clone(), child_handle);
+
+        let started = DelegateEvent::Started {
+            run_id: "run-1".to_string(),
+            agent_id: AgentId::parse("critic").unwrap(),
+            owner_conversation_id: child_conversation_id.clone(),
+            prompt: "prompt".to_string(),
+            started_at: SystemTime::now(),
+            parent_run_id: None,
+            mode: DelegateSessionMode::Standard,
+        };
+
+        app.handle_delegate_update(started).await;
+
+        assert!(
+            app.sessions
+                .get(&parent_conversation_id)
+                .unwrap()
+                .pending_child_summaries
+                .is_empty()
+        );
+        assert!(
+            app.sessions
+                .get(&child_conversation_id)
+                .unwrap()
+                .pending_child_summaries
+                .is_empty()
+        );
+        assert!(app.run_parent_map.is_empty());
+    }
+
+    #[tokio::test]
+    async fn child_completion_bubbles_to_parent() {
+        let mut app = make_test_app();
+
+        let child_conversation_id = "child".to_string();
+        let parent_conversation_id = app.active_session_id.clone();
+
+        let (mut child_widget, _, _, _) = make_chatwidget_manual_with_sender();
+        child_widget.ensure_conversation_id(&child_conversation_id);
+        app.sessions.insert(
+            child_conversation_id.clone(),
+            SessionHandle::new(child_widget, None, DelegateSessionMode::Standard, None),
+        );
+
+        app.active_session_id = child_conversation_id.clone();
+
+        app.run_parent_map
+            .insert("run-1".to_string(), parent_conversation_id.clone());
+
+        let completed = DelegateEvent::Completed {
+            run_id: "run-1".to_string(),
+            agent_id: AgentId::parse("critic").unwrap(),
+            owner_conversation_id: child_conversation_id.clone(),
+            output: Some("Child output".to_string()),
+            duration: Duration::from_secs(2),
+            mode: DelegateSessionMode::Standard,
+        };
+
+        app.handle_delegate_update(completed).await;
+
+        let parent_handle = app
+            .sessions
+            .get(&parent_conversation_id)
+            .unwrap()
+            .pending_child_summaries
+            .clone();
+        assert_eq!(parent_handle.len(), 1);
+        matches!(parent_handle[0], ChildSummary::Completion(_));
+
+        assert!(
+            app.sessions
+                .get(&child_conversation_id)
+                .unwrap()
+                .pending_child_summaries
+                .is_empty()
+        );
+        assert!(app.run_parent_map.is_empty());
     }
 
     #[test]
@@ -1077,7 +1826,11 @@ mod tests {
                 rollout_path: PathBuf::new(),
             };
             Arc::new(new_session_info(
-                app.chat_widget.config_ref(),
+                app.sessions
+                    .get(&app.active_session_id)
+                    .unwrap()
+                    .widget
+                    .config_ref(),
                 event,
                 is_first,
             )) as Arc<dyn HistoryCell>
