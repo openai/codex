@@ -1,10 +1,10 @@
 ## Sandbox & approvals
 
-What Codex is allowed to do is governed by a combination of **sandbox modes** (what Codex is allowed to do without supervision) and **approval modes** (when you must confirm an action). This page explains the options, how they interact, and how the sandbox behaves on each platform.
+What Codex is allowed to do is governed by a combination of **sandbox modes** (what Codex is allowed to do without supervision) and **approval policies** (when you must confirm an action). This page explains the options, how they interact, and how the sandbox behaves on each platform.
 
-### Approval modes
+### Approval policies
 
-We've chosen a powerful default for how Codex works on your computer: `Auto`. In this approval mode, Codex can read files, make edits, and run commands in the working directory automatically. However, Codex will need your approval to work outside the working directory or access network.
+We've chosen a powerful default for how Codex works on your computer: `Auto`. Under this approval policy, Codex can read files, make edits, and run commands in the working directory automatically. However, Codex will need your approval to work outside the working directory or access network.
 
 When you just want to chat, or if you want to plan before diving in, you can switch to `Read Only` mode with the `/approvals` command.
 
