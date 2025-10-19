@@ -1,12 +1,11 @@
 use assert_cmd::Command as AssertCommand;
 use codex_core::RolloutRecorder;
 use codex_core::protocol::GitInfo;
+use core_test_support::fs_wait;
 use core_test_support::skip_if_no_network;
 use std::time::Duration;
-use std::time::Instant;
 use tempfile::TempDir;
 use uuid::Uuid;
-use walkdir::WalkDir;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -211,12 +210,12 @@ async fn responses_api_stream_cli() {
 
 /// End-to-end: create a session (writes rollout), verify the file, then resume and confirm append.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn integration_creates_and_checks_session_file() {
+async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     // Honor sandbox network restrictions for CI parity with the other tests.
-    skip_if_no_network!();
+    skip_if_no_network!(Ok(()));
 
     // 1. Temp home so we read/write isolated session files.
-    let home = TempDir::new().unwrap();
+    let home = TempDir::new()?;
 
     // 2. Unique marker we'll look for in the session log.
     let marker = format!("integration-test-{}", Uuid::new_v4());
@@ -254,63 +253,20 @@ async fn integration_creates_and_checks_session_file() {
 
     // Wait for sessions dir to appear.
     let sessions_dir = home.path().join("sessions");
-    let dir_deadline = Instant::now() + Duration::from_secs(5);
-    while !sessions_dir.exists() && Instant::now() < dir_deadline {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert!(sessions_dir.exists(), "sessions directory never appeared");
+    fs_wait::wait_for_path_exists(&sessions_dir, Duration::from_secs(5)).await?;
 
     // Find the session file that contains `marker`.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut matching_path: Option<std::path::PathBuf> = None;
-    while Instant::now() < deadline && matching_path.is_none() {
-        for entry in WalkDir::new(&sessions_dir) {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            if !entry.file_name().to_string_lossy().ends_with(".jsonl") {
-                continue;
-            }
-            let path = entry.path();
-            let Ok(content) = std::fs::read_to_string(path) else {
-                continue;
-            };
-            let mut lines = content.lines();
-            if lines.next().is_none() {
-                continue;
-            }
-            for line in lines {
-                if line.trim().is_empty() {
-                    continue;
-                }
-                let item: serde_json::Value = match serde_json::from_str(line) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                if item.get("type").and_then(|t| t.as_str()) == Some("response_item")
-                    && let Some(payload) = item.get("payload")
-                    && payload.get("type").and_then(|t| t.as_str()) == Some("message")
-                    && let Some(c) = payload.get("content")
-                    && c.to_string().contains(&marker)
-                {
-                    matching_path = Some(path.to_path_buf());
-                    break;
-                }
-            }
+    let marker_clone = marker.clone();
+    let path = fs_wait::wait_for_matching_file(&sessions_dir, Duration::from_secs(10), move |p| {
+        if p.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+            return false;
         }
-        if matching_path.is_none() {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-
-    let path = match matching_path {
-        Some(p) => p,
-        None => panic!("No session file containing the marker was found"),
-    };
+        let Ok(content) = std::fs::read_to_string(p) else {
+            return false;
+        };
+        content.contains(&marker_clone)
+    })
+    .await?;
 
     // Basic sanity checks on location and metadata.
     let rel = match path.strip_prefix(&sessions_dir) {
@@ -418,42 +374,25 @@ async fn integration_creates_and_checks_session_file() {
     assert!(output2.status.success(), "resume codex-cli run failed");
 
     // Find the new session file containing the resumed marker.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut resumed_path: Option<std::path::PathBuf> = None;
-    while Instant::now() < deadline && resumed_path.is_none() {
-        for entry in WalkDir::new(&sessions_dir) {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            if !entry.file_type().is_file() {
-                continue;
+    let marker2_clone = marker2.clone();
+    let resumed_path =
+        fs_wait::wait_for_matching_file(&sessions_dir, Duration::from_secs(10), move |p| {
+            if p.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+                return false;
             }
-            if !entry.file_name().to_string_lossy().ends_with(".jsonl") {
-                continue;
-            }
-            let p = entry.path();
-            let Ok(c) = std::fs::read_to_string(p) else {
-                continue;
-            };
-            if c.contains(&marker2) {
-                resumed_path = Some(p.to_path_buf());
-                break;
-            }
-        }
-        if resumed_path.is_none() {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
+            std::fs::read_to_string(p)
+                .map(|content| content.contains(&marker2_clone))
+                .unwrap_or(false)
+        })
+        .await?;
 
-    let resumed_path = resumed_path.expect("No resumed session file found containing the marker2");
     // Resume should write to the existing log file.
     assert_eq!(
         resumed_path, path,
         "resume should create a new session file"
     );
 
-    let resumed_content = std::fs::read_to_string(&resumed_path).unwrap();
+    let resumed_content = std::fs::read_to_string(&resumed_path)?;
     assert!(
         resumed_content.contains(&marker),
         "resumed file missing original marker"
@@ -462,6 +401,7 @@ async fn integration_creates_and_checks_session_file() {
         resumed_content.contains(&marker2),
         "resumed file missing resumed marker"
     );
+    Ok(())
 }
 
 /// Integration test to verify git info is collected and recorded in session files.

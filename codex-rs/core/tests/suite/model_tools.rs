@@ -4,6 +4,7 @@ use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
+use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -56,12 +57,12 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
     config.model = model.to_string();
     config.model_family =
         find_family_for_model(model).unwrap_or_else(|| panic!("unknown model family for {model}"));
-    config.include_plan_tool = false;
-    config.include_apply_patch_tool = false;
-    config.include_view_image_tool = false;
-    config.tools_web_search_request = false;
-    config.use_experimental_streamable_shell_tool = false;
-    config.use_experimental_unified_exec_tool = false;
+    config.features.disable(Feature::PlanTool);
+    config.features.disable(Feature::ApplyPatchFreeform);
+    config.features.disable(Feature::ViewImageTool);
+    config.features.disable(Feature::WebSearchRequest);
+    config.features.disable(Feature::StreamableShell);
+    config.features.disable(Feature::UnifiedExec);
 
     let conversation_manager =
         ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
@@ -93,21 +94,37 @@ async fn model_selects_expected_tools() {
     let codex_tools = collect_tool_identifiers_for_model("codex-mini-latest").await;
     assert_eq!(
         codex_tools,
-        vec!["local_shell".to_string()],
+        vec![
+            "local_shell".to_string(),
+            "list_mcp_resources".to_string(),
+            "list_mcp_resource_templates".to_string(),
+            "read_mcp_resource".to_string()
+        ],
         "codex-mini-latest should expose the local shell tool",
     );
 
     let o3_tools = collect_tool_identifiers_for_model("o3").await;
     assert_eq!(
         o3_tools,
-        vec!["shell".to_string()],
+        vec![
+            "shell".to_string(),
+            "list_mcp_resources".to_string(),
+            "list_mcp_resource_templates".to_string(),
+            "read_mcp_resource".to_string()
+        ],
         "o3 should expose the generic shell tool",
     );
 
     let gpt5_codex_tools = collect_tool_identifiers_for_model("gpt-5-codex").await;
     assert_eq!(
         gpt5_codex_tools,
-        vec!["shell".to_string(), "apply_patch".to_string(),],
+        vec![
+            "shell".to_string(),
+            "list_mcp_resources".to_string(),
+            "list_mcp_resource_templates".to_string(),
+            "read_mcp_resource".to_string(),
+            "apply_patch".to_string()
+        ],
         "gpt-5-codex should expose the apply_patch tool",
     );
 }
