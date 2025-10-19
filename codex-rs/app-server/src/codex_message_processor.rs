@@ -1353,6 +1353,7 @@ async fn derive_config_from_params(
         include_view_image_tool: None,
         show_raw_agent_reasoning: None,
         tools_web_search_request: None,
+        additional_writable_roots: Vec::new(),
     };
 
     let cli_overrides = cli_overrides
