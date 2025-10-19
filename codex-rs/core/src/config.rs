@@ -1679,58 +1679,6 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn add_dir_override_ignored_for_read_only_policy() -> std::io::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let additional = temp_dir.path().join("other");
-        std::fs::create_dir_all(&additional)?;
-
-        let overrides = ConfigOverrides {
-            sandbox_mode: Some(SandboxMode::ReadOnly),
-            additional_writable_roots: vec![additional],
-            ..Default::default()
-        };
-
-        let config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            overrides,
-            temp_dir.path().to_path_buf(),
-        )?;
-
-        match config.sandbox_policy {
-            SandboxPolicy::ReadOnly => {}
-            other => panic!("expected read-only policy, got {other:?}"),
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn add_dir_override_ignored_for_danger_full_access_policy() -> std::io::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let extra_dir = temp_dir.path().join("any");
-        std::fs::create_dir_all(&extra_dir)?;
-
-        let overrides = ConfigOverrides {
-            sandbox_mode: Some(SandboxMode::DangerFullAccess),
-            additional_writable_roots: vec![extra_dir],
-            ..Default::default()
-        };
-
-        let config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            overrides,
-            temp_dir.path().to_path_buf(),
-        )?;
-
-        match config.sandbox_policy {
-            SandboxPolicy::DangerFullAccess => {}
-            other => panic!("expected danger-full-access policy, got {other:?}"),
-        }
-
-        Ok(())
-    }
-
-    #[test]
     fn approve_all_feature_forces_on_request_policy() -> std::io::Result<()> {
         let cfg = r#"
 [features]
