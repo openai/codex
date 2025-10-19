@@ -19,3 +19,6 @@ toml = { workspace = true, optional = true }
 cli = ["clap", "serde", "toml"]
 elapsed = []
 sandbox_summary = []
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

@@ -6,6 +6,7 @@
 use app::App;
 pub use app::AppExitInfo;
 use codex_app_server_protocol::AuthMode;
+use codex_common::add_dir_warning_message;
 use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::CodexAuth;
@@ -192,6 +193,13 @@ pub async fn run_main(
     };
 
     let config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
+
+    if let Some(warning) = add_dir_warning_message(&cli.add_dir, &config.sandbox_policy) {
+        #[allow(clippy::print_stderr)]
+        {
+            eprintln!("{warning}");
+        }
+    }
 
     let active_profile = config.active_profile.clone();
     let log_dir = codex_core::config::log_dir(&config)?;
