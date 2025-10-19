@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -30,19 +31,19 @@ use codex_otel::otel_event_manager::ToolDecisionSource;
 pub(crate) struct ExecutorConfig {
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) sandbox_cwd: PathBuf,
-    codex_linux_sandbox_exe: Option<PathBuf>,
+    pub(crate) codex_exe: Option<PathBuf>,
 }
 
 impl ExecutorConfig {
     pub(crate) fn new(
         sandbox_policy: SandboxPolicy,
         sandbox_cwd: PathBuf,
-        codex_linux_sandbox_exe: Option<PathBuf>,
+        codex_exe: Option<PathBuf>,
     ) -> Self {
         Self {
             sandbox_policy,
             sandbox_cwd,
-            codex_linux_sandbox_exe,
+            codex_exe,
         }
     }
 }
@@ -74,19 +75,31 @@ impl Executor {
     /// Runs a prepared execution request end-to-end: prepares parameters, decides on
     /// sandbox placement (prompting the user when necessary), launches the command,
     /// and lets the backend post-process the final output.
-    pub(crate) async fn run(
+    pub(crate) async fn run<F, Fut>(
         &self,
         mut request: ExecutionRequest,
         session: &Session,
         approval_policy: AskForApproval,
         context: &ExecCommandContext,
-    ) -> Result<ExecToolCallOutput, ExecError> {
+        on_exec_begin: F,
+    ) -> Result<ExecToolCallOutput, ExecError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = ()>,
+    {
         if matches!(request.mode, ExecutionMode::Shell) {
             request.params =
                 maybe_translate_shell_command(request.params, session, request.use_shell_profile);
         }
 
-        // Step 1: Normalise parameters via the selected backend.
+        // Step 1: Snapshot sandbox configuration so it stays stable for this run.
+        let config = self
+            .config
+            .read()
+            .map_err(|_| ExecError::rejection("executor config poisoned"))?
+            .clone();
+
+        // Step 2: Normalise parameters via the selected backend.
         let backend = backend_for_mode(&request.mode);
         let stdout_stream = if backend.stream_stdout(&request.mode) {
             request.stdout_stream.clone()
@@ -94,15 +107,8 @@ impl Executor {
             None
         };
         request.params = backend
-            .prepare(request.params, &request.mode)
+            .prepare(request.params, &request.mode, &config)
             .map_err(ExecError::from)?;
-
-        // Step 2: Snapshot sandbox configuration so it stays stable for this run.
-        let config = self
-            .config
-            .read()
-            .map_err(|_| ExecError::rejection("executor config poisoned"))?
-            .clone();
 
         // Step 3: Decide sandbox placement, prompting for approval when needed.
         let sandbox_decision = select_sandbox(
@@ -119,7 +125,7 @@ impl Executor {
         if sandbox_decision.record_session_approval {
             self.approval_cache.insert(request.approval_command.clone());
         }
-
+        on_exec_begin().await;
         // Step 4: Launch the command within the chosen sandbox.
         let first_attempt = self
             .spawn(
@@ -210,7 +216,7 @@ impl Executor {
                 Ok(retry_output)
             }
             ReviewDecision::Denied | ReviewDecision::Abort => {
-                Err(ExecError::rejection("exec command rejected by user"))
+                Err(ExecError::denied("exec command rejected by user"))
             }
         }
     }
@@ -227,7 +233,7 @@ impl Executor {
             sandbox,
             &config.sandbox_policy,
             &config.sandbox_cwd,
-            &config.codex_linux_sandbox_exe,
+            &config.codex_exe,
             stdout_stream,
         )
         .await
@@ -301,7 +307,8 @@ pub(crate) fn normalize_exec_result(
         }
         Err(err) => {
             let message = match err {
-                ExecError::Function(FunctionCallError::RespondToModel(msg)) => msg.clone(),
+                ExecError::Function(FunctionCallError::RespondToModel(msg))
+                | ExecError::Function(FunctionCallError::Denied(msg)) => msg.clone(),
                 ExecError::Codex(e) => get_error_message_ui(e),
                 err => err.to_string(),
             };

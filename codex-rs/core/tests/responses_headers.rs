@@ -63,6 +63,7 @@ async fn responses_stream_includes_task_type_header() {
         config.model.as_str(),
         config.model_family.slug.as_str(),
         None,
+        Some("test@test.com".to_string()),
         Some(AuthMode::ChatGPT),
         false,
         "test".to_string(),
