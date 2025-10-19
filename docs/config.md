@@ -310,6 +310,18 @@ This is reasonable to use if Codex is running in an environment that provides it
 
 Though using this option may also be necessary if you try to use Codex in environments where its native sandboxing mechanisms are unsupported, such as older Linux kernels or on Windows.
 
+### tools.*
+
+Use the optional `[tools]` table to toggle built-in tools that the agent may call. Both keys default to `false` (tools stay disabled) unless you opt in:
+
+```toml
+[tools]
+web_search = true   # allow Codex to issue first-party web searches without prompting you
+view_image = true   # let Codex attach local images (paths in your workspace) to the model request
+```
+
+`web_search` is also recognized under the legacy name `web_search_request`. The `view_image` toggle is useful when you want to include screenshots or diagrams from your repo without pasting them manually. Codex still respects sandboxing: it can only attach files inside the workspace roots you allow.
+
 ### approval_presets
 
 Codex provides three main Approval Presets:
@@ -873,3 +885,4 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `experimental_use_exec_command_tool`             | boolean                                                           | Use experimental exec command tool.                                                                                        |
 | `projects.<path>.trust_level`                    | string                                                            | Mark project/worktree as trusted (only `"trusted"` is recognized).                                                         |
 | `tools.web_search`                               | boolean                                                           | Enable web search tool (alias: `web_search_request`) (default: false).                                                     |
+| `tools.view_image`                               | boolean                                                           | Enable the `view_image` tool so Codex can attach local image files from the workspace (default: false).                    |
