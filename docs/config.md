@@ -33,12 +33,15 @@ Both the `--config` flag and the `config.toml` file support the following option
 The model that Codex should use.
 
 ```toml
-model = "gpt-5"  # overrides the default of "gpt-5-codex"
+model = "gpt-5"  # overrides the default ("gpt-5-codex" on macOS/Linux, "gpt-5" on Windows)
 ```
 
 ### model_providers
 
-This option lets you override and amend the default set of model providers bundled with Codex. This value is a map where the key is the value to use with `model_provider` to select the corresponding provider.
+This option lets you add to the default set of model providers bundled with Codex. The map key becomes the value you use with `model_provider` to select the provider.
+
+> [!NOTE]
+> Built-in providers are not overwritten when you reuse their key. Entries you add only take effect when the key is **new**; for example `[model_providers.openai]` leaves the original OpenAI definition untouched. To customize the bundled OpenAI provider, prefer the dedicated knobs (for example the `OPENAI_BASE_URL` environment variable) or register a new provider key and point `model_provider` at it.
 
 For example, if you wanted to add a provider that uses the OpenAI 4o model via the chat completions API, then you could add the following configuration:
 
@@ -399,8 +402,6 @@ cwd = "/Users/<user>/code/my-server"
 [Streamable HTTP servers](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http) enable Codex to talk to resources that are accessed via a http url (either on localhost or another domain).
 
 ```toml
-# Streamable HTTP requires the experimental rmcp client
-experimental_use_rmcp_client = true
 [mcp_servers.figma]
 url = "https://mcp.linear.app/mcp"
 # Optional environment variable containing a bearer token to use for auth
@@ -411,7 +412,13 @@ http_headers = { "HEADER_NAME" = "HEADER_VALUE" }
 env_http_headers = { "HEADER_NAME" = "ENV_VAR" }
 ```
 
-For oauth login, you must enable `experimental_use_rmcp_client = true` and then run `codex mcp login server_name`
+Streamable HTTP connections always use the experimental Rust MCP client under the hood, so expect occasional rough edges. OAuth login flows are gated on the `experimental_use_rmcp_client = true` flag:
+
+```toml
+experimental_use_rmcp_client = true
+```
+
+After enabling it, run `codex mcp login <server-name>` when the server supports OAuth.
 
 #### Other configuration options
 
@@ -428,7 +435,7 @@ enabled = false
 
 Codex is transitioning to the [official Rust MCP SDK](https://github.com/modelcontextprotocol/rust-sdk).
 
-The flag enabled OAuth support for streamable HTTP servers and uses a new STDIO client implementation.
+This flag enables OAuth support for streamable HTTP servers and switches STDIO servers over to the new client implementation.
 
 Please try and report issues with the new client. To enable it, add this to the top level of your `config.toml`
 
@@ -826,7 +833,6 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `sandbox_workspace_write.network_access`         | boolean                                                           | Allow network in workspace‑write (default: false).                                                                         |
 | `sandbox_workspace_write.exclude_tmpdir_env_var` | boolean                                                           | Exclude `$TMPDIR` from writable roots (default: false).                                                                    |
 | `sandbox_workspace_write.exclude_slash_tmp`      | boolean                                                           | Exclude `/tmp` from writable roots (default: false).                                                                       |
-| `disable_response_storage`                       | boolean                                                           | Required for ZDR orgs.                                                                                                     |
 | `notify`                                         | array<string>                                                     | External program for notifications.                                                                                        |
 | `instructions`                                   | string                                                            | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`.                                                    |
 | `mcp_servers.<id>.command`                       | string                                                            | MCP server launcher command (stdio servers only).                                                                          |
@@ -863,9 +869,7 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `model_supports_reasoning_summaries`             | boolean                                                           | Force‑enable reasoning summaries.                                                                                          |
 | `model_reasoning_summary_format`                 | `none` \| `experimental`                                          | Force reasoning summary format.                                                                                            |
 | `chatgpt_base_url`                               | string                                                            | Base URL for ChatGPT auth flow.                                                                                            |
-| `experimental_resume`                            | string (path)                                                     | Resume JSONL path (internal/experimental).                                                                                 |
 | `experimental_instructions_file`                 | string (path)                                                     | Replace built‑in instructions (experimental).                                                                              |
 | `experimental_use_exec_command_tool`             | boolean                                                           | Use experimental exec command tool.                                                                                        |
-| `responses_originator_header_internal_override`  | string                                                            | Override `originator` header value.                                                                                        |
 | `projects.<path>.trust_level`                    | string                                                            | Mark project/worktree as trusted (only `"trusted"` is recognized).                                                         |
 | `tools.web_search`                               | boolean                                                           | Enable web search tool (alias: `web_search_request`) (default: false).                                                     |
