@@ -13,11 +13,8 @@ pub fn add_dir_warning_message(
     }
 
     match sandbox_policy {
-        SandboxPolicy::WorkspaceWrite { .. } => None,
+        SandboxPolicy::WorkspaceWrite { .. } | SandboxPolicy::DangerFullAccess => None,
         SandboxPolicy::ReadOnly => Some(format_warning(additional_dirs, "read-only")),
-        SandboxPolicy::DangerFullAccess => {
-            Some(format_warning(additional_dirs, "danger-full-access"))
-        }
     }
 }
 
@@ -62,11 +59,6 @@ mod tests {
     fn warns_for_danger_full_access() {
         let sandbox = SandboxPolicy::DangerFullAccess;
         let dirs = vec![PathBuf::from("/tmp/abs")];
-        let message = add_dir_warning_message(&dirs, &sandbox)
-            .expect("expected warning for danger-full-access sandbox");
-        assert_eq!(
-            message,
-            "Ignoring --add-dir (/tmp/abs) because the effective sandbox mode is danger-full-access. Switch to workspace-write to allow additional writable roots."
-        );
+        assert_eq!(add_dir_warning_message(&dirs, &sandbox), None);
     }
 }
