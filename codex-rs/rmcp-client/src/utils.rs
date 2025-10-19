@@ -181,15 +181,14 @@ pub(crate) const DEFAULT_ENV_VARS: &[&str] = &[
     "TEMP",
     "TMP",
     // Suggested for shell-wrapping shims and CLI tools
-    "WINDIR",
     "COMSPEC",
     "APPDATA",
     "LOCALAPPDATA",
-    "HOMEDRIVE",
-    "HOMEPATH",
-    // Preserve HOME if present; some tools prefer it over USERPROFILE
-    "HOME",
-    // Program files roots
+    // Bun installer directories (required when using bun/bunx shims)
+    "BUN_INSTALL_GLOBAL_DIR",
+    "BUN_INSTALL_CACHE_DIR",
+    "BUN_INSTALL_BIN",
+    // Playwright needs these to locate system Edge when using --browser=msedge
     "PROGRAMFILES",
     "PROGRAMFILES(X86)",
 ];
