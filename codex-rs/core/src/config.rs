@@ -317,12 +317,14 @@ fn apply_overlays(
         managed_preferences,
     } = layers;
 
-    for (path, value) in cli_overrides.into_iter() {
-        apply_toml_override(&mut base, &path, value);
-    }
-
+    // Apply managed layers first so they can be overridden by CLI flags.
     for overlay in [managed_config, managed_preferences].into_iter().flatten() {
         merge_toml_values(&mut base, &overlay);
+    }
+
+    // Finally, apply CLI overrides with the highest precedence.
+    for (path, value) in cli_overrides.into_iter() {
+        apply_toml_override(&mut base, &path, value);
     }
 
     base
@@ -1505,6 +1507,50 @@ mod tests {
 
     use std::time::Duration;
     use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn cli_overrides_take_highest_precedence_over_managed_layers() {
+        // Prepare a temporary CODEX_HOME
+        let temp_dir = TempDir::new().expect("tempdir");
+        let managed_path = temp_dir.path().join("managed_config.toml");
+
+        // Base user config
+        std::fs::write(temp_dir.path().join(CONFIG_TOML_FILE), "foo = 1\n")
+            .expect("write base config");
+
+        // Managed file layer
+        std::fs::write(&managed_path, "foo = 2\n").expect("write managed config");
+
+        // CLI override that should win regardless of managed layers
+        let cli_overrides = vec![("foo".to_string(), TomlValue::Integer(999))];
+
+        // Build overrides for loader
+        let loader_overrides = {
+            #[cfg(target_os = "macos")]
+            {
+                crate::config_loader::LoaderOverrides {
+                    managed_config_path: Some(managed_path),
+                    project_config_path: None,
+                    managed_preferences_base64: None,
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                crate::config_loader::LoaderOverrides {
+                    managed_config_path: Some(managed_path),
+                    project_config_path: None,
+                }
+            }
+        };
+
+        // Resolve config with our explicit layers + CLI overrides
+        let root_value = load_resolved_config(temp_dir.path(), cli_overrides, loader_overrides)
+            .await
+            .expect("resolved config");
+
+        let table = root_value.as_table().expect("table");
+        assert_eq!(table.get("foo"), Some(&TomlValue::Integer(999)));
+    }
 
     #[test]
     fn test_toml_parsing() {
