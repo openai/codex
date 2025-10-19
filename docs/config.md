@@ -28,7 +28,7 @@ Both the `--config` flag and the `config.toml` file support the following option
 
 ## Model selection
 
-### Model
+### model
 
 The model that Codex should use.
 
@@ -36,7 +36,7 @@ The model that Codex should use.
 model = "gpt-5"  # overrides the default of "gpt-5-codex"
 ```
 
-### Model providers
+### model_providers
 
 This option lets you override and amend the default set of model providers bundled with Codex. This value is a map where the key is the value to use with `model_provider` to select the corresponding provider.
 
@@ -142,7 +142,7 @@ Number of times Codex will attempt to reconnect when a streaming response is int
 
 How long Codex will wait for activity on a streaming response before treating the connection as lost. Defaults to `300_000` (5 minutes).
 
-### Model provider
+### model_provider
 
 Identifies which provider to use from the `model_providers` map. Defaults to `"openai"`. You can override the `base_url` for the built-in `openai` provider via the `OPENAI_BASE_URL` environment variable.
 
@@ -155,7 +155,7 @@ model_provider = "ollama"
 model = "mistral"
 ```
 
-### Model reasoning effort
+### model_reasoning_effort
 
 If the selected model is known to support reasoning (for example: `o3`, `o4-mini`, `codex-*`, `gpt-5`, `gpt-5-codex`), reasoning is enabled by default when using the Responses API. As explained in the [OpenAI Platform documentation](https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning), this can be set to:
 
@@ -166,7 +166,7 @@ If the selected model is known to support reasoning (for example: `o3`, `o4-mini
 
 Note: to minimize reasoning, choose `"minimal"`.
 
-### Model reasoning summary
+### model_reasoning_summary
 
 If the model name starts with `"o"` (as in `"o3"` or `"o4-mini"`) or `"codex"`, reasoning is enabled by default when using the Responses API. As explained in the [OpenAI Platform documentation](https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries), this can be set to:
 
@@ -180,7 +180,7 @@ To disable reasoning summaries, set `model_reasoning_summary` to `"none"` in you
 model_reasoning_summary = "none"  # disable reasoning summaries
 ```
 
-### Model verbosity
+### model_verbosity
 
 Controls output length/detail on GPT‑5 family models when using the Responses API. Supported values:
 
@@ -199,7 +199,7 @@ model_verbosity = "low"
 
 Note: This applies only to providers using the Responses API. Chat Completions providers are unaffected.
 
-### Model supports reasoning summaries
+### model_supports_reasoning_summaries
 
 By default, `reasoning` is only set on requests to OpenAI models that are known to support them. To force `reasoning` to set on requests to the current model, you can force this behavior by setting the following in `config.toml`:
 
@@ -207,13 +207,13 @@ By default, `reasoning` is only set on requests to OpenAI models that are known 
 model_supports_reasoning_summaries = true
 ```
 
-### Model context window
+### model_context_window
 
 The size of the context window for the model, in tokens.
 
 In general, Codex knows the context window for the most common OpenAI models, but if you are using a new model with an old version of the Codex CLI, then you can use `model_context_window` to tell Codex what value to use to determine how much context is left during a conversation.
 
-### Model max output tokens
+### model_max_output_tokens
 
 This is analogous to `model_context_window`, but for the maximum number of output tokens for the model.
 
@@ -221,7 +221,7 @@ This is analogous to `model_context_window`, but for the maximum number of outpu
 
 ## Execution environment
 
-### Approval policy
+### approval_policy
 
 Determines when the user should be prompted to approve whether Codex can execute a command:
 
@@ -258,7 +258,7 @@ Alternatively, you can have the model run until it is done, and never ask to run
 approval_policy = "never"
 ```
 
-### Sandbox mode
+### sandbox_mode
 
 Codex executes model-generated shell commands inside an OS-level sandbox.
 
@@ -307,7 +307,7 @@ This is reasonable to use if Codex is running in an environment that provides it
 
 Though using this option may also be necessary if you try to use Codex in environments where its native sandboxing mechanisms are unsupported, such as older Linux kernels or on Windows.
 
-### Approval presets
+### approval_presets
 
 Codex provides three main Approval Presets:
 
@@ -319,7 +319,7 @@ You can further customize how Codex runs at the command line using the `--ask-fo
 
 > See also [Sandbox & approvals](./sandbox.md) for in-depth examples and platform-specific behaviour.
 
-### Shell environment policy
+### shell_environment_policy
 
 Codex spawns subprocesses (e.g. when executing a `local_shell` tool-call suggested by the assistant). By default it now passes **your full environment** to those subprocesses. You can tune this behavior via the **`shell_environment_policy`** block in `config.toml`:
 
@@ -363,7 +363,7 @@ Currently, `CODEX_SANDBOX_NETWORK_DISABLED=1` is also added to the environment, 
 
 ## MCP integration
 
-### Connecting to MCP servers
+### mcp_servers
 
 You can configure Codex to use [MCP servers](https://modelcontextprotocol.io/about) to give Codex access to external applications, resources, or services.
 
@@ -704,7 +704,7 @@ show_raw_agent_reasoning = true  # defaults to false
 
 ## Profiles and overrides
 
-### Profiles
+### profiles
 
 A _profile_ is a collection of configuration values that can be set together. Multiple profiles can be defined in `config.toml` and you can specify the one you
 want to use at runtime via the `--profile` flag.
@@ -749,7 +749,7 @@ Users can specify config values at multiple levels. Order of precedence is as fo
 3. as an entry in `config.toml`, e.g., `model = "o3"`
 4. the default value that comes with Codex CLI (i.e., Codex CLI defaults to `gpt-5-codex`)
 
-### History
+### history
 
 By default, Codex CLI records messages sent to the model in `$CODEX_HOME/history.jsonl`. Note that on UNIX, the file permissions are set to `o600`, so it should only be readable and writable by the owner.
 
@@ -792,7 +792,7 @@ We recommend migrating instructions to AGENTS.md; other filenames may reduce mod
 
 > See also [AGENTS.md discovery](./agents_md.md) for how Codex locates these files during a session.
 
-### TUI options
+### tui
 
 Options that are specific to the TUI.
 
