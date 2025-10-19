@@ -42,6 +42,7 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use dirs::home_dir;
+use dunce::canonicalize;
 use serde::Deserialize;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
@@ -1094,6 +1095,8 @@ pub struct ConfigOverrides {
     pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    /// Additional directories that should be treated as writable roots for this session.
+    pub additional_writable_roots: Vec<PathBuf>,
 }
 
 impl Config {
@@ -1122,6 +1125,7 @@ impl Config {
             include_view_image_tool: include_view_image_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            additional_writable_roots,
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -1169,11 +1173,32 @@ impl Config {
                 }
             }
         };
+        let additional_writable_roots: Vec<PathBuf> = additional_writable_roots
+            .into_iter()
+            .map(|path| {
+                let absolute = if path.is_absolute() {
+                    path
+                } else {
+                    resolved_cwd.join(path)
+                };
+                match canonicalize(&absolute) {
+                    Ok(canonical) => canonical,
+                    Err(_) => absolute,
+                }
+            })
+            .collect();
         let active_project = cfg
             .get_active_project(&resolved_cwd)
             .unwrap_or(ProjectConfig { trust_level: None });
 
-        let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode, &resolved_cwd);
+        let mut sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode, &resolved_cwd);
+        if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
+            for path in additional_writable_roots {
+                if !writable_roots.iter().any(|existing| existing == &path) {
+                    writable_roots.push(path);
+                }
+            }
+        }
         let mut approval_policy = approval_policy_override
             .or(config_profile.approval_policy)
             .or(cfg.approval_policy)
@@ -1611,6 +1636,46 @@ trust_level = "trusted"
             sandbox_workspace_write_cfg
                 .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
         );
+    }
+
+    #[test]
+    fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let frontend = temp_dir.path().join("frontend");
+        let backend = temp_dir.path().join("backend");
+        std::fs::create_dir_all(&frontend)?;
+        std::fs::create_dir_all(&backend)?;
+
+        let overrides = ConfigOverrides {
+            cwd: Some(frontend),
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            additional_writable_roots: vec![PathBuf::from("../backend"), backend.clone()],
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            overrides,
+            temp_dir.path().to_path_buf(),
+        )?;
+
+        let expected_backend = canonicalize(&backend).expect("canonicalize backend directory");
+        match config.sandbox_policy {
+            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                assert_eq!(
+                    writable_roots
+                        .iter()
+                        .filter(|root| **root == expected_backend)
+                        .count(),
+                    1,
+                    "expected single writable root entry for {}",
+                    expected_backend.display()
+                );
+            }
+            other => panic!("expected workspace-write policy, got {other:?}"),
+        }
+
+        Ok(())
     }
 
     #[test]

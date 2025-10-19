@@ -61,6 +61,16 @@ In the transcript preview, the footer shows an `Esc edit prev` hint while editin
 
 Sometimes it is not convenient to `cd` to the directory you want Codex to use as the "working root" before running Codex. Fortunately, `codex` supports a `--cd` option so you can specify whatever folder you want. You can confirm that Codex is honoring `--cd` by double-checking the **workdir** it reports in the TUI at the start of a new session.
 
+### `--add-dir` flag
+
+Need to work across multiple projects? Pass `--add-dir` one or more times to expose extra directories as writable roots for the current session while keeping the main working directory unchanged. For example:
+
+```shell
+codex --cd apps/frontend --add-dir ../backend --add-dir ../shared
+```
+
+Codex can now inspect and edit files in each listed directory without leaving the primary workspace.
+
 ### Shell completions
 
 Generate shell completion scripts via:

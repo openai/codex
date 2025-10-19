@@ -563,6 +563,9 @@ fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
     if !resume_cli.images.is_empty() {
         interactive.images = resume_cli.images;
     }
+    if !resume_cli.add_dir.is_empty() {
+        interactive.add_dir.extend(resume_cli.add_dir);
+    }
     if let Some(prompt) = resume_cli.prompt {
         interactive.prompt = Some(prompt);
     }
