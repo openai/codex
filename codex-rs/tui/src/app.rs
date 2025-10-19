@@ -3,14 +3,14 @@ use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
-use crate::chatwidget::ChatWidget;
+use crate::chatwidget::{ChatWidget, ChatWidgetInit};
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
-use crate::resume_picker::ResumeSelection;
+use crate::resume_picker::{self, ResumeSelection};
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_ansi_escape::ansi_escape_line;
@@ -233,18 +233,58 @@ impl App {
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
-                let init = crate::chatwidget::ChatWidgetInit {
-                    config: self.config.clone(),
-                    frame_requester: tui.frame_requester(),
-                    app_event_tx: self.app_event_tx.clone(),
-                    initial_prompt: None,
-                    initial_images: Vec::new(),
-                    enhanced_keys_supported: self.enhanced_keys_supported,
-                    auth_manager: self.auth_manager.clone(),
-                    feedback: self.feedback.clone(),
-                };
+                let init = self.rebuild_chatwidget_init(tui.frame_requester());
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenResumePicker => {
+                match resume_picker::run_resume_picker(tui, &self.config.codex_home).await {
+                    Ok(selection) => match selection {
+                        ResumeSelection::StartFresh => {
+                            let init = self.rebuild_chatwidget_init(tui.frame_requester());
+                            self.chat_widget = ChatWidget::new(init, self.server.clone());
+                            tui.frame_requester().schedule_frame();
+                        }
+                        ResumeSelection::Resume(path) => {
+                            match self
+                                .server
+                                .resume_conversation_from_rollout(
+                                    self.config.clone(),
+                                    path.clone(),
+                                    self.auth_manager.clone(),
+                                )
+                                .await
+                            {
+                                Ok(resumed) => {
+                                    let init = self.rebuild_chatwidget_init(tui.frame_requester());
+                                    self.chat_widget = ChatWidget::new_from_existing(
+                                        init,
+                                        resumed.conversation,
+                                        resumed.session_configured,
+                                    );
+                                    tui.frame_requester().schedule_frame();
+                                }
+                                Err(err) => {
+                                    tracing::error!(
+                                        error = %err,
+                                        resume_path = %path.display(),
+                                        "failed to resume session from picker"
+                                    );
+                                    self.chat_widget.add_error_message(format!(
+                                        "Failed to resume session: {err}"
+                                    ));
+                                }
+                            }
+                        }
+                        ResumeSelection::Exit => {}
+                    },
+                    Err(err) => {
+                        tracing::error!(error = %err, "resume picker failed");
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to open session list: {err}"
+                        ));
+                    }
+                }
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
@@ -440,6 +480,22 @@ impl App {
 
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
         self.chat_widget.token_usage()
+    }
+
+    fn rebuild_chatwidget_init(
+        &self,
+        frame_requester: crate::tui::FrameRequester,
+    ) -> ChatWidgetInit {
+        ChatWidgetInit {
+            config: self.config.clone(),
+            frame_requester,
+            app_event_tx: self.app_event_tx.clone(),
+            initial_prompt: None,
+            initial_images: Vec::new(),
+            enhanced_keys_supported: self.enhanced_keys_supported,
+            auth_manager: self.auth_manager.clone(),
+            feedback: self.feedback.clone(),
+        }
     }
 
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
