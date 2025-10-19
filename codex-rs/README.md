@@ -69,8 +69,7 @@ Need to work across multiple projects? Pass `--add-dir` one or more times to exp
 codex --cd apps/frontend --add-dir ../backend --add-dir ../shared
 ```
 
-Codex can now inspect and edit files in each listed directory without leaving the primary workspace.
-The flag only applies when the effective sandbox mode permits custom writable roots (e.g. `workspace-write` or `danger-full-access`). When `read-only` wins, Codex ignores the extra directories and prints a warning.
+Codex can now inspect and edit files in each listed directory without leaving the primary workspace. The flag only applies when the effective sandbox mode permits custom writable roots (e.g. `workspace-write` or `danger-full-access`).
 
 ### Shell completions
 
