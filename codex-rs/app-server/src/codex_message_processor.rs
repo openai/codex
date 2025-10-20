@@ -52,8 +52,6 @@ use codex_app_server_protocol::SetDefaultModelResponse;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_backend_client::Client as BackendClient;
-use codex_backend_client::types::RateLimitStatusPayload;
-use codex_backend_client::types::RateLimitWindowSnapshot;
 use codex_core::AuthManager;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
@@ -94,7 +92,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InputMessageKind;
 use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_utils_json_to_toml::json_to_toml;
 use std::collections::HashMap;
@@ -592,16 +589,14 @@ impl CodexMessageProcessor {
             client = client.with_chatgpt_account_id(account_id);
         }
 
-        let payload = client
+        client
             .get_rate_limits()
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to fetch codex rate limits: {err}"),
                 data: None,
-            })?;
-
-        Ok(rate_limit_snapshot_from_payload(payload))
+            })
     }
 
     async fn get_user_saved_config(&self, request_id: RequestId) {
@@ -1468,50 +1463,6 @@ async fn derive_config_from_params(
         .collect();
 
     Config::load_with_cli_overrides(cli_overrides, overrides).await
-}
-
-fn rate_limit_snapshot_from_payload(payload: RateLimitStatusPayload) -> RateLimitSnapshot {
-    let Some(details) = payload
-        .rate_limit
-        .and_then(|inner| inner.map(|boxed| *boxed))
-    else {
-        return RateLimitSnapshot {
-            primary: None,
-            secondary: None,
-        };
-    };
-
-    RateLimitSnapshot {
-        primary: map_rate_limit_window(details.primary_window),
-        secondary: map_rate_limit_window(details.secondary_window),
-    }
-}
-
-fn map_rate_limit_window(
-    window: Option<Option<Box<RateLimitWindowSnapshot>>>,
-) -> Option<RateLimitWindow> {
-    let snapshot = match window {
-        Some(Some(snapshot)) => *snapshot,
-        _ => return None,
-    };
-
-    let used_percent = f64::from(snapshot.used_percent);
-    let window_minutes = window_minutes_from_seconds(snapshot.limit_window_seconds);
-    let resets_at = snapshot.reset_at;
-    Some(RateLimitWindow {
-        used_percent,
-        window_minutes,
-        resets_at,
-    })
-}
-
-fn window_minutes_from_seconds(seconds: i32) -> Option<u64> {
-    if seconds <= 0 {
-        return None;
-    }
-
-    let seconds_u64 = seconds as u64;
-    Some(seconds_u64.div_ceil(60))
 }
 
 async fn on_patch_approval_response(
