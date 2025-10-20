@@ -913,7 +913,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: FUNCTION_CALL_LIMIT_MSG.into(),
             }],
         })
