@@ -72,6 +72,7 @@ impl ToolHandler for ApplyPatchHandler {
             env: HashMap::new(),
             with_escalated_permissions: None,
             justification: None,
+            arg0: None,
         };
 
         let content = handle_container_exec_with_params(

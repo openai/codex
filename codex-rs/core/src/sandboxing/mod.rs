@@ -40,6 +40,7 @@ pub struct ExecEnv {
     pub sandbox: SandboxType,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
+    pub arg0: Option<String>,
 }
 
 pub enum SandboxPreference {
@@ -113,8 +114,8 @@ impl SandboxManager {
         command.push(spec.program.clone());
         command.extend(spec.args.iter().cloned());
 
-        let (command, sandbox_env) = match sandbox {
-            SandboxType::None => (command, HashMap::new()),
+        let (command, sandbox_env, arg0_override) = match sandbox {
+            SandboxType::None => (command, HashMap::new(), None),
             SandboxType::MacosSeatbelt => {
                 let mut seatbelt_env = HashMap::new();
                 seatbelt_env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
@@ -123,7 +124,7 @@ impl SandboxManager {
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());
                 full_command.append(&mut args);
-                (full_command, seatbelt_env)
+                (full_command, seatbelt_env, None)
             }
             SandboxType::LinuxSeccomp => {
                 let exe = codex_linux_sandbox_exe
@@ -133,7 +134,11 @@ impl SandboxManager {
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(exe.to_string_lossy().to_string());
                 full_command.append(&mut args);
-                (full_command, HashMap::new())
+                (
+                    full_command,
+                    HashMap::new(),
+                    Some("codex-linux-sandbox".to_string()),
+                )
             }
         };
 
@@ -147,6 +152,7 @@ impl SandboxManager {
             sandbox,
             with_escalated_permissions: spec.with_escalated_permissions,
             justification: spec.justification.clone(),
+            arg0: arg0_override,
         })
     }
 

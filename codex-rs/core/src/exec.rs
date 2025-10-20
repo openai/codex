@@ -54,6 +54,7 @@ pub struct ExecParams {
     pub env: HashMap<String, String>,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
+    pub arg0: Option<String>,
 }
 
 impl ExecParams {
@@ -95,6 +96,7 @@ pub async fn process_exec_tool_call(
         env,
         with_escalated_permissions,
         justification,
+        arg0: _,
     } = params;
 
     let (program, args) = command.split_first().ok_or_else(|| {
@@ -142,6 +144,7 @@ pub(crate) async fn execute_exec_env(
         sandbox,
         with_escalated_permissions,
         justification,
+        arg0,
     } = env;
 
     let params = ExecParams {
@@ -151,6 +154,7 @@ pub(crate) async fn execute_exec_env(
         env,
         with_escalated_permissions,
         justification,
+        arg0,
     };
 
     let start = Instant::now();
@@ -348,7 +352,11 @@ async fn exec(
 ) -> Result<RawExecToolCallOutput> {
     let timeout = params.timeout_duration();
     let ExecParams {
-        command, cwd, env, ..
+        command,
+        cwd,
+        env,
+        arg0,
+        ..
     } = params;
 
     let (program, args) = command.split_first().ok_or_else(|| {
@@ -357,11 +365,11 @@ async fn exec(
             "command args are empty",
         ))
     })?;
-    let arg0 = None;
+    let arg0_ref = arg0.as_deref();
     let child = spawn_child_async(
         PathBuf::from(program),
         args.into(),
-        arg0,
+        arg0_ref,
         cwd,
         sandbox_policy,
         StdioPolicy::RedirectForShellTool,

@@ -3035,6 +3035,7 @@ mod tests {
             env: HashMap::new(),
             with_escalated_permissions: Some(true),
             justification: Some("test".to_string()),
+            arg0: None,
         };
 
         let params2 = ExecParams {
