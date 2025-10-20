@@ -36,12 +36,14 @@ use crate::protocol::SandboxPolicy;
 use anyhow::Context;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use dirs::home_dir;
+use dunce::canonicalize;
 use serde::Deserialize;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
@@ -207,6 +209,12 @@ pub struct Config {
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
+
+    /// When set, restricts ChatGPT login to a specific workspace identifier.
+    pub forced_chatgpt_workspace_id: Option<String>,
+
+    /// When set, restricts the login mechanism users may use.
+    pub forced_login_method: Option<ForcedLoginMethod>,
 
     /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
     pub include_plan_tool: bool,
@@ -843,6 +851,14 @@ pub struct ConfigToml {
     /// System instructions.
     pub instructions: Option<String>,
 
+    /// When set, restricts ChatGPT login to a specific workspace identifier.
+    #[serde(default)]
+    pub forced_chatgpt_workspace_id: Option<String>,
+
+    /// When set, restricts the login mechanism users may use.
+    #[serde(default)]
+    pub forced_login_method: Option<ForcedLoginMethod>,
+
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     #[serde(default)]
     pub mcp_servers: HashMap<String, McpServerConfig>,
@@ -949,6 +965,8 @@ impl From<ConfigToml> for UserSavedConfig {
             approval_policy: config_toml.approval_policy,
             sandbox_mode: config_toml.sandbox_mode,
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
+            forced_chatgpt_workspace_id: config_toml.forced_chatgpt_workspace_id,
+            forced_login_method: config_toml.forced_login_method,
             model: config_toml.model,
             model_reasoning_effort: config_toml.model_reasoning_effort,
             model_reasoning_summary: config_toml.model_reasoning_summary,
@@ -1094,6 +1112,8 @@ pub struct ConfigOverrides {
     pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    /// Additional directories that should be treated as writable roots for this session.
+    pub additional_writable_roots: Vec<PathBuf>,
 }
 
 impl Config {
@@ -1122,6 +1142,7 @@ impl Config {
             include_view_image_tool: include_view_image_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            additional_writable_roots,
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -1169,11 +1190,32 @@ impl Config {
                 }
             }
         };
+        let additional_writable_roots: Vec<PathBuf> = additional_writable_roots
+            .into_iter()
+            .map(|path| {
+                let absolute = if path.is_absolute() {
+                    path
+                } else {
+                    resolved_cwd.join(path)
+                };
+                match canonicalize(&absolute) {
+                    Ok(canonical) => canonical,
+                    Err(_) => absolute,
+                }
+            })
+            .collect();
         let active_project = cfg
             .get_active_project(&resolved_cwd)
             .unwrap_or(ProjectConfig { trust_level: None });
 
-        let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode, &resolved_cwd);
+        let mut sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode, &resolved_cwd);
+        if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
+            for path in additional_writable_roots {
+                if !writable_roots.iter().any(|existing| existing == &path) {
+                    writable_roots.push(path);
+                }
+            }
+        }
         let mut approval_policy = approval_policy_override
             .or(config_profile.approval_policy)
             .or(cfg.approval_policy)
@@ -1224,6 +1266,18 @@ impl Config {
         let use_experimental_streamable_shell_tool = features.enabled(Feature::StreamableShell);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
         let use_experimental_use_rmcp_client = features.enabled(Feature::RmcpClient);
+
+        let forced_chatgpt_workspace_id =
+            cfg.forced_chatgpt_workspace_id.as_ref().and_then(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
+
+        let forced_login_method = cfg.forced_login_method;
 
         let model = model
             .or(config_profile.model)
@@ -1333,6 +1387,8 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            forced_chatgpt_workspace_id,
+            forced_login_method,
             include_plan_tool: include_plan_tool_flag,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             tools_web_search_request,
@@ -1611,6 +1667,46 @@ trust_level = "trusted"
             sandbox_workspace_write_cfg
                 .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
         );
+    }
+
+    #[test]
+    fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let frontend = temp_dir.path().join("frontend");
+        let backend = temp_dir.path().join("backend");
+        std::fs::create_dir_all(&frontend)?;
+        std::fs::create_dir_all(&backend)?;
+
+        let overrides = ConfigOverrides {
+            cwd: Some(frontend),
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            additional_writable_roots: vec![PathBuf::from("../backend"), backend.clone()],
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            overrides,
+            temp_dir.path().to_path_buf(),
+        )?;
+
+        let expected_backend = canonicalize(&backend).expect("canonicalize backend directory");
+        match config.sandbox_policy {
+            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                assert_eq!(
+                    writable_roots
+                        .iter()
+                        .filter(|root| **root == expected_backend)
+                        .count(),
+                    1,
+                    "expected single writable root entry for {}",
+                    expected_backend.display()
+                );
+            }
+            other => panic!("expected workspace-write policy, got {other:?}"),
+        }
+
+        Ok(())
     }
 
     #[test]
@@ -2735,6 +2831,8 @@ model_verbosity = "high"
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
+                forced_chatgpt_workspace_id: None,
+                forced_login_method: None,
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
@@ -2802,6 +2900,8 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
@@ -2884,6 +2984,8 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
@@ -2952,6 +3054,8 @@ model_verbosity = "high"
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,

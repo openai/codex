@@ -2,6 +2,8 @@
 
 #[cfg(not(target_os = "windows"))]
 mod abort_tasks;
+#[cfg(not(target_os = "windows"))]
+mod approvals;
 mod cli_stream;
 mod client;
 mod compact;

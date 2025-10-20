@@ -768,8 +768,8 @@ async fn token_count_includes_rate_limits_snapshot() {
         .insert_header("x-codex-secondary-used-percent", "40.0")
         .insert_header("x-codex-primary-window-minutes", "10")
         .insert_header("x-codex-secondary-window-minutes", "60")
-        .insert_header("x-codex-primary-reset-after-seconds", "1800")
-        .insert_header("x-codex-secondary-reset-after-seconds", "7200")
+        .insert_header("x-codex-primary-reset-at", "2024-01-01T00:30:00Z")
+        .insert_header("x-codex-secondary-reset-at", "2024-01-01T02:00:00Z")
         .set_body_raw(sse_body, "text/event-stream");
 
     Mock::given(method("POST"))
@@ -818,12 +818,12 @@ async fn token_count_includes_rate_limits_snapshot() {
                 "primary": {
                     "used_percent": 12.5,
                     "window_minutes": 10,
-                    "resets_in_seconds": 1800
+                    "resets_at": "2024-01-01T00:30:00Z"
                 },
                 "secondary": {
                     "used_percent": 40.0,
                     "window_minutes": 60,
-                    "resets_in_seconds": 7200
+                    "resets_at": "2024-01-01T02:00:00Z"
                 }
             }
         })
@@ -865,12 +865,12 @@ async fn token_count_includes_rate_limits_snapshot() {
                 "primary": {
                     "used_percent": 12.5,
                     "window_minutes": 10,
-                    "resets_in_seconds": 1800
+                    "resets_at": "2024-01-01T00:30:00Z"
                 },
                 "secondary": {
                     "used_percent": 40.0,
                     "window_minutes": 60,
-                    "resets_in_seconds": 7200
+                    "resets_at": "2024-01-01T02:00:00Z"
                 }
             }
         })
@@ -893,8 +893,8 @@ async fn token_count_includes_rate_limits_snapshot() {
         final_snapshot
             .primary
             .as_ref()
-            .and_then(|window| window.resets_in_seconds),
-        Some(1800)
+            .and_then(|window| window.resets_at.as_deref()),
+        Some("2024-01-01T00:30:00Z")
     );
 
     wait_for_event(&codex, |msg| matches!(msg, EventMsg::TaskComplete(_))).await;
@@ -915,7 +915,7 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
             "error": {
                 "type": "usage_limit_reached",
                 "message": "limit reached",
-                "resets_in_seconds": 42,
+                "resets_at": "2024-01-01T00:00:42Z",
                 "plan_type": "pro"
             }
         }));
@@ -935,12 +935,12 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
         "primary": {
             "used_percent": 100.0,
             "window_minutes": 15,
-            "resets_in_seconds": null
+            "resets_at": null
         },
         "secondary": {
             "used_percent": 87.5,
             "window_minutes": 60,
-            "resets_in_seconds": null
+            "resets_at": null
         }
     });
 
