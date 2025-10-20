@@ -255,13 +255,14 @@ pub(crate) fn is_likely_sandbox_denied(
         return false;
     }
 
-    const SANDBOX_DENIED_KEYWORDS: [&str; 6] = [
+    const SANDBOX_DENIED_KEYWORDS: [&str; 7] = [
         "operation not permitted",
         "permission denied",
         "read-only file system",
         "seccomp",
         "sandbox",
         "landlock",
+        "failed to write file",
     ];
 
     if [
