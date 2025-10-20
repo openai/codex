@@ -216,9 +216,7 @@ async fn handle_exec_outcome(
         }
         Err(ToolError::Codex(err)) => {
             let message = format!("execution error: {err:?}");
-            let response = format_exec_output(
-                &message,
-            );
+            let response = format_exec_output(&message);
             event = ToolEventStage::Failure(ToolEventFailure::Message(message));
             Err(FunctionCallError::RespondToModel(format_exec_output(
                 &response,
@@ -227,7 +225,9 @@ async fn handle_exec_outcome(
         Err(ToolError::Rejected(msg)) | Err(ToolError::SandboxDenied(msg)) => {
             let response = format_exec_output(&msg);
             event = ToolEventStage::Failure(ToolEventFailure::Message(msg));
-            Err(FunctionCallError::RespondToModel(format_exec_output(&response)))
+            Err(FunctionCallError::RespondToModel(format_exec_output(
+                &response,
+            )))
         }
     };
     event_emitter.emit(event_ctx, event).await;

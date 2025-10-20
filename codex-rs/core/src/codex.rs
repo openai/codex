@@ -395,6 +395,7 @@ impl Session {
             tools_config,
             is_review_mode: false,
             final_output_json_schema: None,
+            codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
         }
     }
 
@@ -643,10 +644,7 @@ impl Session {
         let current_configuration = self.state.lock().await.session_configuration.clone();
         let session_configuration = current_configuration.apply(&updates);
 
-        self.services.executor.update_environment(
-            session_configuration.sandbox_policy.clone(),
-            session_configuration.cwd.clone(),
-        );
+        // Unified exec no longer requires a separate environment update here.
 
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
@@ -2298,10 +2296,7 @@ fn is_mcp_client_auth_required_error(error: &anyhow::Error) -> bool {
     error.to_string().contains("Auth required")
 }
 
-use crate::executor::errors::ExecError;
-use crate::executor::linkers::PreparedExec;
-use crate::tools::context::ApplyPatchCommandContext;
-use crate::tools::context::ExecCommandContext;
+// Removed legacy executor imports after unified exec migration.
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
