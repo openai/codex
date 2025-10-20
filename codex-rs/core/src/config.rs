@@ -121,6 +121,12 @@ pub struct Config {
     /// Optional text prepended to the first user message of every session.
     pub global_prompt: Option<String>,
 
+    /// Whether automatic checkpoints should be enabled by default for new sessions.
+    pub auto_checkpoint: bool,
+
+    /// Whether automatic commits should be enabled by default for new sessions.
+    pub auto_commit: bool,
+
     /// Optional shell script that Codex should run when a turn completes.
     /// When set, Codex spawns `/bin/sh -c <script>` and exports the last
     /// assistant reply via the `CODEX_ALARM_LAST_RESPONSE` environment variable.
@@ -697,6 +703,50 @@ pub async fn persist_global_prompt(codex_home: &Path, prompt: Option<&str>) -> a
     Ok(())
 }
 
+async fn persist_bool_flag(codex_home: &Path, key: &str, enabled: bool) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    if enabled {
+        doc[key] = toml_edit::value(true);
+    } else {
+        doc.as_table_mut().remove(key);
+    }
+
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+
+    Ok(())
+}
+
+pub async fn persist_auto_checkpoint(codex_home: &Path, enabled: bool) -> anyhow::Result<()> {
+    persist_bool_flag(codex_home, "auto_checkpoint", enabled).await
+}
+
+pub async fn persist_auto_commit(codex_home: &Path, enabled: bool) -> anyhow::Result<()> {
+    persist_bool_flag(codex_home, "auto_commit", enabled).await
+}
+
 pub async fn persist_alarm_script(codex_home: &Path, script: Option<&str>) -> anyhow::Result<()> {
     let config_path = codex_home.join(CONFIG_TOML_FILE);
     let serialized = match tokio::fs::read_to_string(&config_path).await {
@@ -999,6 +1049,12 @@ pub struct ConfigToml {
 
     /// Global prompt prepended to the first user message of every session.
     pub global_prompt: Option<String>,
+
+    /// Default state for automatic checkpoints.
+    pub auto_checkpoint: Option<bool>,
+
+    /// Default state for automatic commits.
+    pub auto_commit: Option<bool>,
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     #[serde(default)]
@@ -1393,6 +1449,16 @@ impl Config {
                 }
             });
 
+        let auto_checkpoint = config_profile
+            .auto_checkpoint
+            .or(cfg.auto_checkpoint)
+            .unwrap_or(false);
+
+        let auto_commit = config_profile
+            .auto_commit
+            .or(cfg.auto_commit)
+            .unwrap_or(false);
+
         // Default review model when not set in config; allow CLI override to take precedence.
         let review_model = override_review_model
             .or(cfg.review_model)
@@ -1433,6 +1499,8 @@ impl Config {
             approval_policy,
             sandbox_policy,
             shell_environment_policy,
+            auto_checkpoint,
+            auto_commit,
             alarm_script,
             notify,
             user_instructions,
@@ -2403,6 +2471,82 @@ global_prompt = "Reply in Korean."
     }
 
     #[tokio::test]
+    async fn persist_auto_checkpoint_sets_value() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_auto_checkpoint(codex_home.path(), true).await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(parsed.auto_checkpoint, Some(true));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_auto_checkpoint_clears_value() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        tokio::fs::write(
+            &config_path,
+            r#"
+auto_checkpoint = true
+"#,
+        )
+        .await?;
+
+        persist_auto_checkpoint(codex_home.path(), false).await?;
+
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert!(parsed.auto_checkpoint.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_auto_commit_sets_value() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_auto_commit(codex_home.path(), true).await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(parsed.auto_commit, Some(true));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_auto_commit_clears_value() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        tokio::fs::write(
+            &config_path,
+            r#"
+auto_commit = true
+"#,
+        )
+        .await?;
+
+        persist_auto_commit(codex_home.path(), false).await?;
+
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert!(parsed.auto_commit.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn persist_alarm_script_sets_value() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
@@ -2657,6 +2801,8 @@ model_verbosity = "high"
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
                 global_prompt: None,
+                auto_checkpoint: false,
+                auto_commit: false,
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
@@ -2724,6 +2870,8 @@ model_verbosity = "high"
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             global_prompt: None,
+            auto_checkpoint: false,
+            auto_commit: false,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
@@ -2806,6 +2954,8 @@ model_verbosity = "high"
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             global_prompt: None,
+            auto_checkpoint: false,
+            auto_commit: false,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
@@ -2874,6 +3024,8 @@ model_verbosity = "high"
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             global_prompt: None,
+            auto_checkpoint: false,
+            auto_commit: false,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,

@@ -21,6 +21,8 @@ pub struct ConfigProfile {
     pub chatgpt_base_url: Option<String>,
     pub experimental_instructions_file: Option<PathBuf>,
     pub global_prompt: Option<String>,
+    pub auto_checkpoint: Option<bool>,
+    pub auto_commit: Option<bool>,
     pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,

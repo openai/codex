@@ -27,6 +27,8 @@ use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::persist_alarm_script;
+use codex_core::config::persist_auto_checkpoint;
+use codex_core::config::persist_auto_commit;
 use codex_core::config::persist_global_prompt;
 use codex_core::config::persist_model_selection;
 use codex_core::config::persist_prompt_aliases;
@@ -195,6 +197,9 @@ impl App {
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
 
+        let auto_checkpoint_enabled = config.auto_checkpoint;
+        let auto_commit_enabled = config.auto_commit;
+
         let mut app = Self {
             server: conversation_manager,
             app_event_tx,
@@ -209,9 +214,9 @@ impl App {
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
-            auto_checkpoint_enabled: false,
+            auto_checkpoint_enabled,
             auto_checkpoint_state: None,
-            auto_commit_enabled: false,
+            auto_commit_enabled,
             backtrack: BacktrackState::default(),
             pending_update_action: None,
         };
@@ -398,7 +403,17 @@ impl App {
                 self.auto_checkpoint_state = None;
                 let previous = self.auto_checkpoint_enabled;
                 self.auto_checkpoint_enabled = enabled;
+                self.config.auto_checkpoint = enabled;
                 self.chat_widget.set_auto_checkpoint_enabled(enabled);
+                if let Err(err) = persist_auto_checkpoint(&self.config.codex_home, enabled).await {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist auto-checkpoint preference"
+                    );
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save automatic checkpoint preference: {err:#}"
+                    ));
+                }
                 if enabled {
                     let message = if previous {
                         "Automatic checkpoints already enabled."
@@ -676,7 +691,17 @@ impl App {
             CommitAction::SetAuto { enabled } => {
                 let previous = self.auto_commit_enabled;
                 self.auto_commit_enabled = enabled;
+                self.config.auto_commit = enabled;
                 self.chat_widget.set_auto_commit_enabled(enabled);
+                if let Err(err) = persist_auto_commit(&self.config.codex_home, enabled).await {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist auto-commit preference"
+                    );
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save automatic commit preference: {err:#}"
+                    ));
+                }
 
                 let (message, hint) = if enabled {
                     if previous {

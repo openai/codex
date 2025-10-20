@@ -1055,7 +1055,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             todo_items: Vec::new(),
             todo_auto_enabled: false,
-            auto_commit_enabled: false,
+            auto_commit_enabled: config.auto_commit,
             aliases: HashMap::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
@@ -1063,7 +1063,7 @@ impl ChatWidget {
             is_review_mode: false,
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
-            auto_checkpoint_enabled: false,
+            auto_checkpoint_enabled: config.auto_checkpoint,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
         };
@@ -1140,7 +1140,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             todo_items: Vec::new(),
             todo_auto_enabled: false,
-            auto_commit_enabled: false,
+            auto_commit_enabled: config.auto_commit,
             aliases: HashMap::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: true,
@@ -1148,7 +1148,7 @@ impl ChatWidget {
             is_review_mode: false,
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
-            auto_checkpoint_enabled: false,
+            auto_checkpoint_enabled: config.auto_checkpoint,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
         };
@@ -2329,10 +2329,12 @@ impl ChatWidget {
 
     pub(crate) fn set_auto_checkpoint_enabled(&mut self, enabled: bool) {
         self.auto_checkpoint_enabled = enabled;
+        self.config.auto_checkpoint = enabled;
     }
 
     pub(crate) fn set_auto_commit_enabled(&mut self, enabled: bool) {
         self.auto_commit_enabled = enabled;
+        self.config.auto_commit = enabled;
     }
 
     fn push_todo_list_history(&mut self) {

@@ -1,6 +1,9 @@
 use std::borrow::Cow;
 use std::process::Stdio;
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
 use serde::Serialize;
 use tracing::error;
 use tracing::warn;
@@ -82,6 +85,15 @@ fn build_command(
         command.arg(replace_placeholders(
             arg, request, response, session_id, mode,
         ));
+    }
+    #[cfg(unix)]
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
     }
     Some(command)
 }

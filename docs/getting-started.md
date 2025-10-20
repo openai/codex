@@ -48,7 +48,7 @@ Codex also updates TODO items whenever it emits plan updates (for example, from 
 - Codex’s latest responses
 - Updated plan/TODO items
 
-This makes it easy to follow progress over time (or resume after a restart) without littering the directory with separate files. Disable auto mode with `/checkpoint auto off`.
+This makes it easy to follow progress over time (or resume after a restart) without littering the directory with separate files. Disable auto mode with `/checkpoint auto off`. The current preference is stored in `~/.codex/config.toml` under `auto_checkpoint`, and running `/checkpoint auto [on|off]` updates that global default.
 
 ### Prompt aliases with `/alias`
 
@@ -66,7 +66,7 @@ Use Codex to keep your git history tidy without leaving the TUI:
 
 - `/commit` stages tracked changes (respecting `.gitignore`), summarizes the diff, and creates a commit with an auto-generated message.
 - `/commit "Fix migrations"` stages everything and uses your custom commit message instead of the generated summary.
-- `/commit auto` enables automatic commits after each Codex response; turn it back off with `/commit auto off`.
+- `/commit auto` enables automatic commits after each Codex response; turn it back off with `/commit auto off`. The preference persists as `auto_commit` in `~/.codex/config.toml`, so future sessions reuse your choice.
 - If the current working directory is not inside a git repository, Codex will show a warning instead of attempting a commit.
 
 ### Running with a prompt as input
