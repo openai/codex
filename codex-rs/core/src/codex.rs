@@ -364,6 +364,7 @@ impl Session {
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
         conversation_id: ConversationId,
+        tx_event: Sender<Event>,
     ) -> TurnContext {
         let config = session_configuration.original_config_do_not_use.clone();
         let model_family = find_family_for_model(&session_configuration.model)
@@ -408,6 +409,7 @@ impl Session {
             tools_config,
             is_review_mode: false,
             final_output_json_schema: None,
+            item_collector: ItemCollector::new(tx_event, conversation_id, "turn_id".to_string()),
         }
     }
 
@@ -562,11 +564,6 @@ impl Session {
 
         // Create the mutable state for the Session.
         let state = SessionState::new(session_configuration.clone());
-            item_collector: ItemCollector::new(
-                tx_event.clone(),
-                conversation_id,
-                "turn_id".to_string(),
-            ),
 
         let services = SessionServices {
             mcp_connection_manager,
@@ -678,6 +675,7 @@ impl Session {
             session_configuration.provider.clone(),
             &session_configuration,
             self.conversation_id,
+            self.get_tx_event(),
         );
         if let Some(final_schema) = updates.final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
@@ -1378,12 +1376,12 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         }
                     }
 
-                      turn_context
-                    .item_collector
-                    .started_completed(TurnItem::UserMessage(UserMessageItem::new(&items)))
-                    .await;
+                    current_context
+                        .item_collector
+                        .started_completed(TurnItem::UserMessage(UserMessageItem::new(&items)))
+                        .await;
 
-		    sess.spawn_task(Arc::clone(&current_context), sub.id, items, RegularTask)
+                    sess.spawn_task(Arc::clone(&current_context), sub.id, items, RegularTask)
                         .await;
                     previous_context = Some(current_context);
                 }
@@ -2840,11 +2838,6 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            item_collector: ItemCollector::new(
-                tx_event.clone(),
-                conversation_id,
-                "turn_id".to_string(),
-            ),
         };
 
         let state = SessionState::new(session_configuration.clone());
@@ -2866,6 +2859,15 @@ mod tests {
             otel_event_manager: otel_event_manager.clone(),
         };
 
+        let turn_context = Session::make_turn_context(
+            Some(Arc::clone(&auth_manager)),
+            &otel_event_manager,
+            session_configuration.provider.clone(),
+            &session_configuration,
+            conversation_id,
+            tx_event.clone(),
+        );
+
         let session = Session {
             conversation_id,
             tx_event,
@@ -2875,13 +2877,6 @@ mod tests {
             next_internal_sub_id: AtomicU64::new(0),
         };
 
-        let turn_context = Session::make_turn_context(
-            Some(Arc::clone(&auth_manager)),
-            &otel_event_manager,
-            session_configuration.provider.clone(),
-            &session_configuration,
-            conversation_id,
-        );
         (session, turn_context)
     }
 
@@ -2916,11 +2911,6 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            item_collector: ItemCollector::new(
-                tx_event.clone(),
-                conversation_id,
-                "turn_id".to_string(),
-            ),
         };
 
         let state = SessionState::new(session_configuration.clone());
@@ -2942,6 +2932,15 @@ mod tests {
             otel_event_manager: otel_event_manager.clone(),
         };
 
+        let turn_context = Arc::new(Session::make_turn_context(
+            Some(Arc::clone(&auth_manager)),
+            &otel_event_manager,
+            session_configuration.provider.clone(),
+            &session_configuration,
+            conversation_id,
+            tx_event.clone(),
+        ));
+
         let session = Arc::new(Session {
             conversation_id,
             tx_event,
@@ -2951,13 +2950,6 @@ mod tests {
             next_internal_sub_id: AtomicU64::new(0),
         });
 
-        let turn_context = Arc::new(Session::make_turn_context(
-            Some(Arc::clone(&auth_manager)),
-            &otel_event_manager,
-            session_configuration.provider.clone(),
-            &session_configuration,
-            conversation_id,
-        ));
         (session, turn_context, rx_event)
     }
 
@@ -3033,7 +3025,7 @@ mod tests {
     async fn abort_gracefuly_emits_turn_aborted_only() {
         let (sess, tc, rx) = make_session_and_context_with_rx();
         let sub_id = "sub-regular".to_string();
-        let input = vec![InputItem::Text {
+        let input = vec![UserInput::Text {
             text: "hello".to_string(),
         }];
         sess.spawn_task(
