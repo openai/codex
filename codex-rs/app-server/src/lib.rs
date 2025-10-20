@@ -27,6 +27,7 @@ mod codex_message_processor;
 mod error_code;
 mod fuzzy_file_search;
 mod message_processor;
+mod models;
 mod outgoing_message;
 
 /// Size of the bounded channels used to communicate between tasks. The value

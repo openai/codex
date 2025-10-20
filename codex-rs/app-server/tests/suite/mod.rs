@@ -7,6 +7,7 @@ mod fuzzy_file_search;
 mod interrupt;
 mod list_resume;
 mod login;
+mod model_list;
 mod rate_limits;
 mod send_message;
 mod set_default_model;
