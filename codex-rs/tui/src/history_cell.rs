@@ -17,6 +17,7 @@ use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::updates::UpdateAction;
+use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
@@ -290,46 +291,38 @@ impl UpdateAvailableHistoryCell {
 
 impl HistoryCell for UpdateAvailableHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        use ratatui::style::Stylize as _;
-        use ratatui::text::Line;
-
+        use ratatui_macros::line;
+        use ratatui_macros::text;
         let update_instruction = if let Some(update_action) = self.update_action {
-            Line::from(vec![
-                "Run ".into(),
-                update_action.command_str().cyan(),
-                " to update.".into(),
-            ])
+            line!["Run ", update_action.command_str().cyan(), " to update."]
         } else {
-            Line::from(vec![
-                "See ".into(),
+            line![
+                "See ",
                 "https://github.com/openai/codex".cyan().underlined(),
-                " for installation options.".into(),
-            ])
+                " for installation options."
+            ]
         };
 
-        let current_version = env!("CARGO_PKG_VERSION");
-        let content_lines: Vec<Line<'static>> = vec![
-            Line::from(vec![
+        let content = text![
+            line![
                 padded_emoji("✨").bold().cyan(),
                 "Update available!".bold().cyan(),
-                " ".into(),
-                format!("{current_version} -> {}", self.latest_version).bold(),
-            ]),
+                " ",
+                format!("{CODEX_CLI_VERSION} -> {}", self.latest_version).bold(),
+            ],
             update_instruction,
-            Line::from(""),
-            Line::from("See full release notes:"),
-            Line::from(
-                "https://github.com/openai/codex/releases/latest"
-                    .cyan()
-                    .underlined(),
-            ),
+            "",
+            "See full release notes:",
+            "https://github.com/openai/codex/releases/latest"
+                .cyan()
+                .underlined(),
         ];
 
-        let line_max_width = content_lines.iter().map(Line::width).max().unwrap_or(0);
-        let inner_width = line_max_width
+        let inner_width = content
+            .width()
             .min(usize::from(width.saturating_sub(4)))
             .max(1);
-        with_border_with_inner_width(content_lines, inner_width)
+        with_border_with_inner_width(content.lines, inner_width)
     }
 }
 
