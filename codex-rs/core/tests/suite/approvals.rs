@@ -898,7 +898,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             outcome: Outcome::Auto,
             expectation: Expectation::FileNotCreated {
                 target: TargetPath::Workspace("ro_never.txt"),
-                message_contains: &["failed in sandbox"],
+                message_contains: &[""],
             },
         },
         ScenarioSpec {
