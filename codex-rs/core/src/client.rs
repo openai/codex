@@ -634,7 +634,7 @@ fn parse_rate_limit_window(
 
     used_percent.and_then(|used_percent| {
         let window_minutes = parse_header_i64(headers, window_minutes_header);
-        let resets_at = parse_header_i64(headers, resets_header);
+        let resets_at = parse_header_i64(headers, resets_at_header);
 
         let has_data = used_percent != 0.0
             || window_minutes.is_some_and(|minutes| minutes != 0)

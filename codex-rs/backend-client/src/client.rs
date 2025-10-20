@@ -298,7 +298,7 @@ impl Client {
 
         let used_percent = f64::from(snapshot.used_percent);
         let window_minutes = Self::window_minutes_from_seconds(snapshot.limit_window_seconds);
-        let resets_at = snapshot.reset_at;
+        let resets_at = Some(i64::from(snapshot.reset_at));
         Some(RateLimitWindow {
             used_percent,
             window_minutes,
@@ -306,12 +306,12 @@ impl Client {
         })
     }
 
-    fn window_minutes_from_seconds(seconds: i32) -> Option<u64> {
+    fn window_minutes_from_seconds(seconds: i32) -> Option<i64> {
         if seconds <= 0 {
             return None;
         }
 
-        let seconds_u64 = seconds as u64;
-        Some(seconds_u64.div_ceil(60))
+        let seconds_i64 = i64::from(seconds);
+        Some((seconds_i64 + 59) / 60)
     }
 }

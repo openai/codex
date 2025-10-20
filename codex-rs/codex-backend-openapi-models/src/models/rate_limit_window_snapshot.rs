@@ -19,8 +19,8 @@ pub struct RateLimitWindowSnapshot {
     pub limit_window_seconds: i32,
     #[serde(rename = "reset_after_seconds")]
     pub reset_after_seconds: i32,
-    #[serde(rename = "reset_at", deserialize_with = "Option::deserialize")]
-    pub reset_at: Option<String>,
+    #[serde(rename = "reset_at")]
+    pub reset_at: i32,
 }
 
 impl RateLimitWindowSnapshot {
@@ -28,7 +28,7 @@ impl RateLimitWindowSnapshot {
         used_percent: i32,
         limit_window_seconds: i32,
         reset_after_seconds: i32,
-        reset_at: Option<String>,
+        reset_at: i32,
     ) -> RateLimitWindowSnapshot {
         RateLimitWindowSnapshot {
             used_percent,

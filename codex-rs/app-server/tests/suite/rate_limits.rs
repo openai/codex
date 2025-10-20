@@ -113,8 +113,12 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
     let server_url = server.uri();
     write_chatgpt_base_url(codex_home.path(), &server_url).context("write chatgpt base url")?;
 
-    let primary_reset_iso = "2025-01-01T00:02:00Z";
-    let secondary_reset_iso = "2025-01-01T01:00:00Z";
+    let primary_reset_timestamp = chrono::DateTime::parse_from_rfc3339("2025-01-01T00:02:00Z")
+        .expect("parse primary reset timestamp")
+        .timestamp();
+    let secondary_reset_timestamp = chrono::DateTime::parse_from_rfc3339("2025-01-01T01:00:00Z")
+        .expect("parse secondary reset timestamp")
+        .timestamp();
     let response_body = json!({
         "plan_type": "pro",
         "rate_limit": {
@@ -124,13 +128,13 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                 "used_percent": 42,
                 "limit_window_seconds": 3600,
                 "reset_after_seconds": 120,
-                "reset_at": primary_reset_iso,
+                "reset_at": primary_reset_timestamp,
             },
             "secondary_window": {
                 "used_percent": 5,
                 "limit_window_seconds": 86400,
                 "reset_after_seconds": 43200,
-                "reset_at": secondary_reset_iso,
+                "reset_at": secondary_reset_timestamp,
             }
         }
     });
@@ -172,12 +176,12 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
             primary: Some(RateLimitWindow {
                 used_percent: 42.0,
                 window_minutes: Some(60),
-                resets_at: Some(primary_reset_iso.to_string()),
+                resets_at: Some(primary_reset_timestamp),
             }),
             secondary: Some(RateLimitWindow {
                 used_percent: 5.0,
                 window_minutes: Some(1440),
-                resets_at: Some(secondary_reset_iso.to_string()),
+                resets_at: Some(secondary_reset_timestamp),
             }),
         },
     };
