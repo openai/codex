@@ -65,8 +65,8 @@ fn qualify_tools(tools: Vec<ToolInfo>) -> HashMap<String, ToolInfo> {
     let mut qualified_tools = HashMap::new();
     for tool in tools {
         let mut qualified_name = format!(
-            "{}{}{}",
-            tool.server_name, MCP_TOOL_NAME_DELIMITER, tool.tool_name
+            "mcp{}{}{}{}",
+            MCP_TOOL_NAME_DELIMITER, tool.server_name, MCP_TOOL_NAME_DELIMITER, tool.tool_name
         );
         if qualified_name.len() > MAX_TOOL_NAME_LENGTH {
             let mut hasher = Sha1::new();
@@ -741,8 +741,8 @@ mod tests {
         let qualified_tools = qualify_tools(tools);
 
         assert_eq!(qualified_tools.len(), 2);
-        assert!(qualified_tools.contains_key("server1__tool1"));
-        assert!(qualified_tools.contains_key("server1__tool2"));
+        assert!(qualified_tools.contains_key("mcp__server1__tool1"));
+        assert!(qualified_tools.contains_key("mcp__server1__tool2"));
     }
 
     #[test]
@@ -756,7 +756,7 @@ mod tests {
 
         // Only the first tool should remain, the second is skipped
         assert_eq!(qualified_tools.len(), 1);
-        assert!(qualified_tools.contains_key("server1__duplicate_tool"));
+        assert!(qualified_tools.contains_key("mcp__server1__duplicate_tool"));
     }
 
     #[test]
@@ -784,13 +784,13 @@ mod tests {
         assert_eq!(keys[0].len(), 64);
         assert_eq!(
             keys[0],
-            "my_server__extremely_lena02e507efc5a9de88637e436690364fd4219e4ef"
+            "mcp__my_server__extremel119a2b97664e41363932dc84de21e2ff1b93b3e9"
         );
 
         assert_eq!(keys[1].len(), 64);
         assert_eq!(
             keys[1],
-            "my_server__yet_another_e1c3987bd9c50b826cbe1687966f79f0c602d19ca"
+            "mcp__my_server__yet_anot419a82a89325c1b477274a41f8c65ea5f3a7f341"
         );
     }
 }

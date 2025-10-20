@@ -52,6 +52,8 @@ use crate::protocol::TokenUsage;
 use crate::state::TaskKind;
 use crate::token_data::PlanType;
 use crate::util::backoff;
+use chrono::DateTime;
+use chrono::Utc;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -71,7 +73,7 @@ struct Error {
 
     // Optional fields available on "usage_limit_reached" and "usage_not_included" errors
     plan_type: Option<PlanType>,
-    resets_in_seconds: Option<u64>,
+    resets_at: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -419,10 +421,14 @@ impl ModelClient {
                             let plan_type = error
                                 .plan_type
                                 .or_else(|| auth.as_ref().and_then(CodexAuth::get_plan_type));
-                            let resets_in_seconds = error.resets_in_seconds;
+                            let resets_at = error
+                                .resets_at
+                                .as_deref()
+                                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                                .map(|dt| dt.with_timezone(&Utc));
                             let codex_err = CodexErr::UsageLimitReached(UsageLimitReachedError {
                                 plan_type,
-                                resets_in_seconds,
+                                resets_at,
                                 rate_limits: rate_limit_snapshot,
                             });
                             return Err(StreamAttemptError::Fatal(codex_err));
@@ -605,14 +611,14 @@ fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
         headers,
         "x-codex-primary-used-percent",
         "x-codex-primary-window-minutes",
-        "x-codex-primary-reset-after-seconds",
+        "x-codex-primary-reset-at",
     );
 
     let secondary = parse_rate_limit_window(
         headers,
         "x-codex-secondary-used-percent",
         "x-codex-secondary-window-minutes",
-        "x-codex-secondary-reset-after-seconds",
+        "x-codex-secondary-reset-at",
     );
 
     Some(RateLimitSnapshot { primary, secondary })
@@ -628,16 +634,19 @@ fn parse_rate_limit_window(
 
     used_percent.and_then(|used_percent| {
         let window_minutes = parse_header_u64(headers, window_minutes_header);
-        let resets_in_seconds = parse_header_u64(headers, resets_header);
+        let resets_at = parse_header_str(headers, resets_header)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(std::string::ToString::to_string);
 
         let has_data = used_percent != 0.0
             || window_minutes.is_some_and(|minutes| minutes != 0)
-            || resets_in_seconds.is_some_and(|seconds| seconds != 0);
+            || resets_at.is_some();
 
         has_data.then_some(RateLimitWindow {
             used_percent,
             window_minutes,
-            resets_in_seconds,
+            resets_at,
         })
     })
 }
@@ -1390,7 +1399,7 @@ mod tests {
             message: Some("Rate limit reached for gpt-5 in organization org- on tokens per min (TPM): Limit 1, Used 1, Requested 19304. Please try again in 28ms. Visit https://platform.openai.com/account/rate-limits to learn more.".to_string()),
             code: Some("rate_limit_exceeded".to_string()),
             plan_type: None,
-            resets_in_seconds: None
+            resets_at: None
         };
 
         let delay = try_parse_retry_after(&err);
@@ -1404,20 +1413,19 @@ mod tests {
             message: Some("Rate limit reached for gpt-5 in organization <ORG> on tokens per min (TPM): Limit 30000, Used 6899, Requested 24050. Please try again in 1.898s. Visit https://platform.openai.com/account/rate-limits to learn more.".to_string()),
             code: Some("rate_limit_exceeded".to_string()),
             plan_type: None,
-            resets_in_seconds: None
+            resets_at: None
         };
         let delay = try_parse_retry_after(&err);
         assert_eq!(delay, Some(Duration::from_secs_f64(1.898)));
     }
 
     #[test]
-    fn error_response_deserializes_old_schema_known_plan_type_and_serializes_back() {
+    fn error_response_deserializes_schema_known_plan_type_and_serializes_back() {
         use crate::token_data::KnownPlan;
         use crate::token_data::PlanType;
 
-        let json = r#"{"error":{"type":"usage_limit_reached","plan_type":"pro","resets_in_seconds":3600}}"#;
-        let resp: ErrorResponse =
-            serde_json::from_str(json).expect("should deserialize old schema");
+        let json = r#"{"error":{"type":"usage_limit_reached","plan_type":"pro","resets_at":"2024-01-01T00:00:00Z"}}"#;
+        let resp: ErrorResponse = serde_json::from_str(json).expect("should deserialize schema");
 
         assert_matches!(resp.error.plan_type, Some(PlanType::Known(KnownPlan::Pro)));
 
@@ -1426,13 +1434,11 @@ mod tests {
     }
 
     #[test]
-    fn error_response_deserializes_old_schema_unknown_plan_type_and_serializes_back() {
+    fn error_response_deserializes_schema_unknown_plan_type_and_serializes_back() {
         use crate::token_data::PlanType;
 
-        let json =
-            r#"{"error":{"type":"usage_limit_reached","plan_type":"vip","resets_in_seconds":60}}"#;
-        let resp: ErrorResponse =
-            serde_json::from_str(json).expect("should deserialize old schema");
+        let json = r#"{"error":{"type":"usage_limit_reached","plan_type":"vip","resets_at":"2024-01-01T00:01:00Z"}}"#;
+        let resp: ErrorResponse = serde_json::from_str(json).expect("should deserialize schema");
 
         assert_matches!(resp.error.plan_type, Some(PlanType::Unknown(ref s)) if s == "vip");
 
