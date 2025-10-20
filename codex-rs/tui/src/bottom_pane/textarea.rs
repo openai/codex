@@ -5,6 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Style;
+use ratatui::style::Stylize;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 use std::cell::Ref;
@@ -19,6 +20,19 @@ struct TextElement {
     range: Range<usize>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VisualSelectionMode {
+    Character,
+    Line,
+}
+
+#[derive(Debug, Clone)]
+struct Selection {
+    anchor: usize,
+    mode: VisualSelectionMode,
+    tail_inclusive: bool,
+}
+
 #[derive(Debug)]
 pub(crate) struct TextArea {
     text: String,
@@ -26,6 +40,7 @@ pub(crate) struct TextArea {
     wrap_cache: RefCell<Option<WrapCache>>,
     preferred_col: Option<usize>,
     elements: Vec<TextElement>,
+    selection: Option<Selection>,
     kill_buffer: String,
 }
 
@@ -49,6 +64,7 @@ impl TextArea {
             wrap_cache: RefCell::new(None),
             preferred_col: None,
             elements: Vec::new(),
+            selection: None,
             kill_buffer: String::new(),
         }
     }
@@ -59,6 +75,7 @@ impl TextArea {
         self.wrap_cache.replace(None);
         self.preferred_col = None;
         self.elements.clear();
+        self.selection = None;
         self.kill_buffer.clear();
     }
 
@@ -68,6 +85,92 @@ impl TextArea {
 
     pub fn insert_str(&mut self, text: &str) {
         self.insert_str_at(self.cursor_pos, text);
+    }
+
+    pub(crate) fn has_selection(&self) -> bool {
+        self.selection.is_some()
+    }
+
+    pub(crate) fn start_selection(&mut self, mode: VisualSelectionMode) {
+        let anchor = self.cursor_pos;
+        self.selection = Some(Selection {
+            anchor,
+            mode,
+            tail_inclusive: true,
+        });
+    }
+
+    pub(crate) fn update_selection_mode(&mut self, mode: VisualSelectionMode) {
+        if let Some(selection) = self.selection.as_mut() {
+            selection.mode = mode;
+        } else {
+            self.start_selection(mode);
+        }
+    }
+
+    pub(crate) fn set_selection_tail_inclusive(&mut self, inclusive: bool) {
+        if let Some(selection) = self.selection.as_mut() {
+            selection.tail_inclusive = inclusive;
+        }
+    }
+
+    pub(crate) fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    pub(crate) fn selection_range(&self) -> Option<Range<usize>> {
+        let selection = self.selection.as_ref()?;
+        match selection.mode {
+            VisualSelectionMode::Character => self.selection_range_character(
+                selection.anchor,
+                self.cursor_pos,
+                selection.tail_inclusive,
+            ),
+            VisualSelectionMode::Line => {
+                Some(self.selection_range_line(selection.anchor, self.cursor_pos))
+            }
+        }
+    }
+
+    pub(crate) fn delete_selection(&mut self) -> Option<String> {
+        let range = self.selection_range()?;
+        let removed = self.text[range.clone()].to_string();
+        self.replace_range_raw(range, "");
+        self.selection = None;
+        Some(removed)
+    }
+
+    fn selection_range_character(
+        &self,
+        anchor: usize,
+        cursor: usize,
+        tail_inclusive: bool,
+    ) -> Option<Range<usize>> {
+        if self.text.is_empty() {
+            return None;
+        }
+        let mut start = anchor.min(cursor).min(self.text.len());
+        let mut end = anchor.max(cursor).min(self.text.len());
+        let forward = anchor <= cursor;
+        if start == end {
+            end = self.next_atomic_boundary(end);
+            if start == end {
+                start = self.prev_atomic_boundary(start);
+            }
+        } else if tail_inclusive || !forward {
+            end = self.next_atomic_boundary(end);
+        }
+        start = start.min(self.text.len());
+        end = end.min(self.text.len());
+        if start >= end { None } else { Some(start..end) }
+    }
+
+    fn selection_range_line(&self, anchor: usize, cursor: usize) -> Range<usize> {
+        let anchor_range = self.line_range_inclusive(anchor);
+        let cursor_range = self.line_range_inclusive(cursor);
+        let start = anchor_range.start.min(cursor_range.start);
+        let end = anchor_range.end.max(cursor_range.end);
+        start..end
     }
 
     pub fn insert_str_at(&mut self, pos: usize, text: &str) {
@@ -117,6 +220,7 @@ impl TextArea {
 
         // Ensure cursor is not inside an element
         self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
+        self.selection = None;
     }
 
     pub fn cursor(&self) -> usize {
@@ -203,6 +307,27 @@ impl TextArea {
     }
     fn end_of_current_line(&self) -> usize {
         self.end_of_line(self.cursor_pos)
+    }
+
+    pub(crate) fn current_line_start(&self) -> usize {
+        self.beginning_of_current_line()
+    }
+
+    pub(crate) fn current_line_end(&self) -> usize {
+        self.end_of_current_line()
+    }
+
+    fn line_range_inclusive(&self, pos: usize) -> Range<usize> {
+        if self.text.is_empty() {
+            return 0..0;
+        }
+        let clamped = pos.min(self.text.len());
+        let start = self.beginning_of_line(clamped);
+        let mut end = self.end_of_line(clamped);
+        if end < self.text.len() {
+            end += 1;
+        }
+        start..end
     }
 
     pub fn input(&mut self, event: KeyEvent) {
@@ -858,17 +983,108 @@ impl TextArea {
         self.adjust_pos_out_of_elements(candidate, true)
     }
 
+    pub(crate) fn beginning_of_next_word(&self) -> usize {
+        if self.cursor_pos >= self.text.len() {
+            return self.text.len();
+        }
+
+        let suffix = &self.text[self.cursor_pos..];
+        let iter = suffix.char_indices();
+        let at_whitespace = iter
+            .clone()
+            .next()
+            .map(|(_, ch)| ch.is_whitespace())
+            .unwrap_or(false);
+
+        if at_whitespace {
+            for (offset, ch) in iter {
+                if !ch.is_whitespace() {
+                    let pos = self.cursor_pos + offset;
+                    return self.adjust_pos_out_of_elements(pos, true);
+                }
+            }
+            return self.text.len();
+        }
+
+        let mut after_word = self.text.len();
+        for (offset, ch) in iter {
+            if ch.is_whitespace() {
+                after_word = self.cursor_pos + offset;
+                break;
+            }
+        }
+        if after_word >= self.text.len() {
+            return self.text.len();
+        }
+
+        for (offset, ch) in self.text[after_word..].char_indices() {
+            if !ch.is_whitespace() {
+                let pos = after_word + offset;
+                return self.adjust_pos_out_of_elements(pos, true);
+            }
+        }
+
+        self.text.len()
+    }
+
     pub(crate) fn end_of_next_word(&self) -> usize {
-        let Some(first_non_ws) = self.text[self.cursor_pos..].find(|c: char| !c.is_whitespace())
-        else {
+        self.end_of_next_word_from(self.cursor_pos)
+    }
+
+    fn end_of_next_word_from(&self, start: usize) -> usize {
+        if start >= self.text.len() {
+            return self.text.len();
+        }
+        let suffix = &self.text[start..];
+        let Some(first_non_ws) = suffix.find(|c: char| !c.is_whitespace()) else {
             return self.text.len();
         };
-        let word_start = self.cursor_pos + first_non_ws;
+        let word_start = start + first_non_ws;
         let candidate = match self.text[word_start..].find(|c: char| c.is_whitespace()) {
             Some(rel_idx) => word_start + rel_idx,
             None => self.text.len(),
         };
         self.adjust_pos_out_of_elements(candidate, false)
+    }
+
+    pub(crate) fn end_of_next_word_inclusive(&self) -> usize {
+        if self.text.is_empty() {
+            return 0;
+        }
+        let len = self.text.len();
+        let current = self.cursor_pos.min(len);
+        if current == len {
+            return len;
+        }
+
+        let mut search_start = current;
+
+        if let Some(ch) = self.text[current..].chars().next() {
+            if !ch.is_whitespace() {
+                let next_boundary = self.next_atomic_boundary(current);
+                let next_char = self.text[next_boundary..].chars().next();
+                if next_char.is_none_or(char::is_whitespace) {
+                    let idx = next_boundary;
+                    search_start = self.text[idx..]
+                        .char_indices()
+                        .find(|&(_, c)| !c.is_whitespace())
+                        .map(|(offset, _)| idx + offset)
+                        .unwrap_or(len);
+                    if search_start >= len {
+                        return current;
+                    }
+                }
+            }
+        } else {
+            return current;
+        }
+
+        let exclusive = self.end_of_next_word_from(search_start);
+        if exclusive == 0 {
+            0
+        } else {
+            self.prev_atomic_boundary(exclusive)
+        }
     }
 
     fn adjust_pos_out_of_elements(&self, pos: usize, prefer_start: bool) -> usize {
@@ -969,6 +1185,7 @@ impl TextArea {
         lines: &[Range<usize>],
         range: std::ops::Range<usize>,
     ) {
+        let selection = self.selection_range();
         for (row, idx) in range.enumerate() {
             let r = &lines[idx];
             let y = area.y + row as u16;
@@ -988,6 +1205,21 @@ impl TextArea {
                 let x_off = self.text[line_range.start..overlap_start].width() as u16;
                 let style = Style::default().fg(Color::Cyan);
                 buf.set_string(area.x + x_off, y, styled, style);
+            }
+
+            if let Some(selection_range) = &selection {
+                let overlap_start = selection_range.start.max(line_range.start);
+                let overlap_end = selection_range.end.min(line_range.end);
+                if overlap_start < overlap_end {
+                    let x_off = self.text[line_range.start..overlap_start].width() as u16;
+                    let selection_str = &self.text[overlap_start..overlap_end];
+                    buf.set_string(
+                        area.x + x_off,
+                        y,
+                        selection_str,
+                        Style::default().reversed(),
+                    );
+                }
             }
         }
     }
@@ -1469,15 +1701,23 @@ mod tests {
         let after_alpha = t.text().find("alpha").unwrap() + "alpha".len();
         t.set_cursor(after_alpha);
         assert_eq!(t.beginning_of_previous_word(), 2); // skip initial spaces
+        assert_eq!(t.beginning_of_next_word(), t.text().find("beta").unwrap());
 
         // Put cursor at start of beta
         let beta_start = t.text().find("beta").unwrap();
         t.set_cursor(beta_start);
         assert_eq!(t.end_of_next_word(), beta_start + "beta".len());
+        assert_eq!(t.beginning_of_next_word(), t.text().find("gamma").unwrap());
+        assert_eq!(
+            t.end_of_next_word_inclusive(),
+            beta_start + "beta".len().saturating_sub(1)
+        );
 
         // If at end, end_of_next_word returns len
         t.set_cursor(t.text().len());
         assert_eq!(t.end_of_next_word(), t.text().len());
+        assert_eq!(t.beginning_of_next_word(), t.text().len());
+        assert_eq!(t.end_of_next_word_inclusive(), t.text().len());
     }
 
     #[test]

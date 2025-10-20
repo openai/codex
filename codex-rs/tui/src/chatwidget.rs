@@ -937,6 +937,7 @@ impl ChatWidget {
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
+                keybinding_mode: config.keybinding_mode,
             }),
             active_cell: None,
             config: config.clone(),
@@ -1004,6 +1005,7 @@ impl ChatWidget {
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
+                keybinding_mode: config.keybinding_mode,
             }),
             active_cell: None,
             config: config.clone(),
@@ -2033,6 +2035,10 @@ impl ChatWidget {
 
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.bottom_pane.composer_is_empty()
+    }
+
+    pub(crate) fn composer_in_vim_normal_mode(&self) -> bool {
+        self.bottom_pane.composer_in_vim_normal_mode()
     }
 
     /// True when the UI is in the regular composer state with no running task,
