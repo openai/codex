@@ -2293,25 +2293,21 @@ fn mcp_init_error_display(
     entry: Option<&McpAuthStatusEntry>,
     err: &anyhow::Error,
 ) -> String {
-    if matches!(
-        &entry.map(|entry| &entry.config.transport),
-        Some(McpServerTransportConfig::StreamableHttp {
-            url,
-            bearer_token_env_var,
-            http_headers,
-            ..
-        }) if url == "https://api.githubcopilot.com/mcp/"
-            && bearer_token_env_var.is_none()
-            && http_headers
-                .as_ref()
-                .map(HashMap::is_empty)
-                .unwrap_or(true)
-    ) {
+    if let Some(McpServerTransportConfig::StreamableHttp {
+        url,
+        bearer_token_env_var,
+        http_headers,
+        ..
+    }) = &entry.map(|entry| &entry.config.transport)
+        && url == "https://api.githubcopilot.com/mcp/"
+        && bearer_token_env_var.is_none()
+        && http_headers.as_ref().map(HashMap::is_empty).unwrap_or(true)
+    {
         // GitHub only supports OAUth for first party MCP clients.
         // That means that the user has to specify a personal access token either via bearer_token_env_var or http_headers.
         // https://github.com/github/github-mcp-server/issues/921#issuecomment-3221026448
         format!(
-            "GitHub MCP does not support OAuth. Log in by adding `bearer_token_env_var = GITHUB_PERSONAL_ACCESS_TOKEN` in the `mcp_servers.{server_name}` section of your config.toml"
+            "GitHub MCP does not support OAuth. Log in by adding `bearer_token_env_var = CODEX_GITHUB_PAT` in the `mcp_servers.{server_name}` section of your config.toml"
         )
     } else if is_mcp_client_auth_required_error(err) {
         format!(
@@ -2335,7 +2331,10 @@ mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
+    use crate::config_types::McpServerConfig;
+    use crate::config_types::McpServerTransportConfig;
     use crate::exec::ExecToolCallOutput;
+    use crate::mcp::auth::McpAuthStatusEntry;
     use crate::tools::format_exec_output_str;
 
     use crate::protocol::CompactedItem;
@@ -2354,6 +2353,7 @@ mod tests {
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::McpAuthStatus;
     use std::time::Duration;
     use tokio::time::sleep;
 
@@ -3133,5 +3133,73 @@ mod tests {
 
         pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
         assert!(exec_output.output.contains("hi"));
+    }
+
+    #[test]
+    fn mcp_init_error_display_prompts_for_github_pat() {
+        let server_name = "github";
+        let entry = McpAuthStatusEntry {
+            config: McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "https://api.githubcopilot.com/mcp/".to_string(),
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+            },
+            auth_status: McpAuthStatus::Unsupported,
+        };
+        let err = anyhow::anyhow!("OAuth is unsupported");
+
+        let display = mcp_init_error_display(server_name, Some(&entry), &err);
+
+        let expected = format!(
+            "GitHub MCP does not support OAuth. Log in by adding `bearer_token_env_var =  CODEX_GITHUB_PAT` in the `mcp_servers.{server_name}` section of your config.toml"
+        );
+
+        assert_eq!(expected, display);
+    }
+
+    #[test]
+    fn mcp_init_error_display_prompts_for_login_when_auth_required() {
+        let server_name = "example";
+        let err = anyhow::anyhow!("Auth required for server");
+
+        let display = mcp_init_error_display(server_name, None, &err);
+
+        let expected = format!(
+            "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
+        );
+
+        assert_eq!(expected, display);
+    }
+
+    #[test]
+    fn mcp_init_error_display_reports_generic_errors() {
+        let server_name = "custom";
+        let entry = McpAuthStatusEntry {
+            config: McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "https://example.com".to_string(),
+                    bearer_token_env_var: Some("TOKEN".to_string()),
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+            },
+            auth_status: McpAuthStatus::Unsupported,
+        };
+        let err = anyhow::anyhow!("boom");
+
+        let display = mcp_init_error_display(server_name, Some(&entry), &err);
+
+        let expected = format!("MCP client for `{server_name}` failed to start: {err:#}");
+
+        assert_eq!(expected, display);
     }
 }
