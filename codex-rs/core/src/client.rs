@@ -111,10 +111,11 @@ impl ModelClient {
     }
 
     pub fn get_model_context_window(&self) -> Option<u64> {
+        let pct: i64 = self.config.model_family.effective_context_window_percent as i64;
         self.config
             .model_context_window
             .or_else(|| get_model_info(&self.config.model_family).map(|info| info.context_window))
-            .map(apply_context_window_margin)
+            .map(|w| ((w as i64 * pct) / 100) as u64)
     }
 
     pub fn get_auto_compact_token_limit(&self) -> Option<i64> {
@@ -520,10 +521,6 @@ impl StreamAttemptError {
             Self::Fatal(error) => error,
         }
     }
-}
-
-const fn apply_context_window_margin(context_window: u64) -> u64 {
-    (context_window * 95) / 100
 }
 
 #[derive(Debug, Deserialize, Serialize)]

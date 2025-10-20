@@ -1,5 +1,9 @@
 use crate::model_family::ModelFamily;
 
+// Shared constants for commonly used window/token sizes.
+pub(crate) const CONTEXT_WINDOW_272K: u64 = 272_000;
+pub(crate) const MAX_OUTPUT_TOKENS_128K: u64 = 128_000;
+
 /// Metadata about a model, particularly OpenAI models.
 /// We may want to consider including details like the pricing for
 /// input tokens, output tokens, etc., though users will need to be able to
@@ -66,11 +70,17 @@ pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
         // https://platform.openai.com/docs/models/gpt-3.5-turbo
         "gpt-3.5-turbo" => Some(ModelInfo::new(16_385, 4_096)),
 
-        _ if slug.starts_with("gpt-5-codex") => Some(ModelInfo::new(272_000, 128_000)),
+        _ if slug.starts_with("gpt-5-codex") => {
+            Some(ModelInfo::new(CONTEXT_WINDOW_272K, MAX_OUTPUT_TOKENS_128K))
+        }
 
-        _ if slug.starts_with("gpt-5") => Some(ModelInfo::new(272_000, 128_000)),
+        _ if slug.starts_with("gpt-5") => {
+            Some(ModelInfo::new(CONTEXT_WINDOW_272K, MAX_OUTPUT_TOKENS_128K))
+        }
 
-        _ if slug.starts_with("codex-") => Some(ModelInfo::new(272_000, 128_000)),
+        _ if slug.starts_with("codex-") => {
+            Some(ModelInfo::new(CONTEXT_WINDOW_272K, MAX_OUTPUT_TOKENS_128K))
+        }
 
         _ => None,
     }
