@@ -43,15 +43,6 @@ You can also run Codex CLI with a prompt as input:
 codex "explain this codebase to me"
 ```
 
-```shell
-codex --full-auto "create the fanciest todo-list app"
-```
-
-This run behaves like any other Codex session; `--full-auto` simply pre-approves
-the relaxed workspace sandbox and approval policy so Codex can keep going
-without pausing for confirmations. You'll still review the plan, diff, and apply
-the changes yourself at the end.
-
 ### Example prompts
 
 Below are a few bite-size examples you can copy-paste. Replace the text in quotes with your own task.
