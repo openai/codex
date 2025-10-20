@@ -1,14 +1,15 @@
 use crate::user_input::UserInput;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub enum TurnItem {
     UserMessage(UserMessageItem),
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct UserMessageItem {
     pub id: String,
     pub content: Vec<UserInput>,

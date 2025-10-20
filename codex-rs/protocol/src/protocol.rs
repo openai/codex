@@ -525,14 +525,14 @@ pub enum EventMsg {
     ItemCompleted(ItemCompletedEvent),
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct ItemStartedEvent {
     pub thread_id: ConversationId,
     pub turn_id: String,
     pub item: TurnItem,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct ItemCompletedEvent {
     pub thread_id: ConversationId,
     pub turn_id: String,
