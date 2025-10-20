@@ -4,6 +4,8 @@ use crate::app_event::AliasAction;
 use crate::app_event::AppEvent;
 use crate::app_event::CheckpointAction;
 use crate::app_event::CommitAction;
+use crate::app_event::PresetAction;
+use crate::app_event::PresetExecutionMode;
 use crate::app_event::TodoAction;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
@@ -32,6 +34,7 @@ use codex_core::config::persist_auto_commit;
 use codex_core::config::persist_global_prompt;
 use codex_core::config::persist_model_selection;
 use codex_core::config::persist_prompt_aliases;
+use codex_core::config::persist_prompt_presets;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::SessionSource;
@@ -291,20 +294,53 @@ impl App {
         Ok(true)
     }
 
+    fn reset_chat_widget(&mut self, tui: &mut tui::Tui, initial_prompt: Option<String>) {
+        let init = crate::chatwidget::ChatWidgetInit {
+            config: self.config.clone(),
+            frame_requester: tui.frame_requester(),
+            app_event_tx: self.app_event_tx.clone(),
+            initial_prompt,
+            initial_images: Vec::new(),
+            enhanced_keys_supported: self.enhanced_keys_supported,
+            auth_manager: self.auth_manager.clone(),
+        };
+        self.chat_widget = ChatWidget::new(init, self.server.clone());
+        tui.frame_requester().schedule_frame();
+    }
+
+    fn handle_preset_action(&mut self, tui: &mut tui::Tui, action: PresetAction) {
+        match action {
+            PresetAction::Add { name } => {
+                self.chat_widget.open_preset_prompt_editor(name);
+            }
+            PresetAction::Store { name, prompt } => {
+                self.chat_widget.store_preset(name, prompt);
+            }
+            PresetAction::Remove { name } => {
+                self.chat_widget.remove_preset(&name);
+            }
+            PresetAction::List => {
+                self.chat_widget.list_presets();
+            }
+            PresetAction::Load { name } => {
+                self.chat_widget.load_preset(&name);
+            }
+            PresetAction::Execute { name, prompt, mode } => match mode {
+                PresetExecutionMode::CurrentSession => {
+                    self.chat_widget.run_preset_in_current(name, prompt);
+                }
+                PresetExecutionMode::NewSession => {
+                    self.reset_chat_widget(tui, Some(prompt));
+                    self.chat_widget.notify_preset_new_session(&name);
+                }
+            },
+        }
+    }
+
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
-                let init = crate::chatwidget::ChatWidgetInit {
-                    config: self.config.clone(),
-                    frame_requester: tui.frame_requester(),
-                    app_event_tx: self.app_event_tx.clone(),
-                    initial_prompt: None,
-                    initial_images: Vec::new(),
-                    enhanced_keys_supported: self.enhanced_keys_supported,
-                    auth_manager: self.auth_manager.clone(),
-                };
-                self.chat_widget = ChatWidget::new(init, self.server.clone());
-                tui.frame_requester().schedule_frame();
+                self.reset_chat_widget(tui, None);
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
@@ -389,6 +425,9 @@ impl App {
             }
             AppEvent::AliasCommand { action } => {
                 self.handle_alias_action(action);
+            }
+            AppEvent::PresetCommand { action } => {
+                self.handle_preset_action(tui, action);
             }
             AppEvent::CommitCommand { action } => {
                 self.handle_commit_action(action).await;
@@ -602,6 +641,18 @@ impl App {
                         tracing::error!(error = %err, "failed to persist prompt aliases");
                         self.chat_widget
                             .add_error_message(format!("Failed to save aliases: {err}"));
+                    }
+                }
+            }
+            AppEvent::PersistPresets { presets } => {
+                match persist_prompt_presets(&self.config.codex_home, &presets).await {
+                    Ok(()) => {
+                        self.config.prompt_presets = presets;
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist prompt presets");
+                        self.chat_widget
+                            .add_error_message(format!("Failed to save presets: {err}"));
                     }
                 }
             }

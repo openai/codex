@@ -24,6 +24,7 @@ pub enum SlashCommand {
     Commit,
     Undo,
     Diff,
+    Preset,
     Mention,
     Status,
     Todo,
@@ -51,6 +52,7 @@ impl SlashCommand {
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Todo => "manage a shared TODO list for the session",
             SlashCommand::Alias => "save or reuse custom prompt aliases",
+            SlashCommand::Preset => "create or load reusable prompt presets",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::GlobalPrompt => "set or clear the prompt sent at session start",
@@ -80,7 +82,8 @@ impl SlashCommand {
             | SlashCommand::Approvals
             | SlashCommand::Commit
             | SlashCommand::Review
-            | SlashCommand::Logout => false,
+            | SlashCommand::Logout
+            | SlashCommand::Preset => false,
             SlashCommand::Diff
             | SlashCommand::Mention
             | SlashCommand::Status

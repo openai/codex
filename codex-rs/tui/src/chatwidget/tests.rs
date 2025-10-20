@@ -288,6 +288,7 @@ fn make_chatwidget_manual() -> (
         todo_auto_enabled: false,
         auto_commit_enabled: false,
         aliases: HashMap::new(),
+        presets: HashMap::new(),
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
         suppress_session_configured_redraw: false,
@@ -300,6 +301,7 @@ fn make_chatwidget_manual() -> (
         last_rendered_width: std::cell::Cell::new(None),
     };
     widget.hydrate_aliases_from_config();
+    widget.hydrate_presets_from_config();
     (widget, rx, op_rx)
 }
 
@@ -353,6 +355,18 @@ fn next_persist_aliases(
     }
 }
 
+fn next_persist_presets(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> Option<HashMap<String, String>> {
+    loop {
+        match rx.try_recv() {
+            Ok(AppEvent::PersistPresets { presets }) => return Some(presets),
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => return None,
+        }
+    }
+}
+
 #[test]
 fn store_alias_persists_aliases_to_config() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual();
@@ -395,6 +409,58 @@ fn hydrate_aliases_from_config_loads_entries() {
     let entry = chat.aliases.get("deploy").expect("alias should load");
     assert_eq!(entry.name, "Deploy");
     assert_eq!(entry.prompt, "Run deploy");
+}
+
+#[test]
+fn store_preset_persists_presets_to_config() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    chat.store_preset(
+        "Reviewer".to_string(),
+        "Review the latest changes.".to_string(),
+    );
+
+    let presets = next_persist_presets(&mut rx).expect("persist event");
+    assert_eq!(
+        presets.get("Reviewer"),
+        Some(&"Review the latest changes.".to_string())
+    );
+    assert_eq!(
+        chat.config.prompt_presets.get("Reviewer"),
+        Some(&"Review the latest changes.".to_string())
+    );
+}
+
+#[test]
+fn remove_preset_updates_persisted_presets() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    chat.store_preset(
+        "Reviewer".to_string(),
+        "Review the latest changes.".to_string(),
+    );
+    let _ = next_persist_presets(&mut rx);
+
+    chat.remove_preset("Reviewer");
+    let presets = next_persist_presets(&mut rx).expect("persist event after removal");
+    assert!(presets.is_empty());
+    assert!(chat.config.prompt_presets.is_empty());
+}
+
+#[test]
+fn hydrate_presets_from_config_loads_entries() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+    while rx.try_recv().is_ok() {}
+
+    chat.config.prompt_presets.insert(
+        "Reviewer".to_string(),
+        "Review the latest changes.".to_string(),
+    );
+    chat.hydrate_presets_from_config();
+
+    let entry = chat.presets.get("reviewer").expect("preset should load");
+    assert_eq!(entry.name, "Reviewer");
+    assert_eq!(entry.prompt, "Review the latest changes.");
 }
 
 #[test]

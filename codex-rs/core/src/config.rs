@@ -242,6 +242,9 @@ pub struct Config {
     /// User-defined prompt aliases shared across sessions.
     pub prompt_aliases: HashMap<String, String>,
 
+    /// Saved prompt presets that can be loaded from the TUI.
+    pub prompt_presets: HashMap<String, String>,
+
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
 
@@ -875,6 +878,73 @@ pub async fn persist_prompt_aliases(
         }
 
         tui_table.insert("aliases", TomlItem::Table(alias_table));
+    }
+
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+
+    Ok(())
+}
+
+pub async fn persist_prompt_presets(
+    codex_home: &Path,
+    presets: &HashMap<String, String>,
+) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    if presets.is_empty() {
+        if let Some(tui_table) = doc
+            .as_table_mut()
+            .get_mut("tui")
+            .and_then(|item| item.as_table_mut())
+        {
+            tui_table.remove("presets");
+            if tui_table.is_empty() {
+                doc.as_table_mut().remove("tui");
+            }
+        }
+    } else {
+        if !doc.as_table().contains_key("tui") {
+            let mut table = toml_edit::Table::new();
+            table.set_implicit(false);
+            doc["tui"] = TomlItem::Table(table);
+        }
+        let Some(tui_table) = doc["tui"].as_table_mut() else {
+            anyhow::bail!("failed to access `tui` table after insertion");
+        };
+        tui_table.set_implicit(false);
+
+        let mut preset_table = toml_edit::Table::new();
+        preset_table.set_implicit(false);
+
+        let mut pairs: Vec<(&String, &String)> = presets.iter().collect();
+        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+        for (name, prompt) in pairs {
+            preset_table.insert(name.as_str(), toml_edit::value(prompt.clone()));
+        }
+
+        tui_table.insert("presets", TomlItem::Table(preset_table));
     }
 
     tokio::fs::create_dir_all(codex_home)
@@ -1558,6 +1628,11 @@ impl Config {
                 .tui
                 .as_ref()
                 .map(|t| t.aliases.clone())
+                .unwrap_or_default(),
+            prompt_presets: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.presets.clone())
                 .unwrap_or_default(),
             features,
             active_profile: active_profile_name,
@@ -2629,6 +2704,54 @@ notify = ["sh", "-c", "echo hi", "codex-alarm"]
         Ok(())
     }
 
+    #[tokio::test]
+    async fn persist_prompt_presets_sets_values() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut presets = HashMap::new();
+        presets.insert(
+            "Reviewer".to_string(),
+            "Please review the code.".to_string(),
+        );
+        presets.insert("Planner".to_string(), "Plan the next steps.".to_string());
+
+        persist_prompt_presets(codex_home.path(), &presets).await?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        let tui_presets = parsed.tui.map(|t| t.presets).unwrap_or_default();
+
+        assert_eq!(
+            tui_presets.get("Reviewer"),
+            Some(&"Please review the code.".to_string())
+        );
+        assert_eq!(
+            tui_presets.get("Planner"),
+            Some(&"Plan the next steps.".to_string())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_prompt_presets_removes_section_when_empty() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut presets = HashMap::new();
+        presets.insert("Reviewer".to_string(), "Check code".to_string());
+        persist_prompt_presets(codex_home.path(), &presets).await?;
+
+        let empty: HashMap<String, String> = HashMap::new();
+        persist_prompt_presets(codex_home.path(), &empty).await?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        let tui_presets = parsed.tui.map(|t| t.presets).unwrap_or_default();
+        assert!(tui_presets.is_empty());
+        Ok(())
+    }
+
     struct PrecedenceTestFixture {
         cwd: TempDir,
         codex_home: TempDir,
@@ -2811,6 +2934,7 @@ model_verbosity = "high"
                 use_experimental_use_rmcp_client: false,
                 include_view_image_tool: true,
                 prompt_aliases: HashMap::new(),
+                prompt_presets: HashMap::new(),
                 features: Features::with_defaults(),
                 active_profile: Some("o3".to_string()),
                 windows_wsl_setup_acknowledged: false,
@@ -2880,6 +3004,7 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
             prompt_aliases: HashMap::new(),
+            prompt_presets: HashMap::new(),
             features: Features::with_defaults(),
             active_profile: Some("gpt3".to_string()),
             windows_wsl_setup_acknowledged: false,
@@ -2964,6 +3089,7 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
             prompt_aliases: HashMap::new(),
+            prompt_presets: HashMap::new(),
             features: Features::with_defaults(),
             active_profile: Some("zdr".to_string()),
             windows_wsl_setup_acknowledged: false,
@@ -3034,6 +3160,7 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
             prompt_aliases: HashMap::new(),
+            prompt_presets: HashMap::new(),
             features: Features::with_defaults(),
             active_profile: Some("gpt5".to_string()),
             windows_wsl_setup_acknowledged: false,

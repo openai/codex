@@ -324,6 +324,10 @@ pub struct Tui {
     /// User-defined prompt aliases available across Codex sessions.
     #[serde(default)]
     pub aliases: HashMap<String, String>,
+
+    /// Reusable prompt presets that can be loaded into new or existing sessions.
+    #[serde(default)]
+    pub presets: HashMap<String, String>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]

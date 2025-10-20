@@ -35,6 +35,35 @@ pub(crate) enum AliasAction {
     List,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PresetExecutionMode {
+    CurrentSession,
+    NewSession,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum PresetAction {
+    Add {
+        name: String,
+    },
+    Store {
+        name: String,
+        prompt: String,
+    },
+    Remove {
+        name: String,
+    },
+    List,
+    Load {
+        name: String,
+    },
+    Execute {
+        name: String,
+        prompt: String,
+        mode: PresetExecutionMode,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum CommitAction {
     Perform { message: Option<String>, auto: bool },
@@ -84,6 +113,10 @@ pub(crate) enum AppEvent {
     AliasCommand {
         action: AliasAction,
     },
+    /// Handle a `/preset` command issued from the composer.
+    PresetCommand {
+        action: PresetAction,
+    },
     /// Handle a `/commit` command issued from the composer.
     CommitCommand {
         action: CommitAction,
@@ -128,6 +161,11 @@ pub(crate) enum AppEvent {
     /// Persist the global alias list so prompt shortcuts survive restarts.
     PersistAliases {
         aliases: HashMap<String, String>,
+    },
+
+    /// Persist the preset list so it survives restarts.
+    PersistPresets {
+        presets: HashMap<String, String>,
     },
 
     /// Open the reasoning selection popup after picking a model.

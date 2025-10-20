@@ -63,6 +63,8 @@ use tracing::debug;
 
 use crate::app_event::AliasAction;
 use crate::app_event::AppEvent;
+use crate::app_event::PresetAction;
+use crate::app_event::PresetExecutionMode;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
@@ -265,6 +267,12 @@ struct AliasEntry {
     prompt: String,
 }
 
+#[derive(Clone, Debug)]
+struct PresetEntry {
+    name: String,
+    prompt: String,
+}
+
 pub(crate) fn get_limits_duration(windows_minutes: u64) -> String {
     const MINUTES_PER_HOUR: u64 = 60;
     const MINUTES_PER_DAY: u64 = 24 * MINUTES_PER_HOUR;
@@ -337,6 +345,7 @@ pub(crate) struct ChatWidget {
     todo_auto_enabled: bool,
     auto_commit_enabled: bool,
     aliases: HashMap<String, AliasEntry>,
+    presets: HashMap<String, PresetEntry>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     // Simple review mode flag; used to adjust layout and banners.
@@ -1057,6 +1066,7 @@ impl ChatWidget {
             todo_auto_enabled: false,
             auto_commit_enabled: config.auto_commit,
             aliases: HashMap::new(),
+            presets: HashMap::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -1068,6 +1078,7 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
         };
         this.hydrate_aliases_from_config();
+        this.hydrate_presets_from_config();
         this
     }
 
@@ -1142,6 +1153,7 @@ impl ChatWidget {
             todo_auto_enabled: false,
             auto_commit_enabled: config.auto_commit,
             aliases: HashMap::new(),
+            presets: HashMap::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: true,
             pending_notification: None,
@@ -1153,6 +1165,7 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
         };
         this.hydrate_aliases_from_config();
+        this.hydrate_presets_from_config();
         this
     }
 
@@ -1320,6 +1333,17 @@ impl ChatWidget {
                     Some("Invoke saved prompts with //name.".to_string()),
                 );
                 self.list_aliases();
+            }
+            SlashCommand::Preset => {
+                self.add_info_message(
+                    "Usage: /preset add <name>, /preset load <name>, /preset remove <name>, /preset list"
+                        .to_string(),
+                    Some(
+                        "Presets run saved prompts and can optionally start a fresh session."
+                            .to_string(),
+                    ),
+                );
+                self.list_presets();
             }
             SlashCommand::Quit => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
@@ -2166,6 +2190,218 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn open_preset_prompt_editor(&mut self, name: String) {
+        let trimmed = name.trim();
+        let Some(key) = Self::normalize_alias_key(trimmed) else {
+            self.add_error_message(
+                "Preset names may only contain letters, numbers, '-' or '_' and cannot be blank."
+                    .to_string(),
+            );
+            return;
+        };
+        let display_name = trimmed.to_string();
+        let initial_text = self.presets.get(&key).map(|entry| entry.prompt.clone());
+
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            format!("Save preset {display_name}"),
+            "Type the prompt to run when this preset is loaded.".to_string(),
+            Some("Press Enter to save; Esc to cancel.".to_string()),
+            initial_text,
+            false,
+            Box::new(move |input: String| {
+                tx.send(AppEvent::PresetCommand {
+                    action: PresetAction::Store {
+                        name: display_name.clone(),
+                        prompt: input,
+                    },
+                });
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn store_preset(&mut self, name: String, prompt: String) {
+        let trimmed_name = name.trim();
+        let Some(key) = Self::normalize_alias_key(trimmed_name) else {
+            self.add_error_message(
+                "Preset names may only contain letters, numbers, '-' or '_' and cannot be blank."
+                    .to_string(),
+            );
+            return;
+        };
+
+        let trimmed_prompt = prompt.trim();
+        if trimmed_prompt.is_empty() {
+            self.add_error_message("Preset prompt cannot be empty.".to_string());
+            return;
+        }
+
+        let entry = PresetEntry {
+            name: trimmed_name.to_string(),
+            prompt: trimmed_prompt.to_string(),
+        };
+        let existed = self.presets.insert(key, entry).is_some();
+        let action_word = if existed { "Updated" } else { "Saved" };
+        self.add_info_message(
+            format!("{action_word} preset {trimmed_name}."),
+            Some(format!("Run it later with `/preset load {trimmed_name}`.")),
+        );
+
+        let snapshot = self.preset_snapshot();
+        self.config.prompt_presets = snapshot.clone();
+        self.app_event_tx
+            .send(AppEvent::PersistPresets { presets: snapshot });
+    }
+
+    pub(crate) fn remove_preset(&mut self, name: &str) {
+        let Some(key) = Self::normalize_alias_key(name) else {
+            self.add_error_message(
+                "Preset names may only contain letters, numbers, '-' or '_' and cannot be blank."
+                    .to_string(),
+            );
+            return;
+        };
+
+        if let Some(entry) = self.presets.remove(&key) {
+            self.add_info_message(
+                format!("Removed preset {}.", entry.name),
+                Some("Add it again with `/preset add <name>` if needed.".to_string()),
+            );
+            let snapshot = self.preset_snapshot();
+            self.config.prompt_presets = snapshot.clone();
+            self.app_event_tx
+                .send(AppEvent::PersistPresets { presets: snapshot });
+        } else {
+            self.add_error_message(format!("Preset {} does not exist.", name.trim()));
+        }
+    }
+
+    pub(crate) fn list_presets(&mut self) {
+        if self.presets.is_empty() {
+            self.add_info_message(
+                "No presets defined yet.".to_string(),
+                Some("Use `/preset add <name>` to create one.".to_string()),
+            );
+            return;
+        }
+
+        let mut names: Vec<String> = self
+            .presets
+            .values()
+            .map(|entry| entry.name.clone())
+            .collect();
+        names.sort();
+        let summary = names.join(", ");
+        self.add_info_message(
+            "Presets:".to_string(),
+            Some(format!("Load with `/preset load <name>`: {summary}")),
+        );
+    }
+
+    pub(crate) fn load_preset(&mut self, name: &str) {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            self.add_error_message("Preset name cannot be empty.".to_string());
+            return;
+        }
+        let Some(key) = Self::normalize_alias_key(trimmed) else {
+            self.add_error_message(
+                "Preset names may only contain letters, numbers, '-' or '_' and cannot be blank."
+                    .to_string(),
+            );
+            return;
+        };
+        let Some(entry) = self.presets.get(&key).cloned() else {
+            self.add_error_message(format!("Preset {trimmed} does not exist."));
+            return;
+        };
+
+        let preview = {
+            let trimmed_prompt = entry.prompt.trim();
+            let first_line = trimmed_prompt.lines().next().unwrap_or("");
+            let mut preview: String = first_line.chars().take(80).collect();
+            if trimmed_prompt.chars().count() > preview.chars().count() {
+                preview.push('…');
+            }
+            preview
+        };
+
+        let keep_name = entry.name.clone();
+        let keep_prompt = entry.prompt.clone();
+        let current_action: SelectionAction = Box::new(move |tx| {
+            tx.send(AppEvent::PresetCommand {
+                action: PresetAction::Execute {
+                    name: keep_name.clone(),
+                    prompt: keep_prompt.clone(),
+                    mode: PresetExecutionMode::CurrentSession,
+                },
+            });
+        });
+
+        let new_name = entry.name.clone();
+        let new_prompt = entry.prompt.clone();
+        let new_session_action: SelectionAction = Box::new(move |tx| {
+            tx.send(AppEvent::PresetCommand {
+                action: PresetAction::Execute {
+                    name: new_name.clone(),
+                    prompt: new_prompt.clone(),
+                    mode: PresetExecutionMode::NewSession,
+                },
+            });
+        });
+
+        let items = vec![
+            SelectionItem {
+                name: "Keep current conversation".to_string(),
+                description: Some(
+                    "Send the preset prompt without resetting the conversation.".to_string(),
+                ),
+                actions: vec![current_action],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Start new session".to_string(),
+                description: Some(
+                    "Begin a new chat and run the preset as the first message.".to_string(),
+                ),
+                actions: vec![new_session_action],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        let subtitle = if preview.is_empty() {
+            None
+        } else {
+            Some(format!("Preview: {preview}"))
+        };
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(format!("Load preset {}", entry.name)),
+            subtitle,
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn run_preset_in_current(&mut self, name: String, prompt: String) {
+        self.add_info_message(
+            format!("Running preset {name} in current conversation."),
+            Some("Use `/preset load <name>` again to open the session menu.".to_string()),
+        );
+        self.submit_text_message(prompt);
+    }
+
+    pub(crate) fn notify_preset_new_session(&mut self, name: &str) {
+        self.add_info_message(
+            format!("Started new session with preset {name}."),
+            Some("The preset prompt was submitted as the first message.".to_string()),
+        );
+    }
+
     pub(crate) fn open_alias_prompt_editor(&mut self, name: String) {
         let trimmed = name.trim();
         let Some(key) = Self::normalize_alias_key(trimmed) else {
@@ -2308,6 +2544,47 @@ impl ChatWidget {
             );
         }
         self.sync_aliases_to_composer();
+    }
+
+    fn hydrate_presets_from_config(&mut self) {
+        self.presets.clear();
+        for (display_name, prompt) in &self.config.prompt_presets {
+            let trimmed_name = display_name.trim();
+            if trimmed_name.is_empty() {
+                continue;
+            }
+            let Some(key) = Self::normalize_alias_key(trimmed_name) else {
+                tracing::warn!(
+                    preset = trimmed_name,
+                    "invalid preset name found in config; skipping"
+                );
+                continue;
+            };
+
+            let trimmed_prompt = prompt.trim();
+            if trimmed_prompt.is_empty() {
+                tracing::warn!(
+                    preset = trimmed_name,
+                    "preset prompt in config was empty; skipping"
+                );
+                continue;
+            }
+
+            self.presets.insert(
+                key,
+                PresetEntry {
+                    name: trimmed_name.to_string(),
+                    prompt: trimmed_prompt.to_string(),
+                },
+            );
+        }
+    }
+
+    fn preset_snapshot(&self) -> HashMap<String, String> {
+        self.presets
+            .values()
+            .map(|entry| (entry.name.clone(), entry.prompt.clone()))
+            .collect()
     }
 
     fn alias_snapshot(&self) -> HashMap<String, String> {
