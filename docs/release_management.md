@@ -4,7 +4,7 @@ Currently, we made Codex binaries available in three places:
 
 - GitHub Releases https://github.com/openai/codex/releases/
 - `@openai/codex` on npm: https://www.npmjs.com/package/@openai/codex
-- `codex` on Homebrew Cask: https://formulae.brew.sh/cask/codex
+- `codex` on Homebrew: https://formulae.brew.sh/cask/codex
 
 # Cutting a Release
 
