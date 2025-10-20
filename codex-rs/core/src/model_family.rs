@@ -48,6 +48,12 @@ pub struct ModelFamily {
 
     /// Names of beta tools that should be exposed to this model family.
     pub experimental_supported_tools: Vec<String>,
+
+    /// Percentage of the context window considered usable for inputs, after
+    /// reserving headroom for system prompts, tool overhead, and model output.
+    /// This is applied when computing the effective context window seen by
+    /// consumers.
+    pub effective_context_window_percent: i64,
 }
 
 macro_rules! model_family {
@@ -66,6 +72,7 @@ macro_rules! model_family {
             apply_patch_tool_type: None,
             base_instructions: BASE_INSTRUCTIONS.to_string(),
             experimental_supported_tools: Vec::new(),
+            effective_context_window_percent: 95,
         };
         // apply overrides
         $(
@@ -119,8 +126,10 @@ pub fn find_family_for_model(mut slug: &str) -> Option<ModelFamily> {
             reasoning_summary_format: ReasoningSummaryFormat::Experimental,
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             experimental_supported_tools: vec![
+                "grep_files".to_string(),
+                "list_dir".to_string(),
                 "read_file".to_string(),
-                "test_sync_tool".to_string()
+                "test_sync_tool".to_string(),
             ],
             supports_parallel_tool_calls: true,
         )
@@ -133,7 +142,11 @@ pub fn find_family_for_model(mut slug: &str) -> Option<ModelFamily> {
             reasoning_summary_format: ReasoningSummaryFormat::Experimental,
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
-            experimental_supported_tools: vec!["read_file".to_string()],
+            experimental_supported_tools: vec![
+                "grep_files".to_string(),
+                "list_dir".to_string(),
+                "read_file".to_string(),
+            ],
             supports_parallel_tool_calls: true,
         )
 
@@ -169,5 +182,6 @@ pub fn derive_default_model_family(model: &str) -> ModelFamily {
         apply_patch_tool_type: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),
         experimental_supported_tools: Vec::new(),
+        effective_context_window_percent: 95,
     }
 }

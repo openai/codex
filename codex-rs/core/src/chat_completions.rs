@@ -5,11 +5,13 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::error::CodexErr;
+use crate::error::ConnectionFailedError;
+use crate::error::ResponseStreamFailed;
 use crate::error::Result;
 use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
 use crate::model_family::ModelFamily;
-use crate::openai_tools::create_tools_json_for_chat_completions_api;
+use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::util::backoff;
 use bytes::Bytes;
 use codex_otel::otel_event_manager::OtelEventManager;
@@ -309,7 +311,12 @@ pub(crate) async fn stream_chat_completions(
         match res {
             Ok(resp) if resp.status().is_success() => {
                 let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
-                let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
+                let stream = resp.bytes_stream().map_err(|e| {
+                    CodexErr::ResponseStreamFailed(ResponseStreamFailed {
+                        source: e,
+                        request_id: None,
+                    })
+                });
                 tokio::spawn(process_chat_sse(
                     stream,
                     tx_event,
@@ -349,7 +356,9 @@ pub(crate) async fn stream_chat_completions(
             }
             Err(e) => {
                 if attempt > max_retries {
-                    return Err(e.into());
+                    return Err(CodexErr::ConnectionFailed(ConnectionFailedError {
+                        source: e,
+                    }));
                 }
                 let delay = backoff(attempt);
                 tokio::time::sleep(delay).await;
@@ -389,10 +398,12 @@ async fn process_chat_sse<S>(
     let mut reasoning_text = String::new();
 
     loop {
-        let sse = match otel_event_manager
-            .log_sse_event(|| timeout(idle_timeout, stream.next()))
-            .await
-        {
+        let start = std::time::Instant::now();
+        let response = timeout(idle_timeout, stream.next()).await;
+        let duration = start.elapsed();
+        otel_event_manager.log_sse_event(&response, duration);
+
+        let sse = match response {
             Ok(Some(Ok(ev))) => ev,
             Ok(Some(Err(e))) => {
                 let _ = tx_event

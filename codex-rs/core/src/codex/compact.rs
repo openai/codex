@@ -16,6 +16,7 @@ use crate::protocol::InputItem;
 use crate::protocol::InputMessageKind;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
+use crate::state::TaskKind;
 use crate::truncate::truncate_middle;
 use crate::util::backoff;
 use askama::Template;
@@ -70,14 +71,10 @@ async fn run_compact_task_inner(
     input: Vec<InputItem>,
 ) {
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    let turn_input = sess
+    let mut turn_input = sess
         .turn_input_with_history(vec![initial_input_for_turn.clone().into()])
         .await;
-
-    let prompt = Prompt {
-        input: turn_input,
-        ..Default::default()
-    };
+    let mut truncated_count = 0usize;
 
     let max_retries = turn_context.client.get_provider().stream_max_retries();
     let mut retries = 0;
@@ -93,17 +90,36 @@ async fn run_compact_task_inner(
     sess.persist_rollout_items(&[rollout_item]).await;
 
     loop {
+        let prompt = Prompt {
+            input: turn_input.clone(),
+            ..Default::default()
+        };
         let attempt_result =
             drain_to_completed(&sess, turn_context.as_ref(), &sub_id, &prompt).await;
 
         match attempt_result {
             Ok(()) => {
+                if truncated_count > 0 {
+                    sess.notify_background_event(
+                        &sub_id,
+                        format!(
+                            "Trimmed {truncated_count} older conversation item(s) before compacting so the prompt fits the model context window."
+                        ),
+                    )
+                    .await;
+                }
                 break;
             }
             Err(CodexErr::Interrupted) => {
                 return;
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
+                if turn_input.len() > 1 {
+                    turn_input.remove(0);
+                    truncated_count += 1;
+                    retries = 0;
+                    continue;
+                }
                 sess.set_total_tokens_full(&sub_id, turn_context.as_ref())
                     .await;
                 let event = Event {
@@ -121,9 +137,7 @@ async fn run_compact_task_inner(
                     let delay = backoff(retries);
                     sess.notify_stream_error(
                         &sub_id,
-                        format!(
-                            "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
-                        ),
+                        format!("Re-connecting... {retries}/{max_retries}"),
                     )
                     .await;
                     tokio::time::sleep(delay).await;
@@ -245,7 +259,11 @@ async fn drain_to_completed(
     sub_id: &str,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    let mut stream = turn_context.client.clone().stream(prompt).await?;
+    let mut stream = turn_context
+        .client
+        .clone()
+        .stream_with_task_kind(prompt, TaskKind::Compact)
+        .await?;
     loop {
         let maybe_event = stream.next().await;
         let Some(event) = maybe_event else {

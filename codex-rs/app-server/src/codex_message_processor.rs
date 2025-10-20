@@ -84,6 +84,7 @@ use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
 use codex_protocol::ConversationId;
+use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InputMessageKind;
@@ -243,6 +244,19 @@ impl CodexMessageProcessor {
     }
 
     async fn login_api_key(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
+        if matches!(
+            self.config.forced_login_method,
+            Some(ForcedLoginMethod::Chatgpt)
+        ) {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "API key login is disabled. Use ChatGPT login instead.".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
         {
             let mut guard = self.active_login.lock().await;
             if let Some(active) = guard.take() {
@@ -278,9 +292,23 @@ impl CodexMessageProcessor {
     async fn login_chatgpt(&mut self, request_id: RequestId) {
         let config = self.config.as_ref();
 
+        if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "ChatGPT login is disabled. Use API key login instead.".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
         let opts = LoginServerOptions {
             open_browser: false,
-            ..LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string())
+            ..LoginServerOptions::new(
+                config.codex_home.clone(),
+                CLIENT_ID.to_string(),
+                config.forced_chatgpt_workspace_id.clone(),
+            )
         };
 
         enum LoginChatGptReply {
@@ -603,6 +631,7 @@ impl CodexMessageProcessor {
             env,
             with_escalated_permissions: None,
             justification: None,
+            arg0: None,
         };
 
         let effective_policy = params
@@ -1284,6 +1313,7 @@ async fn apply_bespoke_event_handling(
             command,
             cwd,
             reason,
+            parsed_cmd,
         }) => {
             let params = ExecCommandApprovalParams {
                 conversation_id,
@@ -1291,6 +1321,7 @@ async fn apply_bespoke_event_handling(
                 command,
                 cwd,
                 reason,
+                parsed_cmd,
             };
             let rx = outgoing
                 .send_request(ServerRequestPayload::ExecCommandApproval(params))
@@ -1351,6 +1382,7 @@ async fn derive_config_from_params(
         include_view_image_tool: None,
         show_raw_agent_reasoning: None,
         tools_web_search_request: None,
+        additional_writable_roots: Vec::new(),
     };
 
     let cli_overrides = cli_overrides

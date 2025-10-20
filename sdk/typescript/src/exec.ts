@@ -11,6 +11,7 @@ export type CodexExecArgs = {
   baseUrl?: string;
   apiKey?: string;
   threadId?: string | null;
+  images?: string[];
   // --model
   model?: string;
   // --sandbox
@@ -22,6 +23,9 @@ export type CodexExecArgs = {
   // --output-schema
   outputSchemaFile?: string;
 };
+
+const INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
+const TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
 
 export class CodexExec {
   private executablePath: string;
@@ -52,6 +56,12 @@ export class CodexExec {
       commandArgs.push("--output-schema", args.outputSchemaFile);
     }
 
+    if (args.images?.length) {
+      for (const image of args.images) {
+        commandArgs.push("--image", image);
+      }
+    }
+
     if (args.threadId) {
       commandArgs.push("resume", args.threadId);
     }
@@ -59,6 +69,9 @@ export class CodexExec {
     const env = {
       ...process.env,
     };
+    if (!env[INTERNAL_ORIGINATOR_ENV]) {
+      env[INTERNAL_ORIGINATOR_ENV] = TYPESCRIPT_SDK_ORIGINATOR;
+    }
     if (args.baseUrl) {
       env.OPENAI_BASE_URL = args.baseUrl;
     }

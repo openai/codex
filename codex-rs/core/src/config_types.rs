@@ -20,6 +20,10 @@ pub struct McpServerConfig {
     #[serde(flatten)]
     pub transport: McpServerTransportConfig,
 
+    /// When `false`, Codex skips initializing this MCP server.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+
     /// Startup timeout in seconds for initializing MCP server & initially listing tools.
     #[serde(
         default,
@@ -40,21 +44,34 @@ impl<'de> Deserialize<'de> for McpServerConfig {
     {
         #[derive(Deserialize)]
         struct RawMcpServerConfig {
+            // stdio
             command: Option<String>,
             #[serde(default)]
             args: Option<Vec<String>>,
             #[serde(default)]
             env: Option<HashMap<String, String>>,
+            #[serde(default)]
+            env_vars: Option<Vec<String>>,
+            #[serde(default)]
+            cwd: Option<PathBuf>,
+            http_headers: Option<HashMap<String, String>>,
+            #[serde(default)]
+            env_http_headers: Option<HashMap<String, String>>,
 
+            // streamable_http
             url: Option<String>,
             bearer_token: Option<String>,
+            bearer_token_env_var: Option<String>,
 
+            // shared
             #[serde(default)]
             startup_timeout_sec: Option<f64>,
             #[serde(default)]
             startup_timeout_ms: Option<u64>,
             #[serde(default, with = "option_duration_secs")]
             tool_timeout_sec: Option<Duration>,
+            #[serde(default)]
+            enabled: Option<bool>,
         }
 
         let raw = RawMcpServerConfig::deserialize(deserializer)?;
@@ -85,30 +102,58 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                 command: Some(command),
                 args,
                 env,
+                env_vars,
+                cwd,
                 url,
-                bearer_token,
+                bearer_token_env_var,
+                http_headers,
+                env_http_headers,
                 ..
             } => {
                 throw_if_set("stdio", "url", url.as_ref())?;
-                throw_if_set("stdio", "bearer_token", bearer_token.as_ref())?;
+                throw_if_set(
+                    "stdio",
+                    "bearer_token_env_var",
+                    bearer_token_env_var.as_ref(),
+                )?;
+                throw_if_set("stdio", "http_headers", http_headers.as_ref())?;
+                throw_if_set("stdio", "env_http_headers", env_http_headers.as_ref())?;
                 McpServerTransportConfig::Stdio {
                     command,
                     args: args.unwrap_or_default(),
                     env,
+                    env_vars: env_vars.unwrap_or_default(),
+                    cwd,
                 }
             }
             RawMcpServerConfig {
                 url: Some(url),
                 bearer_token,
+                bearer_token_env_var,
                 command,
                 args,
                 env,
-                ..
+                env_vars,
+                cwd,
+                http_headers,
+                env_http_headers,
+                startup_timeout_sec: _,
+                tool_timeout_sec: _,
+                startup_timeout_ms: _,
+                enabled: _,
             } => {
                 throw_if_set("streamable_http", "command", command.as_ref())?;
                 throw_if_set("streamable_http", "args", args.as_ref())?;
                 throw_if_set("streamable_http", "env", env.as_ref())?;
-                McpServerTransportConfig::StreamableHttp { url, bearer_token }
+                throw_if_set("streamable_http", "env_vars", env_vars.as_ref())?;
+                throw_if_set("streamable_http", "cwd", cwd.as_ref())?;
+                throw_if_set("streamable_http", "bearer_token", bearer_token.as_ref())?;
+                McpServerTransportConfig::StreamableHttp {
+                    url,
+                    bearer_token_env_var,
+                    http_headers,
+                    env_http_headers,
+                }
             }
             _ => return Err(SerdeError::custom("invalid transport")),
         };
@@ -117,8 +162,13 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             transport,
             startup_timeout_sec,
             tool_timeout_sec: raw.tool_timeout_sec,
+            enabled: raw.enabled.unwrap_or_else(default_enabled),
         })
     }
+}
+
+const fn default_enabled() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -131,15 +181,25 @@ pub enum McpServerTransportConfig {
         args: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         env: Option<HashMap<String, String>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        env_vars: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<PathBuf>,
     },
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
     StreamableHttp {
         url: String,
-        /// A plain text bearer token to use for authentication.
-        /// This bearer token will be included in the HTTP request header as an `Authorization: Bearer <token>` header.
-        /// This should be used with caution because it lives on disk in clear text.
+        /// Name of the environment variable to read for an HTTP bearer token.
+        /// When set, requests will include the token via `Authorization: Bearer <token>`.
+        /// The actual secret value must be provided via the environment.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        bearer_token: Option<String>,
+        bearer_token_env_var: Option<String>,
+        /// Additional HTTP headers to include in requests to this server.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        http_headers: Option<HashMap<String, String>>,
+        /// HTTP headers where the value is sourced from an environment variable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env_http_headers: Option<HashMap<String, String>>,
     },
 }
 
@@ -301,6 +361,20 @@ pub struct Tui {
     pub notifications: Notifications,
 }
 
+/// Settings for notices we display to users via the tui and app-server clients
+/// (primarily the Codex IDE extension). NOTE: these are different from
+/// notifications - notices are warnings, NUX screens, acknowledgements, etc.
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct Notice {
+    /// Tracks whether the user has acknowledged the full access warning prompt.
+    pub hide_full_access_warning: Option<bool>,
+}
+
+impl Notice {
+    /// used by set_hide_full_access_warning until we refactor config updates
+    pub(crate) const TABLE_KEY: &'static str = "notice";
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {
     #[serde(default)]
@@ -447,9 +521,12 @@ mod tests {
             McpServerTransportConfig::Stdio {
                 command: "echo".to_string(),
                 args: vec![],
-                env: None
+                env: None,
+                env_vars: Vec::new(),
+                cwd: None,
             }
         );
+        assert!(cfg.enabled);
     }
 
     #[test]
@@ -467,9 +544,12 @@ mod tests {
             McpServerTransportConfig::Stdio {
                 command: "echo".to_string(),
                 args: vec!["hello".to_string(), "world".to_string()],
-                env: None
+                env: None,
+                env_vars: Vec::new(),
+                cwd: None,
             }
         );
+        assert!(cfg.enabled);
     }
 
     #[test]
@@ -488,9 +568,69 @@ mod tests {
             McpServerTransportConfig::Stdio {
                 command: "echo".to_string(),
                 args: vec!["hello".to_string(), "world".to_string()],
-                env: Some(HashMap::from([("FOO".to_string(), "BAR".to_string())]))
+                env: Some(HashMap::from([("FOO".to_string(), "BAR".to_string())])),
+                env_vars: Vec::new(),
+                cwd: None,
             }
         );
+        assert!(cfg.enabled);
+    }
+
+    #[test]
+    fn deserialize_stdio_command_server_config_with_env_vars() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            env_vars = ["FOO", "BAR"]
+        "#,
+        )
+        .expect("should deserialize command config with env_vars");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: vec![],
+                env: None,
+                env_vars: vec!["FOO".to_string(), "BAR".to_string()],
+                cwd: None,
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_stdio_command_server_config_with_cwd() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            cwd = "/tmp"
+        "#,
+        )
+        .expect("should deserialize command config with cwd");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: vec![],
+                env: None,
+                env_vars: Vec::new(),
+                cwd: Some(PathBuf::from("/tmp")),
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_disabled_server_config() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            enabled = false
+        "#,
+        )
+        .expect("should deserialize disabled server config");
+
+        assert!(!cfg.enabled);
     }
 
     #[test]
@@ -506,17 +646,20 @@ mod tests {
             cfg.transport,
             McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
-                bearer_token: None
+                bearer_token_env_var: None,
+                http_headers: None,
+                env_http_headers: None,
             }
         );
+        assert!(cfg.enabled);
     }
 
     #[test]
-    fn deserialize_streamable_http_server_config_with_bearer_token() {
+    fn deserialize_streamable_http_server_config_with_env_var() {
         let cfg: McpServerConfig = toml::from_str(
             r#"
             url = "https://example.com/mcp"
-            bearer_token = "secret"
+            bearer_token_env_var = "GITHUB_TOKEN"
         "#,
         )
         .expect("should deserialize http config");
@@ -525,7 +668,35 @@ mod tests {
             cfg.transport,
             McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
-                bearer_token: Some("secret".to_string())
+                bearer_token_env_var: Some("GITHUB_TOKEN".to_string()),
+                http_headers: None,
+                env_http_headers: None,
+            }
+        );
+        assert!(cfg.enabled);
+    }
+
+    #[test]
+    fn deserialize_streamable_http_server_config_with_headers() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            url = "https://example.com/mcp"
+            http_headers = { "X-Foo" = "bar" }
+            env_http_headers = { "X-Token" = "TOKEN_ENV" }
+        "#,
+        )
+        .expect("should deserialize http config with headers");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::StreamableHttp {
+                url: "https://example.com/mcp".to_string(),
+                bearer_token_env_var: None,
+                http_headers: Some(HashMap::from([("X-Foo".to_string(), "bar".to_string())])),
+                env_http_headers: Some(HashMap::from([(
+                    "X-Token".to_string(),
+                    "TOKEN_ENV".to_string()
+                )])),
             }
         );
     }
@@ -553,13 +724,37 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_rejects_bearer_token_for_stdio_transport() {
+    fn deserialize_rejects_headers_for_stdio() {
         toml::from_str::<McpServerConfig>(
             r#"
             command = "echo"
+            http_headers = { "X-Foo" = "bar" }
+        "#,
+        )
+        .expect_err("should reject http_headers for stdio transport");
+
+        toml::from_str::<McpServerConfig>(
+            r#"
+            command = "echo"
+            env_http_headers = { "X-Foo" = "BAR_ENV" }
+        "#,
+        )
+        .expect_err("should reject env_http_headers for stdio transport");
+    }
+
+    #[test]
+    fn deserialize_rejects_inline_bearer_token_field() {
+        let err = toml::from_str::<McpServerConfig>(
+            r#"
+            url = "https://example.com"
             bearer_token = "secret"
         "#,
         )
-        .expect_err("should reject bearer token for stdio transport");
+        .expect_err("should reject bearer_token field");
+
+        assert!(
+            err.to_string().contains("bearer_token is not supported"),
+            "unexpected error: {err}"
+        );
     }
 }
