@@ -27,6 +27,8 @@ use crate::protocol::SandboxPolicy;
 use crate::seatbelt::spawn_command_under_seatbelt;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
+#[cfg(target_os = "windows")]
+use crate::windows::spawn_command_under_windows_restricted_token;
 
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
@@ -70,6 +72,9 @@ pub enum SandboxType {
 
     /// Only available on Linux.
     LinuxSeccomp,
+
+    /// Only available on Windows.
+    WindowsRestrictedToken,
 }
 
 #[derive(Clone)]
@@ -135,6 +140,33 @@ pub async fn process_exec_tool_call(
             .await?;
 
             consume_truncated_output(child, timeout_duration, stdout_stream).await
+        }
+        SandboxType::WindowsRestrictedToken => {
+            #[cfg(target_os = "windows")]
+            {
+                let ExecParams {
+                    command,
+                    cwd: command_cwd,
+                    env,
+                    ..
+                } = params;
+                let child = spawn_command_under_windows_restricted_token(
+                    command,
+                    command_cwd,
+                    sandbox_policy,
+                    sandbox_cwd,
+                    StdioPolicy::RedirectForShellTool,
+                    env,
+                )
+                .await?;
+                consume_truncated_output(child, timeout_duration, stdout_stream.clone()).await
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                return Err(CodexErr::UnsupportedOperation(
+                    "Windows sandbox is only available on Windows".to_string(),
+                ));
+            }
         }
     };
     let duration = start.elapsed();
