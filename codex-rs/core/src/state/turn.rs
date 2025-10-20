@@ -4,7 +4,9 @@ use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::task::AbortHandle;
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::models::ResponseInputItem;
 use tokio::sync::oneshot;
@@ -46,9 +48,11 @@ impl TaskKind {
 
 #[derive(Clone)]
 pub(crate) struct RunningTask {
-    pub(crate) handle: AbortHandle,
+    pub(crate) done: Arc<Notify>,
     pub(crate) kind: TaskKind,
     pub(crate) task: Arc<dyn SessionTask>,
+    pub(crate) cancellation_token: CancellationToken,
+    pub(crate) handle: Arc<AbortOnDropHandle<()>>,
 }
 
 impl ActiveTurn {
@@ -114,13 +118,6 @@ impl ActiveTurn {
     pub(crate) async fn clear_pending(&self) {
         let mut ts = self.turn_state.lock().await;
         ts.clear_pending();
-    }
-
-    /// Best-effort, non-blocking variant for synchronous contexts (Drop/interrupt).
-    pub(crate) fn try_clear_pending_sync(&self) {
-        if let Ok(mut ts) = self.turn_state.try_lock() {
-            ts.clear_pending();
-        }
     }
 }
 

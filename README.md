@@ -76,6 +76,7 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
   - [Managing multiple authentication profiles](./docs/getting-started.md#managing-multiple-authentication-profiles)
   - [Running with a prompt as input](./docs/getting-started.md#running-with-a-prompt-as-input)
   - [Example prompts](./docs/getting-started.md#example-prompts)
+  - [Custom prompts](./docs/prompts.md)
   - [Memory with AGENTS.md](./docs/getting-started.md#memory-with-agentsmd)
   - [Configuration](./docs/config.md)
 - [**Sandbox & approvals**](./docs/sandbox.md)

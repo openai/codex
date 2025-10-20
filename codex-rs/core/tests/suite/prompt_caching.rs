@@ -223,10 +223,28 @@ async fn prompt_tools_are_consistent_across_requests() {
     // our internal implementation is responsible for keeping tools in sync
     // with the OpenAI schema, so we just verify the tool presence here
     let tools_by_model: HashMap<&'static str, Vec<&'static str>> = HashMap::from([
-        ("gpt-5", vec!["shell", "update_plan", "view_image"]),
+        (
+            "gpt-5",
+            vec![
+                "shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "view_image",
+            ],
+        ),
         (
             "gpt-5-codex",
-            vec!["shell", "update_plan", "apply_patch", "view_image"],
+            vec![
+                "shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "view_image",
+            ],
         ),
     ]);
     let expected_tools_names = tools_by_model
@@ -489,7 +507,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
     <root>{}</root>
   </writable_roots>
 </environment_context>"#,
-        writable.path().to_string_lossy()
+        writable.path().to_string_lossy(),
     );
     let expected_env_msg_2 = serde_json::json!({
         "type": "message",
@@ -848,15 +866,14 @@ async fn send_user_turn_with_changes_sends_environment_context() {
     ]);
     assert_eq!(body1["input"], expected_input_1);
 
-    let expected_env_msg_2 = text_user_input(format!(
+    let expected_env_msg_2 = text_user_input(
         r#"<environment_context>
-  <cwd>{}</cwd>
   <approval_policy>never</approval_policy>
   <sandbox_mode>danger-full-access</sandbox_mode>
   <network_access>enabled</network_access>
-</environment_context>"#,
-        default_cwd.to_string_lossy()
-    ));
+</environment_context>"#
+            .to_string(),
+    );
     let expected_user_message_2 = text_user_input("hello 2".to_string());
     let expected_input_2 = serde_json::Value::Array(vec![
         expected_ui_msg,

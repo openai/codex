@@ -23,6 +23,7 @@ use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use dirs::home_dir;
+use codex_tui::UpdateAction;
 use owo_colors::OwoColorize;
 use std::fs;
 use std::path::PathBuf;
@@ -50,7 +51,8 @@ const AUTH_PROFILE_DIR: &str = "profiles";
     // The executable is sometimes invoked via a platform‑specific name like
     // `codex-x86_64-unknown-linux-musl`, but the help output should always use
     // the generic `codex` command name that users run.
-    bin_name = "codex"
+    bin_name = "codex",
+    override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct MultitoolCli {
     #[clap(flatten)]
@@ -116,6 +118,10 @@ enum Subcommand {
     /// Internal: run the responses API proxy.
     #[clap(hide = true)]
     ResponsesApiProxy(ResponsesApiProxyArgs),
+
+    /// Internal: relay stdio to a Unix domain socket.
+    #[clap(hide = true, name = "stdio-to-uds")]
+    StdioToUds(StdioToUdsCommand),
 
     /// Inspect feature flags.
     Features(FeaturesCli),
@@ -309,9 +315,18 @@ fn format_exit_messages(
     color_enabled: bool,
     auth_profile: Option<&str>,
 ) -> Vec<String> {
+#[derive(Debug, Parser)]
+struct StdioToUdsCommand {
+    /// Path to the Unix domain socket to connect to.
+    #[arg(value_name = "SOCKET_PATH")]
+    socket_path: PathBuf,
+}
+
+fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
     let AppExitInfo {
         token_usage,
         conversation_id,
+        ..
     } = exit_info;
 
     if token_usage.is_zero() {
@@ -340,10 +355,32 @@ fn format_exit_messages(
 }
 
 fn print_exit_messages(exit_info: AppExitInfo, auth_profile: Option<&str>) {
+/// Handle the app exit and print the results. Optionally run the update action.
+fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
+    let update_action = exit_info.update_action;
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
     for line in format_exit_messages(exit_info, color_enabled, auth_profile) {
         println!("{line}");
     }
+    if let Some(action) = update_action {
+        run_update_action(action)?;
+    }
+    Ok(())
+}
+
+/// Run the update action and print the result.
+fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
+    println!();
+    let (cmd, args) = action.command_args();
+    let cmd_str = action.command_str();
+    println!("Updating Codex via `{cmd_str}`...");
+    let status = std::process::Command::new(cmd).args(args).status()?;
+    if !status.success() {
+        anyhow::bail!("`{cmd_str}` failed with status {status}");
+    }
+    println!();
+    println!("🎉 Update ran successfully! Please restart Codex.");
+    Ok(())
 }
 
 #[derive(Debug, Default, Parser, Clone)]
@@ -431,6 +468,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             );
             let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
             print_exit_messages(exit_info, active_auth_profile.as_deref());
+            handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             prepend_config_flags(
@@ -463,7 +501,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 config_overrides,
             );
             let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
-            print_exit_messages(exit_info);
+            handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(
@@ -546,6 +584,11 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::ResponsesApiProxy(args)) => {
             tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
+                .await??;
+        }
+        Some(Subcommand::StdioToUds(cmd)) => {
+            let socket_path = cmd.socket_path;
+            tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
         }
         Some(Subcommand::GenerateTs(gen_cli)) => {
@@ -649,6 +692,9 @@ fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
     if !resume_cli.images.is_empty() {
         interactive.images = resume_cli.images;
     }
+    if !resume_cli.add_dir.is_empty() {
+        interactive.add_dir.extend(resume_cli.add_dir);
+    }
     if let Some(prompt) = resume_cli.prompt {
         interactive.prompt = Some(prompt);
     }
@@ -705,6 +751,7 @@ mod tests {
             conversation_id: conversation
                 .map(ConversationId::from_string)
                 .map(Result::unwrap),
+            update_action: None,
         }
     }
 
@@ -713,6 +760,7 @@ mod tests {
         let exit_info = AppExitInfo {
             token_usage: TokenUsage::default(),
             conversation_id: None,
+            update_action: None,
         };
         let lines = format_exit_messages(exit_info, false, None);
         assert!(lines.is_empty());
