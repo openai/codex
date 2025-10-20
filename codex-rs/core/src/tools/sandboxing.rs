@@ -87,6 +87,13 @@ pub(crate) trait Approvable<Req> {
 
     fn approval_key(&self, req: &Req) -> Self::ApprovalKey;
 
+    /// Some tools may request to skip the sandbox on the first attempt
+    /// (e.g., when the request explicitly asks for escalated permissions).
+    /// Defaults to `false`.
+    fn wants_escalated_first_attempt(&self, _req: &Req) -> bool {
+        false
+    }
+
     fn should_bypass_approval(&self, policy: AskForApproval, already_approved: bool) -> bool {
         if already_approved {
             // We do not ask one more time

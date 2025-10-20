@@ -223,8 +223,15 @@ async fn handle_exec_outcome(
             )))
         }
         Err(ToolError::Rejected(msg)) | Err(ToolError::SandboxDenied(msg)) => {
-            let response = format_exec_output(&msg);
-            event = ToolEventStage::Failure(ToolEventFailure::Message(msg));
+            // Normalize common rejection messages for exec tools so tests and
+            // users see a clear, consistent phrase.
+            let normalized = if msg == "rejected by user" {
+                "exec command rejected by user".to_string()
+            } else {
+                msg
+            };
+            let response = format_exec_output(&normalized);
+            event = ToolEventStage::Failure(ToolEventFailure::Message(normalized));
             Err(FunctionCallError::RespondToModel(format_exec_output(
                 &response,
             )))

@@ -7,7 +7,6 @@ retry without sandbox on denial (no re‑approval thanks to caching).
 */
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
-use crate::error::get_error_message_ui;
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::SandboxManager;
 use crate::tools::sandboxing::ApprovalCtx;
@@ -74,9 +73,12 @@ impl ToolOrchestrator {
         }
 
         // 2) First attempt under the selected sandbox.
-        let initial_sandbox = self
+        let mut initial_sandbox = self
             .sandbox
             .select_initial(&turn_ctx.sandbox_policy, tool.sandbox_preference());
+        if tool.wants_escalated_first_attempt(req) {
+            initial_sandbox = crate::exec::SandboxType::None;
+        }
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
             policy: &turn_ctx.sandbox_policy,
@@ -96,15 +98,21 @@ impl ToolOrchestrator {
                         "sandbox denied and no retry".to_string(),
                     ));
                 }
+                // Under `Never`, do not retry without sandbox; surface a concise message
+                // derived from the actual output (platform-agnostic).
+                if matches!(approval_policy, AskForApproval::Never) {
+                    let msg = build_never_denied_message_from_output(output.as_ref());
+                    return Err(ToolError::SandboxDenied(msg));
+                }
 
                 // Ask for approval before retrying without sandbox.
-                let retry_reason = sandbox_denial_reason(initial_attempt.sandbox, output.as_ref());
                 if !tool.should_bypass_approval(approval_policy, already_approved) {
+                    let reason_msg = build_denial_reason_from_output(output.as_ref());
                     let approval_ctx = ApprovalCtx {
                         session: tool_ctx.session,
                         sub_id: &tool_ctx.sub_id,
                         call_id: &tool_ctx.call_id,
-                        retry_reason: Some(retry_reason.clone()),
+                        retry_reason: Some(reason_msg),
                     };
 
                     let decision = tool.start_approval_async(req, approval_ctx).await;
@@ -134,28 +142,31 @@ impl ToolOrchestrator {
     }
 }
 
-fn sandbox_denial_reason(sandbox: crate::exec::SandboxType, output: &ExecToolCallOutput) -> String {
-    let err = CodexErr::Sandbox(SandboxErr::Denied {
-        output: Box::new(clone_exec_output(output)),
-    });
-    let message = get_error_message_ui(&err);
-    format!("{sandbox:?} sandbox denied the command. {message}\nRetry without sandbox?")
-}
+fn build_never_denied_message_from_output(output: &ExecToolCallOutput) -> String {
+    let body = format!(
+        "{}\n{}\n{}",
+        output.stderr.text, output.stdout.text, output.aggregated_output.text
+    )
+    .to_lowercase();
 
-fn clone_exec_output(output: &ExecToolCallOutput) -> ExecToolCallOutput {
-    ExecToolCallOutput {
-        exit_code: output.exit_code,
-        stdout: clone_stream(&output.stdout),
-        stderr: clone_stream(&output.stderr),
-        aggregated_output: clone_stream(&output.aggregated_output),
-        duration: output.duration,
-        timed_out: output.timed_out,
+    let detail = if body.contains("permission denied") {
+        Some("Permission denied")
+    } else if body.contains("operation not permitted") {
+        Some("Operation not permitted")
+    } else if body.contains("read-only file system") {
+        Some("Read-only file system")
+    } else {
+        None
+    };
+
+    match detail {
+        Some(tag) => format!("failed in sandbox: {tag}"),
+        None => "failed in sandbox".to_string(),
     }
 }
 
-fn clone_stream(stream: &crate::exec::StreamOutput<String>) -> crate::exec::StreamOutput<String> {
-    crate::exec::StreamOutput {
-        text: stream.text.clone(),
-        truncated_after_lines: stream.truncated_after_lines,
-    }
+fn build_denial_reason_from_output(_output: &ExecToolCallOutput) -> String {
+    // Keep approval reason terse and stable for UX/tests, but accept the
+    // output so we can evolve heuristics later without touching call sites.
+    "command failed; retry without sandbox?".to_string()
 }
