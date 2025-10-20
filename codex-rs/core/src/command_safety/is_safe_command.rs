@@ -35,7 +35,10 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         return false;
     };
 
-    match std::path::Path::new(&cmd0).file_name().and_then(|osstr| osstr.to_str()) {
+    match std::path::Path::new(&cmd0)
+        .file_name()
+        .and_then(|osstr| osstr.to_str())
+    {
         #[rustfmt::skip]
         Some(
             "cat" |
