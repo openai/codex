@@ -3157,7 +3157,7 @@ mod tests {
         let display = mcp_init_error_display(server_name, Some(&entry), &err);
 
         let expected = format!(
-            "GitHub MCP does not support OAuth. Log in by adding `bearer_token_env_var =  CODEX_GITHUB_PAT` in the `mcp_servers.{server_name}` section of your config.toml"
+            "GitHub MCP does not support OAuth. Log in by adding `bearer_token_env_var = CODEX_GITHUB_PAT` in the `mcp_servers.{server_name}` section of your config.toml"
         );
 
         assert_eq!(expected, display);
