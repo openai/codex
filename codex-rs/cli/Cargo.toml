@@ -36,6 +36,7 @@ codex-rmcp-client = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
 codex-tui = { workspace = true }
 ctor = { workspace = true }
+dirs = { workspace = true }
 owo-colors = { workspace = true }
 serde_json = { workspace = true }
 supports-color = { workspace = true }

@@ -1,3 +1,6 @@
+use anyhow::Context;
+use anyhow::anyhow;
+use anyhow::bail;
 use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
@@ -19,8 +22,10 @@ use codex_exec::Cli as ExecCli;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
+use dirs::home_dir;
 use codex_tui::UpdateAction;
 use owo_colors::OwoColorize;
+use std::fs;
 use std::path::PathBuf;
 use supports_color::Stream;
 
@@ -29,6 +34,10 @@ mod mcp_cmd;
 use crate::mcp_cmd::McpCli;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+
+const CODEX_HOME_ENV_VAR: &str = "CODEX_HOME";
+const AUTH_PROFILE_ENV_VAR: &str = "CODEX_ACTIVE_AUTH_PROFILE";
+const AUTH_PROFILE_DIR: &str = "profiles";
 
 /// Codex CLI
 ///
@@ -48,6 +57,11 @@ use codex_core::config::ConfigOverrides;
 struct MultitoolCli {
     #[clap(flatten)]
     pub config_overrides: CliConfigOverrides,
+
+    /// Authentication profile name. When provided, Codex keeps login state
+    /// isolated under `~/.codex/profiles/<profile>` (or the equivalent CODEX_HOME).
+    #[arg(long = "auth-profile", value_name = "PROFILE", global = true)]
+    auth_profile: Option<String>,
 
     #[clap(flatten)]
     pub feature_toggles: FeatureToggles,
@@ -210,6 +224,97 @@ struct GenerateTsCommand {
     prettier: Option<PathBuf>,
 }
 
+fn apply_auth_profile(raw_profile: Option<&str>) -> anyhow::Result<Option<String>> {
+    let Some(profile) = raw_profile else {
+        // SAFETY: Removing an environment variable is safe; no strings are involved.
+        unsafe {
+            std::env::remove_var(AUTH_PROFILE_ENV_VAR);
+        }
+        return Ok(None);
+    };
+
+    let trimmed = profile.trim();
+    if trimmed.is_empty() {
+        bail!("Authentication profile name cannot be empty");
+    }
+
+    let base = resolve_codex_home_base()?;
+    let slug = profile_slug(trimmed)?;
+    let profile_dir = base.join(AUTH_PROFILE_DIR).join(&slug);
+
+    fs::create_dir_all(&profile_dir).with_context(|| {
+        format!(
+            "Failed to create auth profile directory at {}",
+            profile_dir.display()
+        )
+    })?;
+
+    let canonical_dir = profile_dir.canonicalize().unwrap_or(profile_dir.clone());
+
+    // SAFETY: `canonical_dir` is derived from a valid `PathBuf` and `trimmed`
+    // originates from CLI input which cannot contain interior NUL bytes.
+    unsafe {
+        std::env::set_var(CODEX_HOME_ENV_VAR, &canonical_dir);
+        std::env::set_var(AUTH_PROFILE_ENV_VAR, trimmed);
+    }
+
+    Ok(Some(trimmed.to_string()))
+}
+
+fn resolve_codex_home_base() -> anyhow::Result<PathBuf> {
+    if let Some(existing) = std::env::var_os(CODEX_HOME_ENV_VAR)
+        && !existing.is_empty()
+    {
+        return Ok(PathBuf::from(existing));
+    }
+
+    let mut home = home_dir().ok_or_else(|| anyhow!("Could not find home directory"))?;
+    home.push(".codex");
+    Ok(home)
+}
+
+fn profile_slug(input: &str) -> anyhow::Result<String> {
+    let mut slug = String::new();
+    let mut last_was_dash = true;
+
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            last_was_dash = false;
+        } else if !last_was_dash && !slug.is_empty() {
+            slug.push('-');
+            last_was_dash = true;
+        }
+    }
+
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        bail!("Authentication profile must include at least one alphanumeric character");
+    }
+    Ok(slug)
+}
+
+fn shell_quote(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+
+    if arg
+        .bytes()
+        .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'-' | b'_'))
+    {
+        return arg.to_string();
+    }
+
+    let escaped = arg.replace('\'', "'\\''");
+    format!("'{escaped}'")
+}
+
+fn format_exit_messages(
+    exit_info: AppExitInfo,
+    color_enabled: bool,
+    auth_profile: Option<&str>,
+) -> Vec<String> {
 #[derive(Debug, Parser)]
 struct StdioToUdsCommand {
     /// Path to the Unix domain socket to connect to.
@@ -234,7 +339,10 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     )];
 
     if let Some(session_id) = conversation_id {
-        let resume_cmd = format!("codex resume {session_id}");
+        let profile_segment = auth_profile
+            .map(|profile| format!(" --auth-profile {}", shell_quote(profile)))
+            .unwrap_or_default();
+        let resume_cmd = format!("codex{profile_segment} resume {session_id}");
         let command = if color_enabled {
             resume_cmd.cyan().to_string()
         } else {
@@ -246,11 +354,12 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     lines
 }
 
+fn print_exit_messages(exit_info: AppExitInfo, auth_profile: Option<&str>) {
 /// Handle the app exit and print the results. Optionally run the update action.
 fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
     let update_action = exit_info.update_action;
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
-    for line in format_exit_messages(exit_info, color_enabled) {
+    for line in format_exit_messages(exit_info, color_enabled, auth_profile) {
         println!("{line}");
     }
     if let Some(action) = update_action {
@@ -339,11 +448,13 @@ fn main() -> anyhow::Result<()> {
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
+        auth_profile,
         feature_toggles,
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
 
+    let active_auth_profile = apply_auth_profile(auth_profile.as_deref())?;
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     root_config_overrides
         .raw_overrides
@@ -356,6 +467,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
             );
             let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
+            print_exit_messages(exit_info, active_auth_profile.as_deref());
             handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
@@ -611,6 +723,7 @@ mod tests {
         let MultitoolCli {
             interactive,
             config_overrides: root_overrides,
+            auth_profile: _,
             subcommand,
             feature_toggles: _,
         } = cli;
@@ -649,14 +762,14 @@ mod tests {
             conversation_id: None,
             update_action: None,
         };
-        let lines = format_exit_messages(exit_info, false);
+        let lines = format_exit_messages(exit_info, false, None);
         assert!(lines.is_empty());
     }
 
     #[test]
     fn format_exit_messages_includes_resume_hint_without_color() {
         let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"));
-        let lines = format_exit_messages(exit_info, false);
+        let lines = format_exit_messages(exit_info, false, None);
         assert_eq!(
             lines,
             vec![
@@ -670,9 +783,42 @@ mod tests {
     #[test]
     fn format_exit_messages_applies_color_when_enabled() {
         let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"));
-        let lines = format_exit_messages(exit_info, true);
+        let lines = format_exit_messages(exit_info, true, None);
         assert_eq!(lines.len(), 2);
         assert!(lines[1].contains("\u{1b}[36m"));
+    }
+
+    #[test]
+    fn format_exit_messages_includes_auth_profile_hint() {
+        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"));
+        let lines = format_exit_messages(exit_info, false, Some("Personal"));
+        assert_eq!(
+            lines[1],
+            "To continue this session, run codex --auth-profile Personal resume 123e4567-e89b-12d3-a456-426614174000.".to_string()
+        );
+    }
+
+    #[test]
+    fn format_exit_messages_quotes_auth_profile_when_needed() {
+        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"));
+        let lines = format_exit_messages(exit_info, false, Some("Personal Account"));
+        assert_eq!(
+            lines[1],
+            "To continue this session, run codex --auth-profile 'Personal Account' resume 123e4567-e89b-12d3-a456-426614174000.".to_string()
+        );
+    }
+
+    #[test]
+    fn profile_slug_normalizes_name() {
+        assert_eq!(profile_slug("Primary Account").unwrap(), "primary-account");
+        assert_eq!(profile_slug("Admin--Team").unwrap(), "admin-team");
+        assert_eq!(profile_slug("Data_Sandbox").unwrap(), "data-sandbox");
+    }
+
+    #[test]
+    fn profile_slug_rejects_invalid_input() {
+        assert!(profile_slug("!!!").is_err());
+        assert!(profile_slug("   ").is_err());
     }
 
     #[test]
