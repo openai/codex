@@ -48,8 +48,12 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
     })
     .await;
 
-    let TurnItem::UserMessage(started_item) = started.item;
-    let TurnItem::UserMessage(completed_item) = completed.item;
+    let TurnItem::UserMessage(started_item) = started.item else {
+        panic!("expected user message item");
+    };
+    let TurnItem::UserMessage(completed_item) = completed.item else {
+        panic!("expected user message item");
+    };
 
     assert_eq!(started_item.id, completed_item.id);
     assert_eq!(

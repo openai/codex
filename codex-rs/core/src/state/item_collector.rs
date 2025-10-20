@@ -44,7 +44,7 @@ impl ItemCollector {
         }
     }
 
-    pub async fn completed(&self, item: TurnItem) {
+    pub async fn completed(&self, item: TurnItem, emit_raw_agent_reasoning: bool) {
         let err = self
             .tx_event
             .send(Event {
@@ -52,17 +52,35 @@ impl ItemCollector {
                 msg: EventMsg::ItemCompleted(ItemCompletedEvent {
                     thread_id: self.thread_id,
                     turn_id: self.turn_id.clone(),
-                    item,
+                    item: item.clone(),
                 }),
             })
             .await;
         if let Err(e) = err {
             error!("failed to send item completed event: {e}");
         }
+
+        self.trigger_legacy_events(item, emit_raw_agent_reasoning)
+            .await;
     }
 
-    pub async fn started_completed(&self, item: TurnItem) {
+    pub async fn started_completed(&self, item: TurnItem, emit_raw_agent_reasoning: bool) {
         self.started(item.clone()).await;
-        self.completed(item).await;
+        self.completed(item, emit_raw_agent_reasoning).await;
+    }
+
+    async fn trigger_legacy_events(&self, item: TurnItem, emit_raw_agent_reasoning: bool) {
+        for event in item.legacy_events(emit_raw_agent_reasoning) {
+            if let Err(e) = self
+                .tx_event
+                .send(Event {
+                    id: self.turn_id.clone(),
+                    msg: event.clone(),
+                })
+                .await
+            {
+                error!("failed to send legacy event: {e}");
+            }
+        }
     }
 }

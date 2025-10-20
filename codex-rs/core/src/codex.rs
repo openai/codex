@@ -6,9 +6,9 @@ use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
-use crate::event_mapping::map_response_item_to_event_messages;
 use crate::function_tool::FunctionCallError;
 use crate::parse_command::parse_command;
+use crate::parse_turn_item;
 use crate::review_format::format_review_findings_block;
 use crate::state::ItemCollector;
 use crate::terminal;
@@ -945,17 +945,10 @@ impl Session {
             .await;
 
         // Derive user message events and persist only UserMessage to rollout
-        let msgs =
-            map_response_item_to_event_messages(&response_item, self.show_raw_agent_reasoning());
-        let user_msgs: Vec<RolloutItem> = msgs
-            .into_iter()
-            .filter_map(|m| match m {
-                EventMsg::UserMessage(ev) => Some(RolloutItem::EventMsg(EventMsg::UserMessage(ev))),
-                _ => None,
-            })
-            .collect();
-        if !user_msgs.is_empty() {
-            self.persist_rollout_items(&user_msgs).await;
+        let turn_item = parse_turn_item(&response_item);
+        if let Some(TurnItem::UserMessage(user_msg)) = turn_item {
+            self.persist_rollout_items(&[RolloutItem::EventMsg(user_msg.as_legacy_event())])
+                .await;
         }
     }
 
@@ -1152,22 +1145,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     {
                         sess.record_conversation_items(std::slice::from_ref(&env_item))
                             .await;
-                        for msg in map_response_item_to_event_messages(
-                            &env_item,
-                            sess.show_raw_agent_reasoning(),
-                        ) {
-                            let event = Event {
-                                id: sub.id.clone(),
-                                msg,
-                            };
-                            sess.send_event(event).await;
-                        }
                     }
-
-                    current_context
-                        .item_collector
-                        .started_completed(TurnItem::UserMessage(UserMessageItem::new(&items)))
-                        .await;
 
                     sess.spawn_task(Arc::clone(&current_context), sub.id, items, RegularTask)
                         .await;
@@ -2032,10 +2010,9 @@ async fn try_run_turn(
                     }
                     Ok(None) => {
                         let response = handle_non_tool_response_item(
-                            Arc::clone(&sess),
                             Arc::clone(&turn_context),
-                            sub_id,
                             item.clone(),
+                            sess.show_raw_agent_reasoning(),
                         )
                         .await?;
                         add_completed(ProcessedResponseItem { item, response });
@@ -2168,10 +2145,9 @@ async fn try_run_turn(
 }
 
 async fn handle_non_tool_response_item(
-    sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    sub_id: &str,
     item: ResponseItem,
+    show_raw_agent_reasoning: bool,
 ) -> CodexResult<Option<ResponseInputItem>> {
     debug!(?item, "Output item");
 
@@ -2179,19 +2155,18 @@ async fn handle_non_tool_response_item(
         ResponseItem::Message { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::WebSearchCall { .. } => {
-            let msgs = match &item {
+            let turn_item = match &item {
                 ResponseItem::Message { .. } if turn_context.is_review_mode => {
                     trace!("suppressing assistant Message in review mode");
-                    Vec::new()
+                    None
                 }
-                _ => map_response_item_to_event_messages(&item, sess.show_raw_agent_reasoning()),
+                _ => parse_turn_item(&item),
             };
-            for msg in msgs {
-                let event = Event {
-                    id: sub_id.to_string(),
-                    msg,
-                };
-                sess.send_event(event).await;
+            if let Some(turn_item) = turn_item {
+                turn_context
+                    .item_collector
+                    .started_completed(turn_item, show_raw_agent_reasoning)
+                    .await;
             }
         }
         ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. } => {
