@@ -202,6 +202,7 @@ pub async fn run_main(
             eprintln!("Error adding directories: {warning}");
             std::process::exit(1);
         }
+    }
 
     #[allow(clippy::print_stderr)]
     if let Err(err) = enforce_login_restrictions(&config).await {
