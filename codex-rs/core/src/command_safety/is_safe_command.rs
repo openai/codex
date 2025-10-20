@@ -108,13 +108,12 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         // Rust
         Some("cargo") if command.get(1).map(String::as_str) == Some("check") => true,
 
-        // Special-case `sed -n {N|M,N}p FILE`
+        // Special-case `sed -n {N|M,N}p`
         Some("sed")
             if {
-                command.len() == 4
+                command.len() <= 4
                     && command.get(1).map(String::as_str) == Some("-n")
                     && is_valid_sed_n_arg(command.get(2).map(String::as_str))
-                    && command.get(3).map(String::is_empty) == Some(false)
             } =>
         {
             true
