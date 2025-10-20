@@ -7,6 +7,7 @@ use codex_app_server_protocol::CancelLoginChatGptParams;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginChatGptResponse;
 use codex_app_server_protocol::LogoutChatGptResponse;
@@ -143,4 +144,98 @@ async fn login_and_cancel_chatgpt() {
     if maybe_note.is_err() {
         eprintln!("warning: did not observe login_chat_gpt_complete notification after cancel");
     }
+}
+
+fn create_config_toml_forced_login(codex_home: &Path, forced_method: &str) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    let contents = format!(
+        r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+forced_login_method = "{forced_method}"
+"#
+    );
+    std::fs::write(config_toml, contents)
+}
+
+fn create_config_toml_forced_workspace(
+    codex_home: &Path,
+    workspace_id: &str,
+) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    let contents = format!(
+        r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+forced_chatgpt_workspace_id = "{workspace_id}"
+"#
+    );
+    std::fs::write(config_toml, contents)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn login_chatgpt_rejected_when_forced_api() {
+    let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
+    create_config_toml_forced_login(codex_home.path(), "api")
+        .unwrap_or_else(|err| panic!("write config.toml: {err}"));
+
+    let mut mcp = McpProcess::new(codex_home.path())
+        .await
+        .expect("spawn mcp process");
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
+        .await
+        .expect("init timeout")
+        .expect("init failed");
+
+    let request_id = mcp
+        .send_login_chat_gpt_request()
+        .await
+        .expect("send loginChatGpt");
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await
+    .expect("loginChatGpt error timeout")
+    .expect("loginChatGpt error");
+
+    assert_eq!(
+        err.error.message,
+        "ChatGPT login is disabled. Use API key login instead."
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn login_chatgpt_includes_forced_workspace_query_param() {
+    let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
+    create_config_toml_forced_workspace(codex_home.path(), "ws-forced")
+        .unwrap_or_else(|err| panic!("write config.toml: {err}"));
+
+    let mut mcp = McpProcess::new(codex_home.path())
+        .await
+        .expect("spawn mcp process");
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
+        .await
+        .expect("init timeout")
+        .expect("init failed");
+
+    let request_id = mcp
+        .send_login_chat_gpt_request()
+        .await
+        .expect("send loginChatGpt");
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await
+    .expect("loginChatGpt timeout")
+    .expect("loginChatGpt response");
+
+    let login: LoginChatGptResponse = to_response(resp).expect("deserialize login resp");
+    assert!(
+        login.auth_url.contains("allowed_workspace_id=ws-forced"),
+        "auth URL should include forced workspace"
+    );
 }

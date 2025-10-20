@@ -11,6 +11,7 @@ use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
+use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::find_conversation_path_by_id_str;
@@ -192,6 +193,12 @@ pub async fn run_main(
     };
 
     let config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
+
+    #[allow(clippy::print_stderr)]
+    if let Err(err) = enforce_login_restrictions(&config).await {
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
 
     let active_profile = config.active_profile.clone();
     let log_dir = codex_core::config::log_dir(&config)?;

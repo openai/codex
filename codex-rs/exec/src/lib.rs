@@ -15,6 +15,7 @@ use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
+use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::features::Feature;
@@ -194,6 +195,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
     let approve_all_enabled = config.features.enabled(Feature::ApproveAll);
+
+    if let Err(err) = enforce_login_restrictions(&config).await {
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
 
     let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
 
