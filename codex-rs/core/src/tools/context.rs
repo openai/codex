@@ -240,6 +240,7 @@ pub(crate) struct ExecCommandContext {
     pub(crate) apply_patch: Option<ApplyPatchCommandContext>,
     pub(crate) tool_name: String,
     pub(crate) otel_event_manager: OtelEventManager,
+    pub(crate) is_user_shell_command: bool,
 }
 
 #[derive(Clone, Debug)]

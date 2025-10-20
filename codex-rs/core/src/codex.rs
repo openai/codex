@@ -13,6 +13,7 @@ use crate::terminal;
 use crate::user_notification::UserNotifier;
 use async_channel::Receiver;
 use async_channel::Sender;
+use async_trait::async_trait;
 use codex_apply_patch::ApplyPatchAction;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::ConversationPathResponseEvent;
@@ -56,14 +57,19 @@ use crate::conversation_history::ConversationHistory;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
+use crate::exec::StdoutStream;
 #[cfg(test)]
 use crate::exec::StreamOutput;
 use crate::exec_command::ExecCommandParams;
 use crate::exec_command::ExecSessionManager;
 use crate::exec_command::WriteStdinParams;
+use crate::exec_env::create_env;
+use crate::executor::ExecutionMode;
 use crate::executor::Executor;
 use crate::executor::ExecutorConfig;
+use crate::executor::linkers::PreparedExec;
 use crate::executor::normalize_exec_result;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
@@ -112,7 +118,11 @@ use crate::state::TaskKind;
 use crate::tasks::CompactTask;
 use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
+use crate::tasks::SessionTask;
+use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
+use crate::tools::context::ApplyPatchCommandContext;
+use crate::tools::context::ExecCommandContext;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::format_exec_output_str;
 use crate::tools::parallel::ToolCallRuntime;
@@ -131,6 +141,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
+use uuid::Uuid;
 
 pub mod compact;
 use self::compact::build_compacted_history;
@@ -154,6 +165,7 @@ pub struct CodexSpawnOk {
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 64;
+const USER_SHELL_TOOL_NAME: &str = "user_shell";
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -976,6 +988,7 @@ impl Session {
             command_for_display,
             cwd,
             apply_patch,
+            is_user_shell_command,
             ..
         } = exec_command_context;
         let msg = match apply_patch {
@@ -999,6 +1012,7 @@ impl Session {
                 command: command_for_display.clone(),
                 cwd,
                 parsed_cmd: parse_command(&command_for_display),
+                is_user_shell_command,
             }),
         };
         let event = Event {
@@ -1285,6 +1299,21 @@ impl Session {
         &self.services.user_shell
     }
 
+    pub async fn spawn_user_shell_command(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        sub_id: String,
+        command: String,
+    ) {
+        self.spawn_task(
+            Arc::clone(&turn_context),
+            sub_id,
+            Vec::new(),
+            UserShellCommandTask::new(command),
+        )
+        .await;
+    }
+
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
     }
@@ -1489,6 +1518,10 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         .await;
                 }
             }
+            Op::RunUserShellCommand { command } => {
+                sess.spawn_user_shell_command(Arc::clone(&turn_context), sub.id, command)
+                    .await;
+            }
             Op::Shutdown => {
                 sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
                 info!("Shutting down Codex instance");
@@ -1563,6 +1596,103 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
         }
     }
     debug!("Agent loop exited");
+}
+
+#[derive(Clone)]
+struct UserShellCommandTask {
+    command: String,
+}
+
+impl UserShellCommandTask {
+    fn new(command: String) -> Self {
+        Self { command }
+    }
+}
+
+#[async_trait]
+impl SessionTask for UserShellCommandTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Regular
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        session: Arc<SessionTaskContext>,
+        turn_context: Arc<TurnContext>,
+        sub_id: String,
+        _input: Vec<InputItem>,
+    ) -> Option<String> {
+        let session = session.clone_session();
+        run_user_shell_command(session, turn_context, sub_id, self.command.clone()).await;
+        None
+    }
+}
+
+async fn run_user_shell_command(
+    session: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    sub_id: String,
+    command: String,
+) {
+    let event = Event {
+        id: sub_id.clone(),
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: turn_context.client.get_model_context_window(),
+        }),
+    };
+    session.send_event(event).await;
+
+    let shell_invocation = session
+        .user_shell()
+        .format_user_shell_script(&command)
+        .unwrap_or_else(|| vec![command.clone()]);
+
+    let params = ExecParams {
+        command: shell_invocation.clone(),
+        cwd: turn_context.cwd.clone(),
+        timeout_ms: None,
+        env: create_env(&turn_context.shell_environment_policy),
+        with_escalated_permissions: None,
+        justification: None,
+    };
+
+    session
+        .services
+        .executor
+        .update_environment(SandboxPolicy::DangerFullAccess, turn_context.cwd.clone());
+
+    let call_id = Uuid::new_v4().to_string();
+    let otel_event_manager = turn_context.client.get_otel_event_manager();
+
+    let exec_context = ExecCommandContext {
+        sub_id: sub_id.clone(),
+        call_id: call_id.clone(),
+        command_for_display: shell_invocation.clone(),
+        cwd: params.cwd.clone(),
+        apply_patch: None,
+        tool_name: USER_SHELL_TOOL_NAME.to_string(),
+        otel_event_manager,
+        is_user_shell_command: true,
+    };
+
+    let prepared_exec = PreparedExec::new(
+        exec_context,
+        params,
+        shell_invocation,
+        ExecutionMode::Shell,
+        Some(StdoutStream {
+            sub_id: sub_id.clone(),
+            call_id: call_id.clone(),
+            tx_event: session.get_tx_event(),
+        }),
+        turn_context.shell_environment_policy.use_profile,
+    );
+
+    let turn_diff_tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
+
+    let _ = session
+        .run_exec_with_events(turn_diff_tracker, prepared_exec, AskForApproval::Never)
+        .await;
 }
 
 /// Spawn a review thread using the given prompt.
@@ -2512,9 +2642,6 @@ fn is_mcp_client_auth_required_error(error: &anyhow::Error) -> bool {
 }
 
 use crate::executor::errors::ExecError;
-use crate::executor::linkers::PreparedExec;
-use crate::tools::context::ApplyPatchCommandContext;
-use crate::tools::context::ExecCommandContext;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 

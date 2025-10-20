@@ -122,6 +122,7 @@ pub(crate) async fn handle_container_exec_with_params(
         ),
         tool_name: tool_name.to_string(),
         otel_event_manager,
+        is_user_shell_command: false,
     };
 
     let mode = match apply_patch_exec {
