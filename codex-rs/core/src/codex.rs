@@ -644,8 +644,6 @@ impl Session {
         let current_configuration = self.state.lock().await.session_configuration.clone();
         let session_configuration = current_configuration.apply(&updates);
 
-        // Unified exec no longer requires a separate environment update here.
-
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.otel_event_manager,
@@ -2296,7 +2294,6 @@ fn is_mcp_client_auth_required_error(error: &anyhow::Error) -> bool {
     error.to_string().contains("Auth required")
 }
 
-// Removed legacy executor imports after unified exec migration.
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
