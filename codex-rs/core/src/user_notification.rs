@@ -51,7 +51,6 @@ pub(crate) enum UserNotification {
     AgentTurnComplete {
         thread_id: String,
         turn_id: String,
-        /// Canonical working directory for the Codex session.
         cwd: String,
 
         /// Messages that the user sent to the agent to initiate the turn.
