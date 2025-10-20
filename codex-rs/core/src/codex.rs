@@ -1778,7 +1778,7 @@ pub(crate) async fn run_task(
                     .as_ref()
                     .map(TokenUsage::tokens_in_context_window);
                 let token_limit_reached = total_usage_tokens
-                    .map(|tokens| (tokens as i64) >= limit)
+                    .map(|tokens| tokens >= limit)
                     .unwrap_or(false);
                 let mut items_to_record_in_conversation_history = Vec::<ResponseItem>::new();
                 let mut responses = Vec::<ResponseInputItem>::new();

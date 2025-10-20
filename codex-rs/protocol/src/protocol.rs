@@ -545,21 +545,21 @@ pub struct TaskCompleteEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct TaskStartedEvent {
-    pub model_context_window: Option<u64>,
+    pub model_context_window: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, TS)]
 pub struct TokenUsage {
     #[ts(type = "number")]
-    pub input_tokens: u64,
+    pub input_tokens: i64,
     #[ts(type = "number")]
-    pub cached_input_tokens: u64,
+    pub cached_input_tokens: i64,
     #[ts(type = "number")]
-    pub output_tokens: u64,
+    pub output_tokens: i64,
     #[ts(type = "number")]
-    pub reasoning_output_tokens: u64,
+    pub reasoning_output_tokens: i64,
     #[ts(type = "number")]
-    pub total_tokens: u64,
+    pub total_tokens: i64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
@@ -567,14 +567,14 @@ pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
     #[ts(type = "number | null")]
-    pub model_context_window: Option<u64>,
+    pub model_context_window: Option<i64>,
 }
 
 impl TokenUsageInfo {
     pub fn new_or_append(
         info: &Option<TokenUsageInfo>,
         last: &Option<TokenUsage>,
-        model_context_window: Option<u64>,
+        model_context_window: Option<i64>,
     ) -> Option<Self> {
         if info.is_none() && last.is_none() {
             return None;
@@ -599,9 +599,9 @@ impl TokenUsageInfo {
         self.last_token_usage = last.clone();
     }
 
-    pub fn fill_to_context_window(&mut self, context_window: u64) {
+    pub fn fill_to_context_window(&mut self, context_window: i64) {
         let previous_total = self.total_token_usage.total_tokens;
-        let delta = context_window.saturating_sub(previous_total);
+        let delta = (context_window - previous_total).max(0);
 
         self.model_context_window = Some(context_window);
         self.total_token_usage = TokenUsage {
@@ -614,7 +614,7 @@ impl TokenUsageInfo {
         };
     }
 
-    pub fn full_context_window(context_window: u64) -> Self {
+    pub fn full_context_window(context_window: i64) -> Self {
         let mut info = Self {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
@@ -643,40 +643,39 @@ pub struct RateLimitWindow {
     pub used_percent: f64,
     /// Rolling window duration, in minutes.
     #[ts(type = "number | null")]
-    pub window_minutes: Option<u64>,
+    pub window_minutes: Option<i64>,
     /// Timestamp (RFC3339) when the window resets.
     #[ts(type = "string | null")]
     pub resets_at: Option<String>,
 }
 
 // Includes prompts, tools and space to call compact.
-const BASELINE_TOKENS: u64 = 12000;
+const BASELINE_TOKENS: i64 = 12000;
 
 impl TokenUsage {
     pub fn is_zero(&self) -> bool {
         self.total_tokens == 0
     }
 
-    pub fn cached_input(&self) -> u64 {
-        self.cached_input_tokens
+    pub fn cached_input(&self) -> i64 {
+        self.cached_input_tokens.max(0)
     }
 
-    pub fn non_cached_input(&self) -> u64 {
-        self.input_tokens.saturating_sub(self.cached_input())
+    pub fn non_cached_input(&self) -> i64 {
+        (self.input_tokens - self.cached_input()).max(0)
     }
 
     /// Primary count for display as a single absolute value: non-cached input + output.
-    pub fn blended_total(&self) -> u64 {
-        self.non_cached_input() + self.output_tokens
+    pub fn blended_total(&self) -> i64 {
+        (self.non_cached_input() + self.output_tokens.max(0)).max(0)
     }
 
     /// For estimating what % of the model's context window is used, we need to account
     /// for reasoning output tokens from prior turns being dropped from the context window.
     /// We approximate this here by subtracting reasoning output tokens from the total.
     /// This will be off for the current turn and pending function calls.
-    pub fn tokens_in_context_window(&self) -> u64 {
-        self.total_tokens
-            .saturating_sub(self.reasoning_output_tokens)
+    pub fn tokens_in_context_window(&self) -> i64 {
+        (self.total_tokens - self.reasoning_output_tokens).max(0)
     }
 
     /// Estimate the remaining user-controllable percentage of the model's context window.
@@ -689,17 +688,17 @@ impl TokenUsage {
     /// This normalizes both the numerator and denominator by subtracting the
     /// baseline, so immediately after the first prompt the UI shows 100% left
     /// and trends toward 0% as the user fills the effective window.
-    pub fn percent_of_context_window_remaining(&self, context_window: u64) -> u8 {
+    pub fn percent_of_context_window_remaining(&self, context_window: i64) -> i64 {
         if context_window <= BASELINE_TOKENS {
             return 0;
         }
 
         let effective_window = context_window - BASELINE_TOKENS;
-        let used = self
-            .tokens_in_context_window()
-            .saturating_sub(BASELINE_TOKENS);
-        let remaining = effective_window.saturating_sub(used);
-        ((remaining as f32 / effective_window as f32) * 100.0).clamp(0.0, 100.0) as u8
+        let used = (self.tokens_in_context_window() - BASELINE_TOKENS).max(0);
+        let remaining = (effective_window - used).max(0);
+        ((remaining as f64 / effective_window as f64) * 100.0)
+            .clamp(0.0, 100.0)
+            .round() as i64
     }
 
     /// In-place element-wise sum of token counts.

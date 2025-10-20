@@ -86,8 +86,8 @@ impl OtelEventManager {
         provider_name: &str,
         reasoning_effort: Option<ReasoningEffort>,
         reasoning_summary: ReasoningSummary,
-        context_window: Option<u64>,
-        max_output_tokens: Option<u64>,
+        context_window: Option<i64>,
+        max_output_tokens: Option<i64>,
         auto_compact_token_limit: Option<i64>,
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
@@ -281,11 +281,11 @@ impl OtelEventManager {
 
     pub fn sse_event_completed(
         &self,
-        input_token_count: u64,
-        output_token_count: u64,
-        cached_token_count: Option<u64>,
-        reasoning_token_count: Option<u64>,
-        tool_token_count: u64,
+        input_token_count: i64,
+        output_token_count: i64,
+        cached_token_count: Option<i64>,
+        reasoning_token_count: Option<i64>,
+        tool_token_count: i64,
     ) {
         tracing::event!(
             tracing::Level::INFO,

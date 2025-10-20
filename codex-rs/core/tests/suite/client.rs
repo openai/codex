@@ -858,8 +858,8 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "reasoning_output_tokens": 0,
                     "total_tokens": 123
                 },
-                // Default model is gpt-5-codex in tests → 272000 context window
-                "model_context_window": 272000
+                // Default model is gpt-5-codex in tests → 95% usable context window
+                "model_context_window": 258400
             },
             "rate_limits": {
                 "primary": {
@@ -985,6 +985,8 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
+    const EFFECTIVE_CONTEXT_WINDOW: i64 = (272_000 * 95) / 100;
+
     responses::mount_sse_once_match(
         &server,
         body_string_contains("trigger context window"),
@@ -1056,8 +1058,11 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         .info
         .expect("token usage info present when context window is exceeded");
 
-    assert_eq!(info.model_context_window, Some(272_000));
-    assert_eq!(info.total_token_usage.total_tokens, 272_000);
+    assert_eq!(info.model_context_window, Some(EFFECTIVE_CONTEXT_WINDOW));
+    assert_eq!(
+        info.total_token_usage.total_tokens,
+        EFFECTIVE_CONTEXT_WINDOW
+    );
 
     let error_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
     let expected_context_window_message = CodexErr::ContextWindowExceeded.to_string();

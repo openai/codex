@@ -27,7 +27,7 @@ pub(crate) enum StatusRateLimitData {
 pub(crate) struct RateLimitWindowDisplay {
     pub used_percent: f64,
     pub resets_at: Option<String>,
-    pub window_minutes: Option<u64>,
+    pub window_minutes: Option<i64>,
 }
 
 impl RateLimitWindowDisplay {
