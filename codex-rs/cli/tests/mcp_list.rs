@@ -134,3 +134,28 @@ async fn list_and_get_render_expected_output() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn get_disabled_server_shows_single_line() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut add = codex_command(codex_home.path())?;
+    add.args(["mcp", "add", "docs", "--", "docs-server"])
+        .assert()
+        .success();
+
+    let mut servers = load_global_mcp_servers(codex_home.path()).await?;
+    let docs = servers
+        .get_mut("docs")
+        .expect("docs server should exist after add");
+    docs.enabled = false;
+    write_global_mcp_servers(codex_home.path(), &servers)?;
+
+    let mut get_cmd = codex_command(codex_home.path())?;
+    let get_output = get_cmd.args(["mcp", "get", "docs"]).output()?;
+    assert!(get_output.status.success());
+    let stdout = String::from_utf8(get_output.stdout)?;
+    assert_eq!(stdout.trim_end(), "docs (disabled)");
+
+    Ok(())
+}
