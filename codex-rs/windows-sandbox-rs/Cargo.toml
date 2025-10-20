@@ -3,6 +3,10 @@ name = "codex-windows-sandbox"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "codex_windows_sandbox"
+path = "src/lib.rs"
+
 [dependencies]
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -26,6 +30,7 @@ features = [
     "Win32_System_Environment",
     "Win32_System_Pipes",
     "Win32_System_WindowsProgramming",
+    "Win32_System_IO",
     "Win32_System_Memory",
     "Win32_System_Kernel",
     "Win32_System_Console",
@@ -39,4 +44,4 @@ features = [
 [profile.release]
 opt-level = 3
 
-[workspace]
+ 

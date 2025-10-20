@@ -9,20 +9,16 @@ use windows_sys::Win32::Security::AdjustTokenPrivileges;
 use windows_sys::Win32::Security::CopySid;
 use windows_sys::Win32::Security::CreateRestrictedToken;
 use windows_sys::Win32::Security::CreateWellKnownSid;
-use windows_sys::Win32::Security::FreeSid;
 use windows_sys::Win32::Security::GetLengthSid;
 use windows_sys::Win32::Security::GetTokenInformation;
-use windows_sys::Win32::Security::IsTokenRestricted;
 use windows_sys::Win32::Security::LookupPrivilegeValueW;
 use windows_sys::Win32::Security::TokenGroups;
-use windows_sys::Win32::Security::LUID_AND_ATTRIBUTES;
 use windows_sys::Win32::Security::SID_AND_ATTRIBUTES;
 use windows_sys::Win32::Security::TOKEN_ADJUST_DEFAULT;
 use windows_sys::Win32::Security::TOKEN_ADJUST_PRIVILEGES;
 use windows_sys::Win32::Security::TOKEN_ADJUST_SESSIONID;
 use windows_sys::Win32::Security::TOKEN_ASSIGN_PRIMARY;
 use windows_sys::Win32::Security::TOKEN_DUPLICATE;
-use windows_sys::Win32::Security::TOKEN_INFORMATION_CLASS;
 use windows_sys::Win32::Security::TOKEN_PRIVILEGES;
 use windows_sys::Win32::Security::TOKEN_QUERY;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
@@ -30,20 +26,20 @@ use windows_sys::Win32::System::Threading::GetCurrentProcess;
 const DISABLE_MAX_PRIVILEGE: u32 = 0x01;
 const LUA_TOKEN: u32 = 0x04;
 const WRITE_RESTRICTED: u32 = 0x08;
-const WinWorldSid: i32 = 1;
+const WIN_WORLD_SID: i32 = 1;
 const SE_GROUP_LOGON_ID: u32 = 0xC0000000;
 
 pub unsafe fn world_sid() -> Result<Vec<u8>> {
     let mut size: u32 = 0;
     CreateWellKnownSid(
-        WinWorldSid,
+        WIN_WORLD_SID,
         std::ptr::null_mut(),
         std::ptr::null_mut(),
         &mut size,
     );
     let mut buf: Vec<u8> = vec![0u8; size as usize];
     let ok = CreateWellKnownSid(
-        WinWorldSid,
+        WIN_WORLD_SID,
         std::ptr::null_mut(),
         buf.as_mut_ptr() as *mut c_void,
         &mut size,
@@ -91,6 +87,7 @@ pub unsafe fn get_current_token_for_restriction() -> Result<HANDLE> {
     Ok(h)
 }
 
+#[allow(dead_code)]
 pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
     let mut needed: u32 = 0;
     GetTokenInformation(h_token, TokenGroups, std::ptr::null_mut(), 0, &mut needed);
@@ -163,6 +160,7 @@ unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub unsafe fn create_write_restricted_token_strict() -> Result<(HANDLE, *mut c_void)> {
     let base = get_current_token_for_restriction()?;
     let logon_sid_bytes = get_logon_sid_bytes(base)?;

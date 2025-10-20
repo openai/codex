@@ -1,12 +1,13 @@
 mod acl;
+mod allow;
 mod cap;
 mod env;
+mod logging;
 mod policy;
 mod process;
 mod token;
 mod winutil;
 
-use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -20,11 +21,13 @@ use windows_sys::Win32::Foundation::HANDLE;
 use crate::acl::add_allow_ace;
 use crate::acl::allow_null_device;
 use crate::acl::revoke_ace;
+use crate::allow::compute_allow_paths;
 use crate::cap::cap_sid_file;
 use crate::cap::load_or_create_cap_sids;
 use crate::env::apply_no_network_to_env;
 use crate::env::ensure_non_interactive_pager;
 use crate::env::normalize_null_device_env;
+use crate::logging::{log_failure, log_start, log_success};
 use crate::policy::SandboxMode;
 use crate::policy::SandboxPolicy;
 use crate::process::assign_to_job;
@@ -36,7 +39,6 @@ use crate::token::create_readonly_token_with_cap;
 use crate::token::create_workspace_write_token_with_cap;
 use crate::token::get_current_token_for_restriction;
 use crate::token::get_logon_sid_bytes;
-use std::io::Write;
 
 fn ensure_dir(p: &Path) -> Result<()> {
     if let Some(d) = p.parent() {
@@ -45,55 +47,7 @@ fn ensure_dir(p: &Path) -> Result<()> {
     Ok(())
 }
 
-fn compute_allow_paths(
-    policy: &SandboxPolicy,
-    policy_cwd: &Path,
-    command_cwd: &Path,
-    env_map: &HashMap<String, String>,
-) -> Vec<PathBuf> {
-    let mut allow: Vec<PathBuf> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    // Add declared roots
-    if let SandboxMode::WorkspaceWrite { .. } = &policy.0 {
-        for w in policy.writable_roots_with_cwd(policy_cwd) {
-            let abs = if w.is_absolute() {
-                w
-            } else {
-                command_cwd.join(w)
-            };
-            if seen.insert(abs.to_string_lossy().to_string()) && abs.exists() {
-                allow.push(abs);
-            }
-        }
-    }
-    // Ensure cwd if not already covered
-    if let SandboxMode::WorkspaceWrite { .. } = &policy.0 {
-        let covered = allow.iter().any(|x| command_cwd.starts_with(x));
-        if !covered {
-            let abs = command_cwd.to_path_buf();
-            if seen.insert(abs.to_string_lossy().to_string()) && abs.exists() {
-                allow.push(abs);
-            }
-        }
-    }
-    // TEMP/TMP
-    if !matches!(policy.0, SandboxMode::ReadOnly) {
-        for key in ["TEMP", "TMP"] {
-            if let Some(v) = env_map.get(key) {
-                let abs = PathBuf::from(v);
-                if seen.insert(abs.to_string_lossy().to_string()) && abs.exists() {
-                    allow.push(abs);
-                }
-            } else if let Ok(v) = std::env::var(key) {
-                let abs = PathBuf::from(v);
-                if seen.insert(abs.to_string_lossy().to_string()) && abs.exists() {
-                    allow.push(abs);
-                }
-            }
-        }
-    }
-    allow
-}
+// allow::compute_allow_paths now provides the shared logic
 
 fn main() -> Result<()> {
     if cfg!(not(windows)) {
@@ -102,14 +56,9 @@ fn main() -> Result<()> {
     }
     let mut args: Vec<String> = std::env::args().collect();
     let mut policy_cwd: Option<PathBuf> = None;
-    let mut i = 1;
-    while i < args.len() {
-        if args[i] == "--sandbox-policy-cwd" && i + 1 < args.len() {
-            policy_cwd = Some(PathBuf::from(&args[i + 1]));
-            args.drain(i..=i + 1);
-        } else {
-            break;
-        }
+    if args.len() > 2 && args[1] == "--sandbox-policy-cwd" {
+        policy_cwd = Some(PathBuf::from(&args[2]));
+        args.drain(1..=2);
     }
     if args.len() < 2 {
         eprintln!("No policy specified.");
@@ -144,7 +93,7 @@ fn main() -> Result<()> {
                 let psid = convert_string_sid_to_sid(&caps.readonly).unwrap();
                 create_readonly_token_with_cap(psid)?
             }
-            SandboxMode::WorkspaceWrite { .. } => {
+            SandboxMode::WorkspaceWrite => {
                 let caps = load_or_create_cap_sids(&policy_cwd);
                 ensure_dir(&cap_sid_file(&policy_cwd))?;
                 fs::write(cap_sid_file(&policy_cwd), serde_json::to_string(&caps)?)?;
@@ -156,7 +105,7 @@ fn main() -> Result<()> {
 
     // Diagnostics parity: allow NUL for current logon sid in WS mode
     unsafe {
-        if matches!(policy.0, SandboxMode::WorkspaceWrite { .. }) {
+        if matches!(policy.0, SandboxMode::WorkspaceWrite) {
             if let Ok(base) = get_current_token_for_restriction() {
                 if let Ok(bytes) = get_logon_sid_bytes(base) {
                     let mut tmp = bytes.clone();
@@ -169,7 +118,7 @@ fn main() -> Result<()> {
     }
 
     // Configure ACLs
-    let persist_aces = matches!(policy.0, SandboxMode::WorkspaceWrite { .. });
+    let persist_aces = matches!(policy.0, SandboxMode::WorkspaceWrite);
     let allow = compute_allow_paths(&policy, &policy_cwd, &current_dir, &env_map);
     let mut guards: Vec<(PathBuf, *mut c_void)> = Vec::new();
     unsafe {
@@ -190,48 +139,44 @@ fn main() -> Result<()> {
         allow_null_device(psid_to_use);
     }
 
-    // Command logging (Rust): append START, then SUCCESS/FAILURE
-    const LOG_COMMAND_PREVIEW_LIMIT: usize = 200;
-    const LOG_FILE_NAME: &str = "sandbox_commands.rust.log";
-    let preview = {
-        let j = command.join(" ");
-        if j.len() <= LOG_COMMAND_PREVIEW_LIMIT { j } else { j[..LOG_COMMAND_PREVIEW_LIMIT].to_string() }
-    };
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(LOG_FILE_NAME) {
-        let _ = writeln!(f, "START: {}", preview);
-    }
+    // Command logging (shared)
+    log_start(&command);
 
     // Spawn
-    let (pi, _si) = match unsafe { create_process_as_user(h_token, &command, &current_dir, &env_map) } {
-        Ok(v) => v,
-        Err(e) => {
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(LOG_FILE_NAME) {
-                let _ = writeln!(f, "FAILURE: {} ({})", preview, format!("spawn failed: {}", e));
+    let (pi, _si) =
+        match unsafe { create_process_as_user(h_token, &command, &current_dir, &env_map) } {
+            Ok(v) => v,
+            Err(e) => {
+                log_failure(&command, &format!("spawn failed: {}", e));
+                eprintln!("failed to spawn process: {}", e);
+                return Err(e);
             }
-            eprintln!("failed to spawn process: {}", e);
-            return Err(e);
-        }
-    };
+        };
 
-    let mut code: i32 = 1;
-    unsafe {
+    let code: i32 = unsafe {
         match create_job_kill_on_close() {
             Ok(h_job) => {
                 let _ = assign_to_job(h_job, pi.hProcess);
-                code = wait_process_and_exitcode(&pi)?;
+                let c = wait_process_and_exitcode(&pi)?;
                 CloseHandle(h_job);
+                c
             }
-            Err(_) => {
-                code = wait_process_and_exitcode(&pi)?;
-            }
+            Err(_) => wait_process_and_exitcode(&pi)?,
         }
-    }
+    };
 
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(LOG_FILE_NAME) {
-        if code == 0 { let _ = writeln!(f, "SUCCESS: {}", preview); }
-        else { let _ = writeln!(f, "FAILURE: {} (exit code {})", preview, code); }
+    if code == 0 {
+        log_success(&command);
+    } else {
+        log_failure(&command, &format!("exit code {}", code));
     }
-    if code != 0 { eprintln!("sandboxed command failed with exit code {}: {}", code, command.join(" ")); }
+    if code != 0 {
+        eprintln!(
+            "sandboxed command failed with exit code {}: {}",
+            code,
+            command.join(" ")
+        );
+    }
 
     unsafe {
         if pi.hThread != 0 {

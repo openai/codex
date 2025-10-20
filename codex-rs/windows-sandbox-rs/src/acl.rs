@@ -6,7 +6,6 @@ use std::path::Path;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
-use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Security::AclSizeInformation;
@@ -46,7 +45,7 @@ pub unsafe fn dacl_has_write_allow_for_sid(p_dacl: *mut ACL, psid: *mut c_void) 
         p_dacl as *const ACL,
         &mut info as *mut _ as *mut c_void,
         std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
-        AclSizeInformation as i32,
+        AclSizeInformation,
     );
     if ok == 0 {
         return false;

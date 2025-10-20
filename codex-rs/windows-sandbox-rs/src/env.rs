@@ -35,7 +35,7 @@ fn prepend_path(env_map: &mut HashMap<String, String>, prefix: &str) {
         .cloned()
         .or_else(|| env::var("PATH").ok())
         .unwrap_or_default();
-    let mut parts: Vec<String> = existing.split(';').map(|s| s.to_string()).collect();
+    let parts: Vec<String> = existing.split(';').map(|s| s.to_string()).collect();
     if parts
         .first()
         .map(|p| p.eq_ignore_ascii_case(prefix))

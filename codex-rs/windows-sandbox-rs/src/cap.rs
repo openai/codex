@@ -1,4 +1,3 @@
-use anyhow::Result;
 use rand::rngs::SmallRng;
 use rand::RngCore;
 use rand::SeedableRng;
