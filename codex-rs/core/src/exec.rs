@@ -254,11 +254,6 @@ pub(crate) fn is_likely_sandbox_denied(
     // 2: misuse of shell builtins
     // 126: permission denied
     // 127: command not found
-    const QUICK_REJECT_EXIT_CODES: [i32; 3] = [2, 126, 127];
-    if QUICK_REJECT_EXIT_CODES.contains(&exec_output.exit_code) {
-        return false;
-    }
-
     const SANDBOX_DENIED_KEYWORDS: [&str; 7] = [
         "operation not permitted",
         "permission denied",
@@ -269,7 +264,7 @@ pub(crate) fn is_likely_sandbox_denied(
         "failed to write file",
     ];
 
-    if [
+    let has_sandbox_keyword = [
         &exec_output.stderr.text,
         &exec_output.stdout.text,
         &exec_output.aggregated_output.text,
@@ -280,8 +275,15 @@ pub(crate) fn is_likely_sandbox_denied(
         SANDBOX_DENIED_KEYWORDS
             .iter()
             .any(|needle| lower.contains(needle))
-    }) {
+    });
+
+    if has_sandbox_keyword {
         return true;
+    }
+
+    const QUICK_REJECT_EXIT_CODES: [i32; 3] = [2, 126, 127];
+    if QUICK_REJECT_EXIT_CODES.contains(&exec_output.exit_code) {
+        return false;
     }
 
     #[cfg(unix)]
