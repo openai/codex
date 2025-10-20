@@ -749,6 +749,122 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
+            name: "apply_patch_function_danger_allows_outside_workspace",
+            approval_policy: OnRequest,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            action: ActionKind::ApplyPatchFunction {
+                target: TargetPath::OutsideWorkspace("apply_patch_function_danger.txt"),
+                content: "function-patch-danger",
+            },
+            with_escalated_permissions: false,
+            requires_apply_patch_tool: true,
+            model_override: Some("gpt-5-codex"),
+            outcome: Outcome::Auto,
+            expectation: Expectation::PatchApplied {
+                target: TargetPath::OutsideWorkspace("apply_patch_function_danger.txt"),
+                content: "function-patch-danger",
+            },
+        },
+        ScenarioSpec {
+            name: "apply_patch_function_outside_requires_patch_approval",
+            approval_policy: OnRequest,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::ApplyPatchFunction {
+                target: TargetPath::OutsideWorkspace("apply_patch_function_outside.txt"),
+                content: "function-patch-outside",
+            },
+            with_escalated_permissions: false,
+            requires_apply_patch_tool: true,
+            model_override: Some("gpt-5-codex"),
+            outcome: Outcome::PatchApproval {
+                decision: ReviewDecision::Approved,
+                expected_reason: None,
+            },
+            expectation: Expectation::PatchApplied {
+                target: TargetPath::OutsideWorkspace("apply_patch_function_outside.txt"),
+                content: "function-patch-outside",
+            },
+        },
+        ScenarioSpec {
+            name: "apply_patch_function_outside_denied_blocks_patch",
+            approval_policy: OnRequest,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::ApplyPatchFunction {
+                target: TargetPath::OutsideWorkspace("apply_patch_function_outside_denied.txt"),
+                content: "function-patch-outside-denied",
+            },
+            with_escalated_permissions: false,
+            requires_apply_patch_tool: true,
+            model_override: Some("gpt-5-codex"),
+            outcome: Outcome::PatchApproval {
+                decision: ReviewDecision::Denied,
+                expected_reason: None,
+            },
+            expectation: Expectation::FileNotCreated {
+                target: TargetPath::OutsideWorkspace("apply_patch_function_outside_denied.txt"),
+                message_contains: &["patch rejected by user"],
+            },
+        },
+        ScenarioSpec {
+            name: "apply_patch_shell_outside_requires_patch_approval",
+            approval_policy: OnRequest,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::ApplyPatchShell {
+                target: TargetPath::OutsideWorkspace("apply_patch_shell_outside.txt"),
+                content: "shell-patch-outside",
+            },
+            with_escalated_permissions: false,
+            requires_apply_patch_tool: true,
+            model_override: None,
+            outcome: Outcome::PatchApproval {
+                decision: ReviewDecision::Approved,
+                expected_reason: None,
+            },
+            expectation: Expectation::PatchApplied {
+                target: TargetPath::OutsideWorkspace("apply_patch_shell_outside.txt"),
+                content: "shell-patch-outside",
+            },
+        },
+        ScenarioSpec {
+            name: "apply_patch_function_unless_trusted_requires_patch_approval",
+            approval_policy: UnlessTrusted,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::ApplyPatchFunction {
+                target: TargetPath::Workspace("apply_patch_function_unless_trusted.txt"),
+                content: "function-patch-unless-trusted",
+            },
+            with_escalated_permissions: false,
+            requires_apply_patch_tool: true,
+            model_override: Some("gpt-5-codex"),
+            outcome: Outcome::PatchApproval {
+                decision: ReviewDecision::Approved,
+                expected_reason: None,
+            },
+            expectation: Expectation::PatchApplied {
+                target: TargetPath::Workspace("apply_patch_function_unless_trusted.txt"),
+                content: "function-patch-unless-trusted",
+            },
+        },
+        ScenarioSpec {
+            name: "apply_patch_function_never_rejects_outside_workspace",
+            approval_policy: Never,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::ApplyPatchFunction {
+                target: TargetPath::OutsideWorkspace("apply_patch_function_never.txt"),
+                content: "function-patch-never",
+            },
+            with_escalated_permissions: false,
+            requires_apply_patch_tool: true,
+            model_override: Some("gpt-5-codex"),
+            outcome: Outcome::Auto,
+            expectation: Expectation::FileNotCreated {
+                target: TargetPath::OutsideWorkspace("apply_patch_function_never.txt"),
+                message_contains: &[
+                    "patch rejected: writing outside of the project; rejected by user approval settings",
+                ],
+            },
+        },
+        ScenarioSpec {
             name: "read_only_unless_trusted_requires_approval",
             approval_policy: UnlessTrusted,
             sandbox_policy: SandboxPolicy::ReadOnly,
