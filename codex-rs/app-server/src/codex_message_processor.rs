@@ -1363,7 +1363,6 @@ async fn derive_config_from_params(
         sandbox: sandbox_mode,
         config: cli_overrides,
         base_instructions,
-        include_plan_tool,
         include_apply_patch_tool,
     } = params;
     let overrides = ConfigOverrides {
@@ -1376,7 +1375,6 @@ async fn derive_config_from_params(
         model_provider: None,
         codex_linux_sandbox_exe,
         base_instructions,
-        include_plan_tool,
         include_apply_patch_tool,
         include_view_image_tool: None,
         show_raw_agent_reasoning: None,
