@@ -968,6 +968,7 @@ dependencies = [
  "codex-protocol-ts",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
+ "codex-stdio-to-uds",
  "codex-tui",
  "ctor 0.5.0",
  "owo-colors",
@@ -1395,6 +1396,17 @@ dependencies = [
  "tracing",
  "urlencoding",
  "webbrowser",
+]
+
+[[package]]
+name = "codex-stdio-to-uds"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "pretty_assertions",
+ "tempfile",
+ "uds_windows",
 ]
 
 [[package]]
