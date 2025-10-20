@@ -116,7 +116,7 @@ wire_api = "responses"
 
 Export your key before launching Codex: `export AZURE_OPENAI_API_KEY=…`
 
-### Responses API's reasoning format
+#### Responses API's reasoning format
 Some providers/proxies like litellm require the Response API's reasoning IDs in the payload. You can force this through _force_responses_api_store_reasoning_ids_. Default is `false`.
 
 ```toml
