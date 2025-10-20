@@ -898,7 +898,11 @@ fn scenarios() -> Vec<ScenarioSpec> {
             outcome: Outcome::Auto,
             expectation: Expectation::FileNotCreated {
                 target: TargetPath::Workspace("ro_never.txt"),
-                message_contains: &[""],
+                message_contains: if cfg!(target_os = "linux") {
+                    &["Permission denied"]
+                } else {
+                    &["failed in sandbox"]
+                },
             },
         },
         ScenarioSpec {
