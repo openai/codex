@@ -1,4 +1,4 @@
-use crate::bash::parse_bash_lc_plain_commands;
+use crate::bash::parse_shell_lc_plain_commands;
 
 pub fn is_known_safe_command(command: &[String]) -> bool {
     let command: Vec<String> = command
@@ -29,7 +29,7 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
     // introduce side effects ( "&&", "||", ";", and "|" ). If every
     // individual command in the script is itself a known‑safe command, then
     // the composite expression is considered safe.
-    if let Some(all_commands) = parse_bash_lc_plain_commands(&command)
+    if let Some(all_commands) = parse_shell_lc_plain_commands(&command)
         && !all_commands.is_empty()
         && all_commands
             .iter()
@@ -199,6 +199,11 @@ mod tests {
         assert!(is_safe_to_call_with_exec(&vec_str(&[
             "find", ".", "-name", "file.txt"
         ])));
+    }
+
+    #[test]
+    fn zsh_lc_safe_command_sequence() {
+        assert!(is_known_safe_command(&vec_str(&["zsh", "-lc", "ls"])));
     }
 
     #[test]
