@@ -620,6 +620,7 @@ Specify a program that will be executed to get notified about events generated b
   "type": "agent-turn-complete",
   "thread-id": "b5f6c1c2-1111-2222-3333-444455556666",
   "turn-id": "12345",
+  "cwd": "/Users/alice/projects/example",
   "input-messages": ["Rename `foo` to `bar` and update the callsites."],
   "last-assistant-message": "Rename complete and verified `cargo build` succeeds."
 }
@@ -628,6 +629,8 @@ Specify a program that will be executed to get notified about events generated b
 The `"type"` property will always be set. Currently, `"agent-turn-complete"` is the only notification type that is supported.
 
 `"thread-id"` contains a string that identifies the Codex session that produced the notification; you can use it to correlate multiple turns that belong to the same task.
+
+`"cwd"` reports the absolute working directory for the session so scripts can disambiguate which project triggered the notification.
 
 As an example, here is a Python script that parses the JSON and decides whether to show a desktop push notification using [terminal-notifier](https://github.com/julienXX/terminal-notifier) on macOS:
 
