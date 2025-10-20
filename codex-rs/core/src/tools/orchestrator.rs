@@ -49,6 +49,7 @@ impl ToolOrchestrator {
         // 1) Approval
         let needs_initial_approval =
             tool.wants_initial_approval(req, approval_policy, &turn_ctx.sandbox_policy);
+        let mut already_approved = false;
 
         if needs_initial_approval {
             let approval_ctx = ApprovalCtx {
@@ -67,6 +68,7 @@ impl ToolOrchestrator {
                 }
                 ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {}
             }
+            already_approved = true;
         } else {
             otel.tool_decision(otel_tn, otel_ci, ReviewDecision::Approved, otel_cfg);
         }
@@ -97,7 +99,7 @@ impl ToolOrchestrator {
 
                 // Ask for approval before retrying without sandbox.
                 let retry_reason = sandbox_denial_reason(initial_attempt.sandbox, output.as_ref());
-                if !tool.should_bypass_approval(approval_policy) {
+                if !tool.should_bypass_approval(approval_policy, already_approved) {
                     let approval_ctx = ApprovalCtx {
                         session: tool_ctx.session,
                         sub_id: &tool_ctx.sub_id,

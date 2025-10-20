@@ -87,7 +87,11 @@ pub(crate) trait Approvable<Req> {
 
     fn approval_key(&self, req: &Req) -> Self::ApprovalKey;
 
-    fn should_bypass_approval(&self, policy: AskForApproval) -> bool {
+    fn should_bypass_approval(&self, policy: AskForApproval, already_approved: bool) -> bool {
+        if already_approved {
+            // We do not ask one more time
+            return true;
+        }
         matches!(policy, AskForApproval::Never)
     }
 
