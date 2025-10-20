@@ -870,7 +870,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     let server = start_mock_server().await;
 
     let context_window = 100;
-    let limit = (context_window * 90 / 100);
+    let limit = context_window * 90 / 100;
     let over_limit_tokens = context_window * 95 / 100 + 1;
 
     let first_turn = sse(vec![
