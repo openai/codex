@@ -109,6 +109,9 @@ impl Approvable<ShellRequest> for ShellRuntime {
         policy: AskForApproval,
         sandbox_policy: &SandboxPolicy,
     ) -> bool {
+        if is_known_safe_command(&req.command) {
+            return false;
+        }
         match policy {
             AskForApproval::Never | AskForApproval::OnFailure => false,
             AskForApproval::OnRequest => {

@@ -31,9 +31,11 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
 }
 
 fn is_safe_to_call_with_exec(command: &[String]) -> bool {
-    let cmd0 = command.first().map(String::as_str);
+    let Some(cmd0) = command.first().map(String::as_str) else {
+        return false;
+    };
 
-    match cmd0 {
+    match std::path::Path::new(&cmd0).file_name().and_then(|osstr| osstr.to_str()) {
         #[rustfmt::skip]
         Some(
             "cat" |
