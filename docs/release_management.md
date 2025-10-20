@@ -40,8 +40,6 @@ Inevitably, you just have to refresh this page periodically to see if the releas
 
 https://github.com/Homebrew/homebrew-cask/pulls?q=%3Apr+codex
 
-Once everything builds, a Homebrew admin has to approve the PR. Again, the whole process takes several hours and we don't have total control over it, but it seems to work pretty well.
-
 For reference, our Homebrew cask lives at:
 
 https://github.com/Homebrew/homebrew-cask/blob/main/Casks/c/codex.rb
