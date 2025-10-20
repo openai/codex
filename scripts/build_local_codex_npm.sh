@@ -82,6 +82,8 @@ fi
 
 NEED_HOST=false
 NEED_X86_MUSL=false
+AUTO_ADDED_MUSL=false
+COPY_HOST_TO_MUSL=false
 
 for target in "${TARGETS[@]}"; do
   case "$target" in
@@ -98,6 +100,16 @@ for target in "${TARGETS[@]}"; do
   esac
 done
 
+HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
+
+if "$NEED_HOST" && [[ "$HOST_TRIPLE" == *-unknown-linux-gnu ]]; then
+  if ! "$NEED_X86_MUSL"; then
+    echo "==> Detected Linux host ($HOST_TRIPLE); building x86_64-unknown-linux-musl as well so packaged CLI includes the binary it uses at runtime."
+    NEED_X86_MUSL=true
+    AUTO_ADDED_MUSL=true
+  fi
+fi
+
 if "$NEED_X86_MUSL"; then
   if ! rustup target list --installed | grep -q '^x86_64-unknown-linux-musl$'; then
     echo "Error: Target 'x86_64-unknown-linux-musl' is not installed. Run 'rustup target add x86_64-unknown-linux-musl' first." >&2
@@ -108,27 +120,26 @@ if "$NEED_X86_MUSL"; then
   MUSL_CXX="${MUSL_CXX:-x86_64-linux-musl-g++}"
   MUSL_AR="${MUSL_AR:-x86_64-linux-musl-ar}"
 
+  MISSING_TOOL=""
   if ! command -v "$MUSL_LINKER" >/dev/null 2>&1; then
-    cat >&2 <<EOF
-Error: '$MUSL_LINKER' not found in PATH. Install the musl cross toolchain, e.g.:
-  brew install FiloSottile/musl-cross/musl-cross
-or set MUSL_LINKER to the desired linker binary.
-EOF
-    exit 1
+    MISSING_TOOL="$MUSL_LINKER"
+  elif ! command -v "$MUSL_CXX" >/dev/null 2>&1; then
+    MISSING_TOOL="$MUSL_CXX"
+  elif ! command -v "$MUSL_AR" >/dev/null 2>&1; then
+    MISSING_TOOL="$MUSL_AR"
   fi
 
-  if ! command -v "$MUSL_CXX" >/dev/null 2>&1; then
-    cat >&2 <<EOF
-Error: '$MUSL_CXX' not found in PATH. Install the musl cross toolchain or set MUSL_CXX.
+  if [[ -n "$MISSING_TOOL" ]]; then
+    if "$AUTO_ADDED_MUSL"; then
+      echo "==> Warning: musl toolchain component '$MISSING_TOOL' not found. Skipping musl build and copying host binary instead."
+      COPY_HOST_TO_MUSL=true
+      NEED_X86_MUSL=false
+    else
+      cat >&2 <<EOF
+Error: '$MISSING_TOOL' not found in PATH. Install the musl cross toolchain or set MUSL_LINKER/MUSL_CXX/MUSL_AR.
 EOF
-    exit 1
-  fi
-
-  if ! command -v "$MUSL_AR" >/dev/null 2>&1; then
-    cat >&2 <<EOF
-Error: '$MUSL_AR' not found in PATH. Install the musl cross toolchain or set MUSL_AR.
-EOF
-    exit 1
+      exit 1
+    fi
   fi
 fi
 
@@ -179,9 +190,9 @@ update_vendor_binary() {
   echo "  updated $dest"
 }
 
+HOST_SRC="$REPO_ROOT/codex-rs/target/release/codex"
+
 if "$NEED_HOST"; then
-  HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
-  HOST_SRC="$REPO_ROOT/codex-rs/target/release/codex"
   HOST_DEST="$REPO_ROOT/codex-cli/vendor/$HOST_TRIPLE/codex/codex"
 
   if [[ -d "$(dirname "$HOST_DEST")" ]]; then
@@ -190,6 +201,13 @@ if "$NEED_HOST"; then
   else
     echo "==> Skipping host vendor update (directory missing for $HOST_TRIPLE)"
   fi
+fi
+
+if "$COPY_HOST_TO_MUSL"; then
+  MUSL_DEST="$REPO_ROOT/codex-cli/vendor/x86_64-unknown-linux-musl/codex/codex"
+  echo "==> Copying host binary to $MUSL_DEST (musl toolchain unavailable)"
+  mkdir -p "$(dirname "$MUSL_DEST")"
+  update_vendor_binary "$HOST_SRC" "$MUSL_DEST"
 fi
 
 if "$NEED_X86_MUSL"; then
