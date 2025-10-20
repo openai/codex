@@ -40,13 +40,78 @@ if [[ ! -f "${SOURCE_BIN}" ]]; then
 fi
 
 VENDOR_TARGET_DIR="${CODEX_CLI_DIR}/vendor/${HOST_TRIPLE}"
-CODex_VENDOR_DIR="${VENDOR_TARGET_DIR}/codex"
+CODEX_VENDOR_DIR="${VENDOR_TARGET_DIR}/codex"
 RG_VENDOR_DIR="${VENDOR_TARGET_DIR}/path"
-mkdir -p "${CODex_VENDOR_DIR}" "${RG_VENDOR_DIR}"
+mkdir -p "${CODEX_VENDOR_DIR}" "${RG_VENDOR_DIR}"
 
 echo "==> Installing codex binary into vendor/${HOST_TRIPLE}/codex/"
-cp "${SOURCE_BIN}" "${CODex_VENDOR_DIR}/${BIN_NAME}"
-chmod +x "${CODex_VENDOR_DIR}/${BIN_NAME}"
+cp "${SOURCE_BIN}" "${CODEX_VENDOR_DIR}/${BIN_NAME}"
+chmod +x "${CODEX_VENDOR_DIR}/${BIN_NAME}"
+
+LINUX_TARGET="x86_64-unknown-linux-musl"
+LINUX_VENDOR_DIR="${CODEX_CLI_DIR}/vendor/${LINUX_TARGET}/codex"
+LINUX_VENDOR_BIN="${LINUX_VENDOR_DIR}/codex"
+
+update_linux_binary() {
+  if [[ "${HOST_TRIPLE}" == *"windows"* ]]; then
+    echo "==> Skipping Linux binary build on Windows host"
+    return 0
+  fi
+
+  if ! rustup target list --installed | grep -q "^${LINUX_TARGET}$"; then
+    echo "error: rust target '${LINUX_TARGET}' not installed. Run 'rustup target add ${LINUX_TARGET}' first." >&2
+    exit 1
+  fi
+
+  mkdir -p "${LINUX_VENDOR_DIR}"
+
+  MUSL_LINKER="${MUSL_LINKER:-x86_64-linux-musl-gcc}"
+  MUSL_CXX="${MUSL_CXX:-x86_64-linux-musl-g++}"
+  MUSL_AR="${MUSL_AR:-x86_64-linux-musl-ar}"
+
+  if ! command -v "${MUSL_LINKER}" >/dev/null 2>&1; then
+    cat >&2 <<EOF
+error: '${MUSL_LINKER}' not found. Install the musl cross toolchain (e.g. 'brew install FiloSottile/musl-cross/musl-cross') or set MUSL_LINKER to the desired linker.
+EOF
+    exit 1
+  fi
+
+  if ! command -v "${MUSL_CXX}" >/dev/null 2>&1; then
+    cat >&2 <<EOF
+error: '${MUSL_CXX}' not found. Install the musl cross toolchain or set MUSL_CXX appropriately.
+EOF
+    exit 1
+  fi
+
+  if ! command -v "${MUSL_AR}" >/dev/null 2>&1; then
+    cat >&2 <<EOF
+error: '${MUSL_AR}' not found. Install the musl cross toolchain or set MUSL_AR appropriately.
+EOF
+    exit 1
+  fi
+
+  echo "==> Building codex CLI (${LINUX_TARGET} release)…"
+  (
+    cd "${CODEX_RS_DIR}"
+    CC_x86_64_unknown_linux_musl="${MUSL_LINKER}" \
+    CXX_x86_64_unknown_linux_musl="${MUSL_CXX}" \
+    AR_x86_64_unknown_linux_musl="${MUSL_AR}" \
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="${MUSL_LINKER}" \
+    cargo build -p codex-cli --release --target "${LINUX_TARGET}"
+  )
+
+  LINUX_SOURCE_BIN="${CODEX_RS_DIR}/target/${LINUX_TARGET}/release/codex"
+  if [[ ! -f "${LINUX_SOURCE_BIN}" ]]; then
+    echo "error: expected compiled binary at ${LINUX_SOURCE_BIN}" >&2
+    exit 1
+  fi
+
+  echo "==> Installing codex binary into vendor/${LINUX_TARGET}/codex/"
+  cp "${LINUX_SOURCE_BIN}" "${LINUX_VENDOR_BIN}"
+  chmod +x "${LINUX_VENDOR_BIN}"
+}
+
+update_linux_binary
 
 if ! command -v rg >/dev/null 2>&1; then
   echo "error: ripgrep (rg) not found on PATH. Install it (e.g. 'brew install ripgrep' or 'cargo install ripgrep') before running this script." >&2
