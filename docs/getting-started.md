@@ -47,9 +47,10 @@ codex "explain this codebase to me"
 codex --full-auto "create the fanciest todo-list app"
 ```
 
-That's it - Codex will scaffold a file, run it inside a sandbox, install any
-missing dependencies, and show you the live result. Approve the changes and
-they'll be committed to your working directory.
+This run behaves like any other Codex session; `--full-auto` simply pre-approves
+the relaxed workspace sandbox and approval policy so Codex can keep going
+without pausing for confirmations. You'll still review the plan, diff, and apply
+the changes yourself at the end.
 
 ### Example prompts
 
@@ -69,11 +70,10 @@ Looking to reuse your own instructions? Create slash commands with [custom promp
 
 ### Memory with AGENTS.md
 
-You can give Codex extra instructions and guidance using `AGENTS.md` files. Codex looks for `AGENTS.md` files in the following places, and merges them top-down:
+You can give Codex extra instructions and guidance using `AGENTS.md` files. Codex looks for them in the following places, and merges them top-down:
 
 1. `~/.codex/AGENTS.md` - personal global guidance
-2. `AGENTS.md` at repo root - shared project notes
-3. `AGENTS.md` in the current working directory - sub-folder/feature specifics
+2. Every directory from the repository root down to your current working directory (inclusive). In each directory, Codex first looks for `AGENTS.override.md` and uses it if present; otherwise it falls back to `AGENTS.md`. Use the override form when you want to replace inherited instructions for that directory.
 
 For more information on how to use AGENTS.md, see the [official AGENTS.md documentation](https://agents.md/).
 
