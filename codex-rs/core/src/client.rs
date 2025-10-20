@@ -635,7 +635,7 @@ fn parse_rate_limit_window(
     let used_percent: Option<f64> = parse_header_f64(headers, used_percent_header);
 
     used_percent.and_then(|used_percent| {
-        let window_minutes = parse_header_u64(headers, window_minutes_header);
+        let window_minutes = parse_header_i64(headers, window_minutes_header);
         let resets_at = parse_header_str(headers, resets_header)
             .map(str::trim)
             .filter(|value| !value.is_empty())
