@@ -14,12 +14,14 @@ use crate::ConversationId;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
+use crate::items::TurnItem;
 use crate::message_history::HistoryEntry;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::num_format::format_with_separators;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
+use crate::user_input::UserInput;
 use mcp_types::CallToolResult;
 use mcp_types::Resource as McpResource;
 use mcp_types::ResourceTemplate as McpResourceTemplate;
@@ -62,14 +64,14 @@ pub enum Op {
     /// Input from the user
     UserInput {
         /// User input items, see `InputItem`
-        items: Vec<InputItem>,
+        items: Vec<UserInput>,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
     /// for a turn of a [`crate::codex_conversation::CodexConversation`].
     UserTurn {
         /// User input items, see `InputItem`
-        items: Vec<InputItem>,
+        items: Vec<UserInput>,
 
         /// `cwd` to use with the [`SandboxPolicy`] and potentially tool calls
         /// such as `local_shell`.
@@ -403,28 +405,8 @@ impl SandboxPolicy {
     }
 }
 
-/// User input
-#[non_exhaustive]
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum InputItem {
-    Text {
-        text: String,
-    },
-    /// Pre‑encoded data: URI image.
-    Image {
-        image_url: String,
-    },
-
-    /// Local image path provided by the user.  This will be converted to an
-    /// `Image` variant (base64 data URL) during request serialization.
-    LocalImage {
-        path: std::path::PathBuf,
-    },
-}
-
 /// Event Queue Entry - events from agent
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Event {
     /// Submission `id` that this event is correlated with.
     pub id: String,
@@ -538,6 +520,23 @@ pub enum EventMsg {
 
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
+
+    ItemStarted(ItemStartedEvent),
+    ItemCompleted(ItemCompletedEvent),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct ItemStartedEvent {
+    pub thread_id: ConversationId,
+    pub turn_id: String,
+    pub item: TurnItem,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct ItemCompletedEvent {
+    pub thread_id: ConversationId,
+    pub turn_id: String,
+    pub item: TurnItem,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -645,13 +644,13 @@ pub struct TokenCountEvent {
     pub rate_limits: Option<RateLimitSnapshot>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct RateLimitWindow {
     /// Percentage (0-100) of the window that has been consumed.
     pub used_percent: f64,

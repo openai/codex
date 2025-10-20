@@ -14,6 +14,7 @@ use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnAbortReason;
@@ -182,6 +183,12 @@ client_request_definitions! {
     ExecOneOffCommand {
         params: ExecOneOffCommandParams,
         response: ExecOneOffCommandResponse,
+    },
+    #[serde(rename = "account/rateLimits/read")]
+    #[ts(rename = "account/rateLimits/read")]
+    GetAccountRateLimits {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: GetAccountRateLimitsResponse,
     },
 }
 
@@ -418,6 +425,12 @@ pub struct ExecOneOffCommandResponse {
     pub exit_code: i32,
     pub stdout: String,
     pub stderr: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAccountRateLimitsResponse {
+    pub rate_limits: RateLimitSnapshot,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -968,6 +981,22 @@ mod tests {
 
         let payload = ServerRequestPayload::ExecCommandApproval(params);
         assert_eq!(payload.request_with_id(RequestId::Integer(7)), request);
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_get_account_rate_limits() -> Result<()> {
+        let request = ClientRequest::GetAccountRateLimits {
+            request_id: RequestId::Integer(1),
+            params: None,
+        };
+        assert_eq!(
+            json!({
+                "method": "account/rateLimits/read",
+                "id": 1,
+            }),
+            serde_json::to_value(&request)?,
+        );
         Ok(())
     }
 }

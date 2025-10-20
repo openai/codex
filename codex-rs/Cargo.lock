@@ -182,7 +182,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "base64",
+ "chrono",
  "codex-app-server-protocol",
+ "codex-core",
  "serde",
  "serde_json",
  "tokio",
@@ -834,8 +837,10 @@ dependencies = [
  "app_test_support",
  "assert_cmd",
  "base64",
+ "chrono",
  "codex-app-server-protocol",
  "codex-arg0",
+ "codex-backend-client",
  "codex-common",
  "codex-core",
  "codex-file-search",
@@ -917,6 +922,8 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-backend-openapi-models",
+ "codex-core",
+ "codex-protocol",
  "pretty_assertions",
  "reqwest",
  "serde",
@@ -929,6 +936,7 @@ version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
+ "serde_with",
 ]
 
 [[package]]
@@ -1446,12 +1454,12 @@ dependencies = [
  "libc",
  "mcp-types",
  "opentelemetry-appender-tracing",
- "path-clean",
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",
  "rand 0.9.2",
  "ratatui",
+ "ratatui-macros",
  "regex-lite",
  "serde",
  "serde_json",
@@ -4278,12 +4286,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "path-clean"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17359afc20d7ab31fdb42bb844c8b3bb1dabd7dcf7e68428492da7f16966fcef"
-
-[[package]]
 name = "path-dedot"
 version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4774,6 +4776,15 @@ dependencies = [
  "unicode-segmentation",
  "unicode-truncate",
  "unicode-width 0.2.1",
+]
+
+[[package]]
+name = "ratatui-macros"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fef540f80dbe8a0773266fa6077788ceb65ef624cdbf36e131aaf90b4a52df4"
+dependencies = [
+ "ratatui",
 ]
 
 [[package]]

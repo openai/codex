@@ -20,9 +20,9 @@ use codex_core::config::Config;
 use codex_core::config::OPENAI_DEFAULT_MODEL;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -777,7 +777,7 @@ async fn start_test_conversation(
 async fn user_turn(conversation: &Arc<CodexConversation>, text: &str) {
     conversation
         .submit(Op::UserInput {
-            items: vec![InputItem::Text { text: text.into() }],
+            items: vec![UserInput::Text { text: text.into() }],
         })
         .await
         .expect("submit user turn");

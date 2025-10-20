@@ -1,17 +1,18 @@
 use std::io::BufRead;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use crate::AuthManager;
-use crate::auth::CodexAuth;
-use crate::error::ConnectionFailedError;
-use crate::error::ResponseStreamFailed;
-use crate::error::RetryLimitReachedError;
-use crate::error::UnexpectedResponseError;
 use bytes::Bytes;
+use chrono::DateTime;
+use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
+use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
+use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::ResponseItem;
 use eventsource_stream::Eventsource;
 use futures::prelude::*;
 use regex_lite::Regex;
@@ -27,6 +28,8 @@ use tracing::debug;
 use tracing::trace;
 use tracing::warn;
 
+use crate::AuthManager;
+use crate::auth::CodexAuth;
 use crate::chat_completions::AggregateStreamExt;
 use crate::chat_completions::stream_chat_completions;
 use crate::client_common::Prompt;
@@ -38,7 +41,11 @@ use crate::client_common::create_text_param_for_request;
 use crate::config::Config;
 use crate::default_client::create_client;
 use crate::error::CodexErr;
+use crate::error::ConnectionFailedError;
+use crate::error::ResponseStreamFailed;
 use crate::error::Result;
+use crate::error::RetryLimitReachedError;
+use crate::error::UnexpectedResponseError;
 use crate::error::UsageLimitReachedError;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_family::ModelFamily;
@@ -52,13 +59,6 @@ use crate::state::TaskKind;
 use crate::token_data::PlanType;
 use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::util::backoff;
-use chrono::DateTime;
-use chrono::Utc;
-use codex_otel::otel_event_manager::OtelEventManager;
-use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::models::ResponseItem;
-use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
 struct ErrorResponse {
@@ -628,13 +628,13 @@ fn parse_rate_limit_window(
     headers: &HeaderMap,
     used_percent_header: &str,
     window_minutes_header: &str,
-    resets_header: &str,
+    resets_at_header: &str,
 ) -> Option<RateLimitWindow> {
     let used_percent: Option<f64> = parse_header_f64(headers, used_percent_header);
 
     used_percent.and_then(|used_percent| {
         let window_minutes = parse_header_i64(headers, window_minutes_header);
-        let resets_at = parse_header_i64(headers, resets_header);
+        let resets_at = parse_header_i64(headers, resets_at_header);
 
         let has_data = used_percent != 0.0
             || window_minutes.is_some_and(|minutes| minutes != 0)

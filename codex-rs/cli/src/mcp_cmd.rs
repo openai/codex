@@ -253,6 +253,8 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         enabled: true,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
+        enabled_tools: None,
+        disabled_tools: None,
     };
 
     servers.insert(name.clone(), new_entry);
@@ -676,6 +678,8 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
             "name": get_args.name,
             "enabled": server.enabled,
             "transport": transport,
+            "enabled_tools": server.enabled_tools.clone(),
+            "disabled_tools": server.disabled_tools.clone(),
             "startup_timeout_sec": server
                 .startup_timeout_sec
                 .map(|timeout| timeout.as_secs_f64()),
@@ -687,8 +691,28 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
         return Ok(());
     }
 
+    if !server.enabled {
+        println!("{} (disabled)", get_args.name);
+        return Ok(());
+    }
+
     println!("{}", get_args.name);
     println!("  enabled: {}", server.enabled);
+    let format_tool_list = |tools: &Option<Vec<String>>| -> String {
+        match tools {
+            Some(list) if list.is_empty() => "[]".to_string(),
+            Some(list) => list.join(", "),
+            None => "-".to_string(),
+        }
+    };
+    if server.enabled_tools.is_some() {
+        let enabled_tools_display = format_tool_list(&server.enabled_tools);
+        println!("  enabled_tools: {enabled_tools_display}");
+    }
+    if server.disabled_tools.is_some() {
+        let disabled_tools_display = format_tool_list(&server.disabled_tools);
+        println!("  disabled_tools: {disabled_tools_display}");
+    }
     match &server.transport {
         McpServerTransportConfig::Stdio {
             command,

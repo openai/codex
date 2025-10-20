@@ -29,7 +29,7 @@ ts-rs = { workspace = true, features = [
     "serde-json-impl",
     "no-serde-warnings",
 ] }
-uuid = { workspace = true, features = ["serde", "v7"] }
+uuid = { workspace = true, features = ["serde", "v7", "v4"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }

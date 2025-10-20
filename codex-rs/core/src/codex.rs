@@ -12,12 +12,15 @@ use crate::function_tool::FunctionCallError;
 use crate::mcp::auth::McpAuthStatusEntry;
 use crate::parse_command::parse_command;
 use crate::review_format::format_review_findings_block;
+use crate::state::ItemCollector;
 use crate::terminal;
 use crate::user_notification::UserNotifier;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
 use codex_protocol::ConversationId;
+use codex_protocol::items::TurnItem;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::protocol::ConversationPathResponseEvent;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ReviewRequest;
@@ -79,7 +82,6 @@ use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
-use crate::protocol::InputItem;
 use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
 use crate::protocol::RateLimitSnapshot;
@@ -124,6 +126,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::user_input::UserInput;
 
 pub mod compact;
 use self::compact::build_compacted_history;
@@ -266,6 +269,7 @@ pub(crate) struct TurnContext {
     pub(crate) is_review_mode: bool,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
+    pub(crate) item_collector: ItemCollector,
 }
 
 impl TurnContext {
@@ -354,6 +358,7 @@ impl Session {
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
         conversation_id: ConversationId,
+        tx_event: Sender<Event>,
     ) -> TurnContext {
         let config = session_configuration.original_config_do_not_use.clone();
         let model_family = find_family_for_model(&session_configuration.model)
@@ -399,6 +404,7 @@ impl Session {
             is_review_mode: false,
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+            item_collector: ItemCollector::new(tx_event, conversation_id, "turn_id".to_string()),
         }
     }
 
@@ -645,6 +651,7 @@ impl Session {
             session_configuration.provider.clone(),
             &session_configuration,
             self.conversation_id,
+            self.get_tx_event(),
         );
         if let Some(final_schema) = updates.final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
@@ -975,7 +982,7 @@ impl Session {
     }
 
     /// Returns the input if there was no task running to inject into
-    pub async fn inject_input(&self, input: Vec<InputItem>) -> Result<(), Vec<InputItem>> {
+    pub async fn inject_input(&self, input: Vec<UserInput>) -> Result<(), Vec<UserInput>> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
@@ -1146,6 +1153,11 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         }
                     }
 
+                    current_context
+                        .item_collector
+                        .started_completed(TurnItem::UserMessage(UserMessageItem::new(&items)))
+                        .await;
+
                     sess.spawn_task(Arc::clone(&current_context), sub.id, items, RegularTask)
                         .await;
                     previous_context = Some(current_context);
@@ -1261,7 +1273,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 let turn_context = sess.new_turn(SessionSettingsUpdate::default()).await;
                 // Attempt to inject input into current task
                 if let Err(items) = sess
-                    .inject_input(vec![InputItem::Text {
+                    .inject_input(vec![UserInput::Text {
                         text: compact::SUMMARIZATION_PROMPT.to_string(),
                     }])
                     .await
@@ -1415,10 +1427,15 @@ async fn spawn_review_thread(
         is_review_mode: true,
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
+        item_collector: ItemCollector::new(
+            sess.get_tx_event(),
+            sess.conversation_id,
+            sub_id.to_string(),
+        ),
     };
 
     // Seed the child task with the review prompt as the initial user message.
-    let input: Vec<InputItem> = vec![InputItem::Text {
+    let input: Vec<UserInput> = vec![UserInput::Text {
         text: review_prompt,
     }];
     let tc = Arc::new(review_turn_context);
@@ -1456,7 +1473,7 @@ pub(crate) async fn run_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     sub_id: String,
-    input: Vec<InputItem>,
+    input: Vec<UserInput>,
     task_kind: TaskKind,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
@@ -2651,6 +2668,15 @@ mod tests {
             tool_approvals: Mutex::new(ApprovalStore::default()),
         };
 
+        let turn_context = Session::make_turn_context(
+            Some(Arc::clone(&auth_manager)),
+            &otel_event_manager,
+            session_configuration.provider.clone(),
+            &session_configuration,
+            conversation_id,
+            tx_event.clone(),
+        );
+
         let session = Session {
             conversation_id,
             tx_event,
@@ -2660,13 +2686,6 @@ mod tests {
             next_internal_sub_id: AtomicU64::new(0),
         };
 
-        let turn_context = Session::make_turn_context(
-            Some(Arc::clone(&auth_manager)),
-            &otel_event_manager,
-            session_configuration.provider.clone(),
-            &session_configuration,
-            conversation_id,
-        );
         (session, turn_context)
     }
 
@@ -2717,6 +2736,15 @@ mod tests {
             tool_approvals: Mutex::new(ApprovalStore::default()),
         };
 
+        let turn_context = Arc::new(Session::make_turn_context(
+            Some(Arc::clone(&auth_manager)),
+            &otel_event_manager,
+            session_configuration.provider.clone(),
+            &session_configuration,
+            conversation_id,
+            tx_event.clone(),
+        ));
+
         let session = Arc::new(Session {
             conversation_id,
             tx_event,
@@ -2726,13 +2754,6 @@ mod tests {
             next_internal_sub_id: AtomicU64::new(0),
         });
 
-        let turn_context = Arc::new(Session::make_turn_context(
-            Some(Arc::clone(&auth_manager)),
-            &otel_event_manager,
-            session_configuration.provider.clone(),
-            &session_configuration,
-            conversation_id,
-        ));
         (session, turn_context, rx_event)
     }
 
@@ -2753,7 +2774,7 @@ mod tests {
             _session: Arc<SessionTaskContext>,
             _ctx: Arc<TurnContext>,
             _sub_id: String,
-            _input: Vec<InputItem>,
+            _input: Vec<UserInput>,
             cancellation_token: CancellationToken,
         ) -> Option<String> {
             if self.listen_to_cancellation_token {
@@ -2777,7 +2798,7 @@ mod tests {
     async fn abort_regular_task_emits_turn_aborted_only() {
         let (sess, tc, rx) = make_session_and_context_with_rx();
         let sub_id = "sub-regular".to_string();
-        let input = vec![InputItem::Text {
+        let input = vec![UserInput::Text {
             text: "hello".to_string(),
         }];
         sess.spawn_task(
@@ -2808,7 +2829,7 @@ mod tests {
     async fn abort_gracefuly_emits_turn_aborted_only() {
         let (sess, tc, rx) = make_session_and_context_with_rx();
         let sub_id = "sub-regular".to_string();
-        let input = vec![InputItem::Text {
+        let input = vec![UserInput::Text {
             text: "hello".to_string(),
         }];
         sess.spawn_task(
@@ -2836,7 +2857,7 @@ mod tests {
     async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
         let (sess, tc, rx) = make_session_and_context_with_rx();
         let sub_id = "sub-review".to_string();
-        let input = vec![InputItem::Text {
+        let input = vec![UserInput::Text {
             text: "start review".to_string(),
         }];
         sess.spawn_task(
