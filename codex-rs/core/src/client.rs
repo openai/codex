@@ -110,12 +110,12 @@ impl ModelClient {
         }
     }
 
-    pub fn get_model_context_window(&self) -> Option<u64> {
-        let pct: i64 = self.config.model_family.effective_context_window_percent as i64;
+    pub fn get_model_context_window(&self) -> Option<i64> {
+        let pct = self.config.model_family.effective_context_window_percent;
         self.config
             .model_context_window
             .or_else(|| get_model_info(&self.config.model_family).map(|info| info.context_window))
-            .map(|w| ((w as i64 * pct) / 100) as u64)
+            .map(|w| ((w as i64 * pct) / 100) as i64)
     }
 
     pub fn get_auto_compact_token_limit(&self) -> Option<i64> {

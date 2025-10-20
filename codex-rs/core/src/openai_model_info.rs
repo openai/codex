@@ -1,8 +1,8 @@
 use crate::model_family::ModelFamily;
 
 // Shared constants for commonly used window/token sizes.
-pub(crate) const CONTEXT_WINDOW_272K: u64 = 272_000;
-pub(crate) const MAX_OUTPUT_TOKENS_128K: u64 = 128_000;
+pub(crate) const CONTEXT_WINDOW_272K: i64 = 272_000;
+pub(crate) const MAX_OUTPUT_TOKENS_128K: i64 = 128_000;
 
 /// Metadata about a model, particularly OpenAI models.
 /// We may want to consider including details like the pricing for
@@ -27,12 +27,12 @@ impl ModelInfo {
         Self {
             context_window,
             max_output_tokens,
-            auto_compact_token_limit: Some(Self::default_auto_compact_limit(context_window)),
+            auto_compact_token_limit: Some(Self::default_auto_compact_limit(context_window as i64)),
         }
     }
 
-    const fn default_auto_compact_limit(context_window: u64) -> i64 {
-        (context_window as i64 * 9) / 10
+    const fn default_auto_compact_limit(context_window: i64) -> i64 {
+        (context_window * 9) / 10
     }
 }
 

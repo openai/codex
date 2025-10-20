@@ -53,7 +53,7 @@ pub struct ModelFamily {
     /// reserving headroom for system prompts, tool overhead, and model output.
     /// This is applied when computing the effective context window seen by
     /// consumers.
-    pub effective_context_window_percent: u8,
+    pub effective_context_window_percent: i64,
 }
 
 macro_rules! model_family {

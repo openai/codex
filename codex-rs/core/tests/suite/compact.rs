@@ -19,6 +19,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -886,16 +887,12 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     ]);
     let post_auto_compact_turn = sse(vec![ev_completed_with_tokens("r4", 10)]);
 
-    let request_log = mount_sse_sequence(
-        &server,
-        vec![
-            first_turn,
-            function_call_follow_up,
-            auto_compact_turn,
-            post_auto_compact_turn,
-        ],
-    )
-    .await;
+    // Mount responses in order and keep mocks only for the ones we assert on.
+    let first_turn_mock = mount_sse_once(&server, first_turn).await;
+    let follow_up_mock = mount_sse_once(&server, function_call_follow_up).await;
+    let auto_compact_mock = mount_sse_once(&server, auto_compact_turn).await;
+    // We don't assert on the post-compact request, so no need to keep its mock.
+    mount_sse_once(&server, post_auto_compact_turn).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -925,14 +922,8 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
 
     wait_for_event(&codex, |msg| matches!(msg, EventMsg::TaskComplete(_))).await;
 
-    let requests = request_log.requests();
-    assert_eq!(
-        requests.len(),
-        4,
-        "expected user request, function call follow-up, auto compact, and post-compact requests"
-    );
-
-    let first_request = requests[0].input();
+    // Assert first request captured expected user message that triggers function call.
+    let first_request = first_turn_mock.single_request().input();
     assert!(
         first_request.iter().any(|item| {
             item.get("type").and_then(|value| value.as_str()) == Some("message")
@@ -947,7 +938,9 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
         "first request should include the user message that triggers the function call"
     );
 
-    let function_call_output = requests[1].function_call_output(DUMMY_CALL_ID);
+    let function_call_output = follow_up_mock
+        .single_request()
+        .function_call_output(DUMMY_CALL_ID);
     let output_text = function_call_output
         .get("output")
         .and_then(|value| value.as_str())
@@ -957,7 +950,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
         "function call output should be sent before auto compact"
     );
 
-    let auto_compact_body = requests[2].body_json().to_string();
+    let auto_compact_body = auto_compact_mock.single_request().body_json().to_string();
     assert!(
         auto_compact_body.contains("You have exceeded the maximum number of tokens"),
         "auto compact request should include the summarization prompt after exceeding 95% (limit {limit})"

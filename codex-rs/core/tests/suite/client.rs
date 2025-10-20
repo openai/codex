@@ -985,7 +985,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    const EFFECTIVE_CONTEXT_WINDOW: u64 = (272_000 * 95) / 100;
+    const EFFECTIVE_CONTEXT_WINDOW: i64 = (272_000 * 95) / 100;
 
     responses::mount_sse_once_match(
         &server,
