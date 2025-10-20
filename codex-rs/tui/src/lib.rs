@@ -3,6 +3,7 @@
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 #![deny(clippy::disallowed_methods)]
+use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
 use codex_app_server_protocol::AuthMode;
@@ -27,6 +28,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
 
+mod additional_dirs;
 mod app;
 mod app_backtrack;
 mod app_event;
@@ -193,6 +195,14 @@ pub async fn run_main(
     };
 
     let config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
+
+    if let Some(warning) = add_dir_warning_message(&cli.add_dir, &config.sandbox_policy) {
+        #[allow(clippy::print_stderr)]
+        {
+            eprintln!("Error adding directories: {warning}");
+            std::process::exit(1);
+        }
+    }
 
     #[allow(clippy::print_stderr)]
     if let Err(err) = enforce_login_restrictions(&config).await {

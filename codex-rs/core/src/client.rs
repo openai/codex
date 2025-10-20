@@ -112,10 +112,12 @@ impl ModelClient {
         }
     }
 
-    pub fn get_model_context_window(&self) -> Option<u64> {
+    pub fn get_model_context_window(&self) -> Option<i64> {
+        let pct = self.config.model_family.effective_context_window_percent;
         self.config
             .model_context_window
             .or_else(|| get_model_info(&self.config.model_family).map(|info| info.context_window))
+            .map(|w| w.saturating_mul(pct) / 100)
     }
 
     pub fn get_auto_compact_token_limit(&self) -> Option<i64> {
@@ -544,11 +546,11 @@ struct ResponseCompleted {
 
 #[derive(Debug, Deserialize)]
 struct ResponseCompletedUsage {
-    input_tokens: u64,
+    input_tokens: i64,
     input_tokens_details: Option<ResponseCompletedInputTokensDetails>,
-    output_tokens: u64,
+    output_tokens: i64,
     output_tokens_details: Option<ResponseCompletedOutputTokensDetails>,
-    total_tokens: u64,
+    total_tokens: i64,
 }
 
 impl From<ResponseCompletedUsage> for TokenUsage {
@@ -571,12 +573,12 @@ impl From<ResponseCompletedUsage> for TokenUsage {
 
 #[derive(Debug, Deserialize)]
 struct ResponseCompletedInputTokensDetails {
-    cached_tokens: u64,
+    cached_tokens: i64,
 }
 
 #[derive(Debug, Deserialize)]
 struct ResponseCompletedOutputTokensDetails {
-    reasoning_tokens: u64,
+    reasoning_tokens: i64,
 }
 
 fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
@@ -633,7 +635,7 @@ fn parse_rate_limit_window(
     let used_percent: Option<f64> = parse_header_f64(headers, used_percent_header);
 
     used_percent.and_then(|used_percent| {
-        let window_minutes = parse_header_u64(headers, window_minutes_header);
+        let window_minutes = parse_header_i64(headers, window_minutes_header);
         let resets_at = parse_header_str(headers, resets_header)
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -658,8 +660,8 @@ fn parse_header_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
         .filter(|v| v.is_finite())
 }
 
-fn parse_header_u64(headers: &HeaderMap, name: &str) -> Option<u64> {
-    parse_header_str(headers, name)?.parse::<u64>().ok()
+fn parse_header_i64(headers: &HeaderMap, name: &str) -> Option<i64> {
+    parse_header_str(headers, name)?.parse::<i64>().ok()
 }
 
 fn parse_header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {

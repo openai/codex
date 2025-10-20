@@ -57,11 +57,11 @@ pub struct TurnFailedEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
 pub struct Usage {
     /// The number of input tokens used during the turn.
-    pub input_tokens: u64,
+    pub input_tokens: i64,
     /// The number of cached input tokens used during the turn.
-    pub cached_input_tokens: u64,
+    pub cached_input_tokens: i64,
     /// The number of output tokens used during the turn.
-    pub output_tokens: u64,
+    pub output_tokens: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
