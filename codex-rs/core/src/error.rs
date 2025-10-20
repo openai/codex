@@ -421,16 +421,24 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     fn rate_limit_snapshot() -> RateLimitSnapshot {
+        let primary_reset_at = Utc
+            .with_ymd_and_hms(2024, 1, 1, 1, 0, 0)
+            .unwrap()
+            .timestamp();
+        let secondary_reset_at = Utc
+            .with_ymd_and_hms(2024, 1, 1, 2, 0, 0)
+            .unwrap()
+            .timestamp();
         RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 50.0,
                 window_minutes: Some(60),
-                resets_at: Some("2024-01-01T01:00:00Z".to_string()),
+                resets_at: Some(primary_reset_at),
             }),
             secondary: Some(RateLimitWindow {
                 used_percent: 30.0,
                 window_minutes: Some(120),
-                resets_at: Some("2024-01-01T02:00:00Z".to_string()),
+                resets_at: Some(secondary_reset_at),
             }),
         }
     }

@@ -644,9 +644,9 @@ pub struct RateLimitWindow {
     /// Rolling window duration, in minutes.
     #[ts(type = "number | null")]
     pub window_minutes: Option<i64>,
-    /// Timestamp (RFC3339) when the window resets.
-    #[ts(type = "string | null")]
-    pub resets_at: Option<String>,
+    /// Unix timestamp (seconds since epoch) when the window resets.
+    #[ts(type = "number | null")]
+    pub resets_at: Option<i64>,
 }
 
 // Includes prompts, tools and space to call compact.
