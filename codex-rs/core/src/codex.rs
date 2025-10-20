@@ -643,8 +643,12 @@ impl Session {
     }
 
     pub(crate) async fn new_turn(&self, updates: SessionSettingsUpdate) -> Arc<TurnContext> {
-        let current_configuration = self.state.lock().await.session_configuration.clone();
-        let session_configuration = current_configuration.apply(&updates);
+        let session_configuration = {
+            let mut state = self.state.lock().await;
+            let session_configuration = state.session_configuration.clone().apply(&updates);
+            state.session_configuration = session_configuration.clone();
+            session_configuration
+        };
 
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),

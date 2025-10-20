@@ -6,6 +6,7 @@
 
 use crate::codex::Session;
 use crate::error::CodexErr;
+use crate::protocol::SandboxPolicy;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxTransformError;
@@ -88,6 +89,24 @@ pub(crate) trait Approvable<Req> {
 
     fn should_bypass_approval(&self, policy: AskForApproval) -> bool {
         matches!(policy, AskForApproval::Never)
+    }
+
+    /// Decide whether an initial user approval should be requested before the
+    /// first attempt. Defaults to the orchestrator's behavior (pre‑refactor):
+    /// - Never, OnFailure: do not ask
+    /// - OnRequest: ask unless sandbox policy is DangerFullAccess
+    /// - UnlessTrusted: always ask
+    fn wants_initial_approval(
+        &self,
+        _req: &Req,
+        policy: AskForApproval,
+        sandbox_policy: &SandboxPolicy,
+    ) -> bool {
+        match policy {
+            AskForApproval::Never | AskForApproval::OnFailure => false,
+            AskForApproval::OnRequest => !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess),
+            AskForApproval::UnlessTrusted => true,
+        }
     }
 
     fn start_approval_async<'a>(

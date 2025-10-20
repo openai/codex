@@ -4,7 +4,10 @@ Runtime: shell
 Executes shell requests under the orchestrator: asks for approval when needed,
 builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
+use crate::command_safety::is_dangerous_command::command_might_be_dangerous;
+use crate::command_safety::is_safe_command::is_known_safe_command;
 use crate::exec::ExecToolCallOutput;
+use crate::protocol::SandboxPolicy;
 use crate::sandboxing::execute_env;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::Approvable;
@@ -16,6 +19,7 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
@@ -97,6 +101,25 @@ impl Approvable<ShellRequest> for ShellRuntime {
             })
             .await
         })
+    }
+
+    fn wants_initial_approval(
+        &self,
+        req: &ShellRequest,
+        policy: AskForApproval,
+        sandbox_policy: &SandboxPolicy,
+    ) -> bool {
+        match policy {
+            AskForApproval::Never | AskForApproval::OnFailure => false,
+            AskForApproval::OnRequest => {
+                if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
+                    command_might_be_dangerous(&req.command)
+                } else {
+                    true
+                }
+            }
+            AskForApproval::UnlessTrusted => !is_known_safe_command(&req.command),
+        }
     }
 }
 

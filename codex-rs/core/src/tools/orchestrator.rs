@@ -47,19 +47,8 @@ impl ToolOrchestrator {
         let otel_cfg = codex_otel::otel_event_manager::ToolDecisionSource::Config;
 
         // 1) Approval
-        // Policy semantics for initial attempt:
-        // - Never: bypass approval entirely (auto-approved by config)
-        // - OnFailure: bypass initial approval; ask only on sandbox denial before escalation
-        // - OnRequest: require approval unless sandbox policy auto-approves (DangerFullAccess)
-        // - UnlessTrusted: require approval up-front
-        let needs_initial_approval = match approval_policy {
-            AskForApproval::Never | AskForApproval::OnFailure => false,
-            AskForApproval::OnRequest => !matches!(
-                turn_ctx.sandbox_policy,
-                crate::protocol::SandboxPolicy::DangerFullAccess
-            ),
-            AskForApproval::UnlessTrusted => true,
-        };
+        let needs_initial_approval =
+            tool.wants_initial_approval(req, approval_policy, &turn_ctx.sandbox_policy);
 
         if needs_initial_approval {
             let approval_ctx = ApprovalCtx {
