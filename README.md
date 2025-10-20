@@ -70,7 +70,7 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
 
 ### Built-in session tools
 
-- ` /checkpoint save <name>` stores a workspace snapshot in `.codex/checkpoints/`. Enabling ` /checkpoint auto` now writes to a single daily file named `YYYY-MM-DD-<session_id>.md`, appending only the latest user prompts, Codex replies, and plan updates so you can skim a turn-by-turn log without a directory full of files.
+- ` /checkpoint save <name>` stores a workspace snapshot in `.codex/checkpoints/`. Enabling ` /checkpoint auto` now writes to a single session file named `<session_id>.md`, appending only the latest user prompts, Codex replies, and plan updates so you can skim a turn-by-turn log without a directory full of files.
 - ` /todo add`, ` /todo list`, and ` /todo complete <number>` keep a shared checklist inside the transcript. With ` /todo auto` turned on Codex automatically prepends the current TODO list to its next prompt, and will mark items completed when `/todo complete` (or a plan update) resolves them.
 - ` /alias add <name>` opens an editor for saving reusable prompts. Invoke them later with `//name`, list them with ` /alias list`, or remove them with ` /alias remove <name>`.
 - ` /commit` summarizes tracked changes and creates a git commit. Enable auto-commits with ` /commit auto` to have Codex commit after each response; disable with ` /commit auto off`.

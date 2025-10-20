@@ -276,7 +276,7 @@ impl CustomPromptView {
                 lines.extend(
                     wrapped_segments
                         .into_iter()
-                        .map(|segment| segment.into_owned()),
+                        .map(std::borrow::Cow::into_owned),
                 );
             }
         }

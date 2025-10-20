@@ -42,7 +42,7 @@ Codex also updates TODO items whenever it emits plan updates (for example, from 
 
 ### Automatic checkpoints
 
-`/checkpoint save <name>` still writes a one-off Markdown snapshot, but `/checkpoint auto` now accumulates the entire session inside a single file named `YYYY-MM-DD-<session_id>.md` under `.codex/checkpoints/`. Each turn appends a new “Auto Update” section containing:
+`/checkpoint save <name>` still writes a one-off Markdown snapshot, but `/checkpoint auto` now accumulates the entire session inside a single file named `<session_id>.md` under `.codex/checkpoints/`. Each turn appends a new “Auto Update” section containing:
 
 - Any new user prompts
 - Codex’s latest responses

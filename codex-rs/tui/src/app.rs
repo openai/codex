@@ -389,6 +389,12 @@ impl App {
                 self.handle_commit_action(action).await;
             }
             AppEvent::SetCheckpointAutomation { enabled } => {
+                if enabled && let Err(err) = self.ensure_checkpoint_dir() {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to enable automatic checkpoints: {err:#}"
+                    ));
+                    return Ok(true);
+                }
                 self.auto_checkpoint_state = None;
                 let previous = self.auto_checkpoint_enabled;
                 self.auto_checkpoint_enabled = enabled;
@@ -400,9 +406,9 @@ impl App {
                         "Automatic checkpoints enabled."
                     };
                     let hint = if previous {
-                        Some("Checkpoints continue to save after each Codex response using names like YYYY-MM-DD-abc123.".to_string())
+                        Some("Checkpoints continue to save after each Codex response using names like abc123.".to_string())
                     } else {
-                        Some("A checkpoint will be saved after each Codex response using names like YYYY-MM-DD-abc123.".to_string())
+                        Some("A checkpoint will be saved after each Codex response using names like abc123.".to_string())
                     };
                     self.chat_widget.add_info_message(message.to_string(), hint);
                 } else {
@@ -1050,8 +1056,16 @@ impl App {
 
         let sanitized_session = Self::sanitize_session_id(&session_id);
         let date = Utc::now().format("%Y-%m-%d").to_string();
-        let file_name = format!("{date}-{sanitized_session}.md");
-        let path = self.checkpoint_dir().join(file_name);
+        let file_name = format!("{sanitized_session}.md");
+        let dir = match self.ensure_checkpoint_dir() {
+            Ok(dir) => dir,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to update auto checkpoint: {err:#}"));
+                return;
+            }
+        };
+        let path = dir.join(file_name);
 
         match self.append_auto_checkpoint(&path, &session_id, &date, context) {
             Ok(true) => {
@@ -1292,9 +1306,7 @@ impl App {
 
     fn create_checkpoint(&self, name: Option<String>) -> Result<(String, PathBuf)> {
         let chosen_name = self.choose_checkpoint_name(name);
-        let dir = self.checkpoint_dir();
-        fs::create_dir_all(&dir)
-            .wrap_err_with(|| format!("failed to create checkpoint directory {}", dir.display()))?;
+        let dir = self.ensure_checkpoint_dir()?;
         let file_path = dir.join(format!("{chosen_name}.md"));
         let contents = self.build_checkpoint_markdown(&chosen_name);
         fs::write(&file_path, contents)
@@ -1304,6 +1316,13 @@ impl App {
 
     fn checkpoint_dir(&self) -> PathBuf {
         self.config.cwd.join(".codex").join("checkpoints")
+    }
+
+    fn ensure_checkpoint_dir(&self) -> Result<PathBuf> {
+        let dir = self.checkpoint_dir();
+        fs::create_dir_all(&dir)
+            .wrap_err_with(|| format!("failed to create checkpoint directory {}", dir.display()))?;
+        Ok(dir)
     }
 
     fn choose_checkpoint_name(&self, provided: Option<String>) -> String {
@@ -1680,9 +1699,11 @@ mod tests {
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_protocol::ConversationId;
     use ratatui::prelude::Line;
+    use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+    use tempfile::tempdir;
 
     fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender();
@@ -1756,6 +1777,75 @@ mod tests {
                 .chars()
                 .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit()),
             "hash suffix should be base36 but was '{suffix}'"
+        );
+    }
+
+    #[test]
+    fn auto_checkpoint_creates_directory_when_missing() {
+        let mut app = make_test_app();
+        let tmp = tempdir().expect("temp dir");
+        app.config.cwd = tmp.path().to_path_buf();
+        app.auto_checkpoint_enabled = true;
+        let context = CheckpointContext {
+            user_prompts: vec!["first prompt".to_string()],
+            agent_responses: vec!["assistant reply".to_string()],
+            plan_updates: Vec::new(),
+        };
+        let date = "2025-10-18";
+        let session_id = "test-session";
+        let file_path = app.checkpoint_dir().join(format!(
+            "{date}-{}.md",
+            App::sanitize_session_id(session_id)
+        ));
+        assert!(
+            !file_path.exists(),
+            "checkpoint file should not exist before append"
+        );
+
+        let appended = app
+            .append_auto_checkpoint(&file_path, session_id, date, context)
+            .expect("append succeeds");
+        assert!(appended, "append should write new content");
+        assert!(
+            file_path.exists(),
+            "auto checkpoint file should be created even when directory was missing"
+        );
+        let contents = fs::read_to_string(&file_path).expect("read checkpoint");
+        assert!(
+            contents.contains("User Prompt 1"),
+            "checkpoint should include user prompt section"
+        );
+        assert!(
+            contents.contains("Assistant Response 1"),
+            "checkpoint should include agent response section"
+        );
+    }
+
+    #[test]
+    fn handle_auto_checkpoint_save_initializes_missing_directory() {
+        let mut app = make_test_app();
+        let tmp = tempdir().expect("temp dir");
+        app.config.cwd = tmp.path().to_path_buf();
+        app.auto_checkpoint_enabled = true;
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "What is the status?".to_string(),
+            }),
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("All tasks complete.")],
+                true,
+            )),
+        ];
+
+        app.handle_auto_checkpoint_save();
+
+        let entries = fs::read_dir(app.checkpoint_dir())
+            .expect("auto checkpoint directory should be created")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("dir listing");
+        assert!(
+            !entries.is_empty(),
+            "auto checkpoint save should write at least one file"
         );
     }
 
