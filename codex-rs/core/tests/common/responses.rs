@@ -138,7 +138,7 @@ pub fn ev_response_created(id: &str) -> Value {
     })
 }
 
-pub fn ev_completed_with_tokens(id: &str, total_tokens: u64) -> Value {
+pub fn ev_completed_with_tokens(id: &str, total_tokens: i64) -> Value {
     serde_json::json!({
         "type": "response.completed",
         "response": {

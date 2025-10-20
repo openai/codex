@@ -6,10 +6,10 @@ use anyhow::Result;
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -118,7 +118,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "run unified exec".into(),
             }],
             final_output_json_schema: None,
@@ -254,7 +254,7 @@ PY
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "exercise lag handling".into(),
             }],
             final_output_json_schema: None,
@@ -360,7 +360,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "check timeout".into(),
             }],
             final_output_json_schema: None,

@@ -48,7 +48,7 @@ impl SessionState {
     pub(crate) fn update_token_info_from_usage(
         &mut self,
         usage: &TokenUsage,
-        model_context_window: Option<u64>,
+        model_context_window: Option<i64>,
     ) {
         self.token_info = TokenUsageInfo::new_or_append(
             &self.token_info,
@@ -67,7 +67,7 @@ impl SessionState {
         (self.token_info.clone(), self.latest_rate_limits.clone())
     }
 
-    pub(crate) fn set_token_usage_full(&mut self, context_window: u64) {
+    pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
         match &mut self.token_info {
             Some(info) => info.fill_to_context_window(context_window),
             None => {

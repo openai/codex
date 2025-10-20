@@ -9,13 +9,13 @@ use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
+use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::skip_if_no_network;
@@ -115,7 +115,7 @@ async fn codex_mini_latest_tools() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
         })
@@ -125,7 +125,7 @@ async fn codex_mini_latest_tools() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
         })
@@ -199,7 +199,7 @@ async fn prompt_tools_are_consistent_across_requests() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
         })
@@ -209,7 +209,7 @@ async fn prompt_tools_are_consistent_across_requests() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
         })
@@ -319,7 +319,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
         })
@@ -329,7 +329,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
         })
@@ -439,7 +439,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
     // First turn
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
         })
@@ -468,7 +468,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
     // Second turn after overrides
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
         })
@@ -567,7 +567,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() {
     // First turn
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
         })
@@ -580,7 +580,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() {
     let writable = TempDir::new().unwrap();
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
             cwd: new_cwd.path().to_path_buf(),
@@ -696,7 +696,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
             cwd: default_cwd.clone(),
@@ -713,7 +713,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
             cwd: default_cwd.clone(),
@@ -810,7 +810,7 @@ async fn send_user_turn_with_changes_sends_environment_context() {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
             cwd: default_cwd.clone(),
@@ -827,7 +827,7 @@ async fn send_user_turn_with_changes_sends_environment_context() {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
             cwd: default_cwd.clone(),

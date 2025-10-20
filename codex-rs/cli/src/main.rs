@@ -19,7 +19,7 @@ use codex_exec::Cli as ExecCli;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
-use codex_tui::UpdateAction;
+use codex_tui::updates::UpdateAction;
 use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use supports_color::Stream;
@@ -104,6 +104,10 @@ enum Subcommand {
     /// Internal: run the responses API proxy.
     #[clap(hide = true)]
     ResponsesApiProxy(ResponsesApiProxyArgs),
+
+    /// Internal: relay stdio to a Unix domain socket.
+    #[clap(hide = true, name = "stdio-to-uds")]
+    StdioToUds(StdioToUdsCommand),
 
     /// Inspect feature flags.
     Features(FeaturesCli),
@@ -204,6 +208,13 @@ struct GenerateTsCommand {
     /// Optional path to the Prettier executable to format generated files
     #[arg(short = 'p', long = "prettier", value_name = "PRETTIER_BIN")]
     prettier: Option<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct StdioToUdsCommand {
+    /// Path to the Unix domain socket to connect to.
+    #[arg(value_name = "SOCKET_PATH")]
+    socket_path: PathBuf,
 }
 
 fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
@@ -461,6 +472,11 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::ResponsesApiProxy(args)) => {
             tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
+                .await??;
+        }
+        Some(Subcommand::StdioToUds(cmd)) => {
+            let socket_path = cmd.socket_path;
+            tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
         }
         Some(Subcommand::GenerateTs(gen_cli)) => {

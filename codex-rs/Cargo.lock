@@ -182,7 +182,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "base64",
+ "chrono",
  "codex-app-server-protocol",
+ "codex-core",
  "serde",
  "serde_json",
  "tokio",
@@ -834,8 +837,10 @@ dependencies = [
  "app_test_support",
  "assert_cmd",
  "base64",
+ "chrono",
  "codex-app-server-protocol",
  "codex-arg0",
+ "codex-backend-client",
  "codex-common",
  "codex-core",
  "codex-file-search",
@@ -861,9 +866,11 @@ name = "codex-app-server-protocol"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "clap",
  "codex-protocol",
  "paste",
  "pretty_assertions",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "strum_macros 0.27.2",
@@ -915,6 +922,8 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-backend-openapi-models",
+ "codex-core",
+ "codex-protocol",
  "pretty_assertions",
  "reqwest",
  "serde",
@@ -927,6 +936,7 @@ version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
+ "serde_with",
 ]
 
 [[package]]
@@ -968,6 +978,7 @@ dependencies = [
  "codex-protocol-ts",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
+ "codex-stdio-to-uds",
  "codex-tui",
  "ctor 0.5.0",
  "owo-colors",
@@ -1053,6 +1064,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-utils-pty",
  "codex-utils-string",
  "core-foundation 0.9.4",
  "core_test_support",
@@ -1069,7 +1081,6 @@ dependencies = [
  "mcp-types",
  "openssl-sys",
  "os_info",
- "portable-pty",
  "predicates",
  "pretty_assertions",
  "rand 0.9.2",
@@ -1331,6 +1342,7 @@ dependencies = [
  "icu_locale_core",
  "mcp-types",
  "mime_guess",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "serde_with",
@@ -1398,6 +1410,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-stdio-to-uds"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "pretty_assertions",
+ "tempfile",
+ "uds_windows",
+]
+
+[[package]]
 name = "codex-tui"
 version = "0.0.0"
 dependencies = [
@@ -1431,12 +1454,12 @@ dependencies = [
  "libc",
  "mcp-types",
  "opentelemetry-appender-tracing",
- "path-clean",
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",
  "rand 0.9.2",
  "ratatui",
+ "ratatui-macros",
  "regex-lite",
  "serde",
  "serde_json",
@@ -1467,6 +1490,15 @@ dependencies = [
  "pretty_assertions",
  "serde_json",
  "toml",
+]
+
+[[package]]
+name = "codex-utils-pty"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "portable-pty",
+ "tokio",
 ]
 
 [[package]]
@@ -3567,6 +3599,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 name = "mcp-types"
 version = "0.0.0"
 dependencies = [
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "ts-rs",
@@ -4253,12 +4286,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "path-clean"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17359afc20d7ab31fdb42bb844c8b3bb1dabd7dcf7e68428492da7f16966fcef"
-
-[[package]]
 name = "path-dedot"
 version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4749,6 +4776,15 @@ dependencies = [
  "unicode-segmentation",
  "unicode-truncate",
  "unicode-width 0.2.1",
+]
+
+[[package]]
+name = "ratatui-macros"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fef540f80dbe8a0773266fa6077788ceb65ef624cdbf36e131aaf90b4a52df4"
+dependencies = [
+ "ratatui",
 ]
 
 [[package]]
