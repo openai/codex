@@ -12,10 +12,10 @@ pub(crate) const MAX_OUTPUT_TOKENS_128K: i64 = 128_000;
 #[derive(Debug)]
 pub(crate) struct ModelInfo {
     /// Size of the context window in tokens. This is the maximum size of the input context.
-    pub(crate) context_window: u64,
+    pub(crate) context_window: i64,
 
     /// Maximum number of output tokens that can be generated for the model.
-    pub(crate) max_output_tokens: u64,
+    pub(crate) max_output_tokens: i64,
 
     /// Token threshold where we should automatically compact conversation history. This considers
     /// input tokens + output tokens of this turn.
@@ -23,11 +23,11 @@ pub(crate) struct ModelInfo {
 }
 
 impl ModelInfo {
-    const fn new(context_window: u64, max_output_tokens: u64) -> Self {
+    const fn new(context_window: i64, max_output_tokens: i64) -> Self {
         Self {
             context_window,
             max_output_tokens,
-            auto_compact_token_limit: Some(Self::default_auto_compact_limit(context_window as i64)),
+            auto_compact_token_limit: Some(Self::default_auto_compact_limit(context_window)),
         }
     }
 

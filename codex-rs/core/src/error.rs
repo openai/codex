@@ -227,7 +227,7 @@ impl std::fmt::Display for RetryLimitReachedError {
 #[derive(Debug)]
 pub struct UsageLimitReachedError {
     pub(crate) plan_type: Option<PlanType>,
-    pub(crate) resets_in_seconds: Option<u64>,
+    pub(crate) resets_in_seconds: Option<i64>,
     pub(crate) rate_limits: Option<RateLimitSnapshot>,
 }
 
@@ -264,7 +264,7 @@ impl std::fmt::Display for UsageLimitReachedError {
     }
 }
 
-fn retry_suffix(resets_in_seconds: Option<u64>) -> String {
+fn retry_suffix(resets_in_seconds: Option<i64>) -> String {
     if let Some(secs) = resets_in_seconds {
         let reset_duration = format_reset_duration(secs);
         format!(" Try again in {reset_duration}.")
@@ -273,7 +273,7 @@ fn retry_suffix(resets_in_seconds: Option<u64>) -> String {
     }
 }
 
-fn retry_suffix_after_or(resets_in_seconds: Option<u64>) -> String {
+fn retry_suffix_after_or(resets_in_seconds: Option<i64>) -> String {
     if let Some(secs) = resets_in_seconds {
         let reset_duration = format_reset_duration(secs);
         format!(" or try again in {reset_duration}.")
@@ -282,7 +282,8 @@ fn retry_suffix_after_or(resets_in_seconds: Option<u64>) -> String {
     }
 }
 
-fn format_reset_duration(total_secs: u64) -> String {
+fn format_reset_duration(total_secs: i64) -> String {
+    let total_secs = total_secs.max(0);
     let days = total_secs / 86_400;
     let hours = (total_secs % 86_400) / 3_600;
     let minutes = (total_secs % 3_600) / 60;

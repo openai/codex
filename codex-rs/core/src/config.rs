@@ -83,10 +83,10 @@ pub struct Config {
     pub model_family: ModelFamily,
 
     /// Size of the context window for the model, in tokens.
-    pub model_context_window: Option<u64>,
+    pub model_context_window: Option<i64>,
 
     /// Maximum number of output tokens.
-    pub model_max_output_tokens: Option<u64>,
+    pub model_max_output_tokens: Option<i64>,
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
@@ -816,10 +816,10 @@ pub struct ConfigToml {
     pub model_provider: Option<String>,
 
     /// Size of the context window for the model, in tokens.
-    pub model_context_window: Option<u64>,
+    pub model_context_window: Option<i64>,
 
     /// Maximum number of output tokens.
-    pub model_max_output_tokens: Option<u64>,
+    pub model_max_output_tokens: Option<i64>,
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,

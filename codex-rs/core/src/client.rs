@@ -71,7 +71,7 @@ struct Error {
 
     // Optional fields available on "usage_limit_reached" and "usage_not_included" errors
     plan_type: Option<PlanType>,
-    resets_in_seconds: Option<u64>,
+    resets_in_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -115,7 +115,7 @@ impl ModelClient {
         self.config
             .model_context_window
             .or_else(|| get_model_info(&self.config.model_family).map(|info| info.context_window))
-            .map(|w| ((w as i64 * pct) / 100) as i64)
+            .map(|w| w.saturating_mul(pct) / 100)
     }
 
     pub fn get_auto_compact_token_limit(&self) -> Option<i64> {
@@ -540,11 +540,11 @@ struct ResponseCompleted {
 
 #[derive(Debug, Deserialize)]
 struct ResponseCompletedUsage {
-    input_tokens: u64,
+    input_tokens: i64,
     input_tokens_details: Option<ResponseCompletedInputTokensDetails>,
-    output_tokens: u64,
+    output_tokens: i64,
     output_tokens_details: Option<ResponseCompletedOutputTokensDetails>,
-    total_tokens: u64,
+    total_tokens: i64,
 }
 
 impl From<ResponseCompletedUsage> for TokenUsage {
@@ -567,12 +567,12 @@ impl From<ResponseCompletedUsage> for TokenUsage {
 
 #[derive(Debug, Deserialize)]
 struct ResponseCompletedInputTokensDetails {
-    cached_tokens: u64,
+    cached_tokens: i64,
 }
 
 #[derive(Debug, Deserialize)]
 struct ResponseCompletedOutputTokensDetails {
-    reasoning_tokens: u64,
+    reasoning_tokens: i64,
 }
 
 fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
@@ -629,8 +629,8 @@ fn parse_rate_limit_window(
     let used_percent: Option<f64> = parse_header_f64(headers, used_percent_header);
 
     used_percent.and_then(|used_percent| {
-        let window_minutes = parse_header_u64(headers, window_minutes_header);
-        let resets_in_seconds = parse_header_u64(headers, resets_header);
+        let window_minutes = parse_header_i64(headers, window_minutes_header);
+        let resets_in_seconds = parse_header_i64(headers, resets_header);
 
         let has_data = used_percent != 0.0
             || window_minutes.is_some_and(|minutes| minutes != 0)
@@ -651,8 +651,8 @@ fn parse_header_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
         .filter(|v| v.is_finite())
 }
 
-fn parse_header_u64(headers: &HeaderMap, name: &str) -> Option<u64> {
-    parse_header_str(headers, name)?.parse::<u64>().ok()
+fn parse_header_i64(headers: &HeaderMap, name: &str) -> Option<i64> {
+    parse_header_str(headers, name)?.parse::<i64>().ok()
 }
 
 fn parse_header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
