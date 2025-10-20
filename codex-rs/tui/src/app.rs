@@ -1090,6 +1090,12 @@ impl App {
                 return;
             }
         };
+        if let Err(err) = Self::migrate_legacy_auto_checkpoint(&dir, &sanitized_session) {
+            tracing::warn!(
+                error = %err,
+                "failed to migrate legacy auto checkpoint filename"
+            );
+        }
         let path = dir.join(file_name);
 
         match self.append_auto_checkpoint(&path, &session_id, &date, context) {
@@ -1198,6 +1204,73 @@ impl App {
             .wrap_err_with(|| format!("failed to append to auto checkpoint {}", path.display()))?;
 
         Ok(true)
+    }
+
+    fn migrate_legacy_auto_checkpoint(dir: &Path, sanitized_session: &str) -> Result<()> {
+        let target = dir.join(format!("{sanitized_session}.md"));
+        if target.exists() {
+            return Ok(());
+        }
+
+        let read_dir = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                return Err(err).wrap_err_with(|| format!("failed to read {}", dir.display()));
+            }
+        };
+
+        for entry in read_dir {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if !path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("md"))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if stem == sanitized_session {
+                // Another process already migrated the file.
+                return Ok(());
+            }
+            if stem.ends_with(sanitized_session)
+                && Self::has_legacy_auto_checkpoint_prefix(
+                    &stem[..stem.len() - sanitized_session.len()],
+                )
+            {
+                fs::rename(&path, &target).wrap_err_with(|| {
+                    format!(
+                        "failed to migrate legacy auto checkpoint from {} to {}",
+                        path.display(),
+                        target.display()
+                    )
+                })?;
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn has_legacy_auto_checkpoint_prefix(prefix: &str) -> bool {
+        let bytes = prefix.as_bytes();
+        if bytes.len() != 11 {
+            return false;
+        }
+        bytes[4] == b'-'
+            && bytes[7] == b'-'
+            && bytes[10] == b'-'
+            && bytes[..4].iter().all(|b| b.is_ascii_digit())
+            && bytes[5..7].iter().all(|b| b.is_ascii_digit())
+            && bytes[8..10].iter().all(|b| b.is_ascii_digit())
     }
 
     fn handle_checkpoint_load(&mut self, name: Option<String>) {
