@@ -20,7 +20,7 @@ use crate::onboarding::onboarding_screen::StepStateProvider;
 use super::onboarding_screen::StepState;
 
 pub(crate) const WSL_INSTRUCTIONS: &str = r"Install WSL2 by opening PowerShell as Administrator and running:
-    # Install default Linux distribution (like Ubuntu)
+    # Install default Linux distribution (Ubuntu is recommended)
     wsl --install
 
     # Restart your computer, then start a shell inside of Windows Subsystem for Linux
@@ -97,7 +97,7 @@ impl WidgetRef for &WindowsSetupWidget {
         let mut lines: Vec<Line> = vec![
             Line::from(vec![
                 "> ".into(),
-                "We strongly recommend running Codex in Windows Subsystem for Linux (WSL2)".bold(),
+                "To use all Codex features, we recommend running Codex in Windows Subsystem for Linux (WSL2)".bold(),
             ]),
             Line::from(""),
         ];
