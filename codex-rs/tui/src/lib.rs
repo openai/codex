@@ -16,10 +16,11 @@ use codex_core::RolloutRecorder;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::find_codex_home;
+use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
 use codex_lmstudio::DEFAULT_OSS_MODEL as LMSTUDIO_DEFAULT_OSS_MODEL;
 use codex_ollama::DEFAULT_OSS_MODEL as OLLAMA_DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
@@ -143,7 +144,7 @@ pub async fn run_main(
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
     let codex_home = match find_codex_home() {
-        Ok(codex_home) => codex_home,
+        Ok(codex_home) => codex_home.to_path_buf(),
         Err(err) => {
             eprintln!("Error finding codex home: {err}");
             std::process::exit(1);

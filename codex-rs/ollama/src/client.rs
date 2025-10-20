@@ -47,7 +47,8 @@ impl OllamaClient {
 
     #[cfg(test)]
     async fn try_from_provider_with_base_url(base_url: &str) -> io::Result<Self> {
-        let provider = codex_core::create_oss_provider_with_base_url(base_url);
+        let provider =
+            codex_core::create_oss_provider_with_base_url(base_url, codex_core::WireApi::Chat);
         Self::try_from_provider(&provider).await
     }
 
