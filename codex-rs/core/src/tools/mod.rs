@@ -1,4 +1,5 @@
 pub mod context;
+pub mod events;
 pub(crate) mod handlers;
 pub mod orchestrator;
 pub mod parallel;
@@ -10,16 +11,19 @@ pub mod spec;
 
 use crate::apply_patch;
 use crate::apply_patch::InternalApplyPatchInvocation;
+use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
-// Removed old executor-based imports in favor of the new orchestrator runtimes.
 use crate::function_tool::FunctionCallError;
-// no longer need ExecCommandContext/ApplyPatchCommandContext in orchestrated flow
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::events::ToolEmitter;
+use crate::tools::events::ToolEventCtx;
+use crate::tools::events::ToolEventFailure;
+use crate::tools::events::ToolEventStage;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
@@ -56,7 +60,7 @@ pub(crate) async fn handle_container_exec_with_params(
     params: ExecParams,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    _turn_diff_tracker: SharedTurnDiffTracker,
+    turn_diff_tracker: SharedTurnDiffTracker,
     sub_id: String,
     call_id: String,
 ) -> Result<String, FunctionCallError> {
@@ -104,6 +108,23 @@ pub(crate) async fn handle_container_exec_with_params(
         MaybeApplyPatchVerified::NotApplyPatch => None,
     };
 
+    let (event_emitter, diff_opt) = match apply_patch_exec.as_ref() {
+        Some(exec) => (
+            ToolEmitter::apply_patch(
+                convert_apply_patch_to_protocol(&exec.action),
+                !exec.user_explicitly_approved_this_action,
+            ),
+            Some(&turn_diff_tracker),
+        ),
+        None => (
+            ToolEmitter::shell(params.command.clone(), params.cwd.clone()),
+            None,
+        ),
+    };
+
+    let event_ctx = ToolEventCtx::new(sess.as_ref(), &sub_id, &call_id, diff_opt);
+    event_emitter.emit(event_ctx, ToolEventStage::Begin).await;
+
     // Build runtime contexts only when needed (shell/apply_patch below).
 
     if let Some(exec) = apply_patch_exec {
@@ -135,32 +156,7 @@ pub(crate) async fn handle_container_exec_with_params(
             )
             .await;
 
-        match out {
-            Ok(output) => {
-                let ExecToolCallOutput { exit_code, .. } = &output;
-                let content = format_exec_output_apply_patch(&output);
-                if *exit_code == 0 {
-                    Ok(content)
-                } else {
-                    Err(FunctionCallError::RespondToModel(content))
-                }
-            }
-            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => Err(
-                FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
-            ),
-            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => Err(
-                FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
-            ),
-            Err(ToolError::Codex(err)) => {
-                let message = format!("execution error: {err:?}");
-                Err(FunctionCallError::RespondToModel(format_exec_output(
-                    &message,
-                )))
-            }
-            Err(ToolError::Rejected(msg)) | Err(ToolError::SandboxDenied(msg)) => {
-                Err(FunctionCallError::RespondToModel(format_exec_output(&msg)))
-            }
-        }
+        handle_exec_outcome(&event_emitter, event_ctx, out).await
     } else {
         // Route shell execution through the new orchestrator/runtime.
         let req = ShellRequest {
@@ -191,35 +187,56 @@ pub(crate) async fn handle_container_exec_with_params(
             )
             .await;
 
-        match out {
-            Ok(exec_output) => {
-                let content = format_exec_output_apply_patch(&exec_output);
-                if exec_output.exit_code == 0 {
-                    Ok(content)
-                } else {
-                    Err(FunctionCallError::RespondToModel(content))
-                }
-            }
-            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => Err(
-                FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
-            ),
-            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => Err(
-                FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
-            ),
-            Err(ToolError::Codex(err)) => {
-                let message = format!("execution error: {err:?}");
-                Err(FunctionCallError::RespondToModel(format_exec_output(
-                    &message,
-                )))
-            }
-            Err(ToolError::Rejected(msg)) | Err(ToolError::SandboxDenied(msg)) => {
-                Err(FunctionCallError::RespondToModel(format_exec_output(&msg)))
-            }
-        }
+        handle_exec_outcome(&event_emitter, event_ctx, out).await
     }
 }
 
-pub fn format_exec_output_apply_patch(exec_output: &ExecToolCallOutput) -> String {
+async fn handle_exec_outcome(
+    event_emitter: &ToolEmitter,
+    event_ctx: ToolEventCtx<'_>,
+    out: Result<ExecToolCallOutput, ToolError>,
+) -> Result<String, FunctionCallError> {
+    let event;
+    let result = match out {
+        Ok(output) => {
+            let content = format_exec_output_for_model(&output);
+            let exit_code = output.exit_code;
+            event = ToolEventStage::Success(output);
+            if exit_code == 0 {
+                Ok(content)
+            } else {
+                Err(FunctionCallError::RespondToModel(content))
+            }
+        }
+        Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output })))
+        | Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
+            let response = format_exec_output_for_model(&output);
+            event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
+            Err(FunctionCallError::RespondToModel(response))
+        }
+        Err(ToolError::Codex(err)) => {
+            let message = format!("execution error: {err:?}");
+            let response = format_exec_output(
+                &message,
+            );
+            event = ToolEventStage::Failure(ToolEventFailure::Message(message));
+            Err(FunctionCallError::RespondToModel(format_exec_output(
+                &response,
+            )))
+        }
+        Err(ToolError::Rejected(msg)) | Err(ToolError::SandboxDenied(msg)) => {
+            let response = format_exec_output(&msg);
+            event = ToolEventStage::Failure(ToolEventFailure::Message(msg));
+            Err(FunctionCallError::RespondToModel(format_exec_output(&response)))
+        }
+    };
+    event_emitter.emit(event_ctx, event).await;
+    result
+}
+
+/// Format the combined exec output for sending back to the model.
+/// Includes exit code and duration metadata; truncates large bodies safely.
+pub fn format_exec_output_for_model(exec_output: &ExecToolCallOutput) -> String {
     let ExecToolCallOutput {
         exit_code,
         duration,
@@ -273,19 +290,7 @@ pub fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
     format_exec_output(content)
 }
 
-#[allow(dead_code)]
-fn truncate_function_error(err: FunctionCallError) -> FunctionCallError {
-    match err {
-        FunctionCallError::RespondToModel(msg) => {
-            FunctionCallError::RespondToModel(format_exec_output(&msg))
-        }
-        FunctionCallError::Denied(msg) => FunctionCallError::Denied(format_exec_output(&msg)),
-        FunctionCallError::Fatal(msg) => FunctionCallError::Fatal(format_exec_output(&msg)),
-        other => other,
-    }
-}
-
-fn format_exec_output(content: &str) -> String {
+pub(super) fn format_exec_output(content: &str) -> String {
     // Head+tail truncation for the model: show the beginning and end with an elision.
     // Clients still receive full streams; only this formatted summary is capped.
     let total_lines = content.lines().count();
@@ -355,6 +360,17 @@ fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
 mod tests {
     use super::*;
     use regex_lite::Regex;
+
+    fn truncate_function_error(err: FunctionCallError) -> FunctionCallError {
+        match err {
+            FunctionCallError::RespondToModel(msg) => {
+                FunctionCallError::RespondToModel(format_exec_output(&msg))
+            }
+            FunctionCallError::Denied(msg) => FunctionCallError::Denied(format_exec_output(&msg)),
+            FunctionCallError::Fatal(msg) => FunctionCallError::Fatal(format_exec_output(&msg)),
+            other => other,
+        }
+    }
 
     fn assert_truncated_message_matches(message: &str, line: &str, total_lines: usize) {
         let pattern = truncated_message_pattern(line, total_lines);

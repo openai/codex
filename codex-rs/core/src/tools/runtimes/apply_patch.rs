@@ -48,9 +48,8 @@ impl ApplyPatchRuntime {
         let exe = if let Some(path) = &req.codex_exe {
             path.clone()
         } else {
-            env::current_exe().map_err(|e| {
-                ToolError::Rejected(format!("failed to determine codex exe: {e}"))
-            })?
+            env::current_exe()
+                .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))?
         };
         let program = exe.to_string_lossy().to_string();
         Ok(CommandSpec {
