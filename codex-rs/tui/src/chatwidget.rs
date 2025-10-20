@@ -80,6 +80,7 @@ use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
+use crate::exec_cell::LiveCommandOutput;
 use crate::exec_cell::new_active_exec_command;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
@@ -242,6 +243,7 @@ pub(crate) struct ChatWidget {
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
+    pending_live_output: HashMap<String, LiveCommandOutput>,
     task_complete_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
@@ -484,6 +486,7 @@ impl ChatWidget {
         // Reset running state and clear streaming buffers.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
+        self.pending_live_output.clear();
         self.stream_controller = None;
     }
 
@@ -564,9 +567,34 @@ impl ChatWidget {
 
     fn on_exec_command_output_delta(
         &mut self,
-        _ev: codex_core::protocol::ExecCommandOutputDeltaEvent,
+        ev: codex_core::protocol::ExecCommandOutputDeltaEvent,
     ) {
-        // TODO: Handle streaming exec output if/when implemented
+        let codex_core::protocol::ExecCommandOutputDeltaEvent {
+            call_id,
+            stream,
+            chunk,
+        } = ev;
+
+        let mut applied = false;
+
+        if let Some(cell) = self
+            .active_cell
+            .as_mut()
+            .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
+        {
+            if cell.append_live_output(&call_id, stream.clone(), &chunk) {
+                applied = true;
+            }
+        }
+
+        if applied {
+            self.request_redraw();
+        } else {
+            self.pending_live_output
+                .entry(call_id)
+                .or_insert_with(LiveCommandOutput::default)
+                .append(stream, &chunk);
+        }
     }
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
@@ -727,6 +755,7 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
+        self.pending_live_output.remove(&ev.call_id);
         let (command, parsed) = match running {
             Some(rc) => (rc.command, rc.parsed_cmd),
             None => (vec![ev.call_id.clone()], Vec::new()),
@@ -844,6 +873,18 @@ impl ChatWidget {
             )));
         }
 
+        if let Some(cell) = self
+            .active_cell
+            .as_mut()
+            .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
+        {
+            if let Some(pending) = self.pending_live_output.remove(&ev.call_id) {
+                if cell.apply_pending_live_output(&ev.call_id, pending) {
+                    self.request_redraw();
+                }
+            }
+        }
+
         self.request_redraw();
     }
 
@@ -951,6 +992,7 @@ impl ChatWidget {
             rate_limit_warnings: RateLimitWarningState::default(),
             stream_controller: None,
             running_commands: HashMap::new(),
+            pending_live_output: HashMap::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -1018,6 +1060,7 @@ impl ChatWidget {
             rate_limit_warnings: RateLimitWarningState::default(),
             stream_controller: None,
             running_commands: HashMap::new(),
+            pending_live_output: HashMap::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),

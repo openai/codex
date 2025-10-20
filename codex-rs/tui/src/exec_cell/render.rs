@@ -3,6 +3,7 @@ use std::time::Instant;
 use super::model::CommandOutput;
 use super::model::ExecCall;
 use super::model::ExecCell;
+use super::model::LiveCommandOutput;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::HistoryCell;
 use crate::render::highlight::highlight_bash_to_lines;
@@ -45,6 +46,7 @@ pub(crate) fn new_active_exec_command(
         output: None,
         start_time: Some(Instant::now()),
         duration: None,
+        live_output: LiveCommandOutput::default(),
     })
 }
 
@@ -63,12 +65,8 @@ pub(crate) fn output_lines(
         include_angle_pipe,
         include_prefix,
     } = params;
-    let CommandOutput {
-        exit_code,
-        stdout,
-        stderr,
-        ..
-    } = match output {
+
+    let command_output = match output {
         Some(output) if only_err && output.exit_code == 0 => {
             return OutputLines {
                 lines: Vec::new(),
@@ -84,11 +82,62 @@ pub(crate) fn output_lines(
         }
     };
 
-    let src = if *exit_code == 0 { stdout } else { stderr };
-    let lines: Vec<&str> = src.lines().collect();
+    let src = if command_output.exit_code == 0 {
+        command_output.stdout.as_str()
+    } else {
+        command_output.stderr.as_str()
+    };
+
+    render_output_text(src, include_angle_pipe, include_prefix, false)
+}
+
+pub(crate) fn live_output_lines(
+    live: &LiveCommandOutput,
+    params: OutputLinesParams,
+) -> OutputLines {
+    let OutputLinesParams {
+        include_angle_pipe,
+        include_prefix,
+        ..
+    } = params;
+
+    let mut rendered = render_output_text(
+        live.text(),
+        include_angle_pipe,
+        include_prefix,
+        live.was_truncated(),
+    );
+
+    if live.was_truncated() && !rendered.lines.is_empty() {
+        let mut lines = Vec::with_capacity(rendered.lines.len() + 1);
+        lines.push(Line::from("… output truncated").dim());
+        lines.extend(rendered.lines);
+        rendered.lines = lines;
+    }
+
+    rendered
+}
+
+fn render_output_text(
+    text: &str,
+    include_angle_pipe: bool,
+    include_prefix: bool,
+    truncated_hint: bool,
+) -> OutputLines {
+    if text.is_empty() {
+        return OutputLines {
+            lines: Vec::new(),
+            omitted: None,
+        };
+    }
+
+    let mut lines: Vec<&str> = text.lines().collect();
+    if text.ends_with('\n') {
+        lines.push("");
+    }
+
     let total = lines.len();
     let limit = TOOL_CALL_MAX_LINES;
-
     let mut out: Vec<Line<'static>> = Vec::new();
 
     let head_end = total.min(limit);
@@ -109,8 +158,10 @@ pub(crate) fn output_lines(
     }
 
     let show_ellipsis = total > 2 * limit;
-    let omitted = if show_ellipsis {
+    let mut omitted = if show_ellipsis {
         Some(total - 2 * limit)
+    } else if truncated_hint {
+        Some(0)
     } else {
         None
     };
@@ -133,6 +184,10 @@ pub(crate) fn output_lines(
             span.style = span.style.add_modifier(Modifier::DIM);
         });
         out.push(line);
+    }
+
+    if truncated_hint && omitted.is_none() {
+        omitted = Some(0);
     }
 
     OutputLines {
@@ -411,6 +466,42 @@ impl ExecCell {
                     Span::from(layout.output_block.subsequent_prefix),
                 ));
             } else {
+                let trimmed_output = Self::truncate_lines_middle(
+                    &raw_output.lines,
+                    layout.output_max_lines,
+                    raw_output.omitted,
+                );
+
+                let mut wrapped_output: Vec<Line<'static>> = Vec::new();
+                let output_wrap_width = layout.output_block.wrap_width(width);
+                let output_opts =
+                    RtOptions::new(output_wrap_width).word_splitter(WordSplitter::NoHyphenation);
+                for line in trimmed_output {
+                    push_owned_lines(
+                        &word_wrap_line(&line, output_opts.clone()),
+                        &mut wrapped_output,
+                    );
+                }
+
+                if !wrapped_output.is_empty() {
+                    lines.extend(prefix_lines(
+                        wrapped_output,
+                        Span::from(layout.output_block.initial_prefix).dim(),
+                        Span::from(layout.output_block.subsequent_prefix),
+                    ));
+                }
+            }
+        } else if !call.live_output.is_empty() {
+            let raw_output = live_output_lines(
+                &call.live_output,
+                OutputLinesParams {
+                    only_err: false,
+                    include_angle_pipe: false,
+                    include_prefix: false,
+                },
+            );
+
+            if !raw_output.lines.is_empty() {
                 let trimmed_output = Self::truncate_lines_middle(
                     &raw_output.lines,
                     layout.output_max_lines,

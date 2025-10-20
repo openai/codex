@@ -1,6 +1,8 @@
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
+#[cfg(test)]
+use crate::exec_cell::LiveCommandOutput;
 use crate::exec_cell::OutputLinesParams;
 use crate::exec_cell::TOOL_CALL_MAX_LINES;
 use crate::exec_cell::output_lines;
@@ -1698,6 +1700,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live_output: LiveCommandOutput::default(),
         });
         // Mark call complete so markers are ✓
         cell.complete_call(
@@ -1729,6 +1732,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live_output: LiveCommandOutput::default(),
         });
         // Call 1: Search only
         cell.complete_call(
@@ -1816,6 +1820,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live_output: LiveCommandOutput::default(),
         });
         cell.complete_call(
             "c1",
@@ -1844,6 +1849,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live_output: LiveCommandOutput::default(),
         });
         // Mark call complete so it renders as "Ran"
         cell.complete_call(
@@ -1874,6 +1880,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live_output: LiveCommandOutput::default(),
         });
         cell.complete_call(
             &call_id,
@@ -1902,6 +1909,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live_output: LiveCommandOutput::default(),
         });
         cell.complete_call(
             &call_id,
@@ -1929,6 +1937,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live_output: LiveCommandOutput::default(),
         });
         cell.complete_call(
             &call_id,
@@ -1957,6 +1966,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live_output: LiveCommandOutput::default(),
         });
         cell.complete_call(
             &call_id,
@@ -1985,6 +1995,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live_output: LiveCommandOutput::default(),
         });
         let stderr: String = (1..=10)
             .map(|n| n.to_string())
@@ -2031,6 +2042,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live_output: LiveCommandOutput::default(),
         });
 
         let stderr = "error: first line on stderr\nerror: second line on stderr".to_string();
