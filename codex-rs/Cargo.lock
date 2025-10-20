@@ -919,6 +919,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-backend-openapi-models",
+ "codex-core",
  "codex-protocol",
  "pretty_assertions",
  "reqwest",

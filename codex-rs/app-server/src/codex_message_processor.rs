@@ -566,28 +566,13 @@ impl CodexMessageProcessor {
             });
         }
 
-        let token = auth.get_token().await.map_err(|err| JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message: format!("failed to read codex auth token: {err}"),
-            data: None,
-        })?;
-
-        let mut client =
-            BackendClient::new(self.config.chatgpt_base_url.clone()).map_err(|err| {
-                JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to construct backend client: {err}"),
-                    data: None,
-                }
+        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to construct backend client: {err}"),
+                data: None,
             })?;
-
-        client = client
-            .with_user_agent(get_codex_user_agent())
-            .with_bearer_token(token);
-
-        if let Some(account_id) = auth.get_account_id() {
-            client = client.with_chatgpt_account_id(account_id);
-        }
 
         client
             .get_rate_limits()

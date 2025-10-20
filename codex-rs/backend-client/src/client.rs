@@ -4,6 +4,8 @@ use crate::types::RateLimitStatusPayload;
 use crate::types::RateLimitWindowSnapshot;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
+use codex_core::auth::CodexAuth;
+use codex_core::default_client::get_codex_user_agent;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use reqwest::header::AUTHORIZATION;
@@ -66,6 +68,17 @@ impl Client {
             chatgpt_account_id: None,
             path_style,
         })
+    }
+
+    pub async fn from_auth(base_url: impl Into<String>, auth: &CodexAuth) -> Result<Self> {
+        let token = auth.get_token().await.map_err(anyhow::Error::from)?;
+        let mut client = Self::new(base_url)?
+            .with_user_agent(get_codex_user_agent())
+            .with_bearer_token(token);
+        if let Some(account_id) = auth.get_account_id() {
+            client = client.with_chatgpt_account_id(account_id);
+        }
+        Ok(client)
     }
 
     pub fn with_bearer_token(mut self, token: impl Into<String>) -> Self {
