@@ -232,6 +232,7 @@ mod tests {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct ExecCommandContext {
     pub(crate) sub_id: String,
     pub(crate) call_id: String,
@@ -243,6 +244,7 @@ pub(crate) struct ExecCommandContext {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct ApplyPatchCommandContext {
     pub(crate) user_explicitly_approved_this_action: bool,
     pub(crate) changes: HashMap<PathBuf, FileChange>,

@@ -24,6 +24,7 @@ impl ShellHandler {
             env: create_env(&turn_context.shell_environment_policy),
             with_escalated_permissions: params.with_escalated_permissions,
             justification: params.justification,
+            arg0: None,
         }
     }
 }

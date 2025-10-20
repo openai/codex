@@ -815,12 +815,7 @@ pub(crate) fn build_specs(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
 ) -> ToolRegistryBuilder {
-    use crate::exec_command::EXEC_COMMAND_TOOL_NAME;
-    use crate::exec_command::WRITE_STDIN_TOOL_NAME;
-    use crate::exec_command::create_exec_command_tool_for_responses_api;
-    use crate::exec_command::create_write_stdin_tool_for_responses_api;
     use crate::tools::handlers::ApplyPatchHandler;
-    use crate::tools::handlers::ExecStreamHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
@@ -836,7 +831,6 @@ pub(crate) fn build_specs(
     let mut builder = ToolRegistryBuilder::new();
 
     let shell_handler = Arc::new(ShellHandler);
-    let exec_stream_handler = Arc::new(ExecStreamHandler);
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
@@ -844,7 +838,10 @@ pub(crate) fn build_specs(
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
 
-    if config.experimental_unified_exec_tool {
+    let use_unified_exec = config.experimental_unified_exec_tool
+        || matches!(config.shell_type, ConfigShellToolType::Streamable);
+
+    if use_unified_exec {
         builder.push_spec(create_unified_exec_tool());
         builder.register_handler("unified_exec", unified_exec_handler);
     } else {
@@ -856,14 +853,7 @@ pub(crate) fn build_specs(
                 builder.push_spec(ToolSpec::LocalShell {});
             }
             ConfigShellToolType::Streamable => {
-                builder.push_spec(ToolSpec::Function(
-                    create_exec_command_tool_for_responses_api(),
-                ));
-                builder.push_spec(ToolSpec::Function(
-                    create_write_stdin_tool_for_responses_api(),
-                ));
-                builder.register_handler(EXEC_COMMAND_TOOL_NAME, exec_stream_handler.clone());
-                builder.register_handler(WRITE_STDIN_TOOL_NAME, exec_stream_handler);
+                // Already handled by use_unified_exec.
             }
         }
     }

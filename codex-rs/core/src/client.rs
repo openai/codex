@@ -1,17 +1,18 @@
 use std::io::BufRead;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use crate::AuthManager;
-use crate::auth::CodexAuth;
-use crate::error::ConnectionFailedError;
-use crate::error::ResponseStreamFailed;
-use crate::error::RetryLimitReachedError;
-use crate::error::UnexpectedResponseError;
 use bytes::Bytes;
+use chrono::DateTime;
+use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
+use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
+use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::ResponseItem;
 use eventsource_stream::Eventsource;
 use futures::prelude::*;
 use regex_lite::Regex;
@@ -27,6 +28,8 @@ use tracing::debug;
 use tracing::trace;
 use tracing::warn;
 
+use crate::AuthManager;
+use crate::auth::CodexAuth;
 use crate::chat_completions::AggregateStreamExt;
 use crate::chat_completions::stream_chat_completions;
 use crate::client_common::Prompt;
@@ -38,27 +41,24 @@ use crate::client_common::create_text_param_for_request;
 use crate::config::Config;
 use crate::default_client::create_client;
 use crate::error::CodexErr;
+use crate::error::ConnectionFailedError;
+use crate::error::ResponseStreamFailed;
 use crate::error::Result;
+use crate::error::RetryLimitReachedError;
+use crate::error::UnexpectedResponseError;
 use crate::error::UsageLimitReachedError;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_family::ModelFamily;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
-use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::RateLimitWindow;
 use crate::protocol::TokenUsage;
 use crate::state::TaskKind;
 use crate::token_data::PlanType;
+use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::util::backoff;
-use chrono::DateTime;
-use chrono::Utc;
-use codex_otel::otel_event_manager::OtelEventManager;
-use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::models::ResponseItem;
-use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
 struct ErrorResponse {
@@ -73,7 +73,7 @@ struct Error {
 
     // Optional fields available on "usage_limit_reached" and "usage_not_included" errors
     plan_type: Option<PlanType>,
-    resets_at: Option<String>,
+    resets_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -112,10 +112,12 @@ impl ModelClient {
         }
     }
 
-    pub fn get_model_context_window(&self) -> Option<u64> {
+    pub fn get_model_context_window(&self) -> Option<i64> {
+        let pct = self.config.model_family.effective_context_window_percent;
         self.config
             .model_context_window
             .or_else(|| get_model_info(&self.config.model_family).map(|info| info.context_window))
+            .map(|w| w.saturating_mul(pct) / 100)
     }
 
     pub fn get_auto_compact_token_limit(&self) -> Option<i64> {
@@ -423,9 +425,7 @@ impl ModelClient {
                                 .or_else(|| auth.as_ref().and_then(CodexAuth::get_plan_type));
                             let resets_at = error
                                 .resets_at
-                                .as_deref()
-                                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-                                .map(|dt| dt.with_timezone(&Utc));
+                                .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0));
                             let codex_err = CodexErr::UsageLimitReached(UsageLimitReachedError {
                                 plan_type,
                                 resets_at,
@@ -544,11 +544,11 @@ struct ResponseCompleted {
 
 #[derive(Debug, Deserialize)]
 struct ResponseCompletedUsage {
-    input_tokens: u64,
+    input_tokens: i64,
     input_tokens_details: Option<ResponseCompletedInputTokensDetails>,
-    output_tokens: u64,
+    output_tokens: i64,
     output_tokens_details: Option<ResponseCompletedOutputTokensDetails>,
-    total_tokens: u64,
+    total_tokens: i64,
 }
 
 impl From<ResponseCompletedUsage> for TokenUsage {
@@ -571,12 +571,12 @@ impl From<ResponseCompletedUsage> for TokenUsage {
 
 #[derive(Debug, Deserialize)]
 struct ResponseCompletedInputTokensDetails {
-    cached_tokens: u64,
+    cached_tokens: i64,
 }
 
 #[derive(Debug, Deserialize)]
 struct ResponseCompletedOutputTokensDetails {
-    reasoning_tokens: u64,
+    reasoning_tokens: i64,
 }
 
 fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
@@ -628,16 +628,13 @@ fn parse_rate_limit_window(
     headers: &HeaderMap,
     used_percent_header: &str,
     window_minutes_header: &str,
-    resets_header: &str,
+    resets_at_header: &str,
 ) -> Option<RateLimitWindow> {
     let used_percent: Option<f64> = parse_header_f64(headers, used_percent_header);
 
     used_percent.and_then(|used_percent| {
-        let window_minutes = parse_header_u64(headers, window_minutes_header);
-        let resets_at = parse_header_str(headers, resets_header)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(std::string::ToString::to_string);
+        let window_minutes = parse_header_i64(headers, window_minutes_header);
+        let resets_at = parse_header_i64(headers, resets_at_header);
 
         let has_data = used_percent != 0.0
             || window_minutes.is_some_and(|minutes| minutes != 0)
@@ -658,8 +655,8 @@ fn parse_header_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
         .filter(|v| v.is_finite())
 }
 
-fn parse_header_u64(headers: &HeaderMap, name: &str) -> Option<u64> {
-    parse_header_str(headers, name)?.parse::<u64>().ok()
+fn parse_header_i64(headers: &HeaderMap, name: &str) -> Option<i64> {
+    parse_header_str(headers, name)?.parse::<i64>().ok()
 }
 
 fn parse_header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -1424,7 +1421,8 @@ mod tests {
         use crate::token_data::KnownPlan;
         use crate::token_data::PlanType;
 
-        let json = r#"{"error":{"type":"usage_limit_reached","plan_type":"pro","resets_at":"2024-01-01T00:00:00Z"}}"#;
+        let json =
+            r#"{"error":{"type":"usage_limit_reached","plan_type":"pro","resets_at":1704067200}}"#;
         let resp: ErrorResponse = serde_json::from_str(json).expect("should deserialize schema");
 
         assert_matches!(resp.error.plan_type, Some(PlanType::Known(KnownPlan::Pro)));
@@ -1437,7 +1435,8 @@ mod tests {
     fn error_response_deserializes_schema_unknown_plan_type_and_serializes_back() {
         use crate::token_data::PlanType;
 
-        let json = r#"{"error":{"type":"usage_limit_reached","plan_type":"vip","resets_at":"2024-01-01T00:01:00Z"}}"#;
+        let json =
+            r#"{"error":{"type":"usage_limit_reached","plan_type":"vip","resets_at":1704067260}}"#;
         let resp: ErrorResponse = serde_json::from_str(json).expect("should deserialize schema");
 
         assert_matches!(resp.error.plan_type, Some(PlanType::Unknown(ref s)) if s == "vip");

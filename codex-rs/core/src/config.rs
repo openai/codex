@@ -36,6 +36,7 @@ use crate::protocol::SandboxPolicy;
 use anyhow::Context;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -84,10 +85,10 @@ pub struct Config {
     pub model_family: ModelFamily,
 
     /// Size of the context window for the model, in tokens.
-    pub model_context_window: Option<u64>,
+    pub model_context_window: Option<i64>,
 
     /// Maximum number of output tokens.
-    pub model_max_output_tokens: Option<u64>,
+    pub model_max_output_tokens: Option<i64>,
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
@@ -208,6 +209,12 @@ pub struct Config {
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
+
+    /// When set, restricts ChatGPT login to a specific workspace identifier.
+    pub forced_chatgpt_workspace_id: Option<String>,
+
+    /// When set, restricts the login mechanism users may use.
+    pub forced_login_method: Option<ForcedLoginMethod>,
 
     /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
     pub include_plan_tool: bool,
@@ -477,6 +484,16 @@ pub fn write_global_mcp_servers(
 
             if let Some(timeout) = config.tool_timeout_sec {
                 entry["tool_timeout_sec"] = toml_edit::value(timeout.as_secs_f64());
+            }
+
+            if let Some(enabled_tools) = &config.enabled_tools {
+                entry["enabled_tools"] =
+                    TomlItem::Value(enabled_tools.iter().collect::<TomlArray>().into());
+            }
+
+            if let Some(disabled_tools) = &config.disabled_tools {
+                entry["disabled_tools"] =
+                    TomlItem::Value(disabled_tools.iter().collect::<TomlArray>().into());
             }
 
             doc["mcp_servers"][name.as_str()] = TomlItem::Table(entry);
@@ -819,10 +836,10 @@ pub struct ConfigToml {
     pub model_provider: Option<String>,
 
     /// Size of the context window for the model, in tokens.
-    pub model_context_window: Option<u64>,
+    pub model_context_window: Option<i64>,
 
     /// Maximum number of output tokens.
-    pub model_max_output_tokens: Option<u64>,
+    pub model_max_output_tokens: Option<i64>,
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
@@ -845,6 +862,14 @@ pub struct ConfigToml {
 
     /// System instructions.
     pub instructions: Option<String>,
+
+    /// When set, restricts ChatGPT login to a specific workspace identifier.
+    #[serde(default)]
+    pub forced_chatgpt_workspace_id: Option<String>,
+
+    /// When set, restricts the login mechanism users may use.
+    #[serde(default)]
+    pub forced_login_method: Option<ForcedLoginMethod>,
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     #[serde(default)]
@@ -952,6 +977,8 @@ impl From<ConfigToml> for UserSavedConfig {
             approval_policy: config_toml.approval_policy,
             sandbox_mode: config_toml.sandbox_mode,
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
+            forced_chatgpt_workspace_id: config_toml.forced_chatgpt_workspace_id,
+            forced_login_method: config_toml.forced_login_method,
             model: config_toml.model,
             model_reasoning_effort: config_toml.model_reasoning_effort,
             model_reasoning_summary: config_toml.model_reasoning_summary,
@@ -1252,6 +1279,18 @@ impl Config {
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
         let use_experimental_use_rmcp_client = features.enabled(Feature::RmcpClient);
 
+        let forced_chatgpt_workspace_id =
+            cfg.forced_chatgpt_workspace_id.as_ref().and_then(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
+
+        let forced_login_method = cfg.forced_login_method;
+
         let model = model
             .or(config_profile.model)
             .or(cfg.model)
@@ -1360,6 +1399,8 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            forced_chatgpt_workspace_id,
+            forced_login_method,
             include_plan_tool: include_plan_tool_flag,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             tools_web_search_request,
@@ -1939,6 +1980,8 @@ approve_all = true
                 enabled: true,
                 startup_timeout_sec: Some(Duration::from_secs(3)),
                 tool_timeout_sec: Some(Duration::from_secs(5)),
+                enabled_tools: None,
+                disabled_tools: None,
             },
         );
 
@@ -2076,6 +2119,8 @@ bearer_token = "secret"
                 enabled: true,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         )]);
 
@@ -2138,6 +2183,8 @@ ZIG_VAR = "3"
                 enabled: true,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         )]);
 
@@ -2180,6 +2227,8 @@ ZIG_VAR = "3"
                 enabled: true,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         )]);
 
@@ -2221,6 +2270,8 @@ ZIG_VAR = "3"
                 enabled: true,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         )]);
 
@@ -2278,6 +2329,8 @@ startup_timeout_sec = 2.0
                 enabled: true,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         )]);
         write_global_mcp_servers(codex_home.path(), &servers)?;
@@ -2347,6 +2400,8 @@ X-Auth = "DOCS_AUTH"
                 enabled: true,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         )]);
 
@@ -2368,6 +2423,8 @@ X-Auth = "DOCS_AUTH"
                 enabled: true,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         );
         write_global_mcp_servers(codex_home.path(), &servers)?;
@@ -2427,6 +2484,8 @@ url = "https://example.com/mcp"
                     enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(2)),
                     tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
                 },
             ),
             (
@@ -2442,6 +2501,8 @@ url = "https://example.com/mcp"
                     enabled: true,
                     startup_timeout_sec: None,
                     tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
                 },
             ),
         ]);
@@ -2516,6 +2577,8 @@ url = "https://example.com/mcp"
                 enabled: false,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         )]);
 
@@ -2531,6 +2594,49 @@ url = "https://example.com/mcp"
         let loaded = load_global_mcp_servers(codex_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         assert!(!docs.enabled);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_global_mcp_servers_serializes_tool_filters() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let servers = BTreeMap::from([(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "docs-server".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: Some(vec!["allowed".to_string()]),
+                disabled_tools: Some(vec!["blocked".to_string()]),
+            },
+        )]);
+
+        write_global_mcp_servers(codex_home.path(), &servers)?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = std::fs::read_to_string(&config_path)?;
+        assert!(serialized.contains(r#"enabled_tools = ["allowed"]"#));
+        assert!(serialized.contains(r#"disabled_tools = ["blocked"]"#));
+
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let docs = loaded.get("docs").expect("docs entry");
+        assert_eq!(
+            docs.enabled_tools.as_ref(),
+            Some(&vec!["allowed".to_string()])
+        );
+        assert_eq!(
+            docs.disabled_tools.as_ref(),
+            Some(&vec!["blocked".to_string()])
+        );
 
         Ok(())
     }
@@ -2822,7 +2928,7 @@ model_verbosity = "high"
                 model_family: find_family_for_model("o3").expect("known model slug"),
                 model_context_window: Some(200_000),
                 model_max_output_tokens: Some(100_000),
-                model_auto_compact_token_limit: None,
+                model_auto_compact_token_limit: Some(180_000),
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: AskForApproval::Never,
@@ -2848,6 +2954,8 @@ model_verbosity = "high"
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
+                forced_chatgpt_workspace_id: None,
+                forced_login_method: None,
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
@@ -2889,7 +2997,7 @@ model_verbosity = "high"
             model_family: find_family_for_model("gpt-3.5-turbo").expect("known model slug"),
             model_context_window: Some(16_385),
             model_max_output_tokens: Some(4_096),
-            model_auto_compact_token_limit: None,
+            model_auto_compact_token_limit: Some(14_746),
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
             approval_policy: AskForApproval::UnlessTrusted,
@@ -2915,6 +3023,8 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
@@ -2971,7 +3081,7 @@ model_verbosity = "high"
             model_family: find_family_for_model("o3").expect("known model slug"),
             model_context_window: Some(200_000),
             model_max_output_tokens: Some(100_000),
-            model_auto_compact_token_limit: None,
+            model_auto_compact_token_limit: Some(180_000),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
@@ -2997,6 +3107,8 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
@@ -3039,7 +3151,7 @@ model_verbosity = "high"
             model_family: find_family_for_model("gpt-5").expect("known model slug"),
             model_context_window: Some(272_000),
             model_max_output_tokens: Some(128_000),
-            model_auto_compact_token_limit: None,
+            model_auto_compact_token_limit: Some(244_800),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
@@ -3065,6 +3177,8 @@ model_verbosity = "high"
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,

@@ -9,6 +9,7 @@ use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
 use codex_app_server_protocol::ArchiveConversationParams;
 use codex_app_server_protocol::ArchiveConversationResponse;
+use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthStatusChangeNotification;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConversationSummary;
@@ -18,6 +19,7 @@ use codex_app_server_protocol::ExecOneOffCommandParams;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
 use codex_app_server_protocol::FuzzyFileSearchParams;
 use codex_app_server_protocol::FuzzyFileSearchResponse;
+use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetUserAgentResponse;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
@@ -49,6 +51,7 @@ use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_backend_client::Client as BackendClient;
 use codex_core::AuthManager;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
@@ -77,17 +80,19 @@ use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
 use codex_protocol::ConversationId;
+use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InputMessageKind;
+use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_utils_json_to_toml::json_to_toml;
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -239,10 +244,29 @@ impl CodexMessageProcessor {
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
             }
+            ClientRequest::GetAccountRateLimits {
+                request_id,
+                params: _,
+            } => {
+                self.get_account_rate_limits(request_id).await;
+            }
         }
     }
 
     async fn login_api_key(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
+        if matches!(
+            self.config.forced_login_method,
+            Some(ForcedLoginMethod::Chatgpt)
+        ) {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "API key login is disabled. Use ChatGPT login instead.".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
         {
             let mut guard = self.active_login.lock().await;
             if let Some(active) = guard.take() {
@@ -278,9 +302,23 @@ impl CodexMessageProcessor {
     async fn login_chatgpt(&mut self, request_id: RequestId) {
         let config = self.config.as_ref();
 
+        if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "ChatGPT login is disabled. Use API key login instead.".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
         let opts = LoginServerOptions {
             open_browser: false,
-            ..LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string())
+            ..LoginServerOptions::new(
+                config.codex_home.clone(),
+                CLIENT_ID.to_string(),
+                config.forced_chatgpt_workspace_id.clone(),
+            )
         };
 
         enum LoginChatGptReply {
@@ -499,6 +537,53 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    async fn get_account_rate_limits(&self, request_id: RequestId) {
+        match self.fetch_account_rate_limits().await {
+            Ok(rate_limits) => {
+                let response = GetAccountRateLimitsResponse { rate_limits };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn fetch_account_rate_limits(&self) -> Result<RateLimitSnapshot, JSONRPCErrorError> {
+        let Some(auth) = self.auth_manager.auth() else {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "codex account authentication required to read rate limits".to_string(),
+                data: None,
+            });
+        };
+
+        if auth.mode != AuthMode::ChatGPT {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "chatgpt authentication required to read rate limits".to_string(),
+                data: None,
+            });
+        }
+
+        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to construct backend client: {err}"),
+                data: None,
+            })?;
+
+        client
+            .get_rate_limits()
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to fetch codex rate limits: {err}"),
+                data: None,
+            })
+    }
+
     async fn get_user_saved_config(&self, request_id: RequestId) {
         let toml_value = match load_config_as_toml(&self.config.codex_home).await {
             Ok(val) => val,
@@ -603,6 +688,7 @@ impl CodexMessageProcessor {
             env,
             with_escalated_permissions: None,
             justification: None,
+            arg0: None,
         };
 
         let effective_policy = params

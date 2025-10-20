@@ -29,11 +29,13 @@ members = [
     "protocol-ts",
     "rmcp-client",
     "responses-api-proxy",
+    "stdio-to-uds",
     "otel",
     "tui",
     "git-apply",
     "utils/json-to-toml",
     "utils/readiness",
+    "utils/pty",
     "utils/string",
 ]
 resolver = "2"
@@ -54,10 +56,11 @@ codex-app-server = { path = "app-server" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
+codex-async-utils = { path = "async-utils" }
+codex-backend-client = { path = "backend-client" }
 codex-chatgpt = { path = "chatgpt" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
-codex-async-utils = { path = "async-utils" }
 codex-exec = { path = "exec" }
 codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
@@ -73,8 +76,10 @@ codex-protocol = { path = "protocol" }
 codex-protocol-ts = { path = "protocol-ts" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
+codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
+codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-string = { path = "utils/string" }
 core_test_support = { path = "core/tests/common" }
@@ -138,7 +143,6 @@ os_info = "3.12.0"
 owo-colors = "4.2.0"
 paste = "1.0.15"
 path-absolutize = "3.1.1"
-path-clean = "1.0.1"
 pathdiff = "0.2"
 portable-pty = "0.9.0"
 predicates = "3"
@@ -146,6 +150,7 @@ pretty_assertions = "1.4.1"
 pulldown-cmark = "0.10"
 rand = "0.9"
 ratatui = "0.29.0"
+ratatui-macros = "0.6.0"
 regex-lite = "0.1.7"
 reqwest = "0.12"
 rmcp = { version = "0.8.0", default-features = false }
@@ -186,6 +191,7 @@ tree-sitter = "0.25.10"
 tree-sitter-bash = "0.25"
 tree-sitter-highlight = "0.25.10"
 ts-rs = "11"
+uds_windows = "1.1.0"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2"
 url = "2"
@@ -250,6 +256,11 @@ strip = "symbols"
 
 # See https://github.com/openai/codex/issues/1411 for details.
 codegen-units = 1
+
+[profile.ci-test]
+debug = 1         # Reduce debug symbol size
+inherits = "test"
+opt-level = 0
 
 [patch.crates-io]
 # Uncomment to debug local changes.

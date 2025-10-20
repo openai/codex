@@ -65,8 +65,8 @@ fn qualify_tools(tools: Vec<ToolInfo>) -> HashMap<String, ToolInfo> {
     let mut qualified_tools = HashMap::new();
     for tool in tools {
         let mut qualified_name = format!(
-            "{}{}{}",
-            tool.server_name, MCP_TOOL_NAME_DELIMITER, tool.tool_name
+            "mcp{}{}{}{}",
+            MCP_TOOL_NAME_DELIMITER, tool.server_name, MCP_TOOL_NAME_DELIMITER, tool.tool_name
         );
         if qualified_name.len() > MAX_TOOL_NAME_LENGTH {
             let mut hasher = Sha1::new();
@@ -237,6 +237,9 @@ pub(crate) struct McpConnectionManager {
 
     /// Fully qualified tool name -> tool instance.
     tools: HashMap<String, ToolInfo>,
+
+    /// Server-name -> configured tool filters.
+    tool_filters: HashMap<String, ToolFilter>,
 }
 
 impl McpConnectionManager {
@@ -261,6 +264,7 @@ impl McpConnectionManager {
         // Launch all configured servers concurrently.
         let mut join_set = JoinSet::new();
         let mut errors = ClientStartErrors::new();
+        let mut tool_filters: HashMap<String, ToolFilter> = HashMap::new();
 
         for (server_name, cfg) in mcp_servers {
             // Validate server name before spawning
@@ -273,11 +277,13 @@ impl McpConnectionManager {
             }
 
             if !cfg.enabled {
+                tool_filters.insert(server_name, ToolFilter::from_config(&cfg));
                 continue;
             }
 
             let startup_timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
             let tool_timeout = cfg.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT);
+            tool_filters.insert(server_name.clone(), ToolFilter::from_config(&cfg));
 
             let resolved_bearer_token = match &cfg.transport {
                 McpServerTransportConfig::StreamableHttp {
@@ -393,9 +399,17 @@ impl McpConnectionManager {
             }
         };
 
-        let tools = qualify_tools(all_tools);
+        let filtered_tools = filter_tools(all_tools, &tool_filters);
+        let tools = qualify_tools(filtered_tools);
 
-        Ok((Self { clients, tools }, errors))
+        Ok((
+            Self {
+                clients,
+                tools,
+                tool_filters,
+            },
+            errors,
+        ))
     }
 
     /// Returns a single map that contains all tools. Each key is the
@@ -541,6 +555,13 @@ impl McpConnectionManager {
         tool: &str,
         arguments: Option<serde_json::Value>,
     ) -> Result<mcp_types::CallToolResult> {
+        if let Some(filter) = self.tool_filters.get(server)
+            && !filter.allows(tool)
+        {
+            return Err(anyhow!(
+                "tool '{tool}' is disabled for MCP server '{server}'"
+            ));
+        }
         let managed = self
             .clients
             .get(server)
@@ -617,6 +638,52 @@ impl McpConnectionManager {
             .get(tool_name)
             .map(|tool| (tool.server_name.clone(), tool.tool_name.clone()))
     }
+}
+
+/// A tool is allowed to be used if both are true:
+/// 1. enabled is None (no allowlist is set) or the tool is explicitly enabled.
+/// 2. The tool is not explicitly disabled.
+#[derive(Default, Clone)]
+struct ToolFilter {
+    enabled: Option<HashSet<String>>,
+    disabled: HashSet<String>,
+}
+
+impl ToolFilter {
+    fn from_config(cfg: &McpServerConfig) -> Self {
+        let enabled = cfg
+            .enabled_tools
+            .as_ref()
+            .map(|tools| tools.iter().cloned().collect::<HashSet<_>>());
+        let disabled = cfg
+            .disabled_tools
+            .as_ref()
+            .map(|tools| tools.iter().cloned().collect::<HashSet<_>>())
+            .unwrap_or_default();
+
+        Self { enabled, disabled }
+    }
+
+    fn allows(&self, tool_name: &str) -> bool {
+        if let Some(enabled) = &self.enabled
+            && !enabled.contains(tool_name)
+        {
+            return false;
+        }
+
+        !self.disabled.contains(tool_name)
+    }
+}
+
+fn filter_tools(tools: Vec<ToolInfo>, filters: &HashMap<String, ToolFilter>) -> Vec<ToolInfo> {
+    tools
+        .into_iter()
+        .filter(|tool| {
+            filters
+                .get(&tool.server_name)
+                .is_none_or(|filter| filter.allows(&tool.tool_name))
+        })
+        .collect()
 }
 
 fn resolve_bearer_token(
@@ -711,6 +778,7 @@ fn is_valid_mcp_server_name(server_name: &str) -> bool {
 mod tests {
     use super::*;
     use mcp_types::ToolInputSchema;
+    use std::collections::HashSet;
 
     fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
         ToolInfo {
@@ -741,8 +809,8 @@ mod tests {
         let qualified_tools = qualify_tools(tools);
 
         assert_eq!(qualified_tools.len(), 2);
-        assert!(qualified_tools.contains_key("server1__tool1"));
-        assert!(qualified_tools.contains_key("server1__tool2"));
+        assert!(qualified_tools.contains_key("mcp__server1__tool1"));
+        assert!(qualified_tools.contains_key("mcp__server1__tool2"));
     }
 
     #[test]
@@ -756,7 +824,7 @@ mod tests {
 
         // Only the first tool should remain, the second is skipped
         assert_eq!(qualified_tools.len(), 1);
-        assert!(qualified_tools.contains_key("server1__duplicate_tool"));
+        assert!(qualified_tools.contains_key("mcp__server1__duplicate_tool"));
     }
 
     #[test]
@@ -784,13 +852,84 @@ mod tests {
         assert_eq!(keys[0].len(), 64);
         assert_eq!(
             keys[0],
-            "my_server__extremely_lena02e507efc5a9de88637e436690364fd4219e4ef"
+            "mcp__my_server__extremel119a2b97664e41363932dc84de21e2ff1b93b3e9"
         );
 
         assert_eq!(keys[1].len(), 64);
         assert_eq!(
             keys[1],
-            "my_server__yet_another_e1c3987bd9c50b826cbe1687966f79f0c602d19ca"
+            "mcp__my_server__yet_anot419a82a89325c1b477274a41f8c65ea5f3a7f341"
         );
+    }
+
+    #[test]
+    fn tool_filter_allows_by_default() {
+        let filter = ToolFilter::default();
+
+        assert!(filter.allows("any"));
+    }
+
+    #[test]
+    fn tool_filter_applies_enabled_list() {
+        let filter = ToolFilter {
+            enabled: Some(HashSet::from(["allowed".to_string()])),
+            disabled: HashSet::new(),
+        };
+
+        assert!(filter.allows("allowed"));
+        assert!(!filter.allows("denied"));
+    }
+
+    #[test]
+    fn tool_filter_applies_disabled_list() {
+        let filter = ToolFilter {
+            enabled: None,
+            disabled: HashSet::from(["blocked".to_string()]),
+        };
+
+        assert!(!filter.allows("blocked"));
+        assert!(filter.allows("open"));
+    }
+
+    #[test]
+    fn tool_filter_applies_enabled_then_disabled() {
+        let filter = ToolFilter {
+            enabled: Some(HashSet::from(["keep".to_string(), "remove".to_string()])),
+            disabled: HashSet::from(["remove".to_string()]),
+        };
+
+        assert!(filter.allows("keep"));
+        assert!(!filter.allows("remove"));
+        assert!(!filter.allows("unknown"));
+    }
+
+    #[test]
+    fn filter_tools_applies_per_server_filters() {
+        let tools = vec![
+            create_test_tool("server1", "tool_a"),
+            create_test_tool("server1", "tool_b"),
+            create_test_tool("server2", "tool_a"),
+        ];
+        let mut filters = HashMap::new();
+        filters.insert(
+            "server1".to_string(),
+            ToolFilter {
+                enabled: Some(HashSet::from(["tool_a".to_string(), "tool_b".to_string()])),
+                disabled: HashSet::from(["tool_b".to_string()]),
+            },
+        );
+        filters.insert(
+            "server2".to_string(),
+            ToolFilter {
+                enabled: None,
+                disabled: HashSet::from(["tool_a".to_string()]),
+            },
+        );
+
+        let filtered = filter_tools(tools, &filters);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].server_name, "server1");
+        assert_eq!(filtered[0].tool_name, "tool_a");
     }
 }

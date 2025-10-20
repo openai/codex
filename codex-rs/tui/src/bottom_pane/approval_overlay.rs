@@ -485,11 +485,10 @@ mod tests {
             })
             .collect();
         let expected = vec![
-            "✔ You approved codex to".to_string(),
-            "  run /bin/zsh -lc 'git add".to_string(),
-            "  tui/src/render/mod.rs tui/".to_string(),
-            "  src/render/renderable.rs'".to_string(),
-            "  this time".to_string(),
+            "✔ You approved codex to run".to_string(),
+            "  git add tui/src/render/".to_string(),
+            "  mod.rs tui/src/render/".to_string(),
+            "  renderable.rs this time".to_string(),
         ];
         assert_eq!(rendered, expected);
     }

@@ -5,6 +5,7 @@ use app_test_support::to_response;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::LoginApiKeyResponse;
@@ -55,6 +56,19 @@ approval_policy = "never"
 sandbox_mode = "danger-full-access"
 "#,
     )
+}
+
+fn create_config_toml_forced_login(codex_home: &Path, forced_method: &str) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    let contents = format!(
+        r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+forced_login_method = "{forced_method}"
+"#
+    );
+    std::fs::write(config_toml, contents)
 }
 
 async fn login_with_api_key_via_request(mcp: &mut McpProcess, api_key: &str) {
@@ -220,4 +234,39 @@ async fn get_auth_status_with_api_key_no_include_token() {
     let status: GetAuthStatusResponse = to_response(resp).expect("deserialize status");
     assert_eq!(status.auth_method, Some(AuthMode::ApiKey));
     assert!(status.auth_token.is_none(), "token must be omitted");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn login_api_key_rejected_when_forced_chatgpt() {
+    let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
+    create_config_toml_forced_login(codex_home.path(), "chatgpt")
+        .unwrap_or_else(|err| panic!("write config.toml: {err}"));
+
+    let mut mcp = McpProcess::new(codex_home.path())
+        .await
+        .expect("spawn mcp process");
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
+        .await
+        .expect("init timeout")
+        .expect("init failed");
+
+    let request_id = mcp
+        .send_login_api_key_request(LoginApiKeyParams {
+            api_key: "sk-test-key".to_string(),
+        })
+        .await
+        .expect("send loginApiKey");
+
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await
+    .expect("loginApiKey error timeout")
+    .expect("loginApiKey error");
+
+    assert_eq!(
+        err.error.message,
+        "API key login is disabled. Use ChatGPT login instead."
+    );
 }
