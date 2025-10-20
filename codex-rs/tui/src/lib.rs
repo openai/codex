@@ -198,7 +198,8 @@ pub async fn run_main(
     if let Some(warning) = add_dir_warning_message(&cli.add_dir, &config.sandbox_policy) {
         #[allow(clippy::print_stderr)]
         {
-            eprintln!("{warning}");
+            eprintln!("Error adding directories: {warning}");
+            std::process::exit(1);
         }
     }
 
