@@ -854,7 +854,12 @@ impl HistoryCell for McpToolCallCell {
                     }
                 }
                 Err(err) => {
-                    let err_line = Line::from(format!("Error: {err}").dim());
+                    let err_text = format_and_truncate_tool_result(
+                        &format!("Error: {err}"),
+                        TOOL_CALL_MAX_LINES,
+                        width as usize,
+                    );
+                    let err_line = Line::from(err_text.dim());
                     let wrapped = word_wrap_line(
                         &err_line,
                         RtOptions::new((width as usize).saturating_sub(4))
@@ -996,7 +1001,7 @@ pub(crate) fn new_mcp_tools_output(
     }
 
     for (server, cfg) in config.mcp_servers.iter() {
-        let prefix = format!("{server}__");
+        let prefix = format!("mcp__{server}__");
         let mut names: Vec<String> = tools
             .keys()
             .filter(|k| k.starts_with(&prefix))

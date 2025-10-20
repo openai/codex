@@ -1,0 +1,15 @@
+[package]
+edition.workspace = true
+name = "codex-async-utils"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
+tokio-util.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true

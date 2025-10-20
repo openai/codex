@@ -2,6 +2,7 @@
 members = [
     "backend-client",
     "ansi-escape",
+    "async-utils",
     "app-server",
     "app-server-protocol",
     "apply-patch",
@@ -28,6 +29,7 @@ members = [
     "protocol-ts",
     "rmcp-client",
     "responses-api-proxy",
+    "stdio-to-uds",
     "otel",
     "tui",
     "git-apply",
@@ -54,6 +56,7 @@ codex-app-server = { path = "app-server" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
+codex-async-utils = { path = "async-utils" }
 codex-chatgpt = { path = "chatgpt" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
@@ -72,6 +75,7 @@ codex-protocol = { path = "protocol" }
 codex-protocol-ts = { path = "protocol-ts" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
+codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-readiness = { path = "utils/readiness" }
@@ -166,6 +170,7 @@ strum_macros = "0.27.2"
 supports-color = "3.0.2"
 sys-locale = "0.3.2"
 tempfile = "3.23.0"
+test-log = "0.2.18"
 textwrap = "0.16.2"
 thiserror = "2.0.16"
 time = "0.3"
@@ -185,6 +190,7 @@ tree-sitter = "0.25.10"
 tree-sitter-bash = "0.25"
 tree-sitter-highlight = "0.25.10"
 ts-rs = "11"
+uds_windows = "1.1.0"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2"
 url = "2"
