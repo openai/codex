@@ -41,10 +41,9 @@ Example: suppose your configuration lists `["TEAM_GUIDE.md", ".agents.md"]`. Ins
 
 If the repository root contains `TEAM_GUIDE.md` and the `backend/` directory contains `AGENTS.override.md`, the overall instructions will combine the root `TEAM_GUIDE.md` (because no override or default file was present there) with the `backend/AGENTS.override.md` file (which takes precedence over the fallback names).
 
-You can configure those fallbacks in `~/.codex/config.toml` (or another profile) like this:
+You can configure those fallbacks in `~/.codex/config.toml` (or another profile) like this—the key lives at the top level of the file, not inside a `[project]` table:
 
 ```toml
-[project]
 project_doc_fallback_filenames = ["TEAM_GUIDE.md", ".agents.md"]
 ```
 
