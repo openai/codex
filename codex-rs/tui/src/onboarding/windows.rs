@@ -20,7 +20,8 @@ use crate::onboarding::onboarding_screen::StepStateProvider;
 use super::onboarding_screen::StepState;
 
 pub(crate) const WSL_INSTRUCTIONS: &str = r"Install WSL2 by opening PowerShell as Administrator and running:
-    # Install default Linux distribution (Ubuntu is recommended)
+    # Install WSL using the default Linux distribution (Ubuntu).
+    # See https://learn.microsoft.com/en-us/windows/wsl/install for more info
     wsl --install
 
     # Restart your computer, then start a shell inside of Windows Subsystem for Linux
@@ -34,7 +35,7 @@ pub(crate) const WSL_INSTRUCTIONS: &str = r"Install WSL2 by opening PowerShell a
     nvm install 22
 
     # Install and run Codex in WSL
-    npm i -g @openai/codex
+    npm install --global @openai/codex
     codex
 
     # Additional details and instructions for how to install and run Codex in WSL:
