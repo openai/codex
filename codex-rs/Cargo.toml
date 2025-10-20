@@ -35,6 +35,7 @@ members = [
     "git-apply",
     "utils/json-to-toml",
     "utils/readiness",
+    "utils/pty",
     "utils/string",
 ]
 resolver = "2"
@@ -78,6 +79,7 @@ codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-readiness = { path = "utils/readiness" }
+codex-utils-pty = { path = "utils/pty" }
 codex-utils-string = { path = "utils/string" }
 core_test_support = { path = "core/tests/common" }
 mcp-types = { path = "mcp-types" }

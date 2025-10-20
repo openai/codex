@@ -9,7 +9,6 @@ mod client;
 mod compact;
 mod compact_resume_fork;
 mod exec;
-mod exec_stream_events;
 mod fork_conversation;
 mod grep_files;
 mod items;

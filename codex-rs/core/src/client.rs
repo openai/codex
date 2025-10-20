@@ -45,12 +45,12 @@ use crate::model_family::ModelFamily;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
-use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::RateLimitWindow;
 use crate::protocol::TokenUsage;
 use crate::state::TaskKind;
 use crate::token_data::PlanType;
+use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::util::backoff;
 use chrono::DateTime;
 use chrono::Utc;
@@ -73,7 +73,7 @@ struct Error {
 
     // Optional fields available on "usage_limit_reached" and "usage_not_included" errors
     plan_type: Option<PlanType>,
-    resets_at: Option<String>,
+    resets_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -425,9 +425,7 @@ impl ModelClient {
                                 .or_else(|| auth.as_ref().and_then(CodexAuth::get_plan_type));
                             let resets_at = error
                                 .resets_at
-                                .as_deref()
-                                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-                                .map(|dt| dt.with_timezone(&Utc));
+                                .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0));
                             let codex_err = CodexErr::UsageLimitReached(UsageLimitReachedError {
                                 plan_type,
                                 resets_at,
@@ -636,10 +634,7 @@ fn parse_rate_limit_window(
 
     used_percent.and_then(|used_percent| {
         let window_minutes = parse_header_i64(headers, window_minutes_header);
-        let resets_at = parse_header_str(headers, resets_header)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(std::string::ToString::to_string);
+        let resets_at = parse_header_i64(headers, resets_header);
 
         let has_data = used_percent != 0.0
             || window_minutes.is_some_and(|minutes| minutes != 0)
@@ -1426,7 +1421,8 @@ mod tests {
         use crate::token_data::KnownPlan;
         use crate::token_data::PlanType;
 
-        let json = r#"{"error":{"type":"usage_limit_reached","plan_type":"pro","resets_at":"2024-01-01T00:00:00Z"}}"#;
+        let json =
+            r#"{"error":{"type":"usage_limit_reached","plan_type":"pro","resets_at":1704067200}}"#;
         let resp: ErrorResponse = serde_json::from_str(json).expect("should deserialize schema");
 
         assert_matches!(resp.error.plan_type, Some(PlanType::Known(KnownPlan::Pro)));
@@ -1439,7 +1435,8 @@ mod tests {
     fn error_response_deserializes_schema_unknown_plan_type_and_serializes_back() {
         use crate::token_data::PlanType;
 
-        let json = r#"{"error":{"type":"usage_limit_reached","plan_type":"vip","resets_at":"2024-01-01T00:01:00Z"}}"#;
+        let json =
+            r#"{"error":{"type":"usage_limit_reached","plan_type":"vip","resets_at":1704067260}}"#;
         let resp: ErrorResponse = serde_json::from_str(json).expect("should deserialize schema");
 
         assert_matches!(resp.error.plan_type, Some(PlanType::Unknown(ref s)) if s == "vip");

@@ -631,6 +631,7 @@ impl CodexMessageProcessor {
             env,
             with_escalated_permissions: None,
             justification: None,
+            arg0: None,
         };
 
         let effective_policy = params

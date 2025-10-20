@@ -815,11 +815,7 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
     mount_sse(
         &server,
         sse(vec![
-            ev_local_shell_call(
-                "user_approved_call",
-                "completed",
-                vec!["/bin/echo", "approved"],
-            ),
+            ev_local_shell_call("user_approved_call", "completed", vec!["/bin/date"]),
             ev_completed("done"),
         ]),
     )
@@ -881,11 +877,7 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
     mount_sse(
         &server,
         sse(vec![
-            ev_local_shell_call(
-                "user_approved_session_call",
-                "completed",
-                vec!["/bin/echo", "persist"],
-            ),
+            ev_local_shell_call("user_approved_session_call", "completed", vec!["/bin/date"]),
             ev_completed("done"),
         ]),
     )
@@ -947,11 +939,7 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
     mount_sse(
         &server,
         sse(vec![
-            ev_local_shell_call(
-                "sandbox_retry_call",
-                "completed",
-                vec!["/bin/echo", "retry"],
-            ),
+            ev_local_shell_call("sandbox_retry_call", "completed", vec!["/bin/date"]),
             ev_completed("done"),
         ]),
     )
@@ -1013,7 +1001,7 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
     mount_sse(
         &server,
         sse(vec![
-            ev_local_shell_call("user_denied_call", "completed", vec!["/bin/echo", "deny"]),
+            ev_local_shell_call("user_denied_call", "completed", vec!["/bin/date"]),
             ev_completed("done"),
         ]),
     )
@@ -1075,11 +1063,7 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
     mount_sse(
         &server,
         sse(vec![
-            ev_local_shell_call(
-                "sandbox_session_call",
-                "completed",
-                vec!["/bin/echo", "persist"],
-            ),
+            ev_local_shell_call("sandbox_session_call", "completed", vec!["/bin/date"]),
             ev_completed("done"),
         ]),
     )
@@ -1141,7 +1125,7 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
     mount_sse(
         &server,
         sse(vec![
-            ev_local_shell_call("sandbox_deny_call", "completed", vec!["/bin/echo", "deny"]),
+            ev_local_shell_call("sandbox_deny_call", "completed", vec!["/bin/date"]),
             ev_completed("done"),
         ]),
     )

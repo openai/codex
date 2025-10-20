@@ -28,6 +28,7 @@ codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-utils-string = { workspace = true }
+codex-utils-pty = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
 env-flags = { workspace = true }
@@ -37,7 +38,6 @@ indexmap = { workspace = true }
 libc = { workspace = true }
 mcp-types = { workspace = true }
 os_info = { workspace = true }
-portable-pty = { workspace = true }
 rand = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }

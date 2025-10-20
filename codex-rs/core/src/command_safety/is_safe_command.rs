@@ -1,15 +1,25 @@
 use crate::bash::parse_bash_lc_plain_commands;
 
 pub fn is_known_safe_command(command: &[String]) -> bool {
+    let command: Vec<String> = command
+        .iter()
+        .map(|s| {
+            if s == "zsh" {
+                "bash".to_string()
+            } else {
+                s.clone()
+            }
+        })
+        .collect();
     #[cfg(target_os = "windows")]
     {
         use super::windows_safe_commands::is_safe_command_windows;
-        if is_safe_command_windows(command) {
+        if is_safe_command_windows(&command) {
             return true;
         }
     }
 
-    if is_safe_to_call_with_exec(command) {
+    if is_safe_to_call_with_exec(&command) {
         return true;
     }
 
@@ -19,7 +29,7 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
     // introduce side effects ( "&&", "||", ";", and "|" ). If every
     // individual command in the script is itself a known‑safe command, then
     // the composite expression is considered safe.
-    if let Some(all_commands) = parse_bash_lc_plain_commands(command)
+    if let Some(all_commands) = parse_bash_lc_plain_commands(&command)
         && !all_commands.is_empty()
         && all_commands
             .iter()
@@ -31,9 +41,14 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
 }
 
 fn is_safe_to_call_with_exec(command: &[String]) -> bool {
-    let cmd0 = command.first().map(String::as_str);
+    let Some(cmd0) = command.first().map(String::as_str) else {
+        return false;
+    };
 
-    match cmd0 {
+    match std::path::Path::new(&cmd0)
+        .file_name()
+        .and_then(|osstr| osstr.to_str())
+    {
         #[rustfmt::skip]
         Some(
             "cat" |
@@ -103,13 +118,12 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         // Rust
         Some("cargo") if command.get(1).map(String::as_str) == Some("check") => true,
 
-        // Special-case `sed -n {N|M,N}p FILE`
+        // Special-case `sed -n {N|M,N}p`
         Some("sed")
             if {
-                command.len() == 4
+                command.len() <= 4
                     && command.get(1).map(String::as_str) == Some("-n")
                     && is_valid_sed_n_arg(command.get(2).map(String::as_str))
-                    && command.get(3).map(String::is_empty) == Some(false)
             } =>
         {
             true
