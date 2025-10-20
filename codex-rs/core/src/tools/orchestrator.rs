@@ -11,7 +11,6 @@ use crate::error::get_error_message_ui;
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::SandboxManager;
 use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ApprovalStore;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
@@ -20,14 +19,12 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 
 pub(crate) struct ToolOrchestrator {
-    approvals: ApprovalStore,
     sandbox: SandboxManager,
 }
 
 impl ToolOrchestrator {
     pub fn new() -> Self {
         Self {
-            approvals: ApprovalStore::default(),
             sandbox: SandboxManager::new(),
         }
     }
@@ -65,19 +62,13 @@ impl ToolOrchestrator {
         };
 
         if needs_initial_approval {
-            let key = tool.approval_key(req);
-            let decision = match self.approvals.get(&key) {
-                Some(d) => d,
-                None => {
-                    let ctx = ApprovalCtx {
-                        session: tool_ctx.session,
-                        sub_id: &tool_ctx.sub_id,
-                        call_id: &tool_ctx.call_id,
-                        retry_reason: None,
-                    };
-                    tool.start_approval_async(req, ctx).await
-                }
+            let approval_ctx = ApprovalCtx {
+                session: tool_ctx.session,
+                sub_id: &tool_ctx.sub_id,
+                call_id: &tool_ctx.call_id,
+                retry_reason: None,
             };
+            let decision = tool.start_approval_async(req, approval_ctx).await;
 
             otel.tool_decision(otel_tn, otel_ci, decision, otel_user.clone());
 
@@ -85,8 +76,7 @@ impl ToolOrchestrator {
                 ReviewDecision::Denied | ReviewDecision::Abort => {
                     return Err(ToolError::Rejected("rejected by user".to_string()));
                 }
-                ReviewDecision::ApprovedForSession => self.approvals.put(key.clone(), decision),
-                ReviewDecision::Approved => {}
+                ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {}
             }
         } else {
             otel.tool_decision(otel_tn, otel_ci, ReviewDecision::Approved, otel_cfg);
@@ -133,11 +123,7 @@ impl ToolOrchestrator {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
                             return Err(ToolError::Rejected("rejected by user".to_string()));
                         }
-                        ReviewDecision::ApprovedForSession => {
-                            let key = tool.approval_key(req);
-                            self.approvals.put(key, ReviewDecision::ApprovedForSession);
-                        }
-                        ReviewDecision::Approved => {}
+                        ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {}
                     }
                 }
 

@@ -15,10 +15,12 @@ use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
+use crate::tools::sandboxing::with_cached_approval;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecSession;
 use crate::unified_exec::UnifiedExecSessionManager;
 use codex_protocol::protocol::ReviewDecision;
+use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -75,18 +77,21 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         &'b mut self,
         req: &'b UnifiedExecRequest,
         ctx: ApprovalCtx<'b>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ReviewDecision> + Send + 'b>> {
+    ) -> BoxFuture<'b, ReviewDecision> {
+        let key = self.approval_key(req);
+        let session = ctx.session;
+        let sub_id = ctx.sub_id.to_string();
+        let call_id = ctx.call_id.to_string();
+        let command = req.command.clone();
+        let cwd = req.cwd.clone();
         let reason = ctx.retry_reason.clone();
         Box::pin(async move {
-            ctx.session
-                .request_command_approval(
-                    ctx.sub_id.to_string(),
-                    ctx.call_id.to_string(),
-                    req.command.clone(),
-                    req.cwd.clone(),
-                    reason,
-                )
-                .await
+            with_cached_approval(&session.services, key, || async move {
+                session
+                    .request_command_approval(sub_id, call_id, command, cwd, reason)
+                    .await
+            })
+            .await
         })
     }
 }

@@ -292,20 +292,12 @@ pub(crate) fn is_likely_sandbox_denied(
     false
 }
 
-#[derive(Debug)]
-pub struct StreamOutput<T> {
+#[derive(Debug, Clone)]
+pub struct StreamOutput<T: Clone> {
     pub text: T,
     pub truncated_after_lines: Option<u32>,
 }
 
-impl<T: Clone> Clone for StreamOutput<T> {
-    fn clone(&self) -> Self {
-        Self {
-            text: self.text.clone(),
-            truncated_after_lines: self.truncated_after_lines,
-        }
-    }
-}
 #[derive(Debug)]
 struct RawExecToolCallOutput {
     pub exit_status: ExitStatus,

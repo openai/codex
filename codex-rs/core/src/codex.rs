@@ -104,6 +104,7 @@ use crate::tasks::ReviewTask;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
+use crate::tools::sandboxing::ApprovalStore;
 use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::ToolsConfigParams;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -560,6 +561,7 @@ impl Session {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager,
+            tool_approvals: Mutex::new(ApprovalStore::default()),
         };
 
         let sess = Arc::new(Session {
@@ -2615,6 +2617,7 @@ mod tests {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
+            tool_approvals: Mutex::new(ApprovalStore::default()),
         };
 
         let session = Session {
@@ -2680,6 +2683,7 @@ mod tests {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
+            tool_approvals: Mutex::new(ApprovalStore::default()),
         };
 
         let session = Arc::new(Session {

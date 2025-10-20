@@ -9,13 +9,17 @@ use crate::error::CodexErr;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxTransformError;
+use crate::state::SessionServices;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::path::Path;
+
+use futures::Future;
+use futures::future::BoxFuture;
+use serde::Serialize;
 
 #[derive(Clone, Default, Debug)]
 pub(crate) struct ApprovalStore {
@@ -42,6 +46,33 @@ impl ApprovalStore {
     }
 }
 
+pub(crate) async fn with_cached_approval<K, F, Fut>(
+    services: &SessionServices,
+    key: K,
+    fetch: F,
+) -> ReviewDecision
+where
+    K: Serialize + Clone,
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = ReviewDecision>,
+{
+    {
+        let store = services.tool_approvals.lock().await;
+        if let Some(decision) = store.get(&key) {
+            return decision;
+        }
+    }
+
+    let decision = fetch().await;
+
+    if matches!(decision, ReviewDecision::ApprovedForSession) {
+        let mut store = services.tool_approvals.lock().await;
+        store.put(key, ReviewDecision::ApprovedForSession);
+    }
+
+    decision
+}
+
 #[derive(Clone)]
 pub(crate) struct ApprovalCtx<'a> {
     pub session: &'a Session,
@@ -63,7 +94,7 @@ pub(crate) trait Approvable<Req> {
         &'a mut self,
         req: &'a Req,
         ctx: ApprovalCtx<'a>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ReviewDecision> + Send + 'a>>;
+    ) -> BoxFuture<'a, ReviewDecision>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

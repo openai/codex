@@ -16,7 +16,9 @@ use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
+use crate::tools::sandboxing::with_cached_approval;
 use codex_protocol::protocol::ReviewDecision;
+use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -96,27 +98,34 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         &'a mut self,
         req: &'a ApplyPatchRequest,
         ctx: ApprovalCtx<'a>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ReviewDecision> + Send + 'a>> {
-        if let Some(reason) = ctx.retry_reason.clone() {
-            return Box::pin(async move {
-                ctx.session
-                    .request_command_approval(
-                        ctx.sub_id.to_string(),
-                        ctx.call_id.to_string(),
-                        vec!["apply_patch".to_string()],
-                        req.cwd.clone(),
-                        Some(reason),
-                    )
-                    .await
-            });
-        }
-
-        let decision = if req.user_explicitly_approved {
-            ReviewDecision::ApprovedForSession
-        } else {
-            ReviewDecision::Approved
-        };
-        Box::pin(async move { decision })
+    ) -> BoxFuture<'a, ReviewDecision> {
+        let key = self.approval_key(req);
+        let session = ctx.session;
+        let sub_id = ctx.sub_id.to_string();
+        let call_id = ctx.call_id.to_string();
+        let cwd = req.cwd.clone();
+        let retry_reason = ctx.retry_reason.clone();
+        let user_explicitly_approved = req.user_explicitly_approved;
+        Box::pin(async move {
+            with_cached_approval(&session.services, key, || async move {
+                if let Some(reason) = retry_reason {
+                    session
+                        .request_command_approval(
+                            sub_id,
+                            call_id,
+                            vec!["apply_patch".to_string()],
+                            cwd,
+                            Some(reason),
+                        )
+                        .await
+                } else if user_explicitly_approved {
+                    ReviewDecision::ApprovedForSession
+                } else {
+                    ReviewDecision::Approved
+                }
+            })
+            .await
+        })
     }
 }
 

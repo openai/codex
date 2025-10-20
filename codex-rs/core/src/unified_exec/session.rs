@@ -195,6 +195,15 @@ impl UnifiedExecSession {
 
         if exit_ready {
             managed.check_for_sandbox_denial().await?;
+            return Ok(managed);
+        }
+
+        tokio::pin!(exit_rx);
+        if tokio::time::timeout(Duration::from_millis(50), &mut exit_rx)
+            .await
+            .is_ok()
+        {
+            managed.check_for_sandbox_denial().await?;
         }
 
         Ok(managed)
