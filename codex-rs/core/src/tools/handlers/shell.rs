@@ -47,7 +47,6 @@ impl ToolHandler for ShellHandler {
             session,
             turn,
             tracker,
-            sub_id,
             call_id,
             tool_name,
             payload,
@@ -68,7 +67,6 @@ impl ToolHandler for ShellHandler {
                     Arc::clone(&session),
                     Arc::clone(&turn),
                     Arc::clone(&tracker),
-                    sub_id.clone(),
                     call_id.clone(),
                 )
                 .await?;
@@ -85,7 +83,6 @@ impl ToolHandler for ShellHandler {
                     Arc::clone(&session),
                     Arc::clone(&turn),
                     Arc::clone(&tracker),
-                    sub_id.clone(),
                     call_id.clone(),
                 )
                 .await?;

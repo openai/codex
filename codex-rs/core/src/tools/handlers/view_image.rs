@@ -31,7 +31,6 @@ impl ToolHandler for ViewImageHandler {
             session,
             turn,
             payload,
-            sub_id,
             call_id,
             ..
         } = invocation;
@@ -76,8 +75,8 @@ impl ToolHandler for ViewImageHandler {
             })?;
 
         session
-            .send_event(Event {
-                id: sub_id.to_string(),
+            .send_event_raw(Event {
+                id: turn.sub_id.clone(),
                 msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
                     call_id,
                     path: event_path,

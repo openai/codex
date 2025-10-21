@@ -42,7 +42,6 @@ impl ToolHandler for ApplyPatchHandler {
             session,
             turn,
             tracker,
-            sub_id,
             call_id,
             tool_name,
             payload,
@@ -81,7 +80,6 @@ impl ToolHandler for ApplyPatchHandler {
             Arc::clone(&session),
             Arc::clone(&turn),
             Arc::clone(&tracker),
-            sub_id.clone(),
             call_id.clone(),
         )
         .await?;
