@@ -113,21 +113,6 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
     }
 }
 
-/// Convert a `ResponseItem` into zero or more `EventMsg` values that the UI can render.
-///
-/// When `show_raw_agent_reasoning` is false, raw reasoning content events are omitted.
-pub(crate) fn map_response_item_to_event_messages(
-    item: &ResponseItem,
-    show_raw_agent_reasoning: bool,
-) -> Vec<EventMsg> {
-    if let Some(turn_item) = parse_turn_item(item) {
-        return turn_item.as_legacy_events(show_raw_agent_reasoning);
-    }
-
-    // Variants that require side effects are handled by higher layers and do not emit events here.
-    Vec::new()
-}
-
 #[cfg(test)]
 mod tests {
     use super::parse_turn_item;
