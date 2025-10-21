@@ -330,7 +330,7 @@ pub struct ListModelsParams {
 #[serde(rename_all = "camelCase")]
 pub struct Model {
     pub id: String,
-    pub slug: String,
+    pub model: String,
     pub display_name: String,
     pub description: String,
     pub supported_reasoning_efforts: Vec<ReasoningEffortOption>,

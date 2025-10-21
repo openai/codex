@@ -51,7 +51,7 @@ async fn list_models_returns_all_models_with_large_limit() {
     let expected_models = vec![
         Model {
             id: "gpt-5-codex".to_string(),
-            slug: "gpt-5-codex".to_string(),
+            model: "gpt-5-codex".to_string(),
             display_name: "GPT-5 Codex".to_string(),
             description: "Specialized GPT-5 variant optimized for Codex.".to_string(),
             supported_reasoning_efforts: vec![
@@ -74,7 +74,7 @@ async fn list_models_returns_all_models_with_large_limit() {
         },
         Model {
             id: "gpt-5".to_string(),
-            slug: "gpt-5".to_string(),
+            model: "gpt-5".to_string(),
             display_name: "GPT-5".to_string(),
             description: "General-purpose GPT-5 model.".to_string(),
             supported_reasoning_efforts: vec![

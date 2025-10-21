@@ -302,16 +302,6 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget {
-    fn model_description_for(slug: &str) -> Option<&'static str> {
-        if slug.starts_with("gpt-5-codex") {
-            Some("Optimized for coding tasks with many tools.")
-        } else if slug.starts_with("gpt-5") {
-            Some("Broad world knowledge with strong general reasoning.")
-        } else {
-            None
-        }
-    }
-
     fn flush_answer_stream_with_separator(&mut self) {
         if let Some(mut controller) = self.stream_controller.take()
             && let Some(cell) = controller.finalize()
@@ -1661,39 +1651,22 @@ impl ChatWidget {
         let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
         let presets: Vec<ModelPreset> = builtin_model_presets(auth_mode);
 
-        let mut grouped: Vec<(&str, Vec<ModelPreset>)> = Vec::new();
-        for preset in presets.into_iter() {
-            if let Some((_, entries)) = grouped.iter_mut().find(|(model, _)| *model == preset.model)
-            {
-                entries.push(preset);
-            } else {
-                grouped.push((preset.model, vec![preset]));
-            }
-        }
-
         let mut items: Vec<SelectionItem> = Vec::new();
-        for (model_slug, entries) in grouped.into_iter() {
-            let name = model_slug.to_string();
-            let description = Self::model_description_for(model_slug)
-                .map(std::string::ToString::to_string)
-                .or_else(|| {
-                    entries
-                        .iter()
-                        .find(|preset| !preset.description.is_empty())
-                        .map(|preset| preset.description.to_string())
-                })
-                .or_else(|| entries.first().map(|preset| preset.description.to_string()));
-            let is_current = model_slug == current_model;
-            let model_slug_string = model_slug.to_string();
-            let presets_for_model = entries.clone();
+        for preset in presets.into_iter() {
+            let description = if preset.description.is_empty() {
+                None
+            } else {
+                Some(preset.description.to_string())
+            };
+            let is_current = preset.model == current_model;
+            let preset_for_action = preset;
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 tx.send(AppEvent::OpenReasoningPopup {
-                    model: model_slug_string.clone(),
-                    presets: presets_for_model.clone(),
+                    model: preset_for_action,
                 });
             })];
             items.push(SelectionItem {
-                name,
+                name: preset.display_name.to_string(),
                 description,
                 is_current,
                 actions,
@@ -1712,25 +1685,19 @@ impl ChatWidget {
     }
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
-    pub(crate) fn open_reasoning_popup(&mut self, model_slug: String, presets: Vec<ModelPreset>) {
-        let default_effort = ReasoningEffortConfig::default();
+    pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
+        let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
+        let supported = preset.supported_reasoning_efforts;
 
-        let has_none_choice = presets.iter().any(|preset| preset.effort.is_none());
         struct EffortChoice {
             stored: Option<ReasoningEffortConfig>,
             display: ReasoningEffortConfig,
         }
         let mut choices: Vec<EffortChoice> = Vec::new();
         for effort in ReasoningEffortConfig::iter() {
-            if presets.iter().any(|preset| preset.effort == Some(effort)) {
+            if supported.iter().any(|option| option.effort == effort) {
                 choices.push(EffortChoice {
                     stored: Some(effort),
-                    display: effort,
-                });
-            }
-            if has_none_choice && default_effort == effort {
-                choices.push(EffortChoice {
-                    stored: None,
                     display: effort,
                 });
             }
@@ -1742,21 +1709,16 @@ impl ChatWidget {
             });
         }
 
-        let default_choice: Option<ReasoningEffortConfig> = if has_none_choice {
-            None
-        } else if choices
+        let default_choice: Option<ReasoningEffortConfig> = choices
             .iter()
             .any(|choice| choice.stored == Some(default_effort))
-        {
-            Some(default_effort)
-        } else {
-            choices
-                .iter()
-                .find_map(|choice| choice.stored)
-                .or(Some(default_effort))
-        };
+            .then_some(Some(default_effort))
+            .flatten()
+            .or_else(|| choices.iter().find_map(|choice| choice.stored))
+            .or(Some(default_effort));
 
-        let is_current_model = self.config.model == model_slug;
+        let model_slug = preset.model.to_string();
+        let is_current_model = self.config.model == preset.model;
         let highlight_choice = if is_current_model {
             self.config.model_reasoning_effort
         } else {
@@ -1773,19 +1735,19 @@ impl ChatWidget {
                 effort_label.push_str(" (default)");
             }
 
-            let description = presets
-                .iter()
-                .find(|preset| preset.effort == choice.stored && !preset.description.is_empty())
-                .map(|preset| preset.description.to_string())
-                .or_else(|| {
-                    presets
+            let description = choice
+                .stored
+                .and_then(|effort| {
+                    supported
                         .iter()
-                        .find(|preset| preset.effort == choice.stored)
-                        .map(|preset| preset.description.to_string())
-                });
+                        .find(|option| option.effort == effort)
+                        .map(|option| option.description.to_string())
+                })
+                .filter(|text| !text.is_empty());
 
             let warning = "⚠ High reasoning effort can quickly consume Plus plan rate limits.";
-            let show_warning = model_slug == "gpt-5-codex" && effort == ReasoningEffortConfig::High;
+            let show_warning =
+                preset.model == "gpt-5-codex" && effort == ReasoningEffortConfig::High;
             let selected_description = show_warning.then(|| {
                 description
                     .as_ref()
