@@ -121,7 +121,7 @@ pub(crate) fn map_response_item_to_event_messages(
     show_raw_agent_reasoning: bool,
 ) -> Vec<EventMsg> {
     if let Some(turn_item) = parse_turn_item(item) {
-        return turn_item.legacy_events(show_raw_agent_reasoning);
+        return turn_item.as_legacy_events(show_raw_agent_reasoning);
     }
 
     // Variants that require side effects are handled by higher layers and do not emit events here.
@@ -130,19 +130,18 @@ pub(crate) fn map_response_item_to_event_messages(
 
 #[cfg(test)]
 mod tests {
-    use super::map_response_item_to_event_messages;
-    use crate::protocol::EventMsg;
-    use crate::protocol::WebSearchEndEvent;
-
+    use super::parse_turn_item;
+    use codex_protocol::items::TurnItem;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemContent;
     use codex_protocol::models::ReasoningItemReasoningSummary;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::models::WebSearchAction;
+    use codex_protocol::user_input::UserInput;
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn maps_user_message_with_text_and_two_images() {
+    fn parses_user_message_with_text_and_two_images() {
         let img1 = "https://example.com/one.png".to_string();
         let img2 = "https://example.com/two.jpg".to_string();
 
@@ -162,20 +161,25 @@ mod tests {
             ],
         };
 
-        let events = map_response_item_to_event_messages(&item, false);
-        assert_eq!(events.len(), 1, "expected a single user message event");
+        let turn_item = parse_turn_item(&item).expect("expected user message turn item");
 
-        match &events[0] {
-            EventMsg::UserMessage(user) => {
-                assert_eq!(user.message, "Hello world");
-                assert_eq!(user.images, Some(vec![img1, img2]));
+        match turn_item {
+            TurnItem::UserMessage(user) => {
+                let expected_content = vec![
+                    UserInput::Text {
+                        text: "Hello world".to_string(),
+                    },
+                    UserInput::Image { image_url: img1 },
+                    UserInput::Image { image_url: img2 },
+                ];
+                assert_eq!(user.content, expected_content);
             }
-            other => panic!("expected UserMessage, got {other:?}"),
+            other => panic!("expected TurnItem::UserMessage, got {other:?}"),
         }
     }
 
     #[test]
-    fn maps_reasoning_summary_without_raw_content() {
+    fn parses_reasoning_summary_and_raw_content() {
         let item = ResponseItem::Reasoning {
             id: "reasoning_1".to_string(),
             summary: vec![
@@ -192,18 +196,23 @@ mod tests {
             encrypted_content: None,
         };
 
-        let events = map_response_item_to_event_messages(&item, false);
+        let turn_item = parse_turn_item(&item).expect("expected reasoning turn item");
 
-        assert_eq!(events.len(), 2, "expected only reasoning summaries");
-        assert!(
-            events
-                .iter()
-                .all(|event| matches!(event, EventMsg::AgentReasoning(_)))
-        );
+        match turn_item {
+            TurnItem::Reasoning(reasoning) => {
+                assert_eq!(
+                    reasoning.summary_text,
+                    vec!["Step 1".to_string(), "Step 2".to_string()]
+                );
+                assert_eq!(reasoning.raw_content, vec!["raw details".to_string()]);
+                assert_eq!(reasoning.encrypted_content, None);
+            }
+            other => panic!("expected TurnItem::Reasoning, got {other:?}"),
+        }
     }
 
     #[test]
-    fn maps_reasoning_including_raw_content_when_enabled() {
+    fn parses_reasoning_including_raw_content() {
         let item = ResponseItem::Reasoning {
             id: "reasoning_2".to_string(),
             summary: vec![ReasoningItemReasoningSummary::SummaryText {
@@ -220,20 +229,23 @@ mod tests {
             encrypted_content: None,
         };
 
-        let events = map_response_item_to_event_messages(&item, true);
+        let turn_item = parse_turn_item(&item).expect("expected reasoning turn item");
 
-        assert_eq!(
-            events.len(),
-            3,
-            "expected summary and raw reasoning content events"
-        );
-        assert!(matches!(events[0], EventMsg::AgentReasoning(_)));
-        assert!(matches!(events[1], EventMsg::AgentReasoningRawContent(_)));
-        assert!(matches!(events[2], EventMsg::AgentReasoningRawContent(_)));
+        match turn_item {
+            TurnItem::Reasoning(reasoning) => {
+                assert_eq!(reasoning.summary_text, vec!["Summarized step".to_string()]);
+                assert_eq!(
+                    reasoning.raw_content,
+                    vec!["raw step".to_string(), "final thought".to_string()]
+                );
+                assert_eq!(reasoning.encrypted_content, None);
+            }
+            other => panic!("expected TurnItem::Reasoning, got {other:?}"),
+        }
     }
 
     #[test]
-    fn maps_web_search_call() {
+    fn parses_web_search_call() {
         let item = ResponseItem::WebSearchCall {
             id: Some("ws_1".to_string()),
             status: Some("completed".to_string()),
@@ -242,15 +254,14 @@ mod tests {
             },
         };
 
-        let events = map_response_item_to_event_messages(&item, false);
-        assert_eq!(events.len(), 1, "expected a single web search event");
+        let turn_item = parse_turn_item(&item).expect("expected web search turn item");
 
-        match &events[0] {
-            EventMsg::WebSearchEnd(WebSearchEndEvent { call_id, query }) => {
-                assert_eq!(call_id, "ws_1");
-                assert_eq!(query, "weather");
+        match turn_item {
+            TurnItem::WebSearch(search) => {
+                assert_eq!(search.id, "ws_1");
+                assert_eq!(search.query, "weather");
             }
-            other => panic!("expected WebSearchEnd, got {other:?}"),
+            other => panic!("expected TurnItem::WebSearch, got {other:?}"),
         }
     }
 }

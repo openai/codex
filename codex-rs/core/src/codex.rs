@@ -752,7 +752,7 @@ impl Session {
         item: &TurnItem,
         emit_raw_agent_reasoning: bool,
     ) {
-        for event in item.legacy_events(emit_raw_agent_reasoning) {
+        for event in item.as_legacy_events(emit_raw_agent_reasoning) {
             self.send_event(turn_context, event).await;
         }
     }

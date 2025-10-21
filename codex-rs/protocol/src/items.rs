@@ -96,22 +96,20 @@ impl AgentMessageItem {
         }
     }
 
-    pub fn as_legacy_event(&self) -> EventMsg {
-        let message = self
-            .content
+    pub fn as_legacy_events(&self) -> Vec<EventMsg> {
+        self.content
             .iter()
             .map(|c| match c {
-                AgentMessageContent::Text { text } => text.clone(),
+                AgentMessageContent::Text { text } => EventMsg::AgentMessage(AgentMessageEvent {
+                    message: text.clone(),
+                }),
             })
-            .collect::<Vec<String>>()
-            .join("");
-
-        EventMsg::AgentMessage(AgentMessageEvent { message })
+            .collect()
     }
 }
 
 impl ReasoningItem {
-    pub fn legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
+    pub fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
         let mut events = Vec::new();
         for summary in &self.summary_text {
             events.push(EventMsg::AgentReasoning(AgentReasoningEvent {
@@ -152,12 +150,12 @@ impl TurnItem {
         }
     }
 
-    pub fn legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
+    pub fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
         match self {
             TurnItem::UserMessage(item) => vec![item.as_legacy_event()],
-            TurnItem::AgentMessage(item) => vec![item.as_legacy_event()],
+            TurnItem::AgentMessage(item) => item.as_legacy_events(),
             TurnItem::WebSearch(item) => vec![item.as_legacy_event()],
-            TurnItem::Reasoning(item) => item.legacy_events(show_raw_agent_reasoning),
+            TurnItem::Reasoning(item) => item.as_legacy_events(show_raw_agent_reasoning),
         }
     }
 }
