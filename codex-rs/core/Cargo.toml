@@ -91,6 +91,7 @@ seccompiler = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
+mac-notification-sys = "0.6.6"
 
 # Build OpenSSL from source for musl builds.
 [target.x86_64-unknown-linux-musl.dependencies]
