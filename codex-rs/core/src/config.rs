@@ -216,9 +216,6 @@ pub struct Config {
     /// When set, restricts the login mechanism users may use.
     pub forced_login_method: Option<ForcedLoginMethod>,
 
-    /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
-    pub include_plan_tool: bool,
-
     /// Include the `apply_patch` tool for models that benefit from invoking
     /// file edits as a structured tool call. When unset, this falls back to the
     /// model family's default preference.
@@ -1117,7 +1114,6 @@ pub struct ConfigOverrides {
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
-    pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
@@ -1147,7 +1143,6 @@ impl Config {
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
             base_instructions,
-            include_plan_tool: include_plan_tool_override,
             include_apply_patch_tool: include_apply_patch_tool_override,
             include_view_image_tool: include_view_image_tool_override,
             show_raw_agent_reasoning,
@@ -1174,7 +1169,6 @@ impl Config {
         };
 
         let feature_overrides = FeatureOverrides {
-            include_plan_tool: include_plan_tool_override,
             include_apply_patch_tool: include_apply_patch_tool_override,
             include_view_image_tool: include_view_image_tool_override,
             web_search_request: override_tools_web_search_request,
@@ -1269,7 +1263,6 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
-        let include_plan_tool_flag = features.enabled(Feature::PlanTool);
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let include_view_image_tool_flag = features.enabled(Feature::ViewImageTool);
         let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
@@ -1399,7 +1392,6 @@ impl Config {
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
             forced_chatgpt_workspace_id,
             forced_login_method,
-            include_plan_tool: include_plan_tool_flag,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             tools_web_search_request,
             use_experimental_streamable_shell_tool,
@@ -1765,7 +1757,6 @@ approve_all = true
         profiles.insert(
             "work".to_string(),
             ConfigProfile {
-                include_plan_tool: Some(true),
                 include_view_image_tool: Some(false),
                 ..Default::default()
             },
@@ -1782,9 +1773,7 @@ approve_all = true
             codex_home.path().to_path_buf(),
         )?;
 
-        assert!(config.features.enabled(Feature::PlanTool));
         assert!(!config.features.enabled(Feature::ViewImageTool));
-        assert!(config.include_plan_tool);
         assert!(!config.include_view_image_tool);
 
         Ok(())
@@ -1794,7 +1783,6 @@ approve_all = true
     fn feature_table_overrides_legacy_flags() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let mut entries = BTreeMap::new();
-        entries.insert("plan_tool".to_string(), false);
         entries.insert("apply_patch_freeform".to_string(), false);
         let cfg = ConfigToml {
             features: Some(crate::features::FeaturesToml { entries }),
@@ -1807,9 +1795,7 @@ approve_all = true
             codex_home.path().to_path_buf(),
         )?;
 
-        assert!(!config.features.enabled(Feature::PlanTool));
         assert!(!config.features.enabled(Feature::ApplyPatchFreeform));
-        assert!(!config.include_plan_tool);
         assert!(!config.include_apply_patch_tool);
 
         Ok(())
@@ -2815,6 +2801,7 @@ model_verbosity = "high"
             env_key: Some("OPENAI_API_KEY".to_string()),
             wire_api: crate::WireApi::Chat,
             env_key_instructions: None,
+            experimental_bearer_token: None,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -2908,7 +2895,6 @@ model_verbosity = "high"
                 base_instructions: None,
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
-                include_plan_tool: false,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
                 use_experimental_streamable_shell_tool: false,
@@ -2977,7 +2963,6 @@ model_verbosity = "high"
             base_instructions: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
-            include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             use_experimental_streamable_shell_tool: false,
@@ -3061,7 +3046,6 @@ model_verbosity = "high"
             base_instructions: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
-            include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             use_experimental_streamable_shell_tool: false,
@@ -3131,7 +3115,6 @@ model_verbosity = "high"
             base_instructions: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
-            include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             use_experimental_streamable_shell_tool: false,
