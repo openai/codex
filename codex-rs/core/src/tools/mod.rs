@@ -522,7 +522,7 @@ mod tests {
         let truncated = format_exec_output(&content);
 
         assert!(
-            truncated.contains("omitted"),
+            truncated.contains("[... omitted 42 of 298 lines ...]"),
             "expected omitted marker when line count exceeds limit: {truncated}"
         );
         assert!(
