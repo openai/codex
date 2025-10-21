@@ -45,7 +45,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
         Model {
             id: "gpt-5-codex".to_string(),
             model: "gpt-5-codex".to_string(),
-            display_name: "GPT-5 Codex".to_string(),
+            display_name: "gpt-5-codex".to_string(),
             description: "Optimized for coding tasks with many tools.".to_string(),
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
@@ -68,7 +68,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
         Model {
             id: "gpt-5".to_string(),
             model: "gpt-5".to_string(),
-            display_name: "GPT-5".to_string(),
+            display_name: "gpt-5".to_string(),
             description: "Broad world knowledge with strong general reasoning.".to_string(),
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
