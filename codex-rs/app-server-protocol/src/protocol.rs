@@ -106,6 +106,13 @@ client_request_definitions! {
         params: ListConversationsParams,
         response: ListConversationsResponse,
     },
+    #[serde(rename = "model/list")]
+    #[ts(rename = "model/list")]
+    /// List available Codex models along with display metadata.
+    ListModels {
+        params: ListModelsParams,
+        response: ListModelsResponse,
+    },
     /// Resume a recorded Codex conversation from a rollout file.
     ResumeConversation {
         params: ResumeConversationParams,
@@ -298,6 +305,47 @@ pub struct ConversationSummary {
 #[serde(rename_all = "camelCase")]
 pub struct ListConversationsResponse {
     pub items: Vec<ConversationSummary>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// if None, there are no more items to return.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ListModelsParams {
+    /// Optional page size; defaults to a reasonable server-side value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_size: Option<usize>,
+    /// Opaque pagination cursor returned by a previous call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Model {
+    pub id: String,
+    pub model: String,
+    pub display_name: String,
+    pub description: String,
+    pub supported_reasoning_efforts: Vec<ReasoningEffortOption>,
+    pub default_reasoning_effort: ReasoningEffort,
+    // Only one model should be marked as default.
+    pub is_default: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ReasoningEffortOption {
+    pub reasoning_effort: ReasoningEffort,
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ListModelsResponse {
+    pub items: Vec<Model>,
     /// Opaque cursor to pass to the next call to continue after the last item.
     /// if None, there are no more items to return.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -989,6 +1037,23 @@ mod tests {
             json!({
                 "method": "account/rateLimits/read",
                 "id": 1,
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_list_models() -> Result<()> {
+        let request = ClientRequest::ListModels {
+            request_id: RequestId::Integer(2),
+            params: ListModelsParams::default(),
+        };
+        assert_eq!(
+            json!({
+                "method": "model/list",
+                "id": 2,
+                "params": {}
             }),
             serde_json::to_value(&request)?,
         );

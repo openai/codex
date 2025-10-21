@@ -323,33 +323,37 @@ fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
                 .map(|segment| segment.len())
                 .sum::<usize>()
     };
-    let marker = format!("\n[... omitted {omitted} of {total_lines} lines ...]\n\n");
-
-    // Byte budgets for head/tail around the marker
-    let mut head_budget = MODEL_FORMAT_HEAD_BYTES.min(MODEL_FORMAT_MAX_BYTES);
-    let tail_budget = MODEL_FORMAT_MAX_BYTES.saturating_sub(head_budget + marker.len());
-    if tail_budget == 0 && marker.len() >= MODEL_FORMAT_MAX_BYTES {
-        // Degenerate case: marker alone exceeds budget; return a clipped marker
-        return take_bytes_at_char_boundary(&marker, MODEL_FORMAT_MAX_BYTES).to_string();
-    }
-    if tail_budget == 0 {
-        // Make room for the marker by shrinking head
-        head_budget = MODEL_FORMAT_MAX_BYTES.saturating_sub(marker.len());
-    }
-
     let head_slice = &content[..head_slice_end];
+    let tail_slice = &content[tail_slice_start..];
+    let truncated_by_bytes = content.len() > MODEL_FORMAT_MAX_BYTES;
+    let marker = if omitted > 0 {
+        Some(format!(
+            "\n[... omitted {omitted} of {total_lines} lines ...]\n\n"
+        ))
+    } else if truncated_by_bytes {
+        Some(format!(
+            "\n[... output truncated to fit {MODEL_FORMAT_MAX_BYTES} bytes ...]\n\n"
+        ))
+    } else {
+        None
+    };
+
+    let marker_len = marker.as_ref().map_or(0, String::len);
+    let base_head_budget = MODEL_FORMAT_HEAD_BYTES.min(MODEL_FORMAT_MAX_BYTES);
+    let head_budget = base_head_budget.min(MODEL_FORMAT_MAX_BYTES.saturating_sub(marker_len));
     let head_part = take_bytes_at_char_boundary(head_slice, head_budget);
     let mut result = String::with_capacity(MODEL_FORMAT_MAX_BYTES.min(content.len()));
 
     result.push_str(head_part);
-    result.push_str(&marker);
+    if let Some(marker_text) = marker.as_ref() {
+        result.push_str(marker_text);
+    }
 
     let remaining = MODEL_FORMAT_MAX_BYTES.saturating_sub(result.len());
     if remaining == 0 {
         return result;
     }
 
-    let tail_slice = &content[tail_slice_start..];
     let tail_part = take_last_bytes_at_char_boundary(tail_slice, remaining);
     result.push_str(tail_part);
 
@@ -396,6 +400,11 @@ mod tests {
         let tail_take = MODEL_FORMAT_TAIL_LINES.min(total_lines.saturating_sub(head_take));
         let omitted = total_lines.saturating_sub(head_take + tail_take);
         let escaped_line = regex_lite::escape(line);
+        if omitted == 0 {
+            return format!(
+                r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} output truncated to fit {MODEL_FORMAT_MAX_BYTES} bytes \.{{3}}]\n\n.*)$",
+            );
+        }
         format!(
             r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} omitted {omitted} of {total_lines} lines \.{{3}}]\n\n.*)$",
         )
@@ -441,5 +450,77 @@ mod tests {
             }
             other => panic!("unexpected error variant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn truncate_formatted_exec_output_marks_byte_truncation_without_omitted_lines() {
+        let long_line = "a".repeat(MODEL_FORMAT_MAX_BYTES + 50);
+        let truncated = format_exec_output(&long_line);
+
+        assert_ne!(truncated, long_line);
+        let marker_line =
+            format!("[... output truncated to fit {MODEL_FORMAT_MAX_BYTES} bytes ...]");
+        assert!(
+            truncated.contains(&marker_line),
+            "missing byte truncation marker: {truncated}"
+        );
+        assert!(
+            !truncated.contains("omitted"),
+            "line omission marker should not appear when no lines were dropped: {truncated}"
+        );
+    }
+
+    #[test]
+    fn truncate_formatted_exec_output_returns_original_when_within_limits() {
+        let content = "example output\n".repeat(10);
+
+        assert_eq!(format_exec_output(&content), content);
+    }
+
+    #[test]
+    fn truncate_formatted_exec_output_reports_omitted_lines_and_keeps_head_and_tail() {
+        let total_lines = MODEL_FORMAT_MAX_LINES + 100;
+        let content: String = (0..total_lines)
+            .map(|idx| format!("line-{idx}\n"))
+            .collect();
+
+        let truncated = format_exec_output(&content);
+        let omitted = total_lines - MODEL_FORMAT_MAX_LINES;
+        let expected_marker = format!("[... omitted {omitted} of {total_lines} lines ...]");
+
+        assert!(
+            truncated.contains(&expected_marker),
+            "missing omitted marker: {truncated}"
+        );
+        assert!(
+            truncated.contains("line-0\n"),
+            "expected head line to remain: {truncated}"
+        );
+
+        let last_line = format!("line-{}\n", total_lines - 1);
+        assert!(
+            truncated.contains(&last_line),
+            "expected tail line to remain: {truncated}"
+        );
+    }
+
+    #[test]
+    fn truncate_formatted_exec_output_prefers_line_marker_when_both_limits_exceeded() {
+        let total_lines = MODEL_FORMAT_MAX_LINES + 42;
+        let long_line = "x".repeat(256);
+        let content: String = (0..total_lines)
+            .map(|idx| format!("line-{idx}-{long_line}\n"))
+            .collect();
+
+        let truncated = format_exec_output(&content);
+
+        assert!(
+            truncated.contains("[... omitted 42 of 298 lines ...]"),
+            "expected omitted marker when line count exceeds limit: {truncated}"
+        );
+        assert!(
+            !truncated.contains("output truncated to fit"),
+            "line omission marker should take precedence over byte marker: {truncated}"
+        );
     }
 }
