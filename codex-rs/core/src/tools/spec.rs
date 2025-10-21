@@ -139,48 +139,99 @@ impl From<JsonSchema> for AdditionalProperties {
     }
 }
 
-fn create_unified_exec_tool() -> ToolSpec {
+fn create_exec_command_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
-        "input".to_string(),
-        JsonSchema::Array {
-            items: Box::new(JsonSchema::String { description: None }),
-            description: Some(
-                "When no session_id is provided, treat the array as the command and arguments \
-                 to launch. When session_id is set, concatenate the strings (in order) and write \
-                 them to the session's stdin."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "session_id".to_string(),
+        "cmd".to_string(),
         JsonSchema::String {
+            description: Some("Shell command to execute.".to_string()),
+        },
+    );
+    properties.insert(
+        "shell".to_string(),
+        JsonSchema::String {
+            description: Some("Shell binary to launch. Defaults to /bin/bash.".to_string()),
+        },
+    );
+    properties.insert(
+        "login".to_string(),
+        JsonSchema::Boolean {
             description: Some(
-                "Identifier for an existing interactive session. If omitted, a new command \
-                 is spawned."
-                    .to_string(),
+                "Whether to run the shell with -l/-i semantics. Defaults to true.".to_string(),
             ),
         },
     );
     properties.insert(
-        "timeout_ms".to_string(),
+        "yield_time_ms".to_string(),
         JsonSchema::Number {
             description: Some(
-                "Maximum time in milliseconds to wait for output after writing the input."
-                    .to_string(),
+                "How long to wait (in milliseconds) for output before yielding.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "max_output_tokens".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Maximum number of tokens to return. Excess output will be truncated.".to_string(),
             ),
         },
     );
 
     ToolSpec::Function(ResponsesApiTool {
-        name: "unified_exec".to_string(),
+        name: "exec_command".to_string(),
         description:
-            "Runs a command in a PTY. Provide a session_id to reuse an existing interactive session.".to_string(),
+            "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
+                .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["input".to_string()]),
+            required: Some(vec!["cmd".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_write_stdin_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "session_id".to_string(),
+        JsonSchema::Number {
+            description: Some("Identifier of the running unified exec session.".to_string()),
+        },
+    );
+    properties.insert(
+        "chars".to_string(),
+        JsonSchema::String {
+            description: Some("Bytes to write to stdin (may be empty to poll).".to_string()),
+        },
+    );
+    properties.insert(
+        "yield_time_ms".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "How long to wait (in milliseconds) for output before yielding.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "max_output_tokens".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Maximum number of tokens to return. Excess output will be truncated.".to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "write_stdin".to_string(),
+        description:
+            "Writes characters to an existing unified exec session and returns recent output."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["session_id".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -842,19 +893,20 @@ pub(crate) fn build_specs(
         || matches!(config.shell_type, ConfigShellToolType::Streamable);
 
     if use_unified_exec {
-        builder.push_spec(create_unified_exec_tool());
-        builder.register_handler("unified_exec", unified_exec_handler);
-    } else {
-        match &config.shell_type {
-            ConfigShellToolType::Default => {
-                builder.push_spec(create_shell_tool());
-            }
-            ConfigShellToolType::Local => {
-                builder.push_spec(ToolSpec::LocalShell {});
-            }
-            ConfigShellToolType::Streamable => {
-                // Already handled by use_unified_exec.
-            }
+        builder.push_spec(create_exec_command_tool());
+        builder.push_spec(create_write_stdin_tool());
+        builder.register_handler("exec_command", unified_exec_handler.clone());
+        builder.register_handler("write_stdin", unified_exec_handler);
+    }
+    match &config.shell_type {
+        ConfigShellToolType::Default => {
+            builder.push_spec(create_shell_tool());
+        }
+        ConfigShellToolType::Local => {
+            builder.push_spec(ToolSpec::LocalShell {});
+        }
+        ConfigShellToolType::Streamable => {
+            // Already handled by use_unified_exec.
         }
     }
 
@@ -1018,7 +1070,8 @@ mod tests {
         assert_eq_tool_names(
             &tools,
             &[
-                "unified_exec",
+                "exec_command",
+                "write_stdin",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1045,7 +1098,8 @@ mod tests {
         assert_eq_tool_names(
             &tools,
             &[
-                "unified_exec",
+                "exec_command",
+                "write_stdin",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1070,7 +1124,8 @@ mod tests {
         });
         let (tools, _) = build_specs(&config, None).build();
 
-        assert!(!find_tool(&tools, "unified_exec").supports_parallel_tool_calls);
+        assert!(!find_tool(&tools, "exec_command").supports_parallel_tool_calls);
+        assert!(!find_tool(&tools, "write_stdin").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "grep_files").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "list_dir").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "read_file").supports_parallel_tool_calls);
@@ -1158,7 +1213,8 @@ mod tests {
         assert_eq_tool_names(
             &tools,
             &[
-                "unified_exec",
+                "exec_command",
+                "write_stdin",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1273,11 +1329,12 @@ mod tests {
         ]);
 
         let (tools, _) = build_specs(&config, Some(tools_map)).build();
-        // Expect unified_exec first, followed by MCP tools sorted by fully-qualified name.
+        // Expect exec_command/write_stdin first, followed by MCP tools sorted by fully-qualified name.
         assert_eq_tool_names(
             &tools,
             &[
-                "unified_exec",
+                "exec_command",
+                "write_stdin",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1328,7 +1385,8 @@ mod tests {
         assert_eq_tool_names(
             &tools,
             &[
-                "unified_exec",
+                "exec_command",
+                "write_stdin",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1340,7 +1398,7 @@ mod tests {
         );
 
         assert_eq!(
-            tools[7].spec,
+            tools[8].spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/search".to_string(),
                 parameters: JsonSchema::Object {
@@ -1396,7 +1454,8 @@ mod tests {
         assert_eq_tool_names(
             &tools,
             &[
-                "unified_exec",
+                "exec_command",
+                "write_stdin",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1407,7 +1466,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            tools[7].spec,
+            tools[8].spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/paginate".to_string(),
                 parameters: JsonSchema::Object {
@@ -1462,7 +1521,8 @@ mod tests {
         assert_eq_tool_names(
             &tools,
             &[
-                "unified_exec",
+                "exec_command",
+                "write_stdin",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1473,7 +1533,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            tools[7].spec,
+            tools[8].spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/tags".to_string(),
                 parameters: JsonSchema::Object {
@@ -1530,7 +1590,8 @@ mod tests {
         assert_eq_tool_names(
             &tools,
             &[
-                "unified_exec",
+                "exec_command",
+                "write_stdin",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1541,7 +1602,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            tools[7].spec,
+            tools[8].spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/value".to_string(),
                 parameters: JsonSchema::Object {
@@ -1635,7 +1696,8 @@ mod tests {
         assert_eq_tool_names(
             &tools,
             &[
-                "unified_exec",
+                "exec_command",
+                "write_stdin",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1647,7 +1709,7 @@ mod tests {
         );
 
         assert_eq!(
-            tools[7].spec,
+            tools[8].spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "test_server/do_something_cool".to_string(),
                 parameters: JsonSchema::Object {

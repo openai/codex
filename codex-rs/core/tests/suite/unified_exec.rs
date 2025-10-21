@@ -77,15 +77,15 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
 
     let first_call_id = "uexec-start";
     let first_args = serde_json::json!({
-        "input": ["/bin/cat"],
-        "timeout_ms": 200,
+        "cmd": "/bin/cat",
+        "yield_time_ms": 200,
     });
 
     let second_call_id = "uexec-stdin";
     let second_args = serde_json::json!({
-        "input": ["hello unified exec\n"],
-        "session_id": "0",
-        "timeout_ms": 500,
+        "chars": "hello unified exec\n",
+        "session_id": 0,
+        "yield_time_ms": 500,
     });
 
     let responses = vec![
@@ -93,7 +93,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
             ev_response_created("resp-1"),
             ev_function_call(
                 first_call_id,
-                "unified_exec",
+                "exec_command",
                 &serde_json::to_string(&first_args)?,
             ),
             ev_completed("resp-1"),
@@ -102,7 +102,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
             ev_response_created("resp-2"),
             ev_function_call(
                 second_call_id,
-                "unified_exec",
+                "write_stdin",
                 &serde_json::to_string(&second_args)?,
             ),
             ev_completed("resp-2"),
@@ -146,9 +146,9 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
     let start_output = outputs
         .get(first_call_id)
         .expect("missing first unified_exec output");
-    let session_id = start_output["session_id"].as_str().unwrap_or_default();
+    let session_id = start_output["session_id"].as_i64().unwrap_or_default();
     assert!(
-        !session_id.is_empty(),
+        session_id >= 0,
         "expected session id in first unified_exec response"
     );
     assert!(
@@ -162,7 +162,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
         .get(second_call_id)
         .expect("missing reused unified_exec output");
     assert_eq!(
-        reuse_output["session_id"].as_str().unwrap_or_default(),
+        reuse_output["session_id"].as_i64().unwrap_or_default(),
         session_id
     );
     let echoed = reuse_output["output"].as_str().unwrap_or_default();
@@ -213,15 +213,15 @@ PY
 
     let first_call_id = "uexec-lag-start";
     let first_args = serde_json::json!({
-        "input": ["/bin/sh", "-c", script],
-        "timeout_ms": 25,
+        "cmd": script,
+        "yield_time_ms": 25,
     });
 
     let second_call_id = "uexec-lag-poll";
     let second_args = serde_json::json!({
-        "input": Vec::<String>::new(),
-        "session_id": "0",
-        "timeout_ms": 2_000,
+        "chars": "",
+        "session_id": 0,
+        "yield_time_ms": 2_000,
     });
 
     let responses = vec![
@@ -229,7 +229,7 @@ PY
             ev_response_created("resp-1"),
             ev_function_call(
                 first_call_id,
-                "unified_exec",
+                "exec_command",
                 &serde_json::to_string(&first_args)?,
             ),
             ev_completed("resp-1"),
@@ -238,7 +238,7 @@ PY
             ev_response_created("resp-2"),
             ev_function_call(
                 second_call_id,
-                "unified_exec",
+                "write_stdin",
                 &serde_json::to_string(&second_args)?,
             ),
             ev_completed("resp-2"),
@@ -282,9 +282,9 @@ PY
     let start_output = outputs
         .get(first_call_id)
         .expect("missing initial unified_exec output");
-    let session_id = start_output["session_id"].as_str().unwrap_or_default();
+    let session_id = start_output["session_id"].as_i64().unwrap_or_default();
     assert!(
-        !session_id.is_empty(),
+        session_id >= 0,
         "expected session id from initial unified_exec response"
     );
 
@@ -319,15 +319,15 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
 
     let first_call_id = "uexec-timeout";
     let first_args = serde_json::json!({
-        "input": ["/bin/sh", "-c", "sleep 0.1; echo ready"],
-        "timeout_ms": 10,
+        "cmd": "sleep 0.5; echo ready",
+        "yield_time_ms": 10,
     });
 
     let second_call_id = "uexec-poll";
     let second_args = serde_json::json!({
-        "input": Vec::<String>::new(),
-        "session_id": "0",
-        "timeout_ms": 800,
+        "chars": "",
+        "session_id": 0,
+        "yield_time_ms": 800,
     });
 
     let responses = vec![
@@ -335,7 +335,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
             ev_response_created("resp-1"),
             ev_function_call(
                 first_call_id,
-                "unified_exec",
+                "exec_command",
                 &serde_json::to_string(&first_args)?,
             ),
             ev_completed("resp-1"),
@@ -344,7 +344,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
             ev_response_created("resp-2"),
             ev_function_call(
                 second_call_id,
-                "unified_exec",
+                "write_stdin",
                 &serde_json::to_string(&second_args)?,
             ),
             ev_completed("resp-2"),
@@ -391,7 +391,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
     let outputs = collect_tool_outputs(&bodies)?;
 
     let first_output = outputs.get(first_call_id).expect("missing timeout output");
-    assert_eq!(first_output["session_id"], "0");
+    assert_eq!(first_output["session_id"], 0);
     assert!(
         first_output["output"]
             .as_str()
