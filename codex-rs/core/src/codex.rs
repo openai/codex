@@ -987,17 +987,6 @@ impl Session {
         self.send_event(turn_context, event).await;
     }
 
-    // todo (aibrahim): we should always append to history. In a follow up PR, we should remove the need for this function.
-    /// Build the full turn input by concatenating the current conversation
-    /// history with additional items for this turn.
-    pub async fn turn_input_with_history(&self, extra: Vec<ResponseItem>) -> Vec<ResponseItem> {
-        let history = {
-            let mut state = self.state.lock().await;
-            state.history_snapshot()
-        };
-        [history, extra].concat()
-    }
-
     /// Returns the input if there was no task running to inject into
     pub async fn inject_input(&self, input: Vec<UserInput>) -> Result<(), Vec<UserInput>> {
         let mut active = self.active_turn.lock().await;
@@ -1545,7 +1534,7 @@ pub(crate) async fn run_task(
             review_thread_history.clone()
         } else {
             sess.record_conversation_items(&pending_input).await;
-            sess.turn_input_with_history(pending_input).await
+            sess.history_snapshot().await
         };
 
         let turn_input_messages: Vec<String> = turn_input

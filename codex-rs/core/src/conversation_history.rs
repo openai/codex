@@ -1,5 +1,6 @@
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use tracing::error;
 
 /// Transcript of conversation history
 #[derive(Debug, Clone, Default)]
@@ -11,6 +12,10 @@ pub(crate) struct ConversationHistory {
 impl ConversationHistory {
     pub(crate) fn new() -> Self {
         Self { items: Vec::new() }
+    }
+
+    pub(crate) fn create_with_items(items: Vec<ResponseItem>) -> Self {
+        Self { items }
     }
 
     /// `items` is ordered from oldest to newest.
@@ -33,6 +38,11 @@ impl ConversationHistory {
         self.contents()
     }
 
+    pub(crate) fn remove_last_item(&mut self) {
+        self.items.pop();
+        self.normalize_history();
+    }
+
     /// This function enforces a couple of invariants on the in-memory history:
     /// 1. every call (function/custom) has a corresponding output entry
     /// 2. every output has a corresponding call entry
@@ -51,7 +61,6 @@ impl ConversationHistory {
 
     fn ensure_call_outputs_present(&mut self) {
         let mut missing_outputs_to_insert: Vec<ResponseItem> = Vec::new();
-
         for item in &self.items {
             match item {
                 ResponseItem::FunctionCall { call_id, .. } => {
@@ -63,6 +72,7 @@ impl ConversationHistory {
                     });
 
                     if !has_output {
+                        error!("Function call output is missing for call id: {}", call_id);
                         missing_outputs_to_insert.push(ResponseItem::FunctionCallOutput {
                             call_id: call_id.clone(),
                             output: FunctionCallOutputPayload {
@@ -81,6 +91,10 @@ impl ConversationHistory {
                     });
 
                     if !has_output {
+                        error!(
+                            "Custom tool call output is missing for call id: {}",
+                            call_id
+                        );
                         missing_outputs_to_insert.push(ResponseItem::CustomToolCallOutput {
                             call_id: call_id.clone(),
                             output: "aborted".to_string(),
@@ -90,6 +104,10 @@ impl ConversationHistory {
                 // LocalShellCall is represented in upstream streams by a FunctionCallOutput
                 ResponseItem::LocalShellCall { call_id, .. } => {
                     if let Some(call_id) = call_id.as_ref() {
+                        error!(
+                            "Local shell call output is missing for call id: {}",
+                            call_id
+                        );
                         let has_output = self.items.iter().any(|i| match i {
                             ResponseItem::FunctionCallOutput {
                                 call_id: existing, ..
@@ -141,6 +159,7 @@ impl ConversationHistory {
                     });
 
                     if !has_call {
+                        error!("Function call is missing for call id: {}", call_id);
                         orphan_output_call_ids.insert(call_id.clone());
                     }
                 }
@@ -153,6 +172,7 @@ impl ConversationHistory {
                     });
 
                     if !has_call {
+                        error!("Custom tool call is missing for call id: {}", call_id);
                         orphan_output_call_ids.insert(call_id.clone());
                     }
                 }

@@ -5,6 +5,7 @@ use super::TurnContext;
 use super::get_last_assistant_message_from_turn;
 use crate::Prompt;
 use crate::client_common::ResponseEvent;
+use crate::conversation_history::ConversationHistory;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::protocol::AgentMessageEvent;
@@ -64,10 +65,12 @@ async fn run_compact_task_inner(
     input: Vec<UserInput>,
 ) {
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    // TODO (aibrahim): this should be a history snapshot.
-    let mut turn_input = sess
-        .turn_input_with_history(vec![initial_input_for_turn.clone().into()])
-        .await;
+
+    let items = sess.history_snapshot().await;
+
+    let mut history = ConversationHistory::create_with_items(items);
+    history.record_items(&[initial_input_for_turn.into()]);
+
     let mut truncated_count = 0usize;
 
     let max_retries = turn_context.client.get_provider().stream_max_retries();
@@ -84,6 +87,7 @@ async fn run_compact_task_inner(
     sess.persist_rollout_items(&[rollout_item]).await;
 
     loop {
+        let turn_input = history.get_history();
         let prompt = Prompt {
             input: turn_input.clone(),
             ..Default::default()
@@ -108,7 +112,7 @@ async fn run_compact_task_inner(
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
                 if turn_input.len() > 1 {
-                    turn_input.remove(0);
+                    history.remove_last_item();
                     truncated_count += 1;
                     retries = 0;
                     continue;
