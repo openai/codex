@@ -333,10 +333,17 @@ pub struct Model {
     pub slug: String,
     pub display_name: String,
     pub description: String,
-    pub supported_reasoning_efforts: Vec<ReasoningEffort>,
+    pub supported_reasoning_efforts: Vec<ReasoningEffortOption>,
     pub default_reasoning_effort: ReasoningEffort,
     // Only one model should be marked as default.
     pub is_default: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ReasoningEffortOption {
+    pub reasoning_effort: ReasoningEffort,
+    pub description: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

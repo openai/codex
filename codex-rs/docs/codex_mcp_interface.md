@@ -85,7 +85,9 @@ Each response yields:
 
 - `items` – ordered list of models, newest first. A model includes:
   - `id`, `slug`, `version`, `description`
-  - `supportedReasoningEfforts` – array of `minimal|low|medium|high`
+  - `supportedReasoningEfforts` – array of objects with:
+    - `reasoningEffort` – one of `minimal|low|medium|high`
+    - `description` – human-friendly label for the effort
   - `defaultReasoningEffort` – suggested effort for the UI
   - `isDefault` – whether the model is recommended for most users
 - `nextCursor` – pass into the next request to continue paging (optional)

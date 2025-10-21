@@ -7,6 +7,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ListModelsParams;
 use codex_app_server_protocol::ListModelsResponse;
 use codex_app_server_protocol::Model;
+use codex_app_server_protocol::ReasoningEffortOption;
 use codex_app_server_protocol::RequestId;
 use codex_protocol::config_types::ReasoningEffort;
 use pretty_assertions::assert_eq;
@@ -54,9 +55,19 @@ async fn list_models_returns_all_models_with_large_limit() {
             display_name: "GPT-5 Codex".to_string(),
             description: "Specialized GPT-5 variant optimized for Codex.".to_string(),
             supported_reasoning_efforts: vec![
-                ReasoningEffort::Low,
-                ReasoningEffort::Medium,
-                ReasoningEffort::High,
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Low,
+                    description: "Fastest responses with limited reasoning".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Medium,
+                    description: "Dynamically adjusts reasoning based on the task".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::High,
+                    description: "Maximizes reasoning depth for complex or ambiguous problems"
+                        .to_string(),
+                },
             ],
             default_reasoning_effort: ReasoningEffort::Medium,
             is_default: true,
@@ -67,10 +78,27 @@ async fn list_models_returns_all_models_with_large_limit() {
             display_name: "GPT-5".to_string(),
             description: "General-purpose GPT-5 model.".to_string(),
             supported_reasoning_efforts: vec![
-                ReasoningEffort::Minimal,
-                ReasoningEffort::Low,
-                ReasoningEffort::Medium,
-                ReasoningEffort::High,
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Minimal,
+                    description: "Fastest responses with little reasoning".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Low,
+                    description: "Balances speed with some reasoning; useful for straightforward \
+                                   queries and short explanations"
+                        .to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Medium,
+                    description: "Provides a solid balance of reasoning depth and latency for \
+                         general-purpose tasks"
+                        .to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::High,
+                    description: "Maximizes reasoning depth for complex or ambiguous problems"
+                        .to_string(),
+                },
             ],
             default_reasoning_effort: ReasoningEffort::Medium,
             is_default: false,
