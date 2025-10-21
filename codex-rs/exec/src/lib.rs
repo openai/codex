@@ -64,6 +64,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         dangerously_disable_timeouts,
         dangerously_disable_environment_wrapping,
         dangerously_passthrough_stdio,
+        auto_next_steps,
         cwd,
         skip_git_repo_check,
         color,
@@ -197,6 +198,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             || dangerously_passthrough_stdio)
             .then_some(true),
         passthrough_shell_stdio: dangerously_passthrough_stdio.then_some(true),
+        auto_next_steps: auto_next_steps.then_some(true),
     };
     // Parse `-c` overrides.
     let cli_kv_overrides = match config_overrides.parse_overrides() {

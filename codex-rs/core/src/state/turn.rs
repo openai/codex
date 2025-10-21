@@ -111,6 +111,10 @@ impl TurnState {
             ret
         }
     }
+
+    pub(crate) fn has_pending_input(&self) -> bool {
+        !self.pending_input.is_empty()
+    }
 }
 
 impl ActiveTurn {

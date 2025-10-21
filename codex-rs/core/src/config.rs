@@ -110,6 +110,7 @@ pub struct Config {
     pub disable_command_timeouts: bool,
     pub passthrough_shell_environment: bool,
     pub passthrough_shell_stdio: bool,
+    pub auto_next_steps: bool,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
     /// suppressed from the frontend output. This can reduce visual noise when
@@ -848,6 +849,9 @@ pub struct ConfigToml {
     /// Stream shell command stdout/stderr directly to the user terminal.
     pub passthrough_shell_stdio: Option<bool>,
 
+    /// Continue automatically by prompting for detailed next steps.
+    pub auto_next_steps: Option<bool>,
+
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
@@ -1109,6 +1113,7 @@ pub struct ConfigOverrides {
     pub disable_command_timeouts: Option<bool>,
     pub passthrough_shell_environment: Option<bool>,
     pub passthrough_shell_stdio: Option<bool>,
+    pub auto_next_steps: Option<bool>,
 }
 
 impl Config {
@@ -1140,6 +1145,7 @@ impl Config {
             disable_command_timeouts,
             passthrough_shell_environment,
             passthrough_shell_stdio,
+            auto_next_steps,
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -1247,6 +1253,10 @@ impl Config {
             .or(config_profile.passthrough_shell_stdio)
             .or(cfg.passthrough_shell_stdio)
             .unwrap_or(false);
+        let auto_next_steps = auto_next_steps
+            .or(config_profile.auto_next_steps)
+            .or(cfg.auto_next_steps)
+            .unwrap_or(false);
 
         let include_plan_tool_flag = features.enabled(Feature::PlanTool);
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
@@ -1323,6 +1333,7 @@ impl Config {
             disable_command_timeouts,
             passthrough_shell_environment,
             passthrough_shell_stdio,
+            auto_next_steps,
             notify: cfg.notify,
             user_instructions,
             base_instructions,
@@ -2753,6 +2764,7 @@ model_verbosity = "high"
                 disable_command_timeouts: false,
                 passthrough_shell_environment: false,
                 passthrough_shell_stdio: false,
+                auto_next_steps: false,
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -2823,6 +2835,7 @@ model_verbosity = "high"
             disable_command_timeouts: false,
             passthrough_shell_environment: false,
             passthrough_shell_stdio: false,
+            auto_next_steps: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -2908,6 +2921,7 @@ model_verbosity = "high"
             disable_command_timeouts: false,
             passthrough_shell_environment: false,
             passthrough_shell_stdio: false,
+            auto_next_steps: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -2979,6 +2993,7 @@ model_verbosity = "high"
             disable_command_timeouts: false,
             passthrough_shell_environment: false,
             passthrough_shell_stdio: false,
+            auto_next_steps: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),

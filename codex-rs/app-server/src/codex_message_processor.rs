@@ -1362,6 +1362,7 @@ async fn derive_config_from_params(
         disable_command_timeouts: None,
         passthrough_shell_environment: None,
         passthrough_shell_stdio: None,
+        auto_next_steps: None,
     };
 
     let cli_overrides = cli_overrides

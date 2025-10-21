@@ -276,6 +276,7 @@ pub(crate) struct TurnContext {
     pub(crate) disable_command_timeouts: bool,
     pub(crate) passthrough_shell_environment: bool,
     pub(crate) passthrough_shell_stdio: bool,
+    pub(crate) auto_next_steps: bool,
 }
 
 impl TurnContext {
@@ -506,6 +507,7 @@ impl Session {
             disable_command_timeouts: config.disable_command_timeouts,
             passthrough_shell_environment: config.passthrough_shell_environment,
             passthrough_shell_stdio: config.passthrough_shell_stdio,
+            auto_next_steps: config.auto_next_steps,
         };
         let services = SessionServices {
             mcp_connection_manager,
@@ -1089,6 +1091,17 @@ impl Session {
         }
     }
 
+    pub async fn has_pending_input(&self) -> bool {
+        let active = self.active_turn.lock().await;
+        match active.as_ref() {
+            Some(at) => {
+                let ts = at.turn_state.lock().await;
+                ts.has_pending_input()
+            }
+            None => false,
+        }
+    }
+
     pub async fn list_resources(
         &self,
         server: &str,
@@ -1285,6 +1298,7 @@ async fn submission_loop(
                     disable_command_timeouts: prev.disable_command_timeouts,
                     passthrough_shell_environment: prev.passthrough_shell_environment,
                     passthrough_shell_stdio: prev.passthrough_shell_stdio,
+                    auto_next_steps: prev.auto_next_steps,
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
@@ -1381,6 +1395,7 @@ async fn submission_loop(
                         disable_command_timeouts: turn_context.disable_command_timeouts,
                         passthrough_shell_environment: turn_context.passthrough_shell_environment,
                         passthrough_shell_stdio: turn_context.passthrough_shell_stdio,
+                        auto_next_steps: turn_context.auto_next_steps,
                     };
 
                     // if the environment context has changed, record it in the conversation history
@@ -1670,6 +1685,7 @@ async fn spawn_review_thread(
         disable_command_timeouts: parent_turn_context.disable_command_timeouts,
         passthrough_shell_environment: parent_turn_context.passthrough_shell_environment,
         passthrough_shell_stdio: parent_turn_context.passthrough_shell_stdio,
+        auto_next_steps: parent_turn_context.auto_next_steps,
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -1949,6 +1965,32 @@ pub(crate) async fn run_task(
                     last_agent_message = get_last_assistant_message_from_turn(
                         &items_to_record_in_conversation_history,
                     );
+
+                    if turn_context.auto_next_steps
+                        && !sess.has_pending_input().await
+                        && let Some(next_prompt) =
+                            build_auto_next_steps_prompt(last_agent_message.as_deref())
+                    {
+                        match sess
+                            .inject_input(vec![InputItem::Text {
+                                text: next_prompt.clone(),
+                            }])
+                            .await
+                        {
+                            Ok(()) => {
+                                sess.notify_background_event(
+                                    &sub_id,
+                                    "Auto-next-steps: queuing detailed follow-up tasks.",
+                                )
+                                .await;
+                                continue;
+                            }
+                            Err(_) => {
+                                tracing::warn!("auto-next-steps: failed to queue follow-up prompt");
+                            }
+                        }
+                    }
+
                     sess.notifier()
                         .notify(&UserNotification::AgentTurnComplete {
                             thread_id: sess.conversation_id.to_string(),
@@ -2453,6 +2495,21 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
         }
     })
 }
+
+fn build_auto_next_steps_prompt(last_agent_message: Option<&str>) -> Option<String> {
+    const BASE_DIRECTIVE: &str = "Continue working autonomously. Identify detailed next steps based on the current state, execute them sequentially, and provide concise progress updates after each step. Stop only if the user interrupts.";
+
+    let summary = last_agent_message
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty());
+
+    Some(match summary {
+        Some(summary) => {
+            format!("{BASE_DIRECTIVE}\n\nLatest summary from your previous work:\n{summary}")
+        }
+        None => BASE_DIRECTIVE.to_string(),
+    })
+}
 fn convert_call_tool_result_to_function_call_output_payload(
     call_tool_result: &CallToolResult,
 ) -> FunctionCallOutputPayload {
@@ -2875,6 +2932,7 @@ mod tests {
             disable_command_timeouts: config.disable_command_timeouts,
             passthrough_shell_environment: config.passthrough_shell_environment,
             passthrough_shell_stdio: config.passthrough_shell_stdio,
+            auto_next_steps: config.auto_next_steps,
         };
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
@@ -2947,6 +3005,7 @@ mod tests {
             disable_command_timeouts: config.disable_command_timeouts,
             passthrough_shell_environment: config.passthrough_shell_environment,
             passthrough_shell_stdio: config.passthrough_shell_stdio,
+            auto_next_steps: config.auto_next_steps,
         });
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),

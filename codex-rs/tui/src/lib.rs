@@ -128,6 +128,7 @@ pub async fn run_main(
     let dangerously_disable_timeouts = cli.dangerously_disable_timeouts;
     let dangerously_disable_environment_wrapping = cli.dangerously_disable_environment_wrapping;
     let dangerously_passthrough_stdio = cli.dangerously_passthrough_stdio;
+    let auto_next_steps = cli.auto_next_steps;
     let dangerously_bypass = cli.dangerously_bypass_approvals_and_sandbox
         || dangerously_disable_timeouts
         || dangerously_disable_environment_wrapping
@@ -193,6 +194,7 @@ pub async fn run_main(
             || dangerously_passthrough_stdio)
             .then_some(true),
         passthrough_shell_stdio: dangerously_passthrough_stdio.then_some(true),
+        auto_next_steps: auto_next_steps.then_some(true),
     };
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
     let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
