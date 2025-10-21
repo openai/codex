@@ -7,6 +7,7 @@ use tokio::time::Instant;
 
 use crate::exec_env::create_env;
 use crate::sandboxing::ExecEnv;
+use crate::tools::events::emit_exec_command_begin;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
@@ -23,6 +24,7 @@ use super::UnifiedExecResult;
 use super::UnifiedExecSessionManager;
 use super::session::OutputBuffer;
 use super::session::UnifiedExecSession;
+use shlex::split as shlex_split;
 
 pub(super) struct SessionAcquisition {
     pub(super) session_id: i32,
@@ -246,6 +248,18 @@ impl UnifiedExecSessionManager {
             None => (DEFAULT_TIMEOUT_MS, None),
         };
 
+        let event_command = command_tokens_for_event(request.input_chunks);
+        if !event_command.is_empty() {
+            emit_exec_command_begin(
+                context.session,
+                context.sub_id,
+                context.call_id,
+                &event_command,
+                context.turn.cwd.as_path(),
+            )
+            .await;
+        }
+
         let mut acquisition = self.acquire_session(&request, &context).await?;
 
         if acquisition.reuse_requested {
@@ -284,5 +298,55 @@ impl UnifiedExecSessionManager {
         };
 
         Ok(UnifiedExecResult { session_id, output })
+    }
+}
+
+fn command_tokens_for_event(chunks: &[String]) -> Vec<String> {
+    let mut joined = String::new();
+    for chunk in chunks {
+        joined.push_str(chunk);
+    }
+
+    let Some(line) = joined.lines().map(str::trim).find(|line| !line.is_empty()) else {
+        return Vec::new();
+    };
+
+    if let Some(tokens) = shlex_split(line) {
+        return tokens;
+    }
+
+    if line.split_whitespace().count() > 1 {
+        return line
+            .split_whitespace()
+            .map(std::string::ToString::to_string)
+            .collect();
+    }
+
+    vec![line.to_string()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command_tokens_for_event;
+
+    #[test]
+    fn tokens_from_single_chunk() {
+        let chunks = vec!["cat README.md\n".to_string()];
+        let tokens = command_tokens_for_event(&chunks);
+        assert_eq!(tokens, vec!["cat".to_string(), "README.md".to_string()]);
+    }
+
+    #[test]
+    fn tokens_from_split_chunks() {
+        let chunks = vec!["cat".to_string(), " README.md\n".to_string()];
+        let tokens = command_tokens_for_event(&chunks);
+        assert_eq!(tokens, vec!["cat".to_string(), "README.md".to_string()]);
+    }
+
+    #[test]
+    fn tokens_from_multiple_lines() {
+        let chunks = vec!["ls -la\npwd\n".to_string()];
+        let tokens = command_tokens_for_event(&chunks);
+        assert_eq!(tokens, vec!["ls".to_string(), "-la".to_string()]);
     }
 }

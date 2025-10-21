@@ -11,6 +11,7 @@ use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::TurnDiffEvent;
 use crate::tools::context::SharedTurnDiffTracker;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -51,6 +52,26 @@ pub(crate) enum ToolEventFailure {
     Output(ExecToolCallOutput),
     Message(String),
 }
+
+pub(crate) async fn emit_exec_command_begin(
+    session: &Session,
+    sub_id: &str,
+    call_id: &str,
+    command: &[String],
+    cwd: &Path,
+) {
+    session
+        .send_event(Event {
+            id: sub_id.to_string(),
+            msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                call_id: call_id.to_string(),
+                command: command.to_vec(),
+                cwd: cwd.to_path_buf(),
+                parsed_cmd: parse_command(command),
+            }),
+        })
+        .await;
+}
 // Concrete, allocation-free emitter: avoid trait objects and boxed futures.
 pub(crate) enum ToolEmitter {
     Shell {
@@ -78,17 +99,14 @@ impl ToolEmitter {
     pub async fn emit(&self, ctx: ToolEventCtx<'_>, stage: ToolEventStage) {
         match (self, stage) {
             (Self::Shell { command, cwd }, ToolEventStage::Begin) => {
-                ctx.session
-                    .send_event(Event {
-                        id: ctx.sub_id.to_string(),
-                        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-                            call_id: ctx.call_id.to_string(),
-                            command: command.clone(),
-                            cwd: cwd.clone(),
-                            parsed_cmd: parse_command(command),
-                        }),
-                    })
-                    .await;
+                emit_exec_command_begin(
+                    ctx.session,
+                    ctx.sub_id,
+                    ctx.call_id,
+                    command,
+                    cwd.as_path(),
+                )
+                .await;
             }
             (Self::Shell { .. }, ToolEventStage::Success(output)) => {
                 emit_exec_end(
