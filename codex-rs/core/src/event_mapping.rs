@@ -76,7 +76,7 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
             id,
             summary,
             content,
-            encrypted_content,
+            ..
         } => {
             let summary_text = summary
                 .iter()
@@ -212,7 +212,6 @@ mod tests {
                     vec!["Step 1".to_string(), "Step 2".to_string()]
                 );
                 assert_eq!(reasoning.raw_content, vec!["raw details".to_string()]);
-                assert_eq!(reasoning.encrypted_content, None);
             }
             other => panic!("expected TurnItem::Reasoning, got {other:?}"),
         }
@@ -245,7 +244,6 @@ mod tests {
                     reasoning.raw_content,
                     vec!["raw step".to_string(), "final thought".to_string()]
                 );
-                assert_eq!(reasoning.encrypted_content, None);
             }
             other => panic!("expected TurnItem::Reasoning, got {other:?}"),
         }
