@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::mount_sse_once;
@@ -42,7 +42,7 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
     // Kick off a turn that triggers the function call.
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "start sleep".into(),
             }],
         })

@@ -201,7 +201,7 @@ jobs:
         # Tests take too long for release builds to run them on every PR.
         if: ${{ matrix.profile != 'release' }}
         continue-on-error: true
-        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }}
+        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test
         env:
           RUST_BACKTRACE: 1
 

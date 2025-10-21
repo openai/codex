@@ -51,6 +51,7 @@ pub(crate) enum UserNotification {
     AgentTurnComplete {
         thread_id: String,
         turn_id: String,
+        cwd: String,
 
         /// Messages that the user sent to the agent to initiate the turn.
         input_messages: Vec<String>,
@@ -70,6 +71,7 @@ mod tests {
         let notification = UserNotification::AgentTurnComplete {
             thread_id: "b5f6c1c2-1111-2222-3333-444455556666".to_string(),
             turn_id: "12345".to_string(),
+            cwd: "/Users/example/project".to_string(),
             input_messages: vec!["Rename `foo` to `bar` and update the callsites.".to_string()],
             last_assistant_message: Some(
                 "Rename complete and verified `cargo build` succeeds.".to_string(),
@@ -78,7 +80,7 @@ mod tests {
         let serialized = serde_json::to_string(&notification)?;
         assert_eq!(
             serialized,
-            r#"{"type":"agent-turn-complete","thread-id":"b5f6c1c2-1111-2222-3333-444455556666","turn-id":"12345","input-messages":["Rename `foo` to `bar` and update the callsites."],"last-assistant-message":"Rename complete and verified `cargo build` succeeds."}"#
+            r#"{"type":"agent-turn-complete","thread-id":"b5f6c1c2-1111-2222-3333-444455556666","turn-id":"12345","cwd":"/Users/example/project","input-messages":["Rename `foo` to `bar` and update the callsites."],"last-assistant-message":"Rename complete and verified `cargo build` succeeds."}"#
         );
         Ok(())
     }

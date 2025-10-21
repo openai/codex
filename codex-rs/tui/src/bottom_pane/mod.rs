@@ -70,7 +70,7 @@ pub(crate) struct BottomPane {
     status: Option<StatusIndicatorWidget>,
     /// Queued user messages to show under the status indicator.
     queued_user_messages: Vec<String>,
-    context_window_percent: Option<u8>,
+    context_window_percent: Option<i64>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -357,7 +357,7 @@ impl BottomPane {
         }
     }
 
-    pub(crate) fn set_context_window_percent(&mut self, percent: Option<u8>) {
+    pub(crate) fn set_context_window_percent(&mut self, percent: Option<i64>) {
         if self.context_window_percent == percent {
             return;
         }

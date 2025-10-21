@@ -21,8 +21,8 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::codex::Session;
+use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
-use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
@@ -189,7 +189,7 @@ impl ToolHandler for McpResourceHandler {
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         let ToolInvocation {
             session,
-            sub_id,
+            turn,
             call_id,
             tool_name,
             payload,
@@ -211,7 +211,7 @@ impl ToolHandler for McpResourceHandler {
             "list_mcp_resources" => {
                 handle_list_resources(
                     Arc::clone(&session),
-                    sub_id.clone(),
+                    Arc::clone(&turn),
                     call_id.clone(),
                     arguments_value.clone(),
                 )
@@ -220,14 +220,20 @@ impl ToolHandler for McpResourceHandler {
             "list_mcp_resource_templates" => {
                 handle_list_resource_templates(
                     Arc::clone(&session),
-                    sub_id.clone(),
+                    Arc::clone(&turn),
                     call_id.clone(),
                     arguments_value.clone(),
                 )
                 .await
             }
             "read_mcp_resource" => {
-                handle_read_resource(Arc::clone(&session), sub_id, call_id, arguments_value).await
+                handle_read_resource(
+                    Arc::clone(&session),
+                    Arc::clone(&turn),
+                    call_id,
+                    arguments_value,
+                )
+                .await
             }
             other => Err(FunctionCallError::RespondToModel(format!(
                 "unsupported MCP resource tool: {other}"
@@ -238,7 +244,7 @@ impl ToolHandler for McpResourceHandler {
 
 async fn handle_list_resources(
     session: Arc<Session>,
-    sub_id: String,
+    turn: Arc<TurnContext>,
     call_id: String,
     arguments: Option<Value>,
 ) -> Result<ToolOutput, FunctionCallError> {
@@ -253,7 +259,7 @@ async fn handle_list_resources(
         arguments: arguments.clone(),
     };
 
-    emit_tool_call_begin(&session, &sub_id, &call_id, invocation.clone()).await;
+    emit_tool_call_begin(&session, turn.as_ref(), &call_id, invocation.clone()).await;
     let start = Instant::now();
 
     let payload_result: Result<ListResourcesPayload, FunctionCallError> = async {
@@ -297,7 +303,7 @@ async fn handle_list_resources(
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,
-                    &sub_id,
+                    turn.as_ref(),
                     &call_id,
                     invocation,
                     duration,
@@ -311,7 +317,7 @@ async fn handle_list_resources(
                 let message = err.to_string();
                 emit_tool_call_end(
                     &session,
-                    &sub_id,
+                    turn.as_ref(),
                     &call_id,
                     invocation,
                     duration,
@@ -326,7 +332,7 @@ async fn handle_list_resources(
             let message = err.to_string();
             emit_tool_call_end(
                 &session,
-                &sub_id,
+                turn.as_ref(),
                 &call_id,
                 invocation,
                 duration,
@@ -340,7 +346,7 @@ async fn handle_list_resources(
 
 async fn handle_list_resource_templates(
     session: Arc<Session>,
-    sub_id: String,
+    turn: Arc<TurnContext>,
     call_id: String,
     arguments: Option<Value>,
 ) -> Result<ToolOutput, FunctionCallError> {
@@ -355,7 +361,7 @@ async fn handle_list_resource_templates(
         arguments: arguments.clone(),
     };
 
-    emit_tool_call_begin(&session, &sub_id, &call_id, invocation.clone()).await;
+    emit_tool_call_begin(&session, turn.as_ref(), &call_id, invocation.clone()).await;
     let start = Instant::now();
 
     let payload_result: Result<ListResourceTemplatesPayload, FunctionCallError> = async {
@@ -403,7 +409,7 @@ async fn handle_list_resource_templates(
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,
-                    &sub_id,
+                    turn.as_ref(),
                     &call_id,
                     invocation,
                     duration,
@@ -417,7 +423,7 @@ async fn handle_list_resource_templates(
                 let message = err.to_string();
                 emit_tool_call_end(
                     &session,
-                    &sub_id,
+                    turn.as_ref(),
                     &call_id,
                     invocation,
                     duration,
@@ -432,7 +438,7 @@ async fn handle_list_resource_templates(
             let message = err.to_string();
             emit_tool_call_end(
                 &session,
-                &sub_id,
+                turn.as_ref(),
                 &call_id,
                 invocation,
                 duration,
@@ -446,7 +452,7 @@ async fn handle_list_resource_templates(
 
 async fn handle_read_resource(
     session: Arc<Session>,
-    sub_id: String,
+    turn: Arc<TurnContext>,
     call_id: String,
     arguments: Option<Value>,
 ) -> Result<ToolOutput, FunctionCallError> {
@@ -461,7 +467,7 @@ async fn handle_read_resource(
         arguments: arguments.clone(),
     };
 
-    emit_tool_call_begin(&session, &sub_id, &call_id, invocation.clone()).await;
+    emit_tool_call_begin(&session, turn.as_ref(), &call_id, invocation.clone()).await;
     let start = Instant::now();
 
     let payload_result: Result<ReadResourcePayload, FunctionCallError> = async {
@@ -489,7 +495,7 @@ async fn handle_read_resource(
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,
-                    &sub_id,
+                    turn.as_ref(),
                     &call_id,
                     invocation,
                     duration,
@@ -503,7 +509,7 @@ async fn handle_read_resource(
                 let message = err.to_string();
                 emit_tool_call_end(
                     &session,
-                    &sub_id,
+                    turn.as_ref(),
                     &call_id,
                     invocation,
                     duration,
@@ -518,7 +524,7 @@ async fn handle_read_resource(
             let message = err.to_string();
             emit_tool_call_end(
                 &session,
-                &sub_id,
+                turn.as_ref(),
                 &call_id,
                 invocation,
                 duration,
@@ -544,39 +550,39 @@ fn call_tool_result_from_content(content: &str, success: Option<bool>) -> CallTo
 
 async fn emit_tool_call_begin(
     session: &Arc<Session>,
-    sub_id: &str,
+    turn: &TurnContext,
     call_id: &str,
     invocation: McpInvocation,
 ) {
     session
-        .send_event(Event {
-            id: sub_id.to_string(),
-            msg: EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+        .send_event(
+            turn,
+            EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id: call_id.to_string(),
                 invocation,
             }),
-        })
+        )
         .await;
 }
 
 async fn emit_tool_call_end(
     session: &Arc<Session>,
-    sub_id: &str,
+    turn: &TurnContext,
     call_id: &str,
     invocation: McpInvocation,
     duration: Duration,
     result: Result<CallToolResult, String>,
 ) {
     session
-        .send_event(Event {
-            id: sub_id.to_string(),
-            msg: EventMsg::McpToolCallEnd(McpToolCallEndEvent {
+        .send_event(
+            turn,
+            EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id: call_id.to_string(),
                 invocation,
                 duration,
                 result,
             }),
-        })
+        )
         .await;
 }
 
