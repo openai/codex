@@ -59,6 +59,291 @@ fn collect_tool_outputs(bodies: &[Value]) -> Result<HashMap<String, Value>> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let call_id = "uexec-metadata";
+    let args = serde_json::json!({
+        "cmd": "printf 'abcdefghijklmnopqrstuvwxyz'",
+        "yield_time_ms": 500,
+        "max_output_tokens": 6,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "run metadata test".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert!(!requests.is_empty(), "expected at least one POST request");
+
+    let bodies = requests
+        .iter()
+        .map(|req| req.body_json::<Value>().expect("request json"))
+        .collect::<Vec<_>>();
+
+    let outputs = collect_tool_outputs(&bodies)?;
+    let metadata = outputs
+        .get(call_id)
+        .expect("missing exec_command metadata output");
+
+    let chunk_id = metadata
+        .get("chunk_id")
+        .and_then(Value::as_str)
+        .expect("missing chunk_id");
+    assert_eq!(chunk_id.len(), 6, "chunk id should be 6 hex characters");
+    assert!(
+        chunk_id.chars().all(|c| c.is_ascii_hexdigit()),
+        "chunk id should be hexadecimal: {chunk_id}"
+    );
+
+    let wall_time = metadata
+        .get("wall_time_seconds")
+        .and_then(Value::as_f64)
+        .unwrap_or_default();
+    assert!(
+        wall_time >= 0.0,
+        "wall_time_seconds should be non-negative, got {wall_time}"
+    );
+
+    assert!(
+        metadata.get("session_id").is_none(),
+        "exec_command for a completed process should not include session_id"
+    );
+
+    let exit_code = metadata
+        .get("exit_code")
+        .and_then(Value::as_i64)
+        .expect("expected exit_code");
+    assert_eq!(exit_code, 0, "expected successful exit");
+
+    let output_text = metadata
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("missing output text");
+    assert!(
+        output_text.contains("tokens truncated"),
+        "expected truncation notice in output: {output_text:?}"
+    );
+
+    let original_tokens = metadata
+        .get("original_token_count")
+        .and_then(Value::as_u64)
+        .expect("missing original_token_count");
+    assert!(
+        original_tokens as usize > 6,
+        "original token count should exceed max_output_tokens"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let start_call_id = "uexec-cat-start";
+    let send_call_id = "uexec-cat-send";
+    let exit_call_id = "uexec-cat-exit";
+
+    let start_args = serde_json::json!({
+        "cmd": "/bin/cat",
+        "yield_time_ms": 500,
+    });
+    let send_args = serde_json::json!({
+        "chars": "hello unified exec\n",
+        "session_id": 0,
+        "yield_time_ms": 500,
+    });
+    let exit_args = serde_json::json!({
+        "chars": "\u{0004}",
+        "session_id": 0,
+        "yield_time_ms": 500,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                start_call_id,
+                "exec_command",
+                &serde_json::to_string(&start_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_function_call(
+                send_call_id,
+                "write_stdin",
+                &serde_json::to_string(&send_args)?,
+            ),
+            ev_completed("resp-2"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_function_call(
+                exit_call_id,
+                "write_stdin",
+                &serde_json::to_string(&exit_args)?,
+            ),
+            ev_completed("resp-3"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "all done"),
+            ev_completed("resp-4"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "test write_stdin exit behavior".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert!(!requests.is_empty(), "expected at least one POST request");
+
+    let bodies = requests
+        .iter()
+        .map(|req| req.body_json::<Value>().expect("request json"))
+        .collect::<Vec<_>>();
+
+    let outputs = collect_tool_outputs(&bodies)?;
+
+    let start_output = outputs
+        .get(start_call_id)
+        .expect("missing start output for exec_command");
+    let session_id = start_output
+        .get("session_id")
+        .and_then(Value::as_i64)
+        .expect("expected session id from exec_command");
+    assert!(
+        session_id >= 0,
+        "session_id should be non-negative, got {session_id}"
+    );
+    assert!(
+        start_output.get("exit_code").is_none(),
+        "initial exec_command should not include exit_code while session is running"
+    );
+
+    let send_output = outputs
+        .get(send_call_id)
+        .expect("missing write_stdin echo output");
+    let echoed = send_output
+        .get("output")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        echoed.contains("hello unified exec"),
+        "expected echoed output from cat, got {echoed:?}"
+    );
+    let echoed_session = send_output
+        .get("session_id")
+        .and_then(Value::as_i64)
+        .expect("write_stdin should return session id while process is running");
+    assert_eq!(
+        echoed_session, session_id,
+        "write_stdin should reuse existing session id"
+    );
+    assert!(
+        send_output.get("exit_code").is_none(),
+        "write_stdin should not include exit_code while process is running"
+    );
+
+    let exit_output = outputs
+        .get(exit_call_id)
+        .expect("missing exit metadata output");
+    assert!(
+        exit_output.get("session_id").is_none(),
+        "session_id should be omitted once the process exits"
+    );
+    let exit_code = exit_output
+        .get("exit_code")
+        .and_then(Value::as_i64)
+        .expect("expected exit_code after sending EOF");
+    assert_eq!(exit_code, 0, "cat should exit cleanly after EOF");
+
+    let exit_chunk = exit_output
+        .get("chunk_id")
+        .and_then(Value::as_str)
+        .expect("missing chunk id for exit output");
+    assert!(
+        exit_chunk.chars().all(|c| c.is_ascii_hexdigit()),
+        "chunk id should be hexadecimal: {exit_chunk}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
