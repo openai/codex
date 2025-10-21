@@ -693,7 +693,7 @@ fn ctrl_c_shutdown_ignores_caps_lock() {
 }
 
 #[test]
-fn ctrl_shift_z_restores_cleared_prompt() {
+fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual();
 
     chat.bottom_pane.insert_str("draft message ");
@@ -710,20 +710,20 @@ fn ctrl_shift_z_restores_cleared_prompt() {
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
     assert!(chat.bottom_pane.ctrl_c_quit_hint_visible());
 
-    chat.handle_key_event(KeyEvent::new(
-        KeyCode::Char('z'),
-        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-    ));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     let restored_text = chat.bottom_pane.composer_text();
     assert!(
         restored_text.ends_with(placeholder),
-        "expected placeholder {placeholder:?} after restore"
+        "expected placeholder {placeholder:?} after history recall"
     );
     assert!(restored_text.starts_with("draft message "));
     assert!(!chat.bottom_pane.ctrl_c_quit_hint_visible());
 
     let images = chat.bottom_pane.take_recent_submission_images();
-    assert_eq!(images, vec![PathBuf::from("/tmp/preview.png")]);
+    assert!(
+        images.is_empty(),
+        "attachments are not preserved in history recall"
+    );
 }
 
 #[test]

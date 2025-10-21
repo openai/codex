@@ -111,13 +111,6 @@ pub(crate) struct ChatComposer {
     context_window_percent: Option<i64>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ClearedComposerState {
-    text: String,
-    attachments: Vec<(String, PathBuf)>,
-    pending_pastes: Vec<(String, String)>,
-}
-
 /// Popup state – at most one can be visible at any time.
 enum ActivePopup {
     None,
@@ -249,8 +242,7 @@ impl ChatComposer {
         let Some(text) = self.history.on_entry_response(log_id, offset, entry) else {
             return false;
         };
-        self.textarea.set_text(&text);
-        self.textarea.set_cursor(0);
+        self.set_text_content(text);
         true
     }
 
@@ -323,38 +315,14 @@ impl ChatComposer {
         self.sync_file_search_popup();
     }
 
-    pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<ClearedComposerState> {
-        if self.is_empty() && self.attached_images.is_empty() && self.pending_pastes.is_empty() {
+    pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {
+        if self.is_empty() {
             return None;
         }
         let previous = self.current_text();
-        let attachments = self
-            .attached_images
-            .iter()
-            .map(|img| (img.placeholder.clone(), img.path.clone()))
-            .collect();
-        let pending_pastes = self.pending_pastes.clone();
         self.set_text_content(String::new());
         self.history.reset_navigation();
-        Some(ClearedComposerState {
-            text: previous,
-            attachments,
-            pending_pastes,
-        })
-    }
-
-    pub(crate) fn restore_cleared_prompt(&mut self, state: ClearedComposerState) {
-        let text_len = state.text.len();
-        self.set_text_content(state.text);
-        self.pending_pastes = state.pending_pastes;
-        self.attached_images = state
-            .attachments
-            .into_iter()
-            .map(|(placeholder, path)| AttachedImage { placeholder, path })
-            .collect();
-        if text_len > 0 {
-            self.textarea.set_cursor(text_len);
-        }
+        Some(previous)
     }
 
     /// Get the current composer text.
@@ -932,8 +900,7 @@ impl ChatComposer {
                         _ => unreachable!(),
                     };
                     if let Some(text) = replace_text {
-                        self.textarea.set_text(&text);
-                        self.textarea.set_cursor(0);
+                        self.set_text_content(text);
                         return (InputResult::None, true);
                     }
                 }
@@ -1551,6 +1518,10 @@ impl ChatComposer {
         if self.context_window_percent != percent {
             self.context_window_percent = percent;
         }
+    }
+
+    pub(crate) fn record_cleared_draft(&mut self, text: String) {
+        self.history.record_local_submission(&text);
     }
 
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
