@@ -875,6 +875,11 @@ pub struct AuthStatusChangeNotification {
 #[serde(tag = "method", content = "params", rename_all = "camelCase")]
 #[strum(serialize_all = "camelCase")]
 pub enum ServerNotification {
+    #[serde(rename = "account/rateLimits/updated")]
+    #[ts(rename = "account/rateLimits/updated")]
+    #[strum(serialize = "account/rateLimits/updated")]
+    AccountRateLimitsUpdated(RateLimitSnapshot),
+
     /// Authentication status changed
     AuthStatusChange(AuthStatusChangeNotification),
 
@@ -888,6 +893,7 @@ pub enum ServerNotification {
 impl ServerNotification {
     pub fn to_params(self) -> Result<serde_json::Value, serde_json::Error> {
         match self {
+            ServerNotification::AccountRateLimitsUpdated(params) => serde_json::to_value(params),
             ServerNotification::AuthStatusChange(params) => serde_json::to_value(params),
             ServerNotification::LoginChatGptComplete(params) => serde_json::to_value(params),
             ServerNotification::SessionConfigured(params) => serde_json::to_value(params),

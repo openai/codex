@@ -1436,6 +1436,15 @@ async fn apply_bespoke_event_handling(
                 on_exec_approval_response(event_id, rx, conversation).await;
             });
         }
+        EventMsg::TokenCount(token_count_event) => {
+            if let Some(rate_limits) = token_count_event.rate_limits {
+                outgoing
+                    .send_server_notification(ServerNotification::AccountRateLimitsUpdated(
+                        rate_limits,
+                    ))
+                    .await;
+            }
+        }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {
             let pending = {
