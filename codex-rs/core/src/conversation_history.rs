@@ -40,6 +40,7 @@ impl ConversationHistory {
 
     pub(crate) fn remove_first_item(&mut self) {
         self.items.remove(0);
+        self.normalize_history();
     }
 
     /// This function enforces a couple of invariants on the in-memory history:
