@@ -33,6 +33,7 @@ members = [
     "otel",
     "tui",
     "git-apply",
+    "utils/cache",
     "utils/image",
     "utils/json-to-toml",
     "utils/pty",
@@ -79,6 +80,7 @@ codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
+codex-utils-cache = { path = "utils/cache" }
 codex-utils-image = { path = "utils/image" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-pty = { path = "utils/pty" }
@@ -130,6 +132,7 @@ landlock = "0.4.1"
 lazy_static = "1"
 libc = "0.2.175"
 log = "0.4"
+lru = "0.12.5"
 maplit = "1.0.2"
 mime_guess = "2.0.5"
 multimap = "0.10.0"

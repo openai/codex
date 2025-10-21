@@ -1486,10 +1486,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-utils-cache"
+version = "0.0.0"
+dependencies = [
+ "lru",
+ "tokio",
+]
+
+[[package]]
 name = "codex-utils-image"
 version = "0.0.0"
 dependencies = [
  "base64",
+ "codex-utils-cache",
  "image",
  "tempfile",
  "thiserror 2.0.16",

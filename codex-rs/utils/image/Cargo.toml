@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 base64 = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png"] }
+codex-utils-cache = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
