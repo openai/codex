@@ -1139,11 +1139,11 @@ fn reasoning_popup_escape_returns_to_model_popup() {
     chat.config.model = "gpt-5".to_string();
     chat.open_model_popup();
 
-    let preset = builtin_model_presets(None)
+    let presets = builtin_model_presets(None)
         .into_iter()
         .find(|preset| preset.model == "gpt-5-codex")
         .expect("gpt-5-codex preset");
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(presets);
 
     let before_escape = render_bottom_popup(&chat, 80);
     assert!(before_escape.contains("Select Reasoning Level"));

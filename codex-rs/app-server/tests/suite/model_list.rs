@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use anyhow::Result;
+use anyhow::anyhow;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCError;
@@ -18,42 +20,33 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_models_returns_all_models_with_large_limit() {
-    let codex_home = TempDir::new().expect("create temp dir");
-    let mut mcp = McpProcess::new(codex_home.path())
-        .await
-        .expect("spawn mcp process");
+async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
 
-    timeout(DEFAULT_TIMEOUT, mcp.initialize())
-        .await
-        .expect("initialize timeout")
-        .expect("initialize success");
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_list_models_request(ListModelsParams {
             page_size: Some(100),
             cursor: None,
         })
-        .await
-        .expect("send models request");
+        .await?;
 
     let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
-    .await
-    .expect("models response timeout")
-    .expect("models response");
+    .await??;
 
-    let ListModelsResponse { items, next_cursor } =
-        to_response::<ListModelsResponse>(response).expect("decode models response");
+    let ListModelsResponse { items, next_cursor } = to_response::<ListModelsResponse>(response)?;
 
     let expected_models = vec![
         Model {
             id: "gpt-5-codex".to_string(),
             model: "gpt-5-codex".to_string(),
             display_name: "GPT-5 Codex".to_string(),
-            description: "Specialized GPT-5 variant optimized for Codex.".to_string(),
+            description: "Optimized for coding tasks with many tools.".to_string(),
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Low,
@@ -76,7 +69,7 @@ async fn list_models_returns_all_models_with_large_limit() {
             id: "gpt-5".to_string(),
             model: "gpt-5".to_string(),
             display_name: "GPT-5".to_string(),
-            description: "General-purpose GPT-5 model.".to_string(),
+            description: "Broad world knowledge with strong general reasoning.".to_string(),
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Minimal,
@@ -107,100 +100,84 @@ async fn list_models_returns_all_models_with_large_limit() {
 
     assert_eq!(items, expected_models);
     assert!(next_cursor.is_none());
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_models_pagination_works() {
-    let codex_home = TempDir::new().expect("create temp dir");
-    let mut mcp = McpProcess::new(codex_home.path())
-        .await
-        .expect("spawn mcp process");
+async fn list_models_pagination_works() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
 
-    timeout(DEFAULT_TIMEOUT, mcp.initialize())
-        .await
-        .expect("initialize timeout")
-        .expect("initialize success");
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let first_request = mcp
         .send_list_models_request(ListModelsParams {
             page_size: Some(1),
             cursor: None,
         })
-        .await
-        .expect("send first page");
+        .await?;
 
     let first_response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(first_request)),
     )
-    .await
-    .expect("first page timeout")
-    .expect("first page response");
+    .await??;
 
     let ListModelsResponse {
         items: first_items,
         next_cursor: first_cursor,
-    } = to_response::<ListModelsResponse>(first_response).expect("decode first page");
+    } = to_response::<ListModelsResponse>(first_response)?;
 
     assert_eq!(first_items.len(), 1);
     assert_eq!(first_items[0].id, "gpt-5-codex");
-    let next_cursor = first_cursor.expect("cursor for second page");
+    let next_cursor = first_cursor.ok_or_else(|| anyhow!("cursor for second page"))?;
 
     let second_request = mcp
         .send_list_models_request(ListModelsParams {
             page_size: Some(1),
             cursor: Some(next_cursor.clone()),
         })
-        .await
-        .expect("send second page");
+        .await?;
 
     let second_response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(second_request)),
     )
-    .await
-    .expect("second page timeout")
-    .expect("second page response");
+    .await??;
 
     let ListModelsResponse {
         items: second_items,
         next_cursor: second_cursor,
-    } = to_response::<ListModelsResponse>(second_response).expect("decode second page");
+    } = to_response::<ListModelsResponse>(second_response)?;
 
     assert_eq!(second_items.len(), 1);
     assert_eq!(second_items[0].id, "gpt-5");
     assert!(second_cursor.is_none());
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_models_rejects_invalid_cursor() {
-    let codex_home = TempDir::new().expect("create temp dir");
-    let mut mcp = McpProcess::new(codex_home.path())
-        .await
-        .expect("spawn mcp process");
+async fn list_models_rejects_invalid_cursor() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
 
-    timeout(DEFAULT_TIMEOUT, mcp.initialize())
-        .await
-        .expect("initialize timeout")
-        .expect("initialize success");
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_list_models_request(ListModelsParams {
             page_size: None,
             cursor: Some("invalid".to_string()),
         })
-        .await
-        .expect("send invalid cursor");
+        .await?;
 
     let error: JSONRPCError = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
-    .await
-    .expect("invalid cursor timeout")
-    .expect("invalid cursor error");
+    .await??;
 
     assert_eq!(error.id, RequestId::Integer(request_id));
     assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
     assert_eq!(error.error.message, "invalid cursor: invalid");
+    Ok(())
 }

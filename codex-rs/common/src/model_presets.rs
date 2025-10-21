@@ -34,7 +34,7 @@ const PRESETS: &[ModelPreset] = &[
         id: "gpt-5-codex",
         model: "gpt-5-codex",
         display_name: "GPT-5 Codex",
-        description: "Specialized GPT-5 variant optimized for Codex.",
+        description: "Optimized for coding tasks with many tools.",
         default_reasoning_effort: ReasoningEffort::Medium,
         supported_reasoning_efforts: &[
             ReasoningEffortPreset {
@@ -56,7 +56,7 @@ const PRESETS: &[ModelPreset] = &[
         id: "gpt-5",
         model: "gpt-5",
         display_name: "GPT-5",
-        description: "General-purpose GPT-5 model.",
+        description: "Broad world knowledge with strong general reasoning.",
         default_reasoning_effort: ReasoningEffort::Medium,
         supported_reasoning_efforts: &[
             ReasoningEffortPreset {
@@ -82,4 +82,16 @@ const PRESETS: &[ModelPreset] = &[
 
 pub fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
     PRESETS.to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn only_one_default_model_is_configured() {
+        let default_models = PRESETS.iter().filter(|preset| preset.is_default).count();
+        assert_eq!(default_models, 1);
+    }
 }
