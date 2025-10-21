@@ -1,3 +1,4 @@
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 
 /// Transcript of conversation history
@@ -12,11 +13,6 @@ impl ConversationHistory {
         Self { items: Vec::new() }
     }
 
-    /// Returns a clone of the contents in the transcript.
-    pub(crate) fn contents(&self) -> Vec<ResponseItem> {
-        self.items.clone()
-    }
-
     /// `items` is ordered from oldest to newest.
     pub(crate) fn record_items<I>(&mut self, items: I)
     where
@@ -29,6 +25,156 @@ impl ConversationHistory {
             }
 
             self.items.push(item.clone());
+        }
+    }
+
+    pub(crate) fn get_history(&mut self) -> Vec<ResponseItem> {
+        self.normalize_history();
+        self.contents()
+    }
+
+    /// This function enforces a couple of invariants on the in-memory history:
+    /// 1. every call (function/custom) has a corresponding output entry
+    /// 2. every output has a corresponding call entry
+    pub(crate) fn normalize_history(&mut self) {
+        // all function/tool calls must have a corresponding output
+        self.ensure_call_outputs_present();
+
+        // all outputs must have a corresponding function/tool call
+        self.remove_orphan_outputs();
+    }
+
+    /// Returns a clone of the contents in the transcript.
+    fn contents(&self) -> Vec<ResponseItem> {
+        self.items.clone()
+    }
+
+    fn ensure_call_outputs_present(&mut self) {
+        let mut missing_outputs_to_insert: Vec<ResponseItem> = Vec::new();
+
+        for item in &self.items {
+            match item {
+                ResponseItem::FunctionCall { call_id, .. } => {
+                    let has_output = self.items.iter().any(|i| match i {
+                        ResponseItem::FunctionCallOutput {
+                            call_id: existing, ..
+                        } => existing == call_id,
+                        _ => false,
+                    });
+
+                    if !has_output {
+                        missing_outputs_to_insert.push(ResponseItem::FunctionCallOutput {
+                            call_id: call_id.clone(),
+                            output: FunctionCallOutputPayload {
+                                content: "aborted".to_string(),
+                                success: None,
+                            },
+                        });
+                    }
+                }
+                ResponseItem::CustomToolCall { call_id, .. } => {
+                    let has_output = self.items.iter().any(|i| match i {
+                        ResponseItem::CustomToolCallOutput {
+                            call_id: existing, ..
+                        } => existing == call_id,
+                        _ => false,
+                    });
+
+                    if !has_output {
+                        missing_outputs_to_insert.push(ResponseItem::CustomToolCallOutput {
+                            call_id: call_id.clone(),
+                            output: "aborted".to_string(),
+                        });
+                    }
+                }
+                // LocalShellCall is represented in upstream streams by a FunctionCallOutput
+                ResponseItem::LocalShellCall { call_id, .. } => {
+                    if let Some(call_id) = call_id.as_ref() {
+                        let has_output = self.items.iter().any(|i| match i {
+                            ResponseItem::FunctionCallOutput {
+                                call_id: existing, ..
+                            } => existing == call_id,
+                            _ => false,
+                        });
+
+                        if !has_output {
+                            missing_outputs_to_insert.push(ResponseItem::FunctionCallOutput {
+                                call_id: call_id.clone(),
+                                output: FunctionCallOutputPayload {
+                                    content: "aborted".to_string(),
+                                    success: None,
+                                },
+                            });
+                        }
+                    }
+                }
+                ResponseItem::Reasoning { .. }
+                | ResponseItem::WebSearchCall { .. }
+                | ResponseItem::FunctionCallOutput { .. }
+                | ResponseItem::CustomToolCallOutput { .. }
+                | ResponseItem::Other
+                | ResponseItem::Message { .. } => {
+                    // nothing to do for these variants
+                }
+            }
+        }
+
+        if !missing_outputs_to_insert.is_empty() {
+            self.items.extend(missing_outputs_to_insert);
+        }
+    }
+
+    fn remove_orphan_outputs(&mut self) {
+        // Work on a snapshot to avoid borrowing `self.items` while mutating it.
+        let snapshot = self.items.clone();
+        let mut orphan_output_call_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
+        for item in &snapshot {
+            match item {
+                ResponseItem::FunctionCallOutput { call_id, .. } => {
+                    let has_call = snapshot.iter().any(|i| match i {
+                        ResponseItem::FunctionCall {
+                            call_id: existing, ..
+                        } => existing == call_id,
+                        _ => false,
+                    });
+
+                    if !has_call {
+                        orphan_output_call_ids.insert(call_id.clone());
+                    }
+                }
+                ResponseItem::CustomToolCallOutput { call_id, .. } => {
+                    let has_call = snapshot.iter().any(|i| match i {
+                        ResponseItem::CustomToolCall {
+                            call_id: existing, ..
+                        } => existing == call_id,
+                        _ => false,
+                    });
+
+                    if !has_call {
+                        orphan_output_call_ids.insert(call_id.clone());
+                    }
+                }
+                ResponseItem::FunctionCall { .. }
+                | ResponseItem::CustomToolCall { .. }
+                | ResponseItem::LocalShellCall { .. }
+                | ResponseItem::Reasoning { .. }
+                | ResponseItem::WebSearchCall { .. }
+                | ResponseItem::Other
+                | ResponseItem::Message { .. } => {
+                    // nothing to do for these variants
+                }
+            }
+        }
+
+        if !orphan_output_call_ids.is_empty() {
+            let ids = orphan_output_call_ids;
+            self.items.retain(|i| match i {
+                ResponseItem::FunctionCallOutput { call_id, .. }
+                | ResponseItem::CustomToolCallOutput { call_id, .. } => !ids.contains(call_id),
+                _ => true,
+            });
         }
     }
 

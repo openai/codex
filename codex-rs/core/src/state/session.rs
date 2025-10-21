@@ -36,8 +36,8 @@ impl SessionState {
         self.history.record_items(items)
     }
 
-    pub(crate) fn history_snapshot(&self) -> Vec<ResponseItem> {
-        self.history.contents()
+    pub(crate) fn history_snapshot(&mut self) -> Vec<ResponseItem> {
+        self.history.get_history()
     }
 
     pub(crate) fn replace_history(&mut self, items: Vec<ResponseItem>) {

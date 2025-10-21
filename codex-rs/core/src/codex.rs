@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::path::PathBuf;
@@ -829,7 +828,7 @@ impl Session {
                     history.record_items(std::iter::once(response_item));
                 }
                 RolloutItem::Compacted(compacted) => {
-                    let snapshot = history.contents();
+                    let snapshot = history.get_history();
                     let user_messages = collect_user_messages(&snapshot);
                     let rebuilt = build_compacted_history(
                         self.build_initial_context(turn_context),
@@ -841,7 +840,7 @@ impl Session {
                 _ => {}
             }
         }
-        history.contents()
+        history.get_history()
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
@@ -891,7 +890,7 @@ impl Session {
     }
 
     pub(crate) async fn history_snapshot(&self) -> Vec<ResponseItem> {
-        let state = self.state.lock().await;
+        let mut state = self.state.lock().await;
         state.history_snapshot()
     }
 
@@ -988,11 +987,12 @@ impl Session {
         self.send_event(turn_context, event).await;
     }
 
+    // todo (aibrahim): we should always append to history. In a follow up PR, we should remove the need for this function.
     /// Build the full turn input by concatenating the current conversation
     /// history with additional items for this turn.
     pub async fn turn_input_with_history(&self, extra: Vec<ResponseItem>) -> Vec<ResponseItem> {
         let history = {
-            let state = self.state.lock().await;
+            let mut state = self.state.lock().await;
             state.history_snapshot()
         };
         [history, extra].concat()
@@ -1500,6 +1500,7 @@ pub(crate) async fn run_task(
     // model sees a fresh conversation without the parent session's history.
     // For normal turns, continue recording to the session history as before.
     let is_review_mode = turn_context.is_review_mode;
+    // TODO:(aibrahim): review thread should be a conversation history type.
     let mut review_thread_history: Vec<ResponseItem> = Vec::new();
     if is_review_mode {
         // Seed review threads with environment context so the model knows the working directory.
@@ -1901,61 +1902,6 @@ async fn try_run_turn(
     task_kind: TaskKind,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
-    // call_ids that are part of this response.
-    let completed_call_ids = prompt
-        .input
-        .iter()
-        .filter_map(|ri| match ri {
-            ResponseItem::FunctionCallOutput { call_id, .. } => Some(call_id),
-            ResponseItem::LocalShellCall {
-                call_id: Some(call_id),
-                ..
-            } => Some(call_id),
-            ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    // call_ids that were pending but are not part of this response.
-    // This usually happens because the user interrupted the model before we responded to one of its tool calls
-    // and then the user sent a follow-up message.
-    let missing_calls = {
-        prompt
-            .input
-            .iter()
-            .filter_map(|ri| match ri {
-                ResponseItem::FunctionCall { call_id, .. } => Some(call_id),
-                ResponseItem::LocalShellCall {
-                    call_id: Some(call_id),
-                    ..
-                } => Some(call_id),
-                ResponseItem::CustomToolCall { call_id, .. } => Some(call_id),
-                _ => None,
-            })
-            .filter_map(|call_id| {
-                if completed_call_ids.contains(&call_id) {
-                    None
-                } else {
-                    Some(call_id.clone())
-                }
-            })
-            .map(|call_id| ResponseItem::CustomToolCallOutput {
-                call_id,
-                output: "aborted".to_string(),
-            })
-            .collect::<Vec<_>>()
-    };
-    let prompt: Cow<Prompt> = if missing_calls.is_empty() {
-        Cow::Borrowed(prompt)
-    } else {
-        // Add the synthetic aborted missing calls to the beginning of the input to ensure all call ids have responses.
-        let input = [missing_calls, prompt.input.clone()].concat();
-        Cow::Owned(Prompt {
-            input,
-            ..prompt.clone()
-        })
-    };
-
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
@@ -1964,11 +1910,12 @@ async fn try_run_turn(
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
     });
+
     sess.persist_rollout_items(&[rollout_item]).await;
     let mut stream = turn_context
         .client
         .clone()
-        .stream_with_task_kind(prompt.as_ref(), task_kind)
+        .stream_with_task_kind(prompt, task_kind)
         .or_cancel(&cancellation_token)
         .await??;
 
@@ -2951,7 +2898,7 @@ mod tests {
         rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
 
         let summary1 = "summary one";
-        let snapshot1 = live_history.contents();
+        let snapshot1 = live_history.get_history();
         let user_messages1 = collect_user_messages(&snapshot1);
         let rebuilt1 = build_compacted_history(
             session.build_initial_context(turn_context),
@@ -2984,7 +2931,7 @@ mod tests {
         rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
 
         let summary2 = "summary two";
-        let snapshot2 = live_history.contents();
+        let snapshot2 = live_history.get_history();
         let user_messages2 = collect_user_messages(&snapshot2);
         let rebuilt2 = build_compacted_history(
             session.build_initial_context(turn_context),
@@ -3016,7 +2963,7 @@ mod tests {
         live_history.record_items(std::iter::once(&assistant3));
         rollout_items.push(RolloutItem::ResponseItem(assistant3.clone()));
 
-        (rollout_items, live_history.contents())
+        (rollout_items, live_history.get_history())
     }
 
     #[tokio::test]

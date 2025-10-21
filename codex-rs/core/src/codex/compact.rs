@@ -64,6 +64,7 @@ async fn run_compact_task_inner(
     input: Vec<UserInput>,
 ) {
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
+    // TODO (aibrahim): this should be a history snapshot.
     let mut turn_input = sess
         .turn_input_with_history(vec![initial_input_for_turn.clone().into()])
         .await;
