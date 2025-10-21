@@ -742,9 +742,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial(codex_api_key)]
     async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
-        let _guard = EnvVarGuard::set(CODEX_API_KEY_ENV_VAR, "");
         let codex_home = tempdir().unwrap();
         let _jwt = write_auth_file(
             AuthFileParams {
