@@ -84,7 +84,7 @@ macro_rules! model_family {
 
 /// Returns a `ModelFamily` for the given model slug, or `None` if the slug
 /// does not match any known model family.
-pub fn find_family_for_model(mut slug: &str) -> Option<ModelFamily> {
+pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
     if slug.starts_with("o3") {
         model_family!(
             slug, "o3",
