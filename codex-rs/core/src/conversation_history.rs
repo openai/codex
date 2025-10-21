@@ -38,9 +38,8 @@ impl ConversationHistory {
         self.contents()
     }
 
-    pub(crate) fn remove_last_item(&mut self) {
-        self.items.pop();
-        self.normalize_history();
+    pub(crate) fn remove_first_item(&mut self) {
+        self.items.remove(0);
     }
 
     /// This function enforces a couple of invariants on the in-memory history:
@@ -60,8 +59,12 @@ impl ConversationHistory {
     }
 
     fn ensure_call_outputs_present(&mut self) {
-        let mut missing_outputs_to_insert: Vec<ResponseItem> = Vec::new();
-        for item in &self.items {
+        // Collect synthetic outputs to insert immediately after their calls.
+        // Store the insertion position (index of call) alongside the item so
+        // we can insert in reverse order and avoid index shifting.
+        let mut missing_outputs_to_insert: Vec<(usize, ResponseItem)> = Vec::new();
+
+        for (idx, item) in self.items.iter().enumerate() {
             match item {
                 ResponseItem::FunctionCall { call_id, .. } => {
                     let has_output = self.items.iter().any(|i| match i {
@@ -73,13 +76,16 @@ impl ConversationHistory {
 
                     if !has_output {
                         error!("Function call output is missing for call id: {}", call_id);
-                        missing_outputs_to_insert.push(ResponseItem::FunctionCallOutput {
-                            call_id: call_id.clone(),
-                            output: FunctionCallOutputPayload {
-                                content: "aborted".to_string(),
-                                success: None,
+                        missing_outputs_to_insert.push((
+                            idx,
+                            ResponseItem::FunctionCallOutput {
+                                call_id: call_id.clone(),
+                                output: FunctionCallOutputPayload {
+                                    content: "aborted".to_string(),
+                                    success: None,
+                                },
                             },
-                        });
+                        ));
                     }
                 }
                 ResponseItem::CustomToolCall { call_id, .. } => {
@@ -95,10 +101,13 @@ impl ConversationHistory {
                             "Custom tool call output is missing for call id: {}",
                             call_id
                         );
-                        missing_outputs_to_insert.push(ResponseItem::CustomToolCallOutput {
-                            call_id: call_id.clone(),
-                            output: "aborted".to_string(),
-                        });
+                        missing_outputs_to_insert.push((
+                            idx,
+                            ResponseItem::CustomToolCallOutput {
+                                call_id: call_id.clone(),
+                                output: "aborted".to_string(),
+                            },
+                        ));
                     }
                 }
                 // LocalShellCall is represented in upstream streams by a FunctionCallOutput
@@ -116,13 +125,16 @@ impl ConversationHistory {
                         });
 
                         if !has_output {
-                            missing_outputs_to_insert.push(ResponseItem::FunctionCallOutput {
-                                call_id: call_id.clone(),
-                                output: FunctionCallOutputPayload {
-                                    content: "aborted".to_string(),
-                                    success: None,
+                            missing_outputs_to_insert.push((
+                                idx,
+                                ResponseItem::FunctionCallOutput {
+                                    call_id: call_id.clone(),
+                                    output: FunctionCallOutputPayload {
+                                        content: "aborted".to_string(),
+                                        success: None,
+                                    },
                                 },
-                            });
+                            ));
                         }
                     }
                 }
@@ -138,7 +150,16 @@ impl ConversationHistory {
         }
 
         if !missing_outputs_to_insert.is_empty() {
-            self.items.extend(missing_outputs_to_insert);
+            // Insert from the end to avoid shifting subsequent indices.
+            missing_outputs_to_insert.sort_by_key(|(i, _)| *i);
+            for (idx, item) in missing_outputs_to_insert.into_iter().rev() {
+                let insert_pos = idx + 1; // place immediately after the call
+                if insert_pos <= self.items.len() {
+                    self.items.insert(insert_pos, item);
+                } else {
+                    self.items.push(item);
+                }
+            }
         }
     }
 

@@ -113,11 +113,11 @@ async fn run_compact_task_inner(
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
                 if turn_input.len() > 1 {
-                    // ideally we shouldn't reach this point, but if we do, we should remove the last item to not break cache.
+                    // Trim from the beginning to preserve cache (prefix-based) and keep recent messages intact.
                     error!(
-                        "Context window exceeded while compacting, removing last item to not break cache. Error: {e}"
+                        "Context window exceeded while compacting; removing oldest history item. Error: {e}"
                     );
-                    history.remove_last_item();
+                    history.remove_first_item();
                     truncated_count += 1;
                     retries = 0;
                     continue;
