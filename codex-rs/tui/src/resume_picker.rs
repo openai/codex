@@ -968,6 +968,19 @@ mod tests {
                 "role": "user",
                 "content": [
                     { "type": "input_text", "text": "<user_instructions>hi</user_instructions>" },
+                ]
+            }),
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [
+                    { "type": "input_text", "text": "<environment_context>...</environment_context>" },
+                ]
+            }),
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [
                     { "type": "input_text", "text": "real question" },
                     { "type": "input_image", "image_url": "ignored" }
                 ]
