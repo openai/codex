@@ -273,9 +273,7 @@ impl BottomPane {
     }
 
     pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
-        if let Some(text) = self.composer.clear_for_ctrl_c() {
-            self.composer.record_cleared_draft(text);
-        }
+        self.composer.clear_for_ctrl_c();
         self.request_redraw();
     }
 

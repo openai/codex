@@ -322,6 +322,7 @@ impl ChatComposer {
         let previous = self.current_text();
         self.set_text_content(String::new());
         self.history.reset_navigation();
+        self.history.record_local_submission(&previous);
         Some(previous)
     }
 
@@ -1520,10 +1521,6 @@ impl ChatComposer {
         }
     }
 
-    pub(crate) fn record_cleared_draft(&mut self, text: String) {
-        self.history.record_local_submission(&text);
-    }
-
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
         self.esc_backtrack_hint = show;
         if show {
@@ -1833,6 +1830,28 @@ mod tests {
 
         assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
         assert!(!composer.esc_backtrack_hint);
+    }
+
+    #[test]
+    fn clear_for_ctrl_c_records_cleared_draft() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_text_content("draft text".to_string());
+        assert_eq!(composer.clear_for_ctrl_c(), Some("draft text".to_string()));
+        assert!(composer.is_empty());
+
+        assert_eq!(
+            composer.history.navigate_up(&composer.app_event_tx),
+            Some("draft text".to_string())
+        );
     }
 
     #[test]
