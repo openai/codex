@@ -7,7 +7,9 @@ use tokio::time::Instant;
 
 use crate::exec_env::create_env;
 use crate::sandboxing::ExecEnv;
-use crate::tools::events::emit_exec_command_begin;
+use crate::tools::events::ToolEmitter;
+use crate::tools::events::ToolEventCtx;
+use crate::tools::events::ToolEventStage;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
@@ -248,14 +250,10 @@ impl UnifiedExecSessionManager {
         };
 
         if !request.input_chunks.is_empty() {
-            emit_exec_command_begin(
-                context.session,
-                context.sub_id,
-                context.call_id,
-                request.input_chunks,
-                context.turn.cwd.as_path(),
-            )
-            .await;
+            let event_ctx = ToolEventCtx::new(context.session, context.turn, context.call_id, None);
+            let emitter =
+                ToolEmitter::shell(request.input_chunks.to_vec(), context.turn.cwd.clone());
+            emitter.emit(event_ctx, ToolEventStage::Begin).await;
         }
 
         let mut acquisition = self.acquire_session(&request, &context).await?;
