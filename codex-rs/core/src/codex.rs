@@ -706,7 +706,7 @@ impl Session {
 
     async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
         self.send_event(
-            &turn_context,
+            turn_context,
             EventMsg::ItemStarted(ItemStartedEvent {
                 thread_id: self.conversation_id,
                 turn_id: turn_context.sub_id.clone(),
@@ -993,11 +993,7 @@ impl Session {
 
     /// Record a user input item to conversation history and also persist a
     /// corresponding UserMessage EventMsg to rollout.
-    async fn record_input_and_rollout_usermsg(
-        &self,
-        turn_context: &TurnContext,
-        response_input: &ResponseInputItem,
-    ) {
+    async fn record_input_and_rollout_usermsg(&self, response_input: &ResponseInputItem) {
         let response_item: ResponseItem = response_input.clone().into();
         // Add to conversation history and persist response item to rollout
         self.record_conversation_items(std::slice::from_ref(&response_item))
@@ -1005,17 +1001,9 @@ impl Session {
 
         // Derive user message events and persist only UserMessage to rollout
         let turn_item = parse_turn_item(&response_item);
-        if let Some(turn_item) = turn_item {
-            self.emit_turn_item_started_completed(
-                turn_context,
-                turn_item.clone(),
-                self.show_raw_agent_reasoning(),
-            )
-            .await;
-            if let TurnItem::UserMessage(user_msg) = turn_item {
-                self.persist_rollout_items(&[RolloutItem::EventMsg(user_msg.as_legacy_event())])
-                    .await;
-            }
+        if let Some(TurnItem::UserMessage(user_msg)) = turn_item {
+            self.persist_rollout_items(&[RolloutItem::EventMsg(user_msg.as_legacy_event())])
+                .await;
         }
     }
 
@@ -1542,7 +1530,7 @@ pub(crate) async fn run_task(
         review_thread_history.extend(sess.build_initial_context(turn_context.as_ref()));
         review_thread_history.push(initial_input_for_turn.into());
     } else {
-        sess.record_input_and_rollout_usermsg(turn_context.as_ref(), &initial_input_for_turn)
+        sess.record_input_and_rollout_usermsg(&initial_input_for_turn)
             .await;
     }
 
