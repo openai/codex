@@ -1,4 +1,3 @@
-use crate::protocol::EventMsg;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::ReasoningItem;
@@ -48,11 +47,11 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
 }
 
 fn parse_agent_message(message: &[ContentItem]) -> AgentMessageItem {
-    let mut output: String = String::new();
+    let mut content: Vec<AgentMessageContent> = Vec::new();
     for content_item in message.iter() {
         match content_item {
             ContentItem::OutputText { text } => {
-                output = text.to_string();
+                content.push(AgentMessageContent::Text { text: text.clone() });
             }
             _ => {
                 warn!(
@@ -62,7 +61,7 @@ fn parse_agent_message(message: &[ContentItem]) -> AgentMessageItem {
             }
         }
     }
-    AgentMessageItem::new(&[AgentMessageContent::Text { text: output }])
+    AgentMessageItem::new(&content)
 }
 
 pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
@@ -116,6 +115,7 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
 #[cfg(test)]
 mod tests {
     use super::parse_turn_item;
+    use codex_protocol::items::AgentMessageContent;
     use codex_protocol::items::TurnItem;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemContent;
@@ -160,6 +160,29 @@ mod tests {
                 assert_eq!(user.content, expected_content);
             }
             other => panic!("expected TurnItem::UserMessage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_agent_message() {
+        let item = ResponseItem::Message {
+            id: Some("msg-1".to_string()),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "Hello from Codex".to_string(),
+            }],
+        };
+
+        let turn_item = parse_turn_item(&item).expect("expected agent message turn item");
+
+        match turn_item {
+            TurnItem::AgentMessage(message) => {
+                let Some(AgentMessageContent::Text { text }) = message.content.first() else {
+                    panic!("expected agent message text content");
+                };
+                assert_eq!(text, "Hello from Codex");
+            }
+            other => panic!("expected TurnItem::AgentMessage, got {other:?}"),
         }
     }
 
