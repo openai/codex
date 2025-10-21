@@ -1,5 +1,6 @@
 mod acl;
 mod allow;
+mod audit;
 mod cap;
 mod env;
 mod logging;
@@ -107,6 +108,14 @@ pub struct CaptureResult {
     pub timed_out: bool,
 }
 
+// Expose a reusable preflight audit entry so other codepaths can trigger it
+pub fn preflight_audit_everyone_writable(
+    cwd: &Path,
+    env_map: &HashMap<String, String>,
+) -> Result<()> {
+    audit::audit_everyone_writable(cwd, env_map)
+}
+
 pub fn run_windows_sandbox_capture(
     policy_json_or_preset: &str,
     sandbox_policy_cwd: &Path,
@@ -121,6 +130,9 @@ pub fn run_windows_sandbox_capture(
     apply_no_network_to_env(&mut env_map)?;
 
     let current_dir = cwd.to_path_buf();
+    // Preflight: audit common directories for Everyone-writeable risk and fail-closed.
+    // This is intentionally callable independently so other codepaths can trigger it.
+    audit::audit_everyone_writable(&current_dir, &env_map)?;
     // Log start consistently with the CLI binary
     log_start(&command);
     let (h_token, psid_to_use): (HANDLE, *mut c_void) = unsafe {

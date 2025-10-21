@@ -224,9 +224,15 @@ pub unsafe fn create_readonly_token_with_cap(
     psid_capability: *mut c_void,
 ) -> Result<(HANDLE, *mut c_void)> {
     let base = get_current_token_for_restriction()?;
-    let mut entries: [SID_AND_ATTRIBUTES; 1] = std::mem::zeroed();
+    // Include Everyone in the restricted set to satisfy WRITE_RESTRICTED checks
+    // for system objects touched by PowerShell/CLR during startup.
+    let mut everyone = world_sid()?;
+    let psid_everyone = everyone.as_mut_ptr() as *mut c_void;
+    let mut entries: [SID_AND_ATTRIBUTES; 2] = std::mem::zeroed();
     entries[0].Sid = psid_capability;
     entries[0].Attributes = 0;
+    entries[1].Sid = psid_everyone;
+    entries[1].Attributes = 0;
     let mut new_token: HANDLE = 0;
     let flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
     let ok = CreateRestrictedToken(
@@ -236,7 +242,7 @@ pub unsafe fn create_readonly_token_with_cap(
         std::ptr::null(),
         0,
         std::ptr::null(),
-        1,
+        2,
         entries.as_mut_ptr(),
         &mut new_token,
     );

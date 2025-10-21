@@ -132,6 +132,8 @@ FILE_SHARE_WRITE = 0x00000002
 OPEN_EXISTING = 3
 FILE_ATTRIBUTE_NORMAL = 0x00000080
 WinWorldSid = 1
+WinAuthenticatedUserSid = 17  # WELL_KNOWN_SID_TYPE::WinAuthenticatedUserSid
+WinInteractiveSid = 4         # WELL_KNOWN_SID_TYPE::WinInteractiveSid
 
 # ACCESS_MODE
 NOT_USED_ACCESS   = 0
@@ -817,21 +819,37 @@ def _create_workspace_write_token_with_cap(psid_capability: wt.LPVOID) -> Tuple[
     """
     base = _get_current_token_for_restriction()
     try:
-        # Everyone (WORLD) SID for restricted set
-        everyone_size = wt.DWORD(0)
-        advapi32.CreateWellKnownSid(WinWorldSid, None, None, c.byref(everyone_size))
-        everyone_buf = (c.c_ubyte * everyone_size.value)()
-        _check_bool(
-            advapi32.CreateWellKnownSid(WinWorldSid, None, everyone_buf, c.byref(everyone_size)),
-            "CreateWellKnownSid(WinWorldSid)",
-        )
-        psid_everyone = c.cast(everyone_buf, wt.LPVOID)
+        # Include current Logon SID in the restricted set alongside the capability.
+        # This preserves write scoping to explicitly-allowed locations (capability ACEs)
+        # while avoiding loader/runtime regressions in common tools.
+        logon_sid_bytes = _get_logon_sid_bytes(base)
+        sid_buf = c.create_string_buffer(logon_sid_bytes)
+        psid_logon = c.cast(sid_buf, wt.LPVOID)
+        globals().setdefault("_LIVE_SID_BUFFERS", []).append(sid_buf)
 
-        restrict_entries = (SID_AND_ATTRIBUTES * 2)()
+        # Also include a broad read group to satisfy restricted checks.
+        # Prefer Authenticated Users if SBX_USE_AUTHUSERS=1, else Everyone (compat default).
+        sid_type = WinWorldSid
+        if os.environ.get("SBX_USE_AUTHUSERS") == "1":
+            sid_type = WinAuthenticatedUserSid
+        elif os.environ.get("SBX_USE_INTERACTIVE") == "1":
+            sid_type = WinInteractiveSid
+        grp_size = wt.DWORD(0)
+        advapi32.CreateWellKnownSid(sid_type, None, None, c.byref(grp_size))
+        grp_buf = (c.c_ubyte * grp_size.value)()
+        _check_bool(
+            advapi32.CreateWellKnownSid(sid_type, None, grp_buf, c.byref(grp_size)),
+            "CreateWellKnownSid",
+        )
+        psid_group = c.cast(grp_buf, wt.LPVOID)
+
+        restrict_entries = (SID_AND_ATTRIBUTES * 3)()
         restrict_entries[0].Sid = psid_capability
         restrict_entries[0].Attributes = 0
-        restrict_entries[1].Sid = psid_everyone
+        restrict_entries[1].Sid = psid_logon
         restrict_entries[1].Attributes = 0
+        restrict_entries[2].Sid = psid_group
+        restrict_entries[2].Attributes = 0
 
         new_token = wt.HANDLE()
         flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED
@@ -839,7 +857,7 @@ def _create_workspace_write_token_with_cap(psid_capability: wt.LPVOID) -> Tuple[
             base, flags,
             0, None,
             0, None,
-            2, restrict_entries,
+            3, restrict_entries,
             c.byref(new_token)
         ), "CreateRestrictedToken")
 
@@ -858,9 +876,30 @@ def _create_readonly_token_with_cap(psid_capability: wt.LPVOID) -> Tuple[wt.HAND
     """
     base = _get_current_token_for_restriction()
     try:
-        restrict_entries = (SID_AND_ATTRIBUTES * 1)()
+        # Add Logon SID and Everyone to restricted set for compatibility with CLR/PowerShell
+        # without granting any new file write surfaces (we only add ACEs for capability SID).
+        logon_sid_bytes = _get_logon_sid_bytes(base)
+        sid_buf = c.create_string_buffer(logon_sid_bytes)
+        psid_logon = c.cast(sid_buf, wt.LPVOID)
+        globals().setdefault("_LIVE_SID_BUFFERS", []).append(sid_buf)
+
+        # Everyone (WORLD) SID
+        everyone_size = wt.DWORD(0)
+        advapi32.CreateWellKnownSid(WinWorldSid, None, None, c.byref(everyone_size))
+        everyone_buf = (c.c_ubyte * everyone_size.value)()
+        _check_bool(
+            advapi32.CreateWellKnownSid(WinWorldSid, None, everyone_buf, c.byref(everyone_size)),
+            "CreateWellKnownSid(WinWorldSid)",
+        )
+        psid_everyone = c.cast(everyone_buf, wt.LPVOID)
+
+        restrict_entries = (SID_AND_ATTRIBUTES * 3)()
         restrict_entries[0].Sid = psid_capability
         restrict_entries[0].Attributes = 0
+        restrict_entries[1].Sid = psid_logon
+        restrict_entries[1].Attributes = 0
+        restrict_entries[2].Sid = psid_everyone
+        restrict_entries[2].Attributes = 0
 
         new_token = wt.HANDLE()
         flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED
@@ -872,7 +911,7 @@ def _create_readonly_token_with_cap(psid_capability: wt.LPVOID) -> Tuple[wt.HAND
                 None,
                 0,
                 None,
-                1,
+                3,
                 restrict_entries,
                 c.byref(new_token),
             ),
@@ -1420,8 +1459,13 @@ def main():
             psid_cap_ro, _sid_str_ro = _load_or_create_readonly_cap_sid(policy_cwd)
             h_token, psid = _create_readonly_token_with_cap(psid_cap_ro)
         elif policy.mode == "workspace-write":
-            psid_cap, _sid_str_cached = _load_or_create_cap_sid(policy_cwd)
-            h_token, psid = _create_workspace_write_token_with_cap(psid_cap)
+            # Temporary compat path: allow opting into Logon+Everyone restricted SIDs
+            # to validate regressions with tools like PowerShell and Git.
+            if os.environ.get("SBX_USE_COMPAT") == "1":
+                h_token, psid = _create_write_restricted_token_compat()
+            else:
+                psid_cap, _sid_str_cached = _load_or_create_cap_sid(policy_cwd)
+                h_token, psid = _create_workspace_write_token_with_cap(psid_cap)
         else:
             # Fallback to read-only for unknown mode
             h_token, psid = _create_write_restricted_token_strict()

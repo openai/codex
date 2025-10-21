@@ -15,7 +15,8 @@ const WINDOWS_HELPER_SCRIPT: &str = "windows_restricted_token_v3.py";
 #[cfg(target_os = "windows")]
 const PYTHON_CANDIDATES: &[&str] = &["python", "py"];
 #[cfg(target_os = "windows")]
-const RUST_SANDBOX_EXE_CANDIDATES: &[&str] = &["codex-windows-sandbox.exe", "codex-windows-sandbox"];
+const RUST_SANDBOX_EXE_CANDIDATES: &[&str] =
+    &["codex-windows-sandbox.exe", "codex-windows-sandbox"];
 
 #[cfg(target_os = "windows")]
 pub async fn spawn_command_under_windows_restricted_token(
