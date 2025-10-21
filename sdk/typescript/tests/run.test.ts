@@ -279,6 +279,34 @@ describe("Codex", () => {
       await close();
     }
   });
+  it("forwards profile turn option to exec", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Profile applied", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread();
+      await thread.run("apply profile", { profile: "sdk-profile" });
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      expectPair(commandArgs, ["--profile", "sdk-profile"]);
+    } finally {
+      restore();
+      await close();
+    }
+  });
   it("combines structured text input segments", async () => {
     const { url, close, requests } = await startResponsesTestProxy({
       statusCode: 200,

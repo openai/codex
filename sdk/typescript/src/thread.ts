@@ -85,6 +85,7 @@ export class Thread {
       workingDirectory: options?.workingDirectory,
       skipGitRepoCheck: options?.skipGitRepoCheck,
       outputSchemaFile: schemaPath,
+      profile: turnOptions.profile,
     });
     try {
       for await (const item of generator) {
