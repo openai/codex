@@ -1162,7 +1162,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                             &env_item,
                             sess.show_raw_agent_reasoning(),
                         ) {
-                            sess.send_event(current_context.as_ref(), msg).await;
+                            sess.send_event(&current_context, msg).await;
                         }
                     }
 
@@ -1460,7 +1460,7 @@ async fn spawn_review_thread(
     sess.spawn_task(tc.clone(), input, ReviewTask).await;
 
     // Announce entering review mode so UIs can switch modes.
-    sess.send_event(tc.as_ref(), EventMsg::EnteredReviewMode(review_request))
+    sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
         .await;
 }
 
@@ -1494,7 +1494,7 @@ pub(crate) async fn run_task(
     let event = EventMsg::TaskStarted(TaskStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
-    sess.send_event(turn_context.as_ref(), event).await;
+    sess.send_event(&turn_context, event).await;
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     // For review threads, keep an isolated in-memory history so the
@@ -1701,7 +1701,7 @@ pub(crate) async fn run_task(
                                 "Conversation is still above the token limit after automatic summarization (limit {limit_str}, current {current_tokens}). Please start a new session or trim your input."
                             ),
                         });
-                        sess.send_event(turn_context.as_ref(), event).await;
+                        sess.send_event(&turn_context, event).await;
                         break;
                     }
                     auto_compact_recently_attempted = true;
@@ -1736,7 +1736,7 @@ pub(crate) async fn run_task(
                 let event = EventMsg::Error(ErrorEvent {
                     message: e.to_string(),
                 });
-                sess.send_event(turn_context.as_ref(), event).await;
+                sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation
                 break;
             }
@@ -2103,7 +2103,7 @@ async fn try_run_turn(
                 };
                 if let Ok(Some(unified_diff)) = unified_diff {
                     let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
-                    sess.send_event(turn_context.as_ref(), msg).await;
+                    sess.send_event(&turn_context, msg).await;
                 }
 
                 let result = TurnRunResult {
@@ -2118,26 +2118,26 @@ async fn try_run_turn(
                 // UI will show a selection popup from the final ReviewOutput.
                 if !turn_context.is_review_mode {
                     let event = EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta });
-                    sess.send_event(turn_context.as_ref(), event).await;
+                    sess.send_event(&turn_context, event).await;
                 } else {
                     trace!("suppressing OutputTextDelta in review mode");
                 }
             }
             ResponseEvent::ReasoningSummaryDelta(delta) => {
                 let event = EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta });
-                sess.send_event(turn_context.as_ref(), event).await;
+                sess.send_event(&turn_context, event).await;
             }
             ResponseEvent::ReasoningSummaryPartAdded => {
                 let event =
                     EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {});
-                sess.send_event(turn_context.as_ref(), event).await;
+                sess.send_event(&turn_context, event).await;
             }
             ResponseEvent::ReasoningContentDelta(delta) => {
                 if sess.show_raw_agent_reasoning() {
                     let event = EventMsg::AgentReasoningRawContentDelta(
                         AgentReasoningRawContentDeltaEvent { delta },
                     );
-                    sess.send_event(turn_context.as_ref(), event).await;
+                    sess.send_event(&turn_context, event).await;
                 }
             }
         }
@@ -2163,7 +2163,7 @@ async fn handle_non_tool_response_item(
                 _ => map_response_item_to_event_messages(&item, sess.show_raw_agent_reasoning()),
             };
             for msg in msgs {
-                sess.send_event(turn_context.as_ref(), msg).await;
+                sess.send_event(&turn_context, msg).await;
             }
         }
         ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. } => {

@@ -53,7 +53,7 @@ pub(crate) async fn run_compact_task(
     let start_event = EventMsg::TaskStarted(TaskStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
-    sess.send_event(turn_context.as_ref(), start_event).await;
+    sess.send_event(&turn_context, start_event).await;
     run_compact_task_inner(sess.clone(), turn_context, input).await;
     None
 }
@@ -116,7 +116,7 @@ async fn run_compact_task_inner(
                 let event = EventMsg::Error(ErrorEvent {
                     message: e.to_string(),
                 });
-                sess.send_event(turn_context.as_ref(), event).await;
+                sess.send_event(&turn_context, event).await;
                 return;
             }
             Err(e) => {
@@ -134,7 +134,7 @@ async fn run_compact_task_inner(
                     let event = EventMsg::Error(ErrorEvent {
                         message: e.to_string(),
                     });
-                    sess.send_event(turn_context.as_ref(), event).await;
+                    sess.send_event(&turn_context, event).await;
                     return;
                 }
             }
@@ -156,7 +156,7 @@ async fn run_compact_task_inner(
     let event = EventMsg::AgentMessage(AgentMessageEvent {
         message: "Compact task completed".to_string(),
     });
-    sess.send_event(turn_context.as_ref(), event).await;
+    sess.send_event(&turn_context, event).await;
 }
 
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
