@@ -109,6 +109,7 @@ pub struct Config {
     pub shell_environment_policy: ShellEnvironmentPolicy,
     pub disable_command_timeouts: bool,
     pub passthrough_shell_environment: bool,
+    pub passthrough_shell_stdio: bool,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
     /// suppressed from the frontend output. This can reduce visual noise when
@@ -844,6 +845,9 @@ pub struct ConfigToml {
     /// Pass the host environment through to shell commands without filtering.
     pub passthrough_shell_environment: Option<bool>,
 
+    /// Stream shell command stdout/stderr directly to the user terminal.
+    pub passthrough_shell_stdio: Option<bool>,
+
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
@@ -1104,6 +1108,7 @@ pub struct ConfigOverrides {
     pub tools_web_search_request: Option<bool>,
     pub disable_command_timeouts: Option<bool>,
     pub passthrough_shell_environment: Option<bool>,
+    pub passthrough_shell_stdio: Option<bool>,
 }
 
 impl Config {
@@ -1134,6 +1139,7 @@ impl Config {
             tools_web_search_request: override_tools_web_search_request,
             disable_command_timeouts,
             passthrough_shell_environment,
+            passthrough_shell_stdio,
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -1237,6 +1243,10 @@ impl Config {
             .or(config_profile.passthrough_shell_environment)
             .or(cfg.passthrough_shell_environment)
             .unwrap_or(false);
+        let passthrough_shell_stdio = passthrough_shell_stdio
+            .or(config_profile.passthrough_shell_stdio)
+            .or(cfg.passthrough_shell_stdio)
+            .unwrap_or(false);
 
         let include_plan_tool_flag = features.enabled(Feature::PlanTool);
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
@@ -1312,6 +1322,7 @@ impl Config {
             shell_environment_policy,
             disable_command_timeouts,
             passthrough_shell_environment,
+            passthrough_shell_stdio,
             notify: cfg.notify,
             user_instructions,
             base_instructions,
@@ -2741,6 +2752,7 @@ model_verbosity = "high"
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 disable_command_timeouts: false,
                 passthrough_shell_environment: false,
+                passthrough_shell_stdio: false,
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -2810,6 +2822,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             disable_command_timeouts: false,
             passthrough_shell_environment: false,
+            passthrough_shell_stdio: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -2894,6 +2907,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             disable_command_timeouts: false,
             passthrough_shell_environment: false,
+            passthrough_shell_stdio: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -2964,6 +2978,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             disable_command_timeouts: false,
             passthrough_shell_environment: false,
+            passthrough_shell_stdio: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),

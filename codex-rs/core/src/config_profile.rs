@@ -31,6 +31,7 @@ pub struct ConfigProfile {
     pub tools_view_image: Option<bool>,
     pub disable_command_timeouts: Option<bool>,
     pub passthrough_shell_environment: Option<bool>,
+    pub passthrough_shell_stdio: Option<bool>,
     /// Optional feature toggles scoped to this profile.
     #[serde(default)]
     pub features: Option<crate::features::FeaturesToml>,

@@ -174,10 +174,17 @@ fn select_apply_patch_sandbox(
         &config.sandbox_policy,
         &config.sandbox_cwd,
     ) {
-        SafetyCheck::AutoApprove { sandbox_type, .. } => Ok(SandboxDecision::auto(
-            sandbox_type,
-            should_escalate_on_failure(approval_policy, sandbox_type),
-        )),
+        SafetyCheck::AutoApprove { sandbox_type, .. } => {
+            let sandbox_type = if config.prefer_platform_sandbox {
+                sandbox_type
+            } else {
+                SandboxType::None
+            };
+            Ok(SandboxDecision::auto(
+                sandbox_type,
+                should_escalate_on_failure(approval_policy, sandbox_type),
+            ))
+        }
         SafetyCheck::AskUser => Err(ExecError::rejection(
             "patch requires approval but none was recorded",
         )),
@@ -207,7 +214,7 @@ mod tests {
             action,
             user_explicitly_approved_this_action: true,
         };
-        let cfg = ExecutorConfig::new(SandboxPolicy::ReadOnly, std::env::temp_dir(), None);
+        let cfg = ExecutorConfig::new(SandboxPolicy::ReadOnly, std::env::temp_dir(), None, true);
         let request = ExecutionRequest {
             params: ExecParams {
                 command: vec!["apply_patch".into()],
@@ -217,6 +224,7 @@ mod tests {
                 with_escalated_permissions: None,
                 justification: None,
                 disable_timeout: false,
+                passthrough_stdio: false,
             },
             approval_command: vec!["apply_patch".into()],
             mode: ExecutionMode::ApplyPatch(exec),
@@ -251,7 +259,12 @@ mod tests {
             action,
             user_explicitly_approved_this_action: false,
         };
-        let cfg = ExecutorConfig::new(SandboxPolicy::DangerFullAccess, std::env::temp_dir(), None);
+        let cfg = ExecutorConfig::new(
+            SandboxPolicy::DangerFullAccess,
+            std::env::temp_dir(),
+            None,
+            true,
+        );
         let request = ExecutionRequest {
             params: ExecParams {
                 command: vec!["apply_patch".into()],
@@ -261,6 +274,7 @@ mod tests {
                 with_escalated_permissions: None,
                 justification: None,
                 disable_timeout: false,
+                passthrough_stdio: false,
             },
             approval_command: vec!["apply_patch".into()],
             mode: ExecutionMode::ApplyPatch(exec),
@@ -287,16 +301,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn select_apply_patch_requires_approval_on_unless_trusted() {
+    async fn select_apply_patch_prefers_no_platform_sandbox_when_disabled() {
         let (session, ctx) = make_session_and_context();
-        let tempdir = tempfile::tempdir().expect("tmpdir");
-        let p = tempdir.path().join("a.txt");
+        let tmp = tempfile::tempdir().expect("tmp");
+        let p = tmp.path().join("a.txt");
         let action = ApplyPatchAction::new_add_for_test(&p, "hello".to_string());
         let exec = ApplyPatchExec {
             action,
             user_explicitly_approved_this_action: false,
         };
-        let cfg = ExecutorConfig::new(SandboxPolicy::ReadOnly, std::env::temp_dir(), None);
+        let cfg = ExecutorConfig::new(
+            SandboxPolicy::DangerFullAccess,
+            std::env::temp_dir(),
+            None,
+            false,
+        );
         let request = ExecutionRequest {
             params: ExecParams {
                 command: vec!["apply_patch".into()],
@@ -306,6 +325,51 @@ mod tests {
                 with_escalated_permissions: None,
                 justification: None,
                 disable_timeout: false,
+                passthrough_stdio: false,
+            },
+            approval_command: vec!["apply_patch".into()],
+            mode: ExecutionMode::ApplyPatch(exec),
+            stdout_stream: None,
+            use_shell_profile: false,
+        };
+        let otel_event_manager = ctx.client.get_otel_event_manager();
+        let decision = select_sandbox(
+            &request,
+            AskForApproval::OnRequest,
+            Default::default(),
+            &cfg,
+            &session,
+            "sub",
+            "call",
+            &otel_event_manager,
+        )
+        .await
+        .expect("ok");
+        assert_eq!(decision.initial_sandbox, SandboxType::None);
+        assert_eq!(decision.escalate_on_failure, false);
+    }
+
+    #[tokio::test]
+    async fn select_apply_patch_requires_approval_on_unless_trusted() {
+        let (session, ctx) = make_session_and_context();
+        let tempdir = tempfile::tempdir().expect("tmpdir");
+        let p = tempdir.path().join("a.txt");
+        let action = ApplyPatchAction::new_add_for_test(&p, "hello".to_string());
+        let exec = ApplyPatchExec {
+            action,
+            user_explicitly_approved_this_action: false,
+        };
+        let cfg = ExecutorConfig::new(SandboxPolicy::ReadOnly, std::env::temp_dir(), None, true);
+        let request = ExecutionRequest {
+            params: ExecParams {
+                command: vec!["apply_patch".into()],
+                cwd: std::env::temp_dir(),
+                timeout_ms: None,
+                env: std::collections::HashMap::new(),
+                with_escalated_permissions: None,
+                justification: None,
+                disable_timeout: false,
+                passthrough_stdio: false,
             },
             approval_command: vec!["apply_patch".into()],
             mode: ExecutionMode::ApplyPatch(exec),
@@ -336,7 +400,12 @@ mod tests {
     #[tokio::test]
     async fn select_shell_autoapprove_in_danger_mode() {
         let (session, ctx) = make_session_and_context();
-        let cfg = ExecutorConfig::new(SandboxPolicy::DangerFullAccess, std::env::temp_dir(), None);
+        let cfg = ExecutorConfig::new(
+            SandboxPolicy::DangerFullAccess,
+            std::env::temp_dir(),
+            None,
+            true,
+        );
         let request = ExecutionRequest {
             params: ExecParams {
                 command: vec!["some-unknown".into()],
@@ -346,6 +415,7 @@ mod tests {
                 with_escalated_permissions: None,
                 justification: None,
                 disable_timeout: false,
+                passthrough_stdio: false,
             },
             approval_command: vec!["some-unknown".into()],
             mode: ExecutionMode::Shell,
@@ -373,7 +443,7 @@ mod tests {
     #[tokio::test]
     async fn select_shell_escalates_on_failure_with_platform_sandbox() {
         let (session, ctx) = make_session_and_context();
-        let cfg = ExecutorConfig::new(SandboxPolicy::ReadOnly, std::env::temp_dir(), None);
+        let cfg = ExecutorConfig::new(SandboxPolicy::ReadOnly, std::env::temp_dir(), None, true);
         let request = ExecutionRequest {
             params: ExecParams {
                 // Unknown command => untrusted but not flagged dangerous
@@ -384,6 +454,7 @@ mod tests {
                 with_escalated_permissions: None,
                 justification: None,
                 disable_timeout: false,
+                passthrough_stdio: false,
             },
             approval_command: vec!["some-unknown".into()],
             mode: ExecutionMode::Shell,

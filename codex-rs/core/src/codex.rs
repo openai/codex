@@ -275,6 +275,7 @@ pub(crate) struct TurnContext {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) disable_command_timeouts: bool,
     pub(crate) passthrough_shell_environment: bool,
+    pub(crate) passthrough_shell_stdio: bool,
 }
 
 impl TurnContext {
@@ -504,6 +505,7 @@ impl Session {
             final_output_json_schema: None,
             disable_command_timeouts: config.disable_command_timeouts,
             passthrough_shell_environment: config.passthrough_shell_environment,
+            passthrough_shell_stdio: config.passthrough_shell_stdio,
         };
         let services = SessionServices {
             mcp_connection_manager,
@@ -517,6 +519,7 @@ impl Session {
                 turn_context.sandbox_policy.clone(),
                 turn_context.cwd.clone(),
                 config.codex_linux_sandbox_exe.clone(),
+                !turn_context.passthrough_shell_stdio,
             )),
         };
 
@@ -1281,6 +1284,7 @@ async fn submission_loop(
                     final_output_json_schema: None,
                     disable_command_timeouts: prev.disable_command_timeouts,
                     passthrough_shell_environment: prev.passthrough_shell_environment,
+                    passthrough_shell_stdio: prev.passthrough_shell_stdio,
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
@@ -1376,6 +1380,7 @@ async fn submission_loop(
                         final_output_json_schema,
                         disable_command_timeouts: turn_context.disable_command_timeouts,
                         passthrough_shell_environment: turn_context.passthrough_shell_environment,
+                        passthrough_shell_stdio: turn_context.passthrough_shell_stdio,
                     };
 
                     // if the environment context has changed, record it in the conversation history
@@ -1664,6 +1669,7 @@ async fn spawn_review_thread(
         final_output_json_schema: None,
         disable_command_timeouts: parent_turn_context.disable_command_timeouts,
         passthrough_shell_environment: parent_turn_context.passthrough_shell_environment,
+        passthrough_shell_stdio: parent_turn_context.passthrough_shell_stdio,
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2868,6 +2874,7 @@ mod tests {
             final_output_json_schema: None,
             disable_command_timeouts: config.disable_command_timeouts,
             passthrough_shell_environment: config.passthrough_shell_environment,
+            passthrough_shell_stdio: config.passthrough_shell_stdio,
         };
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
@@ -2881,6 +2888,7 @@ mod tests {
                 turn_context.sandbox_policy.clone(),
                 turn_context.cwd.clone(),
                 None,
+                !turn_context.passthrough_shell_stdio,
             )),
         };
         let session = Session {
@@ -2938,6 +2946,7 @@ mod tests {
             final_output_json_schema: None,
             disable_command_timeouts: config.disable_command_timeouts,
             passthrough_shell_environment: config.passthrough_shell_environment,
+            passthrough_shell_stdio: config.passthrough_shell_stdio,
         });
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
@@ -2951,6 +2960,7 @@ mod tests {
                 config.sandbox_policy.clone(),
                 config.cwd.clone(),
                 None,
+                !config.passthrough_shell_stdio,
             )),
         };
         let session = Arc::new(Session {
@@ -3291,6 +3301,7 @@ mod tests {
             with_escalated_permissions: Some(true),
             justification: Some("test".to_string()),
             disable_timeout: turn_context.disable_command_timeouts,
+            passthrough_stdio: turn_context.passthrough_shell_stdio,
         };
 
         let params2 = ExecParams {

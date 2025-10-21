@@ -32,6 +32,7 @@ pub(crate) struct ExecutorConfig {
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) sandbox_cwd: PathBuf,
     pub(crate) codex_exe: Option<PathBuf>,
+    pub(crate) prefer_platform_sandbox: bool,
 }
 
 impl ExecutorConfig {
@@ -39,11 +40,13 @@ impl ExecutorConfig {
         sandbox_policy: SandboxPolicy,
         sandbox_cwd: PathBuf,
         codex_exe: Option<PathBuf>,
+        prefer_platform_sandbox: bool,
     ) -> Self {
         Self {
             sandbox_policy,
             sandbox_cwd,
             codex_exe,
+            prefer_platform_sandbox,
         }
     }
 }

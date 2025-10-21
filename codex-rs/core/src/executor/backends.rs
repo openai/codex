@@ -96,6 +96,7 @@ impl ExecutionBackend for ApplyPatchBackend {
                     with_escalated_permissions: params.with_escalated_permissions,
                     justification: params.justification,
                     disable_timeout: params.disable_timeout,
+                    passthrough_stdio: params.passthrough_stdio,
                 })
             }
             ExecutionMode::Shell => Err(FunctionCallError::RespondToModel(

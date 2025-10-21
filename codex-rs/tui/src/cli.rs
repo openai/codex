@@ -82,6 +82,15 @@ pub struct Cli {
     )]
     pub dangerously_disable_environment_wrapping: bool,
 
+    /// Like --yolo3 but also streams command stdout/stderr directly to your terminal and skips all sandbox wrappers. EXTREMELY DANGEROUS.
+    #[arg(
+        long = "yolo4",
+        alias = "dangerously-passthrough-stdio",
+        default_value_t = false,
+        conflicts_with_all = ["approval_policy", "full_auto"]
+    )]
+    pub dangerously_passthrough_stdio: bool,
+
     /// Tell the agent to use the specified directory as its working root.
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,

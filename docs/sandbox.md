@@ -34,6 +34,7 @@ Yes, you can disable all approval prompts with `--ask-for-approval never`. This 
 | YOLO (not recommended)             | `--dangerously-bypass-approvals-and-sandbox` (alias: `--yolo`)                              | No sandbox; no prompts                                                                                                                                |
 | YOLO2 (even less safe)             | `--yolo2`                                                                                   | No sandbox; no prompts; disables all command timeouts                                                                                                 |
 | YOLO3 (no guardrails)              | `--yolo3`                                                                                   | No sandbox; no prompts; disables command timeouts and passes through the full host environment                                                        |
+| YOLO4 (fully unchained)            | `--yolo4`                                                                                   | No sandbox; no prompts; disables command timeouts, passes through the host environment, and streams command stdout/stderr directly to your terminal    |
 
 > Note: In `workspace-write`, network is disabled by default unless enabled in config (`[sandbox_workspace_write].network_access = true`).
 

@@ -32,6 +32,7 @@ impl ShellHandler {
             with_escalated_permissions: params.with_escalated_permissions,
             justification: params.justification,
             disable_timeout: turn_context.disable_command_timeouts,
+            passthrough_stdio: turn_context.passthrough_shell_stdio,
         }
     }
 }

@@ -608,6 +608,7 @@ impl CodexMessageProcessor {
             with_escalated_permissions: None,
             justification: None,
             disable_timeout: self.config.disable_command_timeouts,
+            passthrough_stdio: self.config.passthrough_shell_stdio,
         };
 
         let effective_policy = params
@@ -1360,6 +1361,7 @@ async fn derive_config_from_params(
         tools_web_search_request: None,
         disable_command_timeouts: None,
         passthrough_shell_environment: None,
+        passthrough_shell_stdio: None,
     };
 
     let cli_overrides = cli_overrides

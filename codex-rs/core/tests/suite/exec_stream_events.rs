@@ -58,6 +58,7 @@ async fn test_exec_stdout_stream_events_echo() {
         with_escalated_permissions: None,
         justification: None,
         disable_timeout: false,
+        passthrough_stdio: false,
     };
 
     let policy = SandboxPolicy::new_read_only_policy();
@@ -111,6 +112,7 @@ async fn test_exec_stderr_stream_events_echo() {
         with_escalated_permissions: None,
         justification: None,
         disable_timeout: false,
+        passthrough_stdio: false,
     };
 
     let policy = SandboxPolicy::new_read_only_policy();
@@ -167,6 +169,7 @@ async fn test_aggregated_output_interleaves_in_order() {
         with_escalated_permissions: None,
         justification: None,
         disable_timeout: false,
+        passthrough_stdio: false,
     };
 
     let policy = SandboxPolicy::new_read_only_policy();
@@ -206,6 +209,7 @@ async fn test_exec_timeout_returns_partial_output() {
         with_escalated_permissions: None,
         justification: None,
         disable_timeout: false,
+        passthrough_stdio: false,
     };
 
     let policy = SandboxPolicy::new_read_only_policy();

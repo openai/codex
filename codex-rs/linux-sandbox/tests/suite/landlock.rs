@@ -45,6 +45,7 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
         with_escalated_permissions: None,
         justification: None,
         disable_timeout: false,
+        passthrough_stdio: false,
     };
 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
@@ -148,6 +149,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
         with_escalated_permissions: None,
         justification: None,
         disable_timeout: false,
+        passthrough_stdio: false,
     };
 
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
