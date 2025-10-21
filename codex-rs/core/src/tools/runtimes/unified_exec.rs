@@ -80,7 +80,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
     ) -> BoxFuture<'b, ReviewDecision> {
         let key = self.approval_key(req);
         let session = ctx.session;
-        let sub_id = ctx.sub_id.to_string();
+        let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         let command = req.command.clone();
         let cwd = req.cwd.clone();
@@ -88,7 +88,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         Box::pin(async move {
             with_cached_approval(&session.services, key, || async move {
                 session
-                    .request_command_approval(sub_id, call_id, command, cwd, reason)
+                    .request_command_approval(turn, call_id, command, cwd, reason)
                     .await
             })
             .await

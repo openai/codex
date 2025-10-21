@@ -10,7 +10,6 @@ use crate::error::Result as CodexResult;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::CompactedItem;
 use crate::protocol::ErrorEvent;
-use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::InputMessageKind;
 use crate::protocol::TaskStartedEvent;
@@ -40,34 +39,28 @@ pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) {
-    let sub_id = sess.next_internal_sub_id();
     let input = vec![UserInput::Text {
         text: SUMMARIZATION_PROMPT.to_string(),
     }];
-    run_compact_task_inner(sess, turn_context, sub_id, input).await;
+    run_compact_task_inner(sess, turn_context, input).await;
 }
 
 pub(crate) async fn run_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    sub_id: String,
     input: Vec<UserInput>,
 ) -> Option<String> {
-    let start_event = Event {
-        id: sub_id.clone(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
-            model_context_window: turn_context.client.get_model_context_window(),
-        }),
-    };
-    sess.send_event(start_event).await;
-    run_compact_task_inner(sess.clone(), turn_context, sub_id.clone(), input).await;
+    let start_event = EventMsg::TaskStarted(TaskStartedEvent {
+        model_context_window: turn_context.client.get_model_context_window(),
+    });
+    sess.send_event(&turn_context, start_event).await;
+    run_compact_task_inner(sess.clone(), turn_context, input).await;
     None
 }
 
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    sub_id: String,
     input: Vec<UserInput>,
 ) {
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
@@ -94,14 +87,13 @@ async fn run_compact_task_inner(
             input: turn_input.clone(),
             ..Default::default()
         };
-        let attempt_result =
-            drain_to_completed(&sess, turn_context.as_ref(), &sub_id, &prompt).await;
+        let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
 
         match attempt_result {
             Ok(()) => {
                 if truncated_count > 0 {
                     sess.notify_background_event(
-                        &sub_id,
+                        turn_context.as_ref(),
                         format!(
                             "Trimmed {truncated_count} older conversation item(s) before compacting so the prompt fits the model context window."
                         ),
@@ -120,15 +112,11 @@ async fn run_compact_task_inner(
                     retries = 0;
                     continue;
                 }
-                sess.set_total_tokens_full(&sub_id, turn_context.as_ref())
-                    .await;
-                let event = Event {
-                    id: sub_id.clone(),
-                    msg: EventMsg::Error(ErrorEvent {
-                        message: e.to_string(),
-                    }),
-                };
-                sess.send_event(event).await;
+                sess.set_total_tokens_full(turn_context.as_ref()).await;
+                let event = EventMsg::Error(ErrorEvent {
+                    message: e.to_string(),
+                });
+                sess.send_event(&turn_context, event).await;
                 return;
             }
             Err(e) => {
@@ -136,20 +124,17 @@ async fn run_compact_task_inner(
                     retries += 1;
                     let delay = backoff(retries);
                     sess.notify_stream_error(
-                        &sub_id,
+                        turn_context.as_ref(),
                         format!("Re-connecting... {retries}/{max_retries}"),
                     )
                     .await;
                     tokio::time::sleep(delay).await;
                     continue;
                 } else {
-                    let event = Event {
-                        id: sub_id.clone(),
-                        msg: EventMsg::Error(ErrorEvent {
-                            message: e.to_string(),
-                        }),
-                    };
-                    sess.send_event(event).await;
+                    let event = EventMsg::Error(ErrorEvent {
+                        message: e.to_string(),
+                    });
+                    sess.send_event(&turn_context, event).await;
                     return;
                 }
             }
@@ -168,13 +153,10 @@ async fn run_compact_task_inner(
     });
     sess.persist_rollout_items(&[rollout_item]).await;
 
-    let event = Event {
-        id: sub_id.clone(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: "Compact task completed".to_string(),
-        }),
-    };
-    sess.send_event(event).await;
+    let event = EventMsg::AgentMessage(AgentMessageEvent {
+        message: "Compact task completed".to_string(),
+    });
+    sess.send_event(&turn_context, event).await;
 }
 
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
@@ -256,7 +238,6 @@ pub(crate) fn build_compacted_history(
 async fn drain_to_completed(
     sess: &Session,
     turn_context: &TurnContext,
-    sub_id: &str,
     prompt: &Prompt,
 ) -> CodexResult<()> {
     let mut stream = turn_context
@@ -277,10 +258,10 @@ async fn drain_to_completed(
                 sess.record_into_history(std::slice::from_ref(&item)).await;
             }
             Ok(ResponseEvent::RateLimits(snapshot)) => {
-                sess.update_rate_limits(sub_id, snapshot).await;
+                sess.update_rate_limits(turn_context, snapshot).await;
             }
             Ok(ResponseEvent::Completed { token_usage, .. }) => {
-                sess.update_token_usage_info(sub_id, turn_context, token_usage.as_ref())
+                sess.update_token_usage_info(turn_context, token_usage.as_ref())
                     .await;
                 return Ok(());
             }

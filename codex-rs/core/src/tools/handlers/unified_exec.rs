@@ -67,7 +67,6 @@ impl ToolHandler for UnifiedExecHandler {
         let ToolInvocation {
             session,
             turn,
-            sub_id,
             call_id,
             tool_name,
             payload,

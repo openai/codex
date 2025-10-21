@@ -48,7 +48,6 @@ pub(crate) const UNIFIED_EXEC_OUTPUT_MAX_BYTES: usize = 1024 * 1024; // 1 MiB
 pub(crate) struct UnifiedExecContext<'a> {
     pub session: &'a Session,
     pub turn: &'a TurnContext,
-    pub sub_id: &'a str,
     pub call_id: &'a str,
 }
 

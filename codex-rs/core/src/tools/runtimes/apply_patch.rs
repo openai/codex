@@ -68,7 +68,7 @@ impl ApplyPatchRuntime {
 
     fn stdout_stream(ctx: &ToolCtx<'_>) -> Option<crate::exec::StdoutStream> {
         Some(crate::exec::StdoutStream {
-            sub_id: ctx.sub_id.clone(),
+            sub_id: ctx.turn.sub_id.clone(),
             call_id: ctx.call_id.clone(),
             tx_event: ctx.session.get_tx_event(),
         })
@@ -101,7 +101,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
     ) -> BoxFuture<'a, ReviewDecision> {
         let key = self.approval_key(req);
         let session = ctx.session;
-        let sub_id = ctx.sub_id.to_string();
+        let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         let cwd = req.cwd.clone();
         let retry_reason = ctx.retry_reason.clone();
@@ -111,7 +111,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                 if let Some(reason) = retry_reason {
                     session
                         .request_command_approval(
-                            sub_id,
+                            turn,
                             call_id,
                             vec!["apply_patch".to_string()],
                             cwd,

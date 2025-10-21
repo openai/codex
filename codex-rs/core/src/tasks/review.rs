@@ -25,23 +25,14 @@ impl SessionTask for ReviewTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        sub_id: String,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         let sess = session.clone_session();
-        run_task(
-            sess,
-            ctx,
-            sub_id,
-            input,
-            TaskKind::Review,
-            cancellation_token,
-        )
-        .await
+        run_task(sess, ctx, input, TaskKind::Review, cancellation_token).await
     }
 
-    async fn abort(&self, session: Arc<SessionTaskContext>, sub_id: &str) {
-        exit_review_mode(session.clone_session(), sub_id.to_string(), None).await;
+    async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
+        exit_review_mode(session.clone_session(), ctx, None).await;
     }
 }

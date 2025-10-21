@@ -53,7 +53,7 @@ impl ToolOrchestrator {
         if needs_initial_approval {
             let approval_ctx = ApprovalCtx {
                 session: tool_ctx.session,
-                sub_id: &tool_ctx.sub_id,
+                turn: turn_ctx,
                 call_id: &tool_ctx.call_id,
                 retry_reason: None,
             };
@@ -110,7 +110,7 @@ impl ToolOrchestrator {
                     let reason_msg = build_denial_reason_from_output(output.as_ref());
                     let approval_ctx = ApprovalCtx {
                         session: tool_ctx.session,
-                        sub_id: &tool_ctx.sub_id,
+                        turn: turn_ctx,
                         call_id: &tool_ctx.call_id,
                         retry_reason: Some(reason_msg),
                     };
