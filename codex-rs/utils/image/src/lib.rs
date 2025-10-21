@@ -1,12 +1,12 @@
 use std::num::NonZeroUsize;
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use crate::error::ImageProcessingError;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_utils_cache::BlockingLruCache;
+use codex_utils_cache::sha1_digest;
 use image::ColorType;
 use image::DynamicImage;
 use image::GenericImageView;
@@ -37,18 +37,17 @@ impl EncodedImage {
     }
 }
 
-static IMAGE_CACHE: LazyLock<BlockingLruCache<PathBuf, EncodedImage>> =
+static IMAGE_CACHE: LazyLock<BlockingLruCache<[u8; 20], EncodedImage>> =
     LazyLock::new(|| BlockingLruCache::new(NonZeroUsize::new(32).unwrap_or(NonZeroUsize::MIN)));
 
 pub fn load_and_resize_to_fit(path: &Path) -> Result<EncodedImage, ImageProcessingError> {
     let path_buf = path.to_path_buf();
 
-    IMAGE_CACHE.get_or_try_insert_with(path_buf.clone(), || {
-        let file_bytes = std::fs::read(path).map_err(|source| ImageProcessingError::Read {
-            path: path_buf.clone(),
-            source,
-        })?;
+    let file_bytes = read_file_bytes(path, &path_buf)?;
 
+    let key = sha1_digest(&file_bytes);
+
+    IMAGE_CACHE.get_or_try_insert_with(key, move || {
         let format = match image::guess_format(&file_bytes) {
             Ok(ImageFormat::Png) => Some(ImageFormat::Png),
             Ok(ImageFormat::Jpeg) => Some(ImageFormat::Jpeg),
@@ -98,6 +97,23 @@ pub fn load_and_resize_to_fit(path: &Path) -> Result<EncodedImage, ImageProcessi
 
         Ok(encoded)
     })
+}
+
+fn read_file_bytes(path: &Path, path_for_error: &Path) -> Result<Vec<u8>, ImageProcessingError> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => handle.block_on(async {
+            tokio::fs::read(path)
+                .await
+                .map_err(|source| ImageProcessingError::Read {
+                    path: path_for_error.to_path_buf(),
+                    source,
+                })
+        }),
+        Err(_) => std::fs::read(path).map_err(|source| ImageProcessingError::Read {
+            path: path_for_error.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 fn encode_image(
@@ -206,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn returns_cached_image_for_same_path() {
+    fn reprocesses_updated_file_contents() {
         {
             IMAGE_CACHE.clear();
         }
@@ -228,8 +244,8 @@ mod tests {
 
         assert_eq!(first.width, 32);
         assert_eq!(first.height, 16);
-        assert_eq!(second.width, first.width);
-        assert_eq!(second.height, first.height);
-        assert_eq!(second.bytes, first.bytes);
+        assert_eq!(second.width, 96);
+        assert_eq!(second.height, 48);
+        assert_ne!(second.bytes, first.bytes);
     }
 }

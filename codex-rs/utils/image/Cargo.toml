@@ -11,6 +11,8 @@ base64 = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png"] }
 codex-utils-cache = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "rt"] }
+sha1 = { workspace = true }
 
 [dev-dependencies]
 image = { workspace = true, features = ["jpeg", "png"] }

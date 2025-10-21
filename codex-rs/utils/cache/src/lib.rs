@@ -3,6 +3,8 @@ use std::hash::Hash;
 use std::num::NonZeroUsize;
 
 use lru::LruCache;
+use sha1::Digest;
+use sha1::Sha1;
 use tokio::sync::Mutex;
 use tokio::sync::MutexGuard;
 
@@ -101,6 +103,20 @@ where
     pub fn blocking_lock(&self) -> MutexGuard<'_, LruCache<K, V>> {
         self.inner.blocking_lock()
     }
+}
+
+/// Computes the SHA-1 digest of `bytes`.
+///
+/// Useful for content-based cache keys when you want to avoid staleness
+/// caused by path-only keys.
+#[must_use]
+pub fn sha1_digest(bytes: &[u8]) -> [u8; 20] {
+    let mut hasher = Sha1::new();
+    hasher.update(bytes);
+    let result = hasher.finalize();
+    let mut out = [0; 20];
+    out.copy_from_slice(&result);
+    out
 }
 
 #[cfg(test)]
