@@ -3,7 +3,6 @@ use serde::Deserialize;
 use tokio::fs;
 
 use crate::function_tool::FunctionCallError;
-use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ViewImageToolCallEvent;
 use crate::tools::context::ToolInvocation;

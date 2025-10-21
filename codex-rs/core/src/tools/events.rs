@@ -2,7 +2,6 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::parse_command::parse_command;
-use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
