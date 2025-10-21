@@ -349,7 +349,9 @@ fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
     let mut result = String::with_capacity(MODEL_FORMAT_MAX_BYTES.min(content.len()));
 
     result.push_str(head_part);
-    result.push_str(&marker);
+    if omitted > 0 {
+        result.push_str(&marker);
+    }
 
     let remaining = MODEL_FORMAT_MAX_BYTES.saturating_sub(result.len());
     if remaining == 0 {
