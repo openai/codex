@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::DateTime;
+use chrono::Datelike;
 use chrono::Utc;
 use codex_core::ConversationItem;
 use codex_core::ConversationsPage;
@@ -23,6 +24,7 @@ use ratatui::text::Span;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use tracing::debug;
 use unicode_width::UnicodeWidthStr;
 
 use crate::key_hint;
@@ -43,6 +45,25 @@ pub enum ResumeSelection {
     StartFresh,
     Resume(PathBuf),
     Exit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResumeTab {
+    All,
+    CurrentDirectory,
+}
+
+impl ResumeTab {
+    fn all_tabs() -> &'static [ResumeTab] {
+        &[ResumeTab::All, ResumeTab::CurrentDirectory]
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            ResumeTab::All => "All",
+            ResumeTab::CurrentDirectory => "This Folder",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -66,7 +87,11 @@ enum BackgroundEvent {
 /// Interactive session picker that lists recorded rollout files with simple
 /// search and pagination. Shows the first user input as the preview, relative
 /// time (e.g., "5 seconds ago"), and the absolute path.
-pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<ResumeSelection> {
+pub async fn run_resume_picker(
+    tui: &mut Tui,
+    codex_home: &Path,
+    current_dir: Option<PathBuf>,
+) -> Result<ResumeSelection> {
     let alt = AltScreenGuard::enter(tui);
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
@@ -91,6 +116,7 @@ pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<Resum
 
     let mut state = PickerState::new(
         codex_home.to_path_buf(),
+        current_dir,
         alt.tui.frame_requester(),
         page_loader,
     );
@@ -154,6 +180,7 @@ impl Drop for AltScreenGuard<'_> {
 
 struct PickerState {
     codex_home: PathBuf,
+    current_dir: Option<PathBuf>,
     requester: FrameRequester,
     pagination: PaginationState,
     all_rows: Vec<Row>,
@@ -162,6 +189,7 @@ struct PickerState {
     selected: usize,
     scroll_top: usize,
     query: String,
+    active_tab: ResumeTab,
     search_state: SearchState,
     next_request_token: usize,
     next_search_token: usize,
@@ -224,12 +252,26 @@ struct Row {
     preview: String,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
+    cwd: Option<PathBuf>,
+    bucket_label: Option<String>,
+}
+
+impl Row {
+    fn bucket_label(&self) -> Option<&str> {
+        self.bucket_label.as_deref()
+    }
 }
 
 impl PickerState {
-    fn new(codex_home: PathBuf, requester: FrameRequester, page_loader: PageLoader) -> Self {
+    fn new(
+        codex_home: PathBuf,
+        current_dir: Option<PathBuf>,
+        requester: FrameRequester,
+        page_loader: PageLoader,
+    ) -> Self {
         Self {
             codex_home,
+            current_dir,
             requester,
             pagination: PaginationState {
                 next_cursor: None,
@@ -243,6 +285,7 @@ impl PickerState {
             selected: 0,
             scroll_top: 0,
             query: String::new(),
+            active_tab: ResumeTab::All,
             search_state: SearchState::Idle,
             next_request_token: 0,
             next_search_token: 0,
@@ -276,6 +319,12 @@ impl PickerState {
                     self.ensure_selected_visible();
                 }
                 self.request_frame();
+            }
+            KeyCode::Left => {
+                self.select_previous_tab();
+            }
+            KeyCode::Right => {
+                self.select_next_tab();
             }
             KeyCode::Down => {
                 if self.selected + 1 < self.filtered_rows.len() {
@@ -389,6 +438,28 @@ impl PickerState {
         }
 
         let rows = rows_from_items(page.items);
+        if let Some(dir) = self.current_dir.as_ref() {
+            let matching = rows
+                .iter()
+                .filter(|row| {
+                    row.cwd
+                        .as_ref()
+                        .is_some_and(|cwd| cwd == dir || cwd.starts_with(dir))
+                })
+                .count();
+            debug!(
+                target: "resume_picker",
+                page_rows = rows.len(),
+                matching_current_dir = matching,
+                "ingested resume page"
+            );
+        } else {
+            debug!(
+                target: "resume_picker",
+                page_rows = rows.len(),
+                "ingested resume page"
+            );
+        }
         for row in rows {
             if self.seen_paths.insert(row.path.clone()) {
                 self.all_rows.push(row);
@@ -399,23 +470,39 @@ impl PickerState {
     }
 
     fn apply_filter(&mut self) {
-        if self.query.is_empty() {
-            self.filtered_rows = self.all_rows.clone();
+        let query = if self.query.is_empty() {
+            None
         } else {
-            let q = self.query.to_lowercase();
-            self.filtered_rows = self
-                .all_rows
-                .iter()
-                .filter(|r| r.preview.to_lowercase().contains(&q))
-                .cloned()
-                .collect();
-        }
+            Some(self.query.to_lowercase())
+        };
+
+        self.filtered_rows = self
+            .all_rows
+            .iter()
+            .filter(|row| self.row_matches_tab(row))
+            .filter(|row| {
+                if let Some(ref q) = query {
+                    row.preview.to_lowercase().contains(q)
+                } else {
+                    true
+                }
+            })
+            .cloned()
+            .collect();
         if self.selected >= self.filtered_rows.len() {
             self.selected = self.filtered_rows.len().saturating_sub(1);
         }
         if self.filtered_rows.is_empty() {
             self.scroll_top = 0;
         }
+        debug!(
+            target: "resume_picker",
+            tab = ?self.active_tab,
+            query = %self.query,
+            total_rows = self.all_rows.len(),
+            filtered_rows = self.filtered_rows.len(),
+            "applied resume picker filter"
+        );
         self.ensure_selected_visible();
         self.request_frame();
     }
@@ -427,21 +514,100 @@ impl PickerState {
         self.query = new_query;
         self.selected = 0;
         self.apply_filter();
-        if self.query.is_empty() {
-            self.search_state = SearchState::Idle;
+        self.update_search_state_after_filter_change();
+    }
+
+    fn set_tab(&mut self, tab: ResumeTab) {
+        if self.active_tab == tab || !self.is_tab_enabled(tab) {
             return;
         }
-        if !self.filtered_rows.is_empty() {
-            self.search_state = SearchState::Idle;
+        self.active_tab = tab;
+        self.selected = 0;
+        self.scroll_top = 0;
+        self.apply_filter();
+        self.update_search_state_after_filter_change();
+    }
+
+    fn select_next_tab(&mut self) {
+        self.cycle_tab(1);
+    }
+
+    fn select_previous_tab(&mut self) {
+        self.cycle_tab(-1);
+    }
+
+    fn cycle_tab(&mut self, delta: isize) {
+        let tabs = ResumeTab::all_tabs();
+        if tabs.is_empty() {
             return;
         }
-        if self.pagination.reached_scan_cap || self.pagination.next_cursor.is_none() {
-            self.search_state = SearchState::Idle;
-            return;
+        let current_index = tabs
+            .iter()
+            .position(|tab| *tab == self.active_tab)
+            .unwrap_or(0);
+        let len = tabs.len() as isize;
+        for step in 1..=tabs.len() {
+            let offset = (current_index as isize + delta * step as isize).rem_euclid(len);
+            let candidate = tabs[offset as usize];
+            if self.is_tab_enabled(candidate) {
+                self.set_tab(candidate);
+                break;
+            }
         }
-        let token = self.allocate_search_token();
-        self.search_state = SearchState::Active { token };
-        self.load_more_if_needed(LoadTrigger::Search { token });
+    }
+
+    fn is_tab_enabled(&self, tab: ResumeTab) -> bool {
+        match tab {
+            ResumeTab::All => true,
+            ResumeTab::CurrentDirectory => self.current_dir.is_some(),
+        }
+    }
+
+    fn update_search_state_after_filter_change(&mut self) {
+        if self.filtered_rows.is_empty() {
+            if self.pagination.reached_scan_cap || self.pagination.next_cursor.is_none() {
+                self.search_state = SearchState::Idle;
+                return;
+            }
+
+            if let Some(token) = self.search_state.active_token() {
+                self.load_more_if_needed(LoadTrigger::Search { token });
+                return;
+            }
+
+            if !self.query.is_empty() || matches!(self.active_tab, ResumeTab::CurrentDirectory) {
+                let token = self.allocate_search_token();
+                self.search_state = SearchState::Active { token };
+                self.load_more_if_needed(LoadTrigger::Search { token });
+            } else {
+                self.search_state = SearchState::Idle;
+            }
+        } else if self.query.is_empty() {
+            if self.search_state.is_active() {
+                self.search_state = SearchState::Idle;
+            }
+        } else if self.search_state.is_active() {
+            self.search_state = SearchState::Idle;
+        }
+    }
+
+    fn count_for_tab(&self, tab: ResumeTab) -> usize {
+        match tab {
+            ResumeTab::All => self.all_rows.len(),
+            ResumeTab::CurrentDirectory => {
+                let Some(dir) = self.current_dir.as_ref() else {
+                    return 0;
+                };
+                self.all_rows
+                    .iter()
+                    .filter(|row| {
+                        row.cwd
+                            .as_ref()
+                            .is_some_and(|cwd| cwd == dir || cwd.starts_with(dir))
+                    })
+                    .count()
+            }
+        }
     }
 
     fn continue_search_if_needed(&mut self) {
@@ -469,6 +635,21 @@ impl PickerState {
             return;
         }
         self.continue_search_if_needed();
+    }
+
+    fn row_matches_tab(&self, row: &Row) -> bool {
+        match self.active_tab {
+            ResumeTab::All => true,
+            ResumeTab::CurrentDirectory => {
+                let Some(current_dir) = self.current_dir.as_ref() else {
+                    return false;
+                };
+                let Some(row_cwd) = row.cwd.as_ref() else {
+                    return false;
+                };
+                row_cwd == current_dir || row_cwd.starts_with(current_dir)
+            }
+        }
     }
 
     fn ensure_selected_visible(&mut self) {
@@ -590,12 +771,22 @@ fn head_to_row(item: &ConversationItem) -> Row {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| String::from("(no message yet)"));
+    let cwd = extract_cwd(&item.head);
+    debug!(
+        target: "resume_picker",
+        path = %item.path.display(),
+        cwd = ?cwd.as_ref().map(|p| p.display().to_string()),
+        "converted conversation item to row"
+    );
+    let bucket_label = updated_at.or(created_at).map(format_time_bucket_label);
 
     Row {
         path: item.path.clone(),
         preview,
         created_at,
         updated_at,
+        cwd,
+        bucket_label,
     }
 }
 
@@ -611,6 +802,89 @@ fn extract_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
         .and_then(|v| v.as_str())
         .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
         .map(|dt| dt.with_timezone(&Utc))
+}
+
+fn extract_cwd(head: &[serde_json::Value]) -> Option<PathBuf> {
+    head.iter().find_map(|value| {
+        let obj = value.as_object()?;
+
+        if let Some(root) = obj.get("cwd").and_then(|cwd| cwd.as_str()) {
+            return Some(PathBuf::from(root));
+        }
+
+        if let Some(meta) = obj
+            .get("meta")
+            .and_then(|meta| meta.as_object())
+            .and_then(|meta| meta.get("cwd"))
+            .and_then(|cwd| cwd.as_str())
+        {
+            return Some(PathBuf::from(meta));
+        }
+
+        if obj
+            .get("kind")
+            .and_then(|kind| kind.as_str())
+            .is_some_and(|kind| kind == "session_start")
+        {
+            return obj
+                .get("cwd")
+                .and_then(|cwd| cwd.as_str())
+                .map(PathBuf::from);
+        }
+
+        None
+    })
+}
+
+fn format_time_bucket_label(ts: DateTime<Utc>) -> String {
+    let now = Utc::now();
+    let now_date = now.date_naive();
+    let ts_date = ts.date_naive();
+    let mut days = now_date.signed_duration_since(ts_date).num_days();
+    if days < 0 {
+        days = 0;
+    }
+    if days == 0 {
+        "Today".to_string()
+    } else if days == 1 {
+        "Yesterday".to_string()
+    } else if days < 7 {
+        format!("{days} days ago")
+    } else if days < 30 {
+        let weeks = ((days + 6) / 7).max(1);
+        if weeks == 1 {
+            "1 week ago".to_string()
+        } else {
+            format!("{weeks} weeks ago")
+        }
+    } else {
+        let month_name = month_name(ts.month());
+        let day = ts.day();
+        let year = ts.year();
+        if year == now.year() {
+            format!("{month_name} {day}")
+        } else {
+            format!("{month_name} {day}, {year}")
+        }
+    }
+}
+
+fn month_name(month: u32) -> &'static str {
+    match month {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        12 => "December",
+        _ => "",
+    }
 }
 
 fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
@@ -666,18 +940,10 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         .areas(area);
 
         // Header
-        frame.render_widget_ref(
-            Line::from(vec!["Resume a previous session".bold().cyan()]),
-            header,
-        );
+        frame.render_widget_ref(render_tabs_line(state), header);
 
         // Search line
-        let q = if state.query.is_empty() {
-            "Type to search".dim().to_string()
-        } else {
-            format!("Search: {}", state.query)
-        };
-        frame.render_widget_ref(Line::from(q), search);
+        frame.render_widget_ref(render_search_line(state), search);
 
         let metrics = calculate_column_metrics(&state.filtered_rows);
 
@@ -695,6 +961,11 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             "    ".dim(),
             key_hint::ctrl(KeyCode::Char('c')).into(),
             " to quit ".dim(),
+            "    ".dim(),
+            key_hint::plain(KeyCode::Left).into(),
+            "/".dim(),
+            key_hint::plain(KeyCode::Right).into(),
+            " tabs".dim(),
             "    ".dim(),
             key_hint::plain(KeyCode::Up).into(),
             "/".dim(),
@@ -723,21 +994,45 @@ fn render_list(
         return;
     }
 
-    let capacity = area.height as usize;
-    let start = state.scroll_top.min(rows.len().saturating_sub(1));
-    let end = rows.len().min(start + capacity);
     let labels = &metrics.labels;
-    let mut y = area.y;
-
     let max_created_width = metrics.max_created_width;
     let max_updated_width = metrics.max_updated_width;
+    let mut y = area.y;
+    let mut lines_remaining = area.height as usize;
+    let mut index = state.scroll_top.min(rows.len().saturating_sub(1));
+    let mut last_bucket = if index > 0 {
+        state.filtered_rows[index - 1].bucket_label.clone()
+    } else {
+        None
+    };
 
-    for (idx, (row, (created_label, updated_label))) in rows[start..end]
-        .iter()
-        .zip(labels[start..end].iter())
-        .enumerate()
-    {
-        let is_sel = start + idx == state.selected;
+    while index < rows.len() && lines_remaining > 0 {
+        let row = &rows[index];
+
+        if row.bucket_label() != last_bucket.as_deref() {
+            if let Some(label) = row.bucket_label() {
+                let divider_text = format!("--- {label} ---");
+                let divider_line: Line = vec![Span::from(divider_text).dim()].into();
+                let rect = Rect::new(area.x, y, area.width, 1);
+                frame.render_widget_ref(divider_line, rect);
+                y = y.saturating_add(1);
+                if lines_remaining == 0 {
+                    break;
+                }
+                lines_remaining = lines_remaining.saturating_sub(1);
+                if lines_remaining == 0 {
+                    break;
+                }
+            }
+            last_bucket = row.bucket_label().map(str::to_string);
+        }
+
+        if lines_remaining == 0 {
+            break;
+        }
+
+        let (created_label, updated_label) = &labels[index];
+        let is_sel = index == state.selected;
         let marker = if is_sel { "> ".bold() } else { "  ".into() };
         let marker_width = 2usize;
         let created_span = if max_created_width == 0 {
@@ -781,9 +1076,11 @@ fn render_list(
         let rect = Rect::new(area.x, y, area.width, 1);
         frame.render_widget_ref(line, rect);
         y = y.saturating_add(1);
+        lines_remaining = lines_remaining.saturating_sub(1);
+        index += 1;
     }
 
-    if state.pagination.loading.is_pending() && y < area.y.saturating_add(area.height) {
+    if state.pagination.loading.is_pending() && lines_remaining > 0 {
         let loading_line: Line = vec!["  ".into(), "Loading older sessions…".italic().dim()].into();
         let rect = Rect::new(area.x, y, area.width, 1);
         frame.render_widget_ref(loading_line, rect);
@@ -804,15 +1101,42 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
             );
             return vec![Span::from(msg).italic().dim()].into();
         }
-        return vec!["No results for your search".italic().dim()].into();
+        let scope_msg = if state.active_tab == ResumeTab::CurrentDirectory {
+            "No results for your search in this folder"
+        } else {
+            "No results for your search"
+        };
+        return vec![Span::from(scope_msg).italic().dim()].into();
+    }
+
+    if state.pagination.loading.is_pending() {
+        return vec!["Loading older sessions…".italic().dim()].into();
+    }
+
+    if state.active_tab == ResumeTab::CurrentDirectory {
+        if state.current_dir.is_none() {
+            return vec!["Current folder not available".italic().dim()].into();
+        }
+        if state.pagination.reached_scan_cap {
+            let msg = format!(
+                "Scanned first {} sessions; none matched this folder",
+                state.pagination.num_scanned_files
+            );
+            return vec![Span::from(msg).italic().dim()].into();
+        }
+        return vec!["No sessions for this folder yet".italic().dim()].into();
     }
 
     if state.all_rows.is_empty() && state.pagination.num_scanned_files == 0 {
         return vec!["No sessions yet".italic().dim()].into();
     }
 
-    if state.pagination.loading.is_pending() {
-        return vec!["Loading older sessions…".italic().dim()].into();
+    if state.pagination.reached_scan_cap {
+        let msg = format!(
+            "Scanned first {} sessions; more may exist",
+            state.pagination.num_scanned_files
+        );
+        return vec![Span::from(msg).italic().dim()].into();
     }
 
     vec!["No sessions yet".italic().dim()].into()
@@ -899,6 +1223,61 @@ fn render_column_headers(
     frame.render_widget_ref(Line::from(spans), area);
 }
 
+fn render_tabs_line(state: &PickerState) -> Line<'static> {
+    let mut spans: Vec<Span> = vec!["Resume sessions".bold().cyan()];
+    spans.push("  ".into());
+
+    for (idx, tab) in ResumeTab::all_tabs().iter().enumerate() {
+        if idx > 0 {
+            spans.push(" ".into());
+        }
+        let count = state.count_for_tab(*tab);
+        let label = if state.is_tab_enabled(*tab) {
+            format!(" {} ({count}) ", tab.label())
+        } else {
+            format!(" {} (-) ", tab.label())
+        };
+        let mut span = Span::from(label);
+        if state.active_tab == *tab {
+            span = span.bold().cyan();
+        } else if !state.is_tab_enabled(*tab) {
+            span = span.dim();
+        }
+        spans.push(span);
+    }
+
+    if state.active_tab == ResumeTab::CurrentDirectory
+        && let Some(dir) = state.current_dir.as_ref()
+    {
+        spans.push("  ".into());
+        spans.push(Span::from(format_current_dir_label(dir)).dim());
+    }
+
+    spans.into()
+}
+
+fn format_current_dir_label(dir: &Path) -> String {
+    dir.display().to_string()
+}
+
+fn render_search_line(state: &PickerState) -> Line<'static> {
+    if state.query.is_empty() {
+        let placeholder = match state.active_tab {
+            ResumeTab::All => "Type to search all sessions".to_string(),
+            ResumeTab::CurrentDirectory => {
+                if state.current_dir.is_some() {
+                    "Type to search this folder".to_string()
+                } else {
+                    "Current folder not available".to_string()
+                }
+            }
+        };
+        vec![Span::from(placeholder).dim()].into()
+    } else {
+        Line::from(format!("Search: {}", state.query))
+    }
+}
+
 struct ColumnMetrics {
     max_created_width: usize,
     max_updated_width: usize,
@@ -935,6 +1314,7 @@ mod tests {
     use insta::assert_snapshot;
     use serde_json::json;
     use std::future::Future;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Mutex;
@@ -1038,6 +1418,76 @@ mod tests {
     }
 
     #[test]
+    fn head_to_row_extracts_cwd_from_session_meta() {
+        let fixture_heads = vec![
+            vec![json!({
+                "cwd": "/workspace/project",
+                "id": "sess",
+                "timestamp": "2025-01-01T00:00:00Z",
+                "originator": "codex_cli_rs",
+                "cli_version": "0.0.0",
+                "instructions": null,
+                "source": "cli"
+            })],
+            vec![json!({
+                "meta": {
+                    "id": "sess",
+                    "timestamp": "2025-01-01T00:00:00Z",
+                    "cwd": "/workspace/project",
+                    "originator": "codex_cli_rs",
+                    "cli_version": "0.0.0",
+                    "instructions": null,
+                    "source": "cli"
+                },
+                "git": null
+            })],
+        ];
+
+        for head in fixture_heads {
+            let item = ConversationItem {
+                path: PathBuf::from("/tmp/a.jsonl"),
+                head,
+                tail: Vec::new(),
+                created_at: Some("2025-01-01T00:00:00Z".into()),
+                updated_at: Some("2025-01-01T00:00:00Z".into()),
+            };
+
+            let row = head_to_row(&item);
+            assert_eq!(row.cwd.as_deref(), Some(Path::new("/workspace/project")));
+            assert!(row.bucket_label.is_some());
+        }
+    }
+
+    #[test]
+    fn head_to_row_extracts_cwd_from_legacy_session_start() {
+        let head = vec![
+            json!({
+                "ts": "2025-01-01T00:00:00Z",
+                "dir": "meta",
+                "kind": "session_start",
+                "cwd": "/workspace/project"
+            }),
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [
+                    { "type": "input_text", "text": "hello" }
+                ]
+            }),
+        ];
+        let item = ConversationItem {
+            path: PathBuf::from("/tmp/a.jsonl"),
+            head,
+            tail: Vec::new(),
+            created_at: Some("2025-01-01T00:00:00Z".into()),
+            updated_at: Some("2025-01-01T00:00:00Z".into()),
+        };
+
+        let row = head_to_row(&item);
+        assert_eq!(row.cwd.as_deref(), Some(Path::new("/workspace/project")));
+    }
+
+    #[test]
     fn row_uses_tail_timestamp_for_updated_at() {
         let head = head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["Hello"]);
         let tail = vec![json!({
@@ -1079,8 +1529,12 @@ mod tests {
         use ratatui::layout::Layout;
 
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state =
-            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            None,
+            FrameRequester::test_dummy(),
+            loader,
+        );
 
         let now = Utc::now();
         let rows = vec![
@@ -1089,18 +1543,24 @@ mod tests {
                 preview: String::from("Fix resume picker timestamps"),
                 created_at: Some(now - Duration::minutes(16)),
                 updated_at: Some(now - Duration::seconds(42)),
+                cwd: None,
+                bucket_label: Some("Today".to_string()),
             },
             Row {
                 path: PathBuf::from("/tmp/b.jsonl"),
                 preview: String::from("Investigate lazy pagination cap"),
                 created_at: Some(now - Duration::hours(1)),
                 updated_at: Some(now - Duration::minutes(35)),
+                cwd: None,
+                bucket_label: Some("Today".to_string()),
             },
             Row {
                 path: PathBuf::from("/tmp/c.jsonl"),
                 preview: String::from("Explain the codebase"),
                 created_at: Some(now - Duration::hours(2)),
                 updated_at: Some(now - Duration::hours(2)),
+                cwd: None,
+                bucket_label: Some("Yesterday".to_string()),
             },
         ];
         state.all_rows = rows.clone();
@@ -1135,8 +1595,12 @@ mod tests {
     #[test]
     fn pageless_scrolling_deduplicates_and_keeps_order() {
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state =
-            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            None,
+            FrameRequester::test_dummy(),
+            loader,
+        );
 
         state.reset_pagination();
         state.ingest_page(page(
@@ -1190,6 +1654,43 @@ mod tests {
     }
 
     #[test]
+    fn current_directory_tab_filters_rows() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            Some(PathBuf::from("/workspace/project")),
+            FrameRequester::test_dummy(),
+            loader,
+        );
+
+        let now = Utc::now();
+        state.all_rows = vec![
+            Row {
+                path: PathBuf::from("/tmp/a.jsonl"),
+                preview: String::from("Match this folder"),
+                created_at: Some(now - Duration::minutes(5)),
+                updated_at: Some(now - Duration::minutes(1)),
+                cwd: Some(PathBuf::from("/workspace/project")),
+                bucket_label: Some("Today".to_string()),
+            },
+            Row {
+                path: PathBuf::from("/tmp/b.jsonl"),
+                preview: String::from("Different folder"),
+                created_at: Some(now - Duration::hours(2)),
+                updated_at: Some(now - Duration::hours(1)),
+                cwd: Some(PathBuf::from("/workspace/other")),
+                bucket_label: Some("Yesterday".to_string()),
+            },
+        ];
+        state.filtered_rows = state.all_rows.clone();
+        state.set_tab(ResumeTab::CurrentDirectory);
+
+        assert_eq!(state.active_tab, ResumeTab::CurrentDirectory);
+        assert_eq!(state.filtered_rows.len(), 1);
+        assert_eq!(state.filtered_rows[0].preview, "Match this folder");
+    }
+
+    #[test]
     fn ensure_minimum_rows_prefetches_when_underfilled() {
         let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let request_sink = recorded_requests.clone();
@@ -1197,8 +1698,12 @@ mod tests {
             request_sink.lock().unwrap().push(req);
         });
 
-        let mut state =
-            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            None,
+            FrameRequester::test_dummy(),
+            loader,
+        );
         state.reset_pagination();
         state.ingest_page(page(
             vec![
@@ -1222,8 +1727,12 @@ mod tests {
     #[test]
     fn page_navigation_uses_view_rows() {
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state =
-            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            None,
+            FrameRequester::test_dummy(),
+            loader,
+        );
 
         let mut items = Vec::new();
         for idx in 0..20 {
@@ -1266,8 +1775,12 @@ mod tests {
     #[test]
     fn up_at_bottom_does_not_scroll_when_visible() {
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state =
-            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            None,
+            FrameRequester::test_dummy(),
+            loader,
+        );
 
         let mut items = Vec::new();
         for idx in 0..10 {
@@ -1306,8 +1819,12 @@ mod tests {
             request_sink.lock().unwrap().push(req);
         });
 
-        let mut state =
-            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            None,
+            FrameRequester::test_dummy(),
+            loader,
+        );
         state.reset_pagination();
         state.ingest_page(page(
             vec![make_item(
