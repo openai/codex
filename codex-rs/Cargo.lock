@@ -1501,7 +1501,6 @@ dependencies = [
  "base64",
  "codex-utils-cache",
  "image",
- "sha1",
  "tempfile",
  "thiserror 2.0.16",
  "tokio",
