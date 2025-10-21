@@ -1489,12 +1489,13 @@ pub(crate) async fn run_task(
     // model sees a fresh conversation without the parent session's history.
     // For normal turns, continue recording to the session history as before.
     let is_review_mode = turn_context.is_review_mode;
-    // TODO:(aibrahim): review thread should be a conversation history type.
-    let mut review_thread_history: Vec<ResponseItem> = Vec::new();
+
+    let mut review_thread_history: ConversationHistory = ConversationHistory::new();
     if is_review_mode {
         // Seed review threads with environment context so the model knows the working directory.
-        review_thread_history.extend(sess.build_initial_context(turn_context.as_ref()));
-        review_thread_history.push(initial_input_for_turn.into());
+        review_thread_history
+            .record_items(sess.build_initial_context(turn_context.as_ref()).iter());
+        review_thread_history.record_items(std::iter::once(&initial_input_for_turn.into()));
     } else {
         sess.record_input_and_rollout_usermsg(&initial_input_for_turn)
             .await;
@@ -1529,9 +1530,9 @@ pub(crate) async fn run_task(
         //   represents an append-only log without duplicates.
         let turn_input: Vec<ResponseItem> = if is_review_mode {
             if !pending_input.is_empty() {
-                review_thread_history.extend(pending_input);
+                review_thread_history.record_items(&pending_input);
             }
-            review_thread_history.clone()
+            review_thread_history.get_history()
         } else {
             sess.record_conversation_items(&pending_input).await;
             sess.history_snapshot().await
@@ -1672,7 +1673,7 @@ pub(crate) async fn run_task(
                 if !items_to_record_in_conversation_history.is_empty() {
                     if is_review_mode {
                         review_thread_history
-                            .extend(items_to_record_in_conversation_history.clone());
+                            .record_items(items_to_record_in_conversation_history.iter());
                     } else {
                         sess.record_conversation_items(&items_to_record_in_conversation_history)
                             .await;
