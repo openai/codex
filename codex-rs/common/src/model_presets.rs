@@ -29,40 +29,6 @@ pub struct ModelPreset {
     pub is_default: bool,
 }
 
-const GPT5_CODEX_REASONING: &[ReasoningEffortPreset] = &[
-    ReasoningEffortPreset {
-        effort: ReasoningEffort::Low,
-        description: "Fastest responses with limited reasoning",
-    },
-    ReasoningEffortPreset {
-        effort: ReasoningEffort::Medium,
-        description: "Dynamically adjusts reasoning based on the task",
-    },
-    ReasoningEffortPreset {
-        effort: ReasoningEffort::High,
-        description: "Maximizes reasoning depth for complex or ambiguous problems",
-    },
-];
-
-const GPT5_REASONING: &[ReasoningEffortPreset] = &[
-    ReasoningEffortPreset {
-        effort: ReasoningEffort::Minimal,
-        description: "Fastest responses with little reasoning",
-    },
-    ReasoningEffortPreset {
-        effort: ReasoningEffort::Low,
-        description: "Balances speed with some reasoning; useful for straightforward queries and short explanations",
-    },
-    ReasoningEffortPreset {
-        effort: ReasoningEffort::Medium,
-        description: "Provides a solid balance of reasoning depth and latency for general-purpose tasks",
-    },
-    ReasoningEffortPreset {
-        effort: ReasoningEffort::High,
-        description: "Maximizes reasoning depth for complex or ambiguous problems",
-    },
-];
-
 const PRESETS: &[ModelPreset] = &[
     ModelPreset {
         id: "gpt-5-codex",
@@ -70,7 +36,20 @@ const PRESETS: &[ModelPreset] = &[
         display_name: "GPT-5 Codex",
         description: "Specialized GPT-5 variant optimized for Codex.",
         default_reasoning_effort: ReasoningEffort::Medium,
-        supported_reasoning_efforts: GPT5_CODEX_REASONING,
+        supported_reasoning_efforts: &[
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::Low,
+                description: "Fastest responses with limited reasoning",
+            },
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::Medium,
+                description: "Dynamically adjusts reasoning based on the task",
+            },
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::High,
+                description: "Maximizes reasoning depth for complex or ambiguous problems",
+            },
+        ],
         is_default: true,
     },
     ModelPreset {
@@ -79,7 +58,24 @@ const PRESETS: &[ModelPreset] = &[
         display_name: "GPT-5",
         description: "General-purpose GPT-5 model.",
         default_reasoning_effort: ReasoningEffort::Medium,
-        supported_reasoning_efforts: GPT5_REASONING,
+        supported_reasoning_efforts: &[
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::Minimal,
+                description: "Fastest responses with little reasoning",
+            },
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::Low,
+                description: "Balances speed with some reasoning; useful for straightforward queries and short explanations",
+            },
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::Medium,
+                description: "Provides a solid balance of reasoning depth and latency for general-purpose tasks",
+            },
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::High,
+                description: "Maximizes reasoning depth for complex or ambiguous problems",
+            },
+        ],
         is_default: false,
     },
 ];

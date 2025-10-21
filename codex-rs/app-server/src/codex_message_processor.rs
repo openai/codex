@@ -1,7 +1,7 @@
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
-use crate::models::codex_models;
+use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
@@ -838,7 +838,7 @@ impl CodexMessageProcessor {
 
     async fn list_models(&self, request_id: RequestId, params: ListModelsParams) {
         let ListModelsParams { page_size, cursor } = params;
-        let models = codex_models();
+        let models = supported_models();
         let total = models.len();
 
         if total == 0 {

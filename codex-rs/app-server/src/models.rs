@@ -4,7 +4,7 @@ use codex_common::model_presets::ModelPreset;
 use codex_common::model_presets::ReasoningEffortPreset;
 use codex_common::model_presets::builtin_model_presets;
 
-pub fn codex_models() -> Vec<Model> {
+pub fn supported_models() -> Vec<Model> {
     builtin_model_presets(None)
         .into_iter()
         .map(model_from_preset)
