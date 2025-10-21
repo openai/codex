@@ -25,6 +25,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
+use tracing::error;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
@@ -112,6 +113,10 @@ async fn run_compact_task_inner(
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
                 if turn_input.len() > 1 {
+                    // ideally we shouldn't reach this point, but if we do, we should remove the last item to not break cache.
+                    error!(
+                        "Context window exceeded while compacting, removing last item to not break cache. Error: {e}"
+                    );
                     history.remove_last_item();
                     truncated_count += 1;
                     retries = 0;
