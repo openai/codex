@@ -10,8 +10,8 @@ use crate::pull::PullEvent;
 use crate::pull::PullProgressReporter;
 use crate::url::base_url_to_host_root;
 use crate::url::is_openai_compatible_base_url;
-use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::ModelProviderInfo;
+use codex_core::OLLAMA_OSS_PROVIDER_ID;
 use codex_core::WireApi;
 use codex_core::config::Config;
 
@@ -34,11 +34,11 @@ impl OllamaClient {
         // account.
         let provider = config
             .model_providers
-            .get(BUILT_IN_OSS_MODEL_PROVIDER_ID)
+            .get(OLLAMA_OSS_PROVIDER_ID)
             .ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::NotFound,
-                    format!("Built-in provider {BUILT_IN_OSS_MODEL_PROVIDER_ID} not found",),
+                    format!("Built-in provider {OLLAMA_OSS_PROVIDER_ID} not found",),
                 )
             })?;
 
@@ -47,7 +47,8 @@ impl OllamaClient {
 
     #[cfg(test)]
     async fn try_from_provider_with_base_url(base_url: &str) -> io::Result<Self> {
-        let provider = codex_core::create_oss_provider_with_base_url(base_url);
+        let provider =
+            codex_core::create_oss_provider_with_base_url(base_url, codex_core::WireApi::Chat);
         Self::try_from_provider(&provider).await
     }
 

@@ -26,7 +26,9 @@ use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_family::ModelFamily;
 use crate::model_family::derive_default_model_family;
 use crate::model_family::find_family_for_model;
+use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::model_provider_info::ModelProviderInfo;
+use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
@@ -776,6 +778,48 @@ pub async fn persist_model_selection(
     Ok(())
 }
 
+/// Save the default OSS provider preference to config.toml
+pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::Result<()> {
+    // Validate that the provider is one of the known OSS providers
+    match provider {
+        LMSTUDIO_OSS_PROVIDER_ID | OLLAMA_OSS_PROVIDER_ID => {
+            // Valid provider, continue
+        }
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "Invalid OSS provider '{provider}'. Must be one of: {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID}"
+                ),
+            ));
+        }
+    }
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+
+    // Read existing config or create empty string if file doesn't exist
+    let content = match std::fs::read_to_string(&config_path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+
+    // Parse as DocumentMut for editing while preserving structure
+    let mut doc = content.parse::<DocumentMut>().map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("failed to parse config.toml: {e}"),
+        )
+    })?;
+
+    // Set the default_oss_provider at root level
+    use toml_edit::value;
+    doc["oss_provider"] = value(provider);
+
+    // Write the modified document back
+    std::fs::write(&config_path, doc.to_string())?;
+    Ok(())
+}
+
 /// Apply a single dotted-path override onto a TOML value.
 fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
     use toml::value::Table;
@@ -958,6 +1002,8 @@ pub struct ConfigToml {
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
+    /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
+    pub oss_provider: Option<String>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -3245,6 +3291,41 @@ trust_level = "trusted"
 trust_level = "trusted"
 "#;
         assert_eq!(contents, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_default_oss_provider() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let codex_home = temp_dir.path();
+        let config_path = codex_home.join(CONFIG_TOML_FILE);
+
+        // Test setting valid provider on empty config
+        set_default_oss_provider(codex_home, OLLAMA_OSS_PROVIDER_ID)?;
+        let content = std::fs::read_to_string(&config_path)?;
+        assert!(content.contains("oss_provider = \"ollama\""));
+
+        // Test updating existing config
+        std::fs::write(&config_path, "model = \"gpt-4\"\n")?;
+        set_default_oss_provider(codex_home, LMSTUDIO_OSS_PROVIDER_ID)?;
+        let content = std::fs::read_to_string(&config_path)?;
+        assert!(content.contains("oss_provider = \"lmstudio\""));
+        assert!(content.contains("model = \"gpt-4\""));
+
+        // Test overwriting existing oss_provider
+        set_default_oss_provider(codex_home, OLLAMA_OSS_PROVIDER_ID)?;
+        let content = std::fs::read_to_string(&config_path)?;
+        assert!(content.contains("oss_provider = \"ollama\""));
+        assert!(!content.contains("oss_provider = \"lmstudio\""));
+
+        // Test invalid provider
+        let result = set_default_oss_provider(codex_home, "invalid_provider");
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("Invalid OSS provider"));
+        assert!(error.to_string().contains("invalid_provider"));
 
         Ok(())
     }

@@ -19,6 +19,7 @@ members = [
     "file-search",
     "git-tooling",
     "linux-sandbox",
+    "lmstudio",
     "login",
     "mcp-client",
     "mcp-server",
@@ -66,6 +67,7 @@ codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
 codex-git-tooling = { path = "git-tooling" }
 codex-linux-sandbox = { path = "linux-sandbox" }
+codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-mcp-client = { path = "mcp-client" }
 codex-mcp-server = { path = "mcp-server" }
