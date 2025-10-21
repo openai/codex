@@ -441,7 +441,13 @@ startup_timeout_sec = 20
 tool_timeout_sec = 30
 # Optional: disable a server without removing it
 enabled = false
+# Optional: only expose a subset of tools from this server
+enabled_tools = ["search", "summarize"]
+# Optional: hide specific tools (applied after `enabled_tools`, if set)
+disabled_tools = ["search"]
 ```
+
+When both `enabled_tools` and `disabled_tools` are specified, Codex first restricts the server to the allow-list and then removes any tools that appear in the deny-list.
 
 #### Experimental RMCP client
 
@@ -620,6 +626,7 @@ Specify a program that will be executed to get notified about events generated b
   "type": "agent-turn-complete",
   "thread-id": "b5f6c1c2-1111-2222-3333-444455556666",
   "turn-id": "12345",
+  "cwd": "/Users/alice/projects/example",
   "input-messages": ["Rename `foo` to `bar` and update the callsites."],
   "last-assistant-message": "Rename complete and verified `cargo build` succeeds."
 }
@@ -628,6 +635,8 @@ Specify a program that will be executed to get notified about events generated b
 The `"type"` property will always be set. Currently, `"agent-turn-complete"` is the only notification type that is supported.
 
 `"thread-id"` contains a string that identifies the Codex session that produced the notification; you can use it to correlate multiple turns that belong to the same task.
+
+`"cwd"` reports the absolute working directory for the session so scripts can disambiguate which project triggered the notification.
 
 As an example, here is a Python script that parses the JSON and decides whether to show a desktop push notification using [terminal-notifier](https://github.com/julienXX/terminal-notifier) on macOS:
 
@@ -871,6 +880,8 @@ If `forced_chatgpt_workspace_id` is set but `forced_login_method` is not set, AP
 | `mcp_servers.<id>.enabled`                       | boolean                                                           | When false, Codex skips starting the server (default: true).                                                               |
 | `mcp_servers.<id>.startup_timeout_sec`           | number                                                            | Startup timeout in seconds (default: 10). Timeout is applied both for initializing MCP server and initially listing tools. |
 | `mcp_servers.<id>.tool_timeout_sec`              | number                                                            | Per-tool timeout in seconds (default: 60). Accepts fractional values; omit to use the default.                             |
+| `mcp_servers.<id>.enabled_tools`                 | array<string>                                                     | Restrict the server to the listed tool names.                                                                              |
+| `mcp_servers.<id>.disabled_tools`                | array<string>                                                     | Remove the listed tool names after applying `enabled_tools`, if any.                                                       |
 | `model_providers.<id>.name`                      | string                                                            | Display name.                                                                                                              |
 | `model_providers.<id>.base_url`                  | string                                                            | API base URL.                                                                                                              |
 | `model_providers.<id>.env_key`                   | string                                                            | Env var for API key.                                                                                                       |

@@ -8,7 +8,7 @@ Custom prompts turn your repeatable instructions into reusable slash commands, s
 - File type: Codex only loads `.md` files. Non-Markdown files are ignored.
 - Naming: The filename (without `.md`) becomes the prompt name. A file called `review.md` registers the prompt `review`.
 - Refresh: Prompts are loaded when a session starts. Restart Codex (or start a new session) after adding or editing files.
-- Conflicts: Files whose names collide with built-in commands (like `init`) are skipped.
+- Conflicts: Files whose names collide with built-in commands (like `init`) stay hidden in the slash popup, but you can still invoke them with `/prompts:<name>`.
 
 ### File format
 
@@ -23,7 +23,7 @@ Custom prompts turn your repeatable instructions into reusable slash commands, s
   ```
 
   - `description` shows under the entry in the popup.
-  - `argument-hint` (or `argument_hint`) displays a short hint about expected inputs.
+  - `argument-hint` (or `argument_hint`) lets you document expected inputs, though the current UI ignores this metadata.
 
 ### Placeholders and arguments
 

@@ -216,9 +216,6 @@ pub struct Config {
     /// When set, restricts the login mechanism users may use.
     pub forced_login_method: Option<ForcedLoginMethod>,
 
-    /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
-    pub include_plan_tool: bool,
-
     /// Include the `apply_patch` tool for models that benefit from invoking
     /// file edits as a structured tool call. When unset, this falls back to the
     /// model family's default preference.
@@ -482,6 +479,16 @@ pub fn write_global_mcp_servers(
 
             if let Some(timeout) = config.tool_timeout_sec {
                 entry["tool_timeout_sec"] = toml_edit::value(timeout.as_secs_f64());
+            }
+
+            if let Some(enabled_tools) = &config.enabled_tools {
+                entry["enabled_tools"] =
+                    TomlItem::Value(enabled_tools.iter().collect::<TomlArray>().into());
+            }
+
+            if let Some(disabled_tools) = &config.disabled_tools {
+                entry["disabled_tools"] =
+                    TomlItem::Value(disabled_tools.iter().collect::<TomlArray>().into());
             }
 
             doc["mcp_servers"][name.as_str()] = TomlItem::Table(entry);
@@ -1107,7 +1114,6 @@ pub struct ConfigOverrides {
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
-    pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
@@ -1137,7 +1143,6 @@ impl Config {
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
             base_instructions,
-            include_plan_tool: include_plan_tool_override,
             include_apply_patch_tool: include_apply_patch_tool_override,
             include_view_image_tool: include_view_image_tool_override,
             show_raw_agent_reasoning,
@@ -1164,7 +1169,6 @@ impl Config {
         };
 
         let feature_overrides = FeatureOverrides {
-            include_plan_tool: include_plan_tool_override,
             include_apply_patch_tool: include_apply_patch_tool_override,
             include_view_image_tool: include_view_image_tool_override,
             web_search_request: override_tools_web_search_request,
@@ -1259,7 +1263,6 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
-        let include_plan_tool_flag = features.enabled(Feature::PlanTool);
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let include_view_image_tool_flag = features.enabled(Feature::ViewImageTool);
         let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
@@ -1389,7 +1392,6 @@ impl Config {
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
             forced_chatgpt_workspace_id,
             forced_login_method,
-            include_plan_tool: include_plan_tool_flag,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             tools_web_search_request,
             use_experimental_streamable_shell_tool,
@@ -1755,7 +1757,6 @@ approve_all = true
         profiles.insert(
             "work".to_string(),
             ConfigProfile {
-                include_plan_tool: Some(true),
                 include_view_image_tool: Some(false),
                 ..Default::default()
             },
@@ -1772,9 +1773,7 @@ approve_all = true
             codex_home.path().to_path_buf(),
         )?;
 
-        assert!(config.features.enabled(Feature::PlanTool));
         assert!(!config.features.enabled(Feature::ViewImageTool));
-        assert!(config.include_plan_tool);
         assert!(!config.include_view_image_tool);
 
         Ok(())
@@ -1784,7 +1783,6 @@ approve_all = true
     fn feature_table_overrides_legacy_flags() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let mut entries = BTreeMap::new();
-        entries.insert("plan_tool".to_string(), false);
         entries.insert("apply_patch_freeform".to_string(), false);
         let cfg = ConfigToml {
             features: Some(crate::features::FeaturesToml { entries }),
@@ -1797,9 +1795,7 @@ approve_all = true
             codex_home.path().to_path_buf(),
         )?;
 
-        assert!(!config.features.enabled(Feature::PlanTool));
         assert!(!config.features.enabled(Feature::ApplyPatchFreeform));
-        assert!(!config.include_plan_tool);
         assert!(!config.include_apply_patch_tool);
 
         Ok(())
@@ -1923,6 +1919,8 @@ approve_all = true
                 enabled: true,
                 startup_timeout_sec: Some(Duration::from_secs(3)),
                 tool_timeout_sec: Some(Duration::from_secs(5)),
+                enabled_tools: None,
+                disabled_tools: None,
             },
         );
 
@@ -2059,6 +2057,8 @@ bearer_token = "secret"
                 enabled: true,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         )]);
 
@@ -2121,6 +2121,8 @@ ZIG_VAR = "3"
                 enabled: true,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         )]);
 
@@ -2163,6 +2165,8 @@ ZIG_VAR = "3"
                 enabled: true,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         )]);
 
@@ -2204,6 +2208,8 @@ ZIG_VAR = "3"
                 enabled: true,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         )]);
 
@@ -2261,6 +2267,8 @@ startup_timeout_sec = 2.0
                 enabled: true,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         )]);
         write_global_mcp_servers(codex_home.path(), &servers)?;
@@ -2330,6 +2338,8 @@ X-Auth = "DOCS_AUTH"
                 enabled: true,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         )]);
 
@@ -2351,6 +2361,8 @@ X-Auth = "DOCS_AUTH"
                 enabled: true,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         );
         write_global_mcp_servers(codex_home.path(), &servers)?;
@@ -2410,6 +2422,8 @@ url = "https://example.com/mcp"
                     enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(2)),
                     tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
                 },
             ),
             (
@@ -2425,6 +2439,8 @@ url = "https://example.com/mcp"
                     enabled: true,
                     startup_timeout_sec: None,
                     tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
                 },
             ),
         ]);
@@ -2499,6 +2515,8 @@ url = "https://example.com/mcp"
                 enabled: false,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         )]);
 
@@ -2514,6 +2532,49 @@ url = "https://example.com/mcp"
         let loaded = load_global_mcp_servers(codex_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         assert!(!docs.enabled);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_global_mcp_servers_serializes_tool_filters() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let servers = BTreeMap::from([(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "docs-server".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: Some(vec!["allowed".to_string()]),
+                disabled_tools: Some(vec!["blocked".to_string()]),
+            },
+        )]);
+
+        write_global_mcp_servers(codex_home.path(), &servers)?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = std::fs::read_to_string(&config_path)?;
+        assert!(serialized.contains(r#"enabled_tools = ["allowed"]"#));
+        assert!(serialized.contains(r#"disabled_tools = ["blocked"]"#));
+
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let docs = loaded.get("docs").expect("docs entry");
+        assert_eq!(
+            docs.enabled_tools.as_ref(),
+            Some(&vec!["allowed".to_string()])
+        );
+        assert_eq!(
+            docs.disabled_tools.as_ref(),
+            Some(&vec!["blocked".to_string()])
+        );
 
         Ok(())
     }
@@ -2833,7 +2894,6 @@ model_verbosity = "high"
                 base_instructions: None,
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
-                include_plan_tool: false,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
                 use_experimental_streamable_shell_tool: false,
@@ -2902,7 +2962,6 @@ model_verbosity = "high"
             base_instructions: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
-            include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             use_experimental_streamable_shell_tool: false,
@@ -2986,7 +3045,6 @@ model_verbosity = "high"
             base_instructions: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
-            include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             use_experimental_streamable_shell_tool: false,
@@ -3056,7 +3114,6 @@ model_verbosity = "high"
             base_instructions: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
-            include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             use_experimental_streamable_shell_tool: false,

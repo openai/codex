@@ -113,7 +113,7 @@ impl UnifiedExecSessionManager {
         );
         let tool_ctx = ToolCtx {
             session: context.session,
-            sub_id: context.sub_id.to_string(),
+            turn: context.turn,
             call_id: context.call_id.to_string(),
             tool_name: "unified_exec".to_string(),
         };

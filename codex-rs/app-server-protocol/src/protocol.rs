@@ -247,10 +247,6 @@ pub struct NewConversationParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_instructions: Option<String>,
 
-    /// Whether to include the plan tool in the conversation.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub include_plan_tool: Option<bool>,
-
     /// Whether to include the apply patch tool in the conversation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_apply_patch_tool: Option<bool>,
@@ -886,7 +882,6 @@ mod tests {
                 sandbox: None,
                 config: None,
                 base_instructions: None,
-                include_plan_tool: None,
                 include_apply_patch_tool: None,
             },
         };

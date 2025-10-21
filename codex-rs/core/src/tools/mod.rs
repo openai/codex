@@ -61,7 +61,6 @@ pub(crate) async fn handle_container_exec_with_params(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
-    sub_id: String,
     call_id: String,
 ) -> Result<String, FunctionCallError> {
     let _otel_event_manager = turn_context.client.get_otel_event_manager();
@@ -78,14 +77,8 @@ pub(crate) async fn handle_container_exec_with_params(
     // check if this was a patch, and apply it if so
     let apply_patch_exec = match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
         MaybeApplyPatchVerified::Body(changes) => {
-            match apply_patch::apply_patch(
-                sess.as_ref(),
-                turn_context.as_ref(),
-                &sub_id,
-                &call_id,
-                changes,
-            )
-            .await
+            match apply_patch::apply_patch(sess.as_ref(), turn_context.as_ref(), &call_id, changes)
+                .await
             {
                 InternalApplyPatchInvocation::Output(item) => return item,
                 InternalApplyPatchInvocation::DelegateToExec(apply_patch_exec) => {
@@ -122,7 +115,7 @@ pub(crate) async fn handle_container_exec_with_params(
         ),
     };
 
-    let event_ctx = ToolEventCtx::new(sess.as_ref(), &sub_id, &call_id, diff_opt);
+    let event_ctx = ToolEventCtx::new(sess.as_ref(), turn_context.as_ref(), &call_id, diff_opt);
     event_emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
     // Build runtime contexts only when needed (shell/apply_patch below).
@@ -141,7 +134,7 @@ pub(crate) async fn handle_container_exec_with_params(
         let mut runtime = ApplyPatchRuntime::new();
         let tool_ctx = ToolCtx {
             session: sess.as_ref(),
-            sub_id: sub_id.clone(),
+            turn: turn_context.as_ref(),
             call_id: call_id.clone(),
             tool_name: tool_name.to_string(),
         };
@@ -172,7 +165,7 @@ pub(crate) async fn handle_container_exec_with_params(
         let mut runtime = ShellRuntime::new();
         let tool_ctx = ToolCtx {
             session: sess.as_ref(),
-            sub_id: sub_id.clone(),
+            turn: turn_context.as_ref(),
             call_id: call_id.clone(),
             tool_name: tool_name.to_string(),
         };

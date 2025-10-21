@@ -1056,18 +1056,21 @@ pub(crate) fn new_mcp_tools_output(
             .collect();
         names.sort();
 
-        let status = auth_statuses
+        let auth_status = auth_statuses
             .get(server.as_str())
             .copied()
             .unwrap_or(McpAuthStatus::Unsupported);
-        lines.push(vec!["  • Server: ".into(), server.clone().into()].into());
-        let status_line = if cfg.enabled {
-            vec!["    • Status: ".into(), "enabled".green()].into()
-        } else {
-            vec!["    • Status: ".into(), "disabled".red()].into()
-        };
-        lines.push(status_line);
-        lines.push(vec!["    • Auth: ".into(), status.to_string().into()].into());
+        let mut header: Vec<Span<'static>> = vec!["  • ".into(), server.clone().into()];
+        if !cfg.enabled {
+            header.push(" ".into());
+            header.push("(disabled)".red());
+            lines.push(header.into());
+            lines.push(Line::from(""));
+            continue;
+        }
+        lines.push(header.into());
+        lines.push(vec!["    • Status: ".into(), "enabled".green()].into());
+        lines.push(vec!["    • Auth: ".into(), auth_status.to_string().into()].into());
 
         match &cfg.transport {
             McpServerTransportConfig::Stdio {
@@ -1126,15 +1129,6 @@ pub(crate) fn new_mcp_tools_output(
                     lines.push(vec!["    • Env HTTP headers: ".into(), display.into()].into());
                 }
             }
-        }
-
-        if !cfg.enabled {
-            let disabled = "(disabled)".red();
-            lines.push(vec!["    • Tools: ".into(), disabled.clone()].into());
-            lines.push(vec!["    • Resources: ".into(), disabled.clone()].into());
-            lines.push(vec!["    • Resource templates: ".into(), disabled].into());
-            lines.push(Line::from(""));
-            continue;
         }
 
         if names.is_empty() {

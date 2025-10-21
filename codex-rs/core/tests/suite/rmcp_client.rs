@@ -94,6 +94,8 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
                     enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
                 },
             );
         })
@@ -230,6 +232,8 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
                     enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
                 },
             );
         })
@@ -381,6 +385,8 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
                     enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
                 },
             );
         })
@@ -564,6 +570,8 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
                     enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
                 },
             );
         })

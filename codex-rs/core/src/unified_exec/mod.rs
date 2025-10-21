@@ -43,7 +43,6 @@ const UNIFIED_EXEC_OUTPUT_MAX_BYTES: usize = 128 * 1024; // 128 KiB
 pub(crate) struct UnifiedExecContext<'a> {
     pub session: &'a Session,
     pub turn: &'a TurnContext,
-    pub sub_id: &'a str,
     pub call_id: &'a str,
     pub session_id: Option<i32>,
 }
@@ -110,7 +109,6 @@ mod tests {
                 UnifiedExecContext {
                     session,
                     turn: turn.as_ref(),
-                    sub_id: "sub",
                     call_id: "call",
                     session_id,
                 },
