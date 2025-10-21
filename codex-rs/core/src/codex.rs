@@ -12,7 +12,6 @@ use crate::mcp::auth::McpAuthStatusEntry;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::review_format::format_review_findings_block;
-use crate::state::ItemCollector;
 use crate::terminal;
 use crate::user_notification::UserNotifier;
 use async_channel::Receiver;
@@ -20,9 +19,10 @@ use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
 use codex_protocol::ConversationId;
 use codex_protocol::items::TurnItem;
-use codex_protocol::items::UserMessageItem;
 use codex_protocol::protocol::ConversationPathResponseEvent;
 use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -270,7 +270,6 @@ pub(crate) struct TurnContext {
     pub(crate) is_review_mode: bool,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
-    pub(crate) item_collector: ItemCollector,
 }
 
 impl TurnContext {
@@ -359,7 +358,6 @@ impl Session {
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
         conversation_id: ConversationId,
-        tx_event: Sender<Event>,
         sub_id: String,
     ) -> TurnContext {
         let config = session_configuration.original_config_do_not_use.clone();
@@ -394,8 +392,6 @@ impl Session {
             features: &config.features,
         });
 
-        let item_collector = ItemCollector::new(tx_event, conversation_id, sub_id.clone());
-
         TurnContext {
             sub_id,
             client,
@@ -409,7 +405,6 @@ impl Session {
             is_review_mode: false,
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
-            item_collector,
         }
     }
 
@@ -665,7 +660,6 @@ impl Session {
             session_configuration.provider.clone(),
             &session_configuration,
             self.conversation_id,
-            self.get_tx_event(),
             sub_id,
         );
         if let Some(final_schema) = updates.final_output_json_schema {
@@ -707,6 +701,59 @@ impl Session {
         self.persist_rollout_items(&rollout_items).await;
         if let Err(e) = self.tx_event.send(event).await {
             error!("failed to send tool call event: {e}");
+        }
+    }
+
+    async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
+        self.send_event(
+            &turn_context,
+            EventMsg::ItemStarted(ItemStartedEvent {
+                thread_id: self.conversation_id,
+                turn_id: turn_context.sub_id.clone(),
+                item: item.clone(),
+            }),
+        )
+        .await;
+    }
+
+    async fn emit_turn_item_completed(
+        &self,
+        turn_context: &TurnContext,
+        item: TurnItem,
+        emit_raw_agent_reasoning: bool,
+    ) {
+        self.send_event(
+            turn_context,
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id: self.conversation_id,
+                turn_id: turn_context.sub_id.clone(),
+                item: item.clone(),
+            }),
+        )
+        .await;
+        self.emit_turn_item_legacy_events(turn_context, &item, emit_raw_agent_reasoning)
+            .await;
+    }
+
+    async fn emit_turn_item_started_completed(
+        &self,
+        turn_context: &TurnContext,
+        item: TurnItem,
+        emit_raw_agent_reasoning: bool,
+    ) {
+        self.emit_turn_item_started(turn_context, &item).await;
+        self.emit_turn_item_completed(turn_context, item, emit_raw_agent_reasoning)
+            .await;
+    }
+
+    async fn emit_turn_item_legacy_events(
+        &self,
+        turn_context: &TurnContext,
+        item: &TurnItem,
+        emit_raw_agent_reasoning: bool,
+    ) {
+        for event in item.legacy_events(emit_raw_agent_reasoning) {
+            self.send_event(turn_context, event).await;
         }
     }
 
@@ -946,7 +993,11 @@ impl Session {
 
     /// Record a user input item to conversation history and also persist a
     /// corresponding UserMessage EventMsg to rollout.
-    async fn record_input_and_rollout_usermsg(&self, response_input: &ResponseInputItem) {
+    async fn record_input_and_rollout_usermsg(
+        &self,
+        turn_context: &TurnContext,
+        response_input: &ResponseInputItem,
+    ) {
         let response_item: ResponseItem = response_input.clone().into();
         // Add to conversation history and persist response item to rollout
         self.record_conversation_items(std::slice::from_ref(&response_item))
@@ -954,9 +1005,17 @@ impl Session {
 
         // Derive user message events and persist only UserMessage to rollout
         let turn_item = parse_turn_item(&response_item);
-        if let Some(TurnItem::UserMessage(user_msg)) = turn_item {
-            self.persist_rollout_items(&[RolloutItem::EventMsg(user_msg.as_legacy_event())])
-                .await;
+        if let Some(turn_item) = turn_item {
+            self.emit_turn_item_started_completed(
+                turn_context,
+                turn_item.clone(),
+                self.show_raw_agent_reasoning(),
+            )
+            .await;
+            if let TurnItem::UserMessage(user_msg) = turn_item {
+                self.persist_rollout_items(&[RolloutItem::EventMsg(user_msg.as_legacy_event())])
+                    .await;
+            }
         }
     }
 
@@ -1151,7 +1210,6 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     {
                         sess.record_conversation_items(std::slice::from_ref(&env_item))
                             .await;
-                            sess.send_event(event).await;
                     }
 
                     sess.spawn_task(Arc::clone(&current_context), items, RegularTask)
@@ -1427,11 +1485,6 @@ async fn spawn_review_thread(
         is_review_mode: true,
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
-        item_collector: ItemCollector::new(
-            sess.get_tx_event(),
-            sess.conversation_id,
-            sub_id.to_string(),
-        ),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -1489,7 +1542,7 @@ pub(crate) async fn run_task(
         review_thread_history.extend(sess.build_initial_context(turn_context.as_ref()));
         review_thread_history.push(initial_input_for_turn.into());
     } else {
-        sess.record_input_and_rollout_usermsg(&initial_input_for_turn)
+        sess.record_input_and_rollout_usermsg(turn_context.as_ref(), &initial_input_for_turn)
             .await;
     }
 
@@ -2006,6 +2059,7 @@ async fn try_run_turn(
                     }
                     Ok(None) => {
                         let response = handle_non_tool_response_item(
+                            sess.as_ref(),
                             Arc::clone(&turn_context),
                             item.clone(),
                             sess.show_raw_agent_reasoning(),
@@ -2127,6 +2181,7 @@ async fn try_run_turn(
 }
 
 async fn handle_non_tool_response_item(
+    sess: &Session,
     turn_context: Arc<TurnContext>,
     item: ResponseItem,
     show_raw_agent_reasoning: bool,
@@ -2145,10 +2200,12 @@ async fn handle_non_tool_response_item(
                 _ => parse_turn_item(&item),
             };
             if let Some(turn_item) = turn_item {
-                turn_context
-                    .item_collector
-                    .started_completed(turn_item, show_raw_agent_reasoning)
-                    .await;
+                sess.emit_turn_item_started_completed(
+                    turn_context.as_ref(),
+                    turn_item,
+                    show_raw_agent_reasoning,
+                )
+                .await;
             }
         }
         ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. } => {
@@ -2635,7 +2692,6 @@ mod tests {
             session_configuration.provider.clone(),
             &session_configuration,
             conversation_id,
-            tx_event.clone(),
             "turn_id".to_string(),
         );
 
@@ -2704,7 +2760,6 @@ mod tests {
             session_configuration.provider.clone(),
             &session_configuration,
             conversation_id,
-            tx_event.clone(),
             "turn_id".to_string(),
         ));
 
