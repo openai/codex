@@ -87,7 +87,6 @@ impl ToolHandler for UnifiedExecHandler {
         let context = UnifiedExecContext {
             session: &session,
             turn: turn.as_ref(),
-            sub_id: &sub_id,
             call_id: &call_id,
         };
 

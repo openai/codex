@@ -166,7 +166,6 @@ mod tests {
         let context = UnifiedExecContext {
             session,
             turn: turn.as_ref(),
-            sub_id: "sub",
             call_id: "call",
         };
 
