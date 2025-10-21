@@ -183,9 +183,12 @@ async fn interrupt_tool_records_history_entries() {
         }
     }
 
-    assert!(call_seen, "function call not recorded in responses payload");
     assert!(
-        abort_seen,
-        "aborted function call output not recorded in responses payload"
+        !call_seen,
+        "function call should not be recorded in responses payload"
+    );
+    assert!(
+        !abort_seen,
+        "aborted function call output should not be recorded in responses payload"
     );
 }
