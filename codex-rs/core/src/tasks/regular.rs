@@ -24,19 +24,10 @@ impl SessionTask for RegularTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        sub_id: String,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         let sess = session.clone_session();
-        run_task(
-            sess,
-            ctx,
-            sub_id,
-            input,
-            TaskKind::Regular,
-            cancellation_token,
-        )
-        .await
+        run_task(sess, ctx, input, TaskKind::Regular, cancellation_token).await
     }
 }
