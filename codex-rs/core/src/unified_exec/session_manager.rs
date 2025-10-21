@@ -24,7 +24,6 @@ use super::UnifiedExecResult;
 use super::UnifiedExecSessionManager;
 use super::session::OutputBuffer;
 use super::session::UnifiedExecSession;
-use shlex::split as shlex_split;
 
 pub(super) struct SessionAcquisition {
     pub(super) session_id: i32,
@@ -253,7 +252,7 @@ impl UnifiedExecSessionManager {
                 context.session,
                 context.sub_id,
                 context.call_id,
-                &request.input_chunks,
+                request.input_chunks,
                 context.turn.cwd.as_path(),
             )
             .await;
