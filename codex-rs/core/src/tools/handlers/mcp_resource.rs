@@ -556,13 +556,13 @@ async fn emit_tool_call_begin(
     invocation: McpInvocation,
 ) {
     session
-        .send_event_raw(Event {
-            id: turn.sub_id.clone(),
-            msg: EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+        .send_event(
+            turn,
+            EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id: call_id.to_string(),
                 invocation,
             }),
-        })
+        )
         .await;
 }
 
@@ -575,15 +575,15 @@ async fn emit_tool_call_end(
     result: Result<CallToolResult, String>,
 ) {
     session
-        .send_event_raw(Event {
-            id: turn.sub_id.clone(),
-            msg: EventMsg::McpToolCallEnd(McpToolCallEndEvent {
+        .send_event(
+            turn,
+            EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id: call_id.to_string(),
                 invocation,
                 duration,
                 result,
             }),
-        })
+        )
         .await;
 }
 

@@ -150,7 +150,7 @@ impl Session {
         match active.take() {
             Some(mut at) => {
                 at.clear_pending().await;
-                
+
                 at.drain_tasks()
             }
             None => Vec::new(),

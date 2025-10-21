@@ -75,13 +75,13 @@ impl ToolHandler for ViewImageHandler {
             })?;
 
         session
-            .send_event_raw(Event {
-                id: turn.sub_id.clone(),
-                msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
+            .send_event(
+                turn.as_ref(),
+                EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
                     call_id,
                     path: event_path,
                 }),
-            })
+            )
             .await;
 
         Ok(ToolOutput::Function {
