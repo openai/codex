@@ -97,7 +97,6 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
                 id: id.clone(),
                 summary_text,
                 raw_content,
-                encrypted_content: encrypted_content.clone(),
             }))
         }
         ResponseItem::WebSearchCall {
