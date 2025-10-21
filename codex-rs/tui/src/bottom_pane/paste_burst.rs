@@ -201,12 +201,12 @@ impl PasteBurst {
         if !self.is_active() {
             return None;
         }
+        self.active = false;
         let mut out = std::mem::take(&mut self.buffer);
-        if let Some((ch, _)) = self.pending_first_char.take() {
+        if let Some((ch, _at)) = self.pending_first_char.take() {
             out.push(ch);
         }
-        self.clear_after_explicit_paste();
-        if out.is_empty() { None } else { Some(out) }
+        Some(out)
     }
 
     /// Clear only the timing window and any pending first-char.
