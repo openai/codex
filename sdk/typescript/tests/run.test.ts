@@ -279,8 +279,30 @@ describe("Codex", () => {
       await close();
     }
   });
-  it("forwards profile turn option to exec", async () => {
-    const { url, close } = await startResponsesTestProxy({
+  it("throws when configured profile does not exist", async () => {
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    const { restoreEnvironment } = setTempCodexHome("");
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, apiKey: "test" });
+
+      const thread = client.startThread();
+      await expect(thread.run("apply profile", { profile: "sdk-profile" })).rejects.toThrow(
+        /config profile .*sdk-profile.* not found/,
+      );
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      expectPair(commandArgs, ["--profile", "sdk-profile"]);
+    } finally {
+      restoreEnvironment();
+      restore();
+    }
+  });
+
+  it("runs when configured profile exists", async () => {
+    const { url, close, requests } = await startResponsesTestProxy({
       statusCode: 200,
       responseBodies: [
         sse(
@@ -293,16 +315,23 @@ describe("Codex", () => {
 
     const { args: spawnArgs, restore } = codexExecSpy();
 
+    const { restoreEnvironment } = setTempCodexHome(
+      '[profiles."sdk-profile"]\nmodel = "gpt-test-1"\n',
+    );
+
     try {
       const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const thread = client.startThread();
-      await thread.run("apply profile", { profile: "sdk-profile" });
+      const result = await thread.run("apply profile", { profile: "sdk-profile" });
 
+      expect(result.finalResponse).toBe("Profile applied");
+      expect(requests.length).toBeGreaterThan(0);
       const commandArgs = spawnArgs[0];
       expect(commandArgs).toBeDefined();
       expectPair(commandArgs, ["--profile", "sdk-profile"]);
     } finally {
+      restoreEnvironment();
       restore();
       await close();
     }
@@ -500,4 +529,24 @@ function expectPair(args: string[] | undefined, pair: [string, string]) {
     throw new Error(`Pair ${pair[0]} not found in args`);
   }
   expect(args[index + 1]).toBe(pair[1]);
+}
+
+function setTempCodexHome(configContents: string): { restoreEnvironment: () => void } {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-home-"));
+  const configPath = path.join(codexHome, "config.toml");
+  fs.writeFileSync(configPath, configContents);
+
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = codexHome;
+
+  return {
+    restoreEnvironment: () => {
+      if (previousCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = previousCodexHome;
+      }
+      fs.rmSync(codexHome, { recursive: true, force: true });
+    },
+  };
 }
