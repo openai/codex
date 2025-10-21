@@ -114,10 +114,6 @@ impl ConversationHistory {
                 // LocalShellCall is represented in upstream streams by a FunctionCallOutput
                 ResponseItem::LocalShellCall { call_id, .. } => {
                     if let Some(call_id) = call_id.as_ref() {
-                        error!(
-                            "Local shell call output is missing for call id: {}",
-                            call_id
-                        );
                         let has_output = self.items.iter().any(|i| match i {
                             ResponseItem::FunctionCallOutput {
                                 call_id: existing, ..
@@ -126,6 +122,10 @@ impl ConversationHistory {
                         });
 
                         if !has_output {
+                            error!(
+                                "Local shell call output is missing for call id: {}",
+                                call_id
+                            );
                             missing_outputs_to_insert.push((
                                 idx,
                                 ResponseItem::FunctionCallOutput {
@@ -176,6 +176,10 @@ impl ConversationHistory {
                     let has_call = snapshot.iter().any(|i| match i {
                         ResponseItem::FunctionCall {
                             call_id: existing, ..
+                        } => existing == call_id,
+                        ResponseItem::LocalShellCall {
+                            call_id: Some(existing),
+                            ..
                         } => existing == call_id,
                         _ => false,
                     });
