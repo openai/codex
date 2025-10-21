@@ -42,6 +42,7 @@ pub(crate) enum CancellationEvent {
 }
 
 pub(crate) use chat_composer::ChatComposer;
+pub(crate) use chat_composer::ClearedComposerState;
 pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
 
@@ -65,6 +66,7 @@ pub(crate) struct BottomPane {
     is_task_running: bool,
     ctrl_c_quit_hint: bool,
     esc_backtrack_hint: bool,
+    last_ctrl_c_cleared: Option<ClearedComposerState>,
 
     /// Inline status indicator shown above the composer while a task is running.
     status: Option<StatusIndicatorWidget>,
@@ -102,6 +104,7 @@ impl BottomPane {
             ctrl_c_quit_hint: false,
             status: None,
             queued_user_messages: Vec::new(),
+            last_ctrl_c_cleared: None,
             esc_backtrack_hint: false,
             context_window_percent: None,
         }
@@ -273,7 +276,7 @@ impl BottomPane {
     }
 
     pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
-        self.composer.clear_for_ctrl_c();
+        self.last_ctrl_c_cleared = self.composer.clear_for_ctrl_c();
         self.request_redraw();
     }
 
@@ -306,6 +309,19 @@ impl BottomPane {
                 .set_ctrl_c_quit_hint(false, self.has_input_focus);
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn restore_cleared_prompt(&mut self) -> bool {
+        if !self.view_stack.is_empty() {
+            return false;
+        }
+        let Some(state) = self.last_ctrl_c_cleared.take() else {
+            return false;
+        };
+        self.composer.restore_cleared_prompt(state);
+        self.clear_ctrl_c_quit_hint();
+        self.request_redraw();
+        true
     }
 
     #[cfg(test)]
