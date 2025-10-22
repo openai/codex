@@ -6,7 +6,9 @@ use codex_protocol::parse_command::ParsedCommand;
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
+    /// The aggregated stderr + stdout interleaved.
     pub(crate) aggregated_output: String,
+    /// The formatted output of the command, as seen by the model.
     pub(crate) formatted_output: String,
 }
 
