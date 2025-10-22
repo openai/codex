@@ -11,6 +11,10 @@ pub struct SeatbeltCommand {
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
 
+    /// While the command runs, capture macOS sandbox denials via `log stream` and print them after exit
+    #[arg(long = "log-denials", default_value_t = false)]
+    pub log_denials: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 
