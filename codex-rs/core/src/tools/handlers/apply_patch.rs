@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::sync::Arc;
 
+use crate::apply_patch;
+use crate::apply_patch::InternalApplyPatchInvocation;
+use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::client_common::tools::FreeformTool;
 use crate::client_common::tools::FreeformToolFormat;
 use crate::client_common::tools::ResponsesApiTool;
@@ -11,9 +13,14 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
-use crate::tools::handle_container_exec_with_params;
+use crate::tools::events::ToolEmitter;
+use crate::tools::events::ToolEventCtx;
+use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
+use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
+use crate::tools::sandboxing::ToolCtx;
 use crate::tools::spec::ApplyPatchToolArgs;
 use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
@@ -74,20 +81,83 @@ impl ToolHandler for ApplyPatchHandler {
             arg0: None,
         };
 
-        let content = handle_container_exec_with_params(
-            tool_name.as_str(),
-            exec_params,
-            Arc::clone(&session),
-            Arc::clone(&turn),
-            Arc::clone(&tracker),
-            call_id.clone(),
-        )
-        .await?;
+        // Re-parse and verify the patch so we can compute changes and approval
+        let command = vec!["apply_patch".to_string(), patch_input.clone()];
+        match codex_apply_patch::maybe_parse_apply_patch_verified(&command, &exec_params.cwd) {
+            codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+                match apply_patch::apply_patch(session.as_ref(), turn.as_ref(), &call_id, changes)
+                    .await
+                {
+                    InternalApplyPatchInvocation::Output(item) => {
+                        let content = item?;
+                        Ok(ToolOutput::Function {
+                            content,
+                            success: Some(true),
+                        })
+                    }
+                    InternalApplyPatchInvocation::DelegateToExec(apply) => {
+                        let emitter = ToolEmitter::apply_patch(
+                            convert_apply_patch_to_protocol(&apply.action),
+                            !apply.user_explicitly_approved_this_action,
+                        );
+                        let event_ctx = ToolEventCtx::new(
+                            session.as_ref(),
+                            turn.as_ref(),
+                            &call_id,
+                            Some(&tracker),
+                        );
+                        emitter.begin(event_ctx).await;
 
-        Ok(ToolOutput::Function {
-            content,
-            success: Some(true),
-        })
+                        let req = ApplyPatchRequest {
+                            patch: apply.action.patch.clone(),
+                            cwd: exec_params.cwd,
+                            timeout_ms: exec_params.timeout_ms,
+                            user_explicitly_approved: apply.user_explicitly_approved_this_action,
+                            codex_exe: turn.codex_linux_sandbox_exe.clone(),
+                        };
+
+                        let mut orchestrator = ToolOrchestrator::new();
+                        let mut runtime = ApplyPatchRuntime::new();
+                        let tool_ctx = ToolCtx {
+                            session: session.as_ref(),
+                            turn: turn.as_ref(),
+                            call_id: call_id.clone(),
+                            tool_name: tool_name.to_string(),
+                        };
+                        let out = orchestrator
+                            .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
+                            .await;
+                        let event_ctx = ToolEventCtx::new(
+                            session.as_ref(),
+                            turn.as_ref(),
+                            &call_id,
+                            Some(&tracker),
+                        );
+                        let content = emitter.finish(event_ctx, out).await?;
+                        Ok(ToolOutput::Function {
+                            content,
+                            success: Some(true),
+                        })
+                    }
+                }
+            }
+            codex_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
+                Err(FunctionCallError::RespondToModel(format!(
+                    "apply_patch verification failed: {parse_error}"
+                )))
+            }
+            codex_apply_patch::MaybeApplyPatchVerified::ShellParseError(error) => {
+                tracing::trace!("Failed to parse apply_patch input, {error:?}");
+                Err(FunctionCallError::RespondToModel(
+                    "apply_patch handler received invalid patch input".to_string(),
+                ))
+            }
+            codex_apply_patch::MaybeApplyPatchVerified::NotApplyPatch => {
+                Err(FunctionCallError::RespondToModel(
+                    "apply_patch handler received non-apply_patch input".to_string(),
+                ))
+            }
+        }
     }
 }
 

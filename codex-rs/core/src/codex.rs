@@ -2340,7 +2340,11 @@ mod tests {
     use crate::tools::MODEL_FORMAT_MAX_LINES;
     use crate::tools::MODEL_FORMAT_TAIL_LINES;
     use crate::tools::ToolRouter;
-    use crate::tools::handle_container_exec_with_params;
+    use crate::tools::context::ToolInvocation;
+    use crate::tools::context::ToolOutput;
+    use crate::tools::context::ToolPayload;
+    use crate::tools::handlers::ShellHandler;
+    use crate::tools::registry::ToolHandler;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
@@ -3065,15 +3069,26 @@ mod tests {
         let tool_name = "shell";
         let call_id = "test-call".to_string();
 
-        let resp = handle_container_exec_with_params(
-            tool_name,
-            params,
-            Arc::clone(&session),
-            Arc::clone(&turn_context),
-            Arc::clone(&turn_diff_tracker),
-            call_id,
-        )
-        .await;
+        let handler = ShellHandler;
+        let resp = handler
+            .handle(ToolInvocation {
+                session: Arc::clone(&session),
+                turn: Arc::clone(&turn_context),
+                tracker: Arc::clone(&turn_diff_tracker),
+                call_id,
+                tool_name: tool_name.to_string(),
+                payload: ToolPayload::Function {
+                    arguments: serde_json::json!({
+                        "command": params.command.clone(),
+                        "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                        "timeout_ms": params.timeout_ms,
+                        "with_escalated_permissions": params.with_escalated_permissions,
+                        "justification": params.justification.clone(),
+                    })
+                    .to_string(),
+                },
+            })
+            .await;
 
         let Err(FunctionCallError::RespondToModel(output)) = resp else {
             panic!("expected error result");
@@ -3092,17 +3107,30 @@ mod tests {
             .expect("unique turn context Arc")
             .sandbox_policy = SandboxPolicy::DangerFullAccess;
 
-        let resp2 = handle_container_exec_with_params(
-            tool_name,
-            params2,
-            Arc::clone(&session),
-            Arc::clone(&turn_context),
-            Arc::clone(&turn_diff_tracker),
-            "test-call-2".to_string(),
-        )
-        .await;
+        let resp2 = handler
+            .handle(ToolInvocation {
+                session: Arc::clone(&session),
+                turn: Arc::clone(&turn_context),
+                tracker: Arc::clone(&turn_diff_tracker),
+                call_id: "test-call-2".to_string(),
+                tool_name: tool_name.to_string(),
+                payload: ToolPayload::Function {
+                    arguments: serde_json::json!({
+                        "command": params2.command.clone(),
+                        "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                        "timeout_ms": params2.timeout_ms,
+                        "with_escalated_permissions": params2.with_escalated_permissions,
+                        "justification": params2.justification.clone(),
+                    })
+                    .to_string(),
+                },
+            })
+            .await;
 
-        let output = resp2.expect("expected Ok result");
+        let output = match resp2.expect("expected Ok result") {
+            ToolOutput::Function { content, .. } => content,
+            _ => panic!("unexpected tool output"),
+        };
 
         #[derive(Deserialize, PartialEq, Eq, Debug)]
         struct ResponseExecMetadata {
