@@ -1,6 +1,8 @@
-use crate::policy::{SandboxMode, SandboxPolicy};
+use crate::policy::SandboxMode;
+use crate::policy::SandboxPolicy;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 pub fn compute_allow_paths(
     policy: &SandboxPolicy,

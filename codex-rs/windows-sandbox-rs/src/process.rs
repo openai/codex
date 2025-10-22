@@ -109,6 +109,11 @@ pub unsafe fn create_process_as_user(
     let env_block = make_env_block(env_map);
     let mut si: STARTUPINFOW = std::mem::zeroed();
     si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    // Some processes (e.g., PowerShell) can fail with STATUS_DLL_INIT_FAILED
+    // if lpDesktop is not set when launching with a restricted token.
+    // Point explicitly at the interactive desktop.
+    let desktop = to_wide("Winsta0\\Default");
+    si.lpDesktop = desktop.as_ptr() as *mut u16;
     ensure_inheritable_stdio(&mut si)?;
     let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
     let ok = CreateProcessAsUserW(

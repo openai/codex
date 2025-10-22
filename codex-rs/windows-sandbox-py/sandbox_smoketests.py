@@ -36,6 +36,7 @@ def run_sbx(policy: str, cmd_argv: List[str], cwd: Path, env_extra: Optional[dic
         argv = [RUST_EXE, "--sandbox-policy-cwd", str(cwd), policy, "--", *cmd_argv]
     else:
         argv = [PY, SANDBOX_SCRIPT, policy, "--", *cmd_argv]
+    print(cmd_argv)
     cp = subprocess.run(argv, cwd=str(cwd), env=env,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                         timeout=TIMEOUT_SEC, text=True)

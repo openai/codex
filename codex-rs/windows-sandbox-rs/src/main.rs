@@ -27,7 +27,9 @@ use crate::cap::load_or_create_cap_sids;
 use crate::env::apply_no_network_to_env;
 use crate::env::ensure_non_interactive_pager;
 use crate::env::normalize_null_device_env;
-use crate::logging::{log_failure, log_start, log_success};
+use crate::logging::log_failure;
+use crate::logging::log_start;
+use crate::logging::log_success;
 use crate::policy::SandboxMode;
 use crate::policy::SandboxPolicy;
 use crate::process::assign_to_job;
@@ -37,6 +39,7 @@ use crate::process::wait_process_and_exitcode;
 use crate::token::convert_string_sid_to_sid;
 use crate::token::create_readonly_token_with_cap;
 use crate::token::create_workspace_write_token_with_cap;
+use crate::token::create_write_restricted_token_compat;
 use crate::token::get_current_token_for_restriction;
 use crate::token::get_logon_sid_bytes;
 
@@ -97,8 +100,12 @@ fn main() -> Result<()> {
                 let caps = load_or_create_cap_sids(&policy_cwd);
                 ensure_dir(&cap_sid_file(&policy_cwd))?;
                 fs::write(cap_sid_file(&policy_cwd), serde_json::to_string(&caps)?)?;
-                let psid = convert_string_sid_to_sid(&caps.workspace).unwrap();
-                create_workspace_write_token_with_cap(psid)?
+                if std::env::var("SBX_USE_COMPAT").ok().as_deref() == Some("1") {
+                    create_write_restricted_token_compat()?
+                } else {
+                    let psid = convert_string_sid_to_sid(&caps.workspace).unwrap();
+                    create_workspace_write_token_with_cap(psid)?
+                }
             }
         }
     };

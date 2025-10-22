@@ -39,9 +39,5 @@ features = [
     "Win32_Networking_WinSock",
     "Win32_System_LibraryLoader",
     "Win32_System_Com",
+    "Win32_Security_Authentication_Identity",
 ]
-
-[profile.release]
-opt-level = 3
-
- 

@@ -2,6 +2,7 @@ use crate::winutil::to_wide;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::ffi::c_void;
+use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::LUID;
@@ -12,6 +13,7 @@ use windows_sys::Win32::Security::CreateWellKnownSid;
 use windows_sys::Win32::Security::GetLengthSid;
 use windows_sys::Win32::Security::GetTokenInformation;
 use windows_sys::Win32::Security::LookupPrivilegeValueW;
+
 use windows_sys::Win32::Security::TokenGroups;
 use windows_sys::Win32::Security::SID_AND_ATTRIBUTES;
 use windows_sys::Win32::Security::TOKEN_ADJUST_DEFAULT;
@@ -28,6 +30,56 @@ const LUA_TOKEN: u32 = 0x04;
 const WRITE_RESTRICTED: u32 = 0x08;
 const WIN_WORLD_SID: i32 = 1;
 const SE_GROUP_LOGON_ID: u32 = 0xC0000000;
+fn append_debug_log(line: &str) {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    let path = crate::logging::LOG_FILE_NAME;
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{}", line);
+    }
+}
+
+unsafe fn log_restricted_sids_debug(h_token: HANDLE, ctx: &str) {
+    // TOKEN_INFORMATION_CLASS::TokenRestrictedSids = 11
+    let mut needed: u32 = 0;
+    unsafe {
+        windows_sys::Win32::Security::GetTokenInformation(
+            h_token,
+            11,
+            std::ptr::null_mut(),
+            0,
+            &mut needed,
+        );
+        if needed == 0 {
+            append_debug_log(&format!(
+                "DEBUG: restricted_sids {}: query failed (size)",
+                ctx
+            ));
+            return;
+        }
+        let mut buf: Vec<u8> = vec![0u8; needed as usize];
+        let ok = windows_sys::Win32::Security::GetTokenInformation(
+            h_token,
+            11,
+            buf.as_mut_ptr() as *mut c_void,
+            needed,
+            &mut needed,
+        );
+        if ok == 0 {
+            append_debug_log(&format!(
+                "DEBUG: restricted_sids {}: query failed (data)",
+                ctx
+            ));
+            return;
+        }
+        if needed < std::mem::size_of::<u32>() as u32 {
+            append_debug_log(&format!("DEBUG: restricted_sids {}: buffer too small", ctx));
+            return;
+        }
+        let count = std::ptr::read_unaligned(buf.as_ptr() as *const u32) as usize;
+        append_debug_log(&format!("DEBUG: restricted_sids {}: count={}", ctx, count));
+    }
+}
 
 pub unsafe fn world_sid() -> Result<Vec<u8>> {
     let mut size: u32 = 0;
@@ -89,46 +141,94 @@ pub unsafe fn get_current_token_for_restriction() -> Result<HANDLE> {
 
 #[allow(dead_code)]
 pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
-    let mut needed: u32 = 0;
-    GetTokenInformation(h_token, TokenGroups, std::ptr::null_mut(), 0, &mut needed);
-    if needed == 0 {
-        return Err(anyhow!(
-            "GetTokenInformation size failed: {}",
-            GetLastError()
-        ));
-    }
-    let mut buf: Vec<u8> = vec![0u8; needed as usize];
-    let ok = GetTokenInformation(
-        h_token,
-        TokenGroups,
-        buf.as_mut_ptr() as *mut c_void,
-        needed,
-        &mut needed,
-    );
-    if ok == 0 {
-        return Err(anyhow!(
-            "GetTokenInformation(TokenGroups) failed: {}",
-            GetLastError()
-        ));
-    }
-    let group_count = *(buf.as_ptr() as *const u32) as usize;
-    let groups_ptr = buf.as_ptr().add(std::mem::size_of::<u32>()) as *const SID_AND_ATTRIBUTES;
-    for i in 0..group_count {
-        let entry = *groups_ptr.add(i);
-        if (entry.Attributes & SE_GROUP_LOGON_ID) == SE_GROUP_LOGON_ID {
-            let sid = entry.Sid;
-            let sid_len = GetLengthSid(sid);
-            let mut out = vec![0u8; sid_len as usize];
-            let ok2 = CopySid(sid_len, out.as_mut_ptr() as *mut c_void, sid);
-            if ok2 == 0 {
-                return Err(anyhow!("CopySid failed: {}", GetLastError()));
+    unsafe fn scan_token_groups_for_logon(h: HANDLE) -> Option<Vec<u8>> {
+        let mut needed: u32 = 0;
+        GetTokenInformation(h, TokenGroups, std::ptr::null_mut(), 0, &mut needed);
+        if needed == 0 {
+            return None;
+        }
+        let mut buf: Vec<u8> = vec![0u8; needed as usize];
+        let ok = GetTokenInformation(
+            h,
+            TokenGroups,
+            buf.as_mut_ptr() as *mut c_void,
+            needed,
+            &mut needed,
+        );
+        if ok == 0 || (needed as usize) < std::mem::size_of::<u32>() {
+            return None;
+        }
+        let group_count = std::ptr::read_unaligned(buf.as_ptr() as *const u32) as usize;
+        append_debug_log(&format!("DEBUG: token groups count={}", group_count));
+        // TOKEN_GROUPS layout is: DWORD GroupCount; SID_AND_ATTRIBUTES Groups[];
+        // On 64-bit, Groups is aligned to pointer alignment after 4-byte GroupCount.
+        let after_count = unsafe { buf.as_ptr().add(std::mem::size_of::<u32>()) } as usize;
+        let align = std::mem::align_of::<SID_AND_ATTRIBUTES>();
+        let aligned = (after_count + (align - 1)) & !(align - 1);
+        let groups_ptr = aligned as *const SID_AND_ATTRIBUTES;
+        for i in 0..group_count {
+            let entry: SID_AND_ATTRIBUTES = std::ptr::read_unaligned(groups_ptr.add(i));
+            append_debug_log(&format!(
+                "DEBUG: group[{}] attrs=0x{:08x}",
+                i, entry.Attributes
+            ));
+            if (entry.Attributes & SE_GROUP_LOGON_ID) == SE_GROUP_LOGON_ID {
+                let sid = entry.Sid;
+                let sid_len = GetLengthSid(sid);
+                if sid_len == 0 {
+                    return None;
+                }
+                let mut out = vec![0u8; sid_len as usize];
+                if CopySid(sid_len, out.as_mut_ptr() as *mut c_void, sid) == 0 {
+                    return None;
+                }
+                return Some(out);
             }
-            return Ok(out);
+        }
+        None
+    }
+
+    if let Some(v) = scan_token_groups_for_logon(h_token) {
+        return Ok(v);
+    }
+
+    #[repr(C)]
+    struct TOKEN_LINKED_TOKEN {
+        linked_token: HANDLE,
+    }
+    const TOKEN_LINKED_TOKEN_CLASS: i32 = 19; // TokenLinkedToken
+    let mut ln_needed: u32 = 0;
+    GetTokenInformation(
+        h_token,
+        TOKEN_LINKED_TOKEN_CLASS,
+        std::ptr::null_mut(),
+        0,
+        &mut ln_needed,
+    );
+    if ln_needed >= std::mem::size_of::<TOKEN_LINKED_TOKEN>() as u32 {
+        let mut ln_buf: Vec<u8> = vec![0u8; ln_needed as usize];
+        let ok = GetTokenInformation(
+            h_token,
+            TOKEN_LINKED_TOKEN_CLASS,
+            ln_buf.as_mut_ptr() as *mut c_void,
+            ln_needed,
+            &mut ln_needed,
+        );
+        if ok != 0 {
+            let lt: TOKEN_LINKED_TOKEN =
+                std::ptr::read_unaligned(ln_buf.as_ptr() as *const TOKEN_LINKED_TOKEN);
+            if lt.linked_token != 0 {
+                let res = scan_token_groups_for_logon(lt.linked_token);
+                CloseHandle(lt.linked_token);
+                if let Some(v) = res {
+                    return Ok(v);
+                }
+            }
         }
     }
+
     Err(anyhow!("Logon SID not present on token"))
 }
-
 unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
     let mut luid = LUID {
         LowPart: 0,
@@ -193,13 +293,18 @@ pub unsafe fn create_workspace_write_token_with_cap(
     psid_capability: *mut c_void,
 ) -> Result<(HANDLE, *mut c_void)> {
     let base = get_current_token_for_restriction()?;
+    let mut logon_sid_bytes = get_logon_sid_bytes(base)?;
+    let psid_logon = logon_sid_bytes.as_mut_ptr() as *mut c_void;
     let mut everyone = world_sid()?;
     let psid_everyone = everyone.as_mut_ptr() as *mut c_void;
-    let mut entries: [SID_AND_ATTRIBUTES; 2] = std::mem::zeroed();
+    let mut entries: [SID_AND_ATTRIBUTES; 3] = std::mem::zeroed();
+    // Exact set and order: Capability, Logon, Everyone
     entries[0].Sid = psid_capability;
     entries[0].Attributes = 0;
-    entries[1].Sid = psid_everyone;
+    entries[1].Sid = psid_logon;
     entries[1].Attributes = 0;
+    entries[2].Sid = psid_everyone;
+    entries[2].Attributes = 0;
     let mut new_token: HANDLE = 0;
     let flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
     let ok = CreateRestrictedToken(
@@ -209,7 +314,49 @@ pub unsafe fn create_workspace_write_token_with_cap(
         std::ptr::null(),
         0,
         std::ptr::null(),
-        2,
+        3,
+        entries.as_mut_ptr(),
+        &mut new_token,
+    );
+    if ok == 0 {
+        return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
+    }
+    unsafe {
+        log_restricted_sids_debug(new_token, "workspace-write");
+    }
+    enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
+    Ok((new_token, psid_capability))
+}
+
+pub unsafe fn create_write_restricted_token_compat() -> Result<(HANDLE, *mut c_void)> {
+    let base = get_current_token_for_restriction()?;
+    let mut entries: [SID_AND_ATTRIBUTES; 2] = std::mem::zeroed();
+    let mut restrict_count: u32 = 0;
+
+    if let Ok(bytes) = get_logon_sid_bytes(base) {
+        let mut sid_buf = bytes;
+        let psid_logon = sid_buf.as_mut_ptr() as *mut c_void;
+        entries[restrict_count as usize].Sid = psid_logon;
+        entries[restrict_count as usize].Attributes = 0;
+        restrict_count += 1;
+    }
+
+    let mut everyone = world_sid()?;
+    let psid_everyone = everyone.as_mut_ptr() as *mut c_void;
+    entries[restrict_count as usize].Sid = psid_everyone;
+    entries[restrict_count as usize].Attributes = 0;
+    restrict_count += 1;
+
+    let mut new_token: HANDLE = 0;
+    let flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
+    let ok = CreateRestrictedToken(
+        base,
+        flags,
+        0,
+        std::ptr::null(),
+        0,
+        std::ptr::null(),
+        restrict_count,
         entries.as_mut_ptr(),
         &mut new_token,
     );
@@ -217,22 +364,31 @@ pub unsafe fn create_workspace_write_token_with_cap(
         return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
     }
     enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
-    Ok((new_token, psid_capability))
+    // Return logon SID if present; otherwise Everyone (not used for ACLs anyway)
+    let returned_sid = if entries[0].Sid == psid_everyone && restrict_count == 1 {
+        psid_everyone
+    } else {
+        entries[0].Sid
+    };
+    Ok((new_token, returned_sid))
 }
 
 pub unsafe fn create_readonly_token_with_cap(
     psid_capability: *mut c_void,
 ) -> Result<(HANDLE, *mut c_void)> {
     let base = get_current_token_for_restriction()?;
-    // Include Everyone in the restricted set to satisfy WRITE_RESTRICTED checks
-    // for system objects touched by PowerShell/CLR during startup.
+    let mut logon_sid_bytes = get_logon_sid_bytes(base)?;
+    let psid_logon = logon_sid_bytes.as_mut_ptr() as *mut c_void;
     let mut everyone = world_sid()?;
     let psid_everyone = everyone.as_mut_ptr() as *mut c_void;
-    let mut entries: [SID_AND_ATTRIBUTES; 2] = std::mem::zeroed();
+    let mut entries: [SID_AND_ATTRIBUTES; 3] = std::mem::zeroed();
+    // Exact set and order: Capability, Logon, Everyone
     entries[0].Sid = psid_capability;
     entries[0].Attributes = 0;
-    entries[1].Sid = psid_everyone;
+    entries[1].Sid = psid_logon;
     entries[1].Attributes = 0;
+    entries[2].Sid = psid_everyone;
+    entries[2].Attributes = 0;
     let mut new_token: HANDLE = 0;
     let flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
     let ok = CreateRestrictedToken(
@@ -242,12 +398,15 @@ pub unsafe fn create_readonly_token_with_cap(
         std::ptr::null(),
         0,
         std::ptr::null(),
-        2,
+        3,
         entries.as_mut_ptr(),
         &mut new_token,
     );
     if ok == 0 {
         return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
+    }
+    unsafe {
+        log_restricted_sids_debug(new_token, "read-only");
     }
     enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
     Ok((new_token, psid_capability))

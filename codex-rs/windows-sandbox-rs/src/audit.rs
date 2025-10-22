@@ -1,16 +1,20 @@
 use crate::acl::dacl_has_write_allow_for_sid;
 use crate::token::world_sid;
 use crate::winutil::to_wide;
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
+use anyhow::Result;
 use std::collections::HashSet;
 use std::ffi::c_void;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::path::Path;
+use std::path::PathBuf;
+use std::time::Duration;
+use std::time::Instant;
 use windows_sys::Win32::Foundation::LocalFree;
-use windows_sys::Win32::Foundation::{ERROR_SUCCESS, HLOCAL};
+use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Security::Authorization::GetNamedSecurityInfoW;
-use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::ACL;
+use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
 
 fn unique_push(set: &mut HashSet<PathBuf>, out: &mut Vec<PathBuf>, p: PathBuf) {
     if let Ok(abs) = p.canonicalize() {

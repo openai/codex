@@ -132,8 +132,6 @@ FILE_SHARE_WRITE = 0x00000002
 OPEN_EXISTING = 3
 FILE_ATTRIBUTE_NORMAL = 0x00000080
 WinWorldSid = 1
-WinAuthenticatedUserSid = 17  # WELL_KNOWN_SID_TYPE::WinAuthenticatedUserSid
-WinInteractiveSid = 4         # WELL_KNOWN_SID_TYPE::WinInteractiveSid
 
 # ACCESS_MODE
 NOT_USED_ACCESS   = 0
@@ -814,7 +812,7 @@ def _create_write_restricted_token_compat() -> Tuple[wt.HANDLE, wt.LPVOID]:
 
 def _create_workspace_write_token_with_cap(psid_capability: wt.LPVOID) -> Tuple[wt.HANDLE, wt.LPVOID]:
     r"""
-    Workspace-write: SidsToRestrict = [ Capability SID, Everyone ].
+    Workspace-write: SidsToRestrict = [ Capability SID, Logon SID, Everyone ].
     The Capability SID is unique to this workspace and is used for directory ACLs.
     """
     base = _get_current_token_for_restriction()
@@ -827,19 +825,13 @@ def _create_workspace_write_token_with_cap(psid_capability: wt.LPVOID) -> Tuple[
         psid_logon = c.cast(sid_buf, wt.LPVOID)
         globals().setdefault("_LIVE_SID_BUFFERS", []).append(sid_buf)
 
-        # Also include a broad read group to satisfy restricted checks.
-        # Prefer Authenticated Users if SBX_USE_AUTHUSERS=1, else Everyone (compat default).
-        sid_type = WinWorldSid
-        if os.environ.get("SBX_USE_AUTHUSERS") == "1":
-            sid_type = WinAuthenticatedUserSid
-        elif os.environ.get("SBX_USE_INTERACTIVE") == "1":
-            sid_type = WinInteractiveSid
+                # Always include Everyone (WORLD) as the broad read group to satisfy restricted checks.
         grp_size = wt.DWORD(0)
-        advapi32.CreateWellKnownSid(sid_type, None, None, c.byref(grp_size))
+        advapi32.CreateWellKnownSid(WinWorldSid, None, None, c.byref(grp_size))
         grp_buf = (c.c_ubyte * grp_size.value)()
         _check_bool(
-            advapi32.CreateWellKnownSid(sid_type, None, grp_buf, c.byref(grp_size)),
-            "CreateWellKnownSid",
+            advapi32.CreateWellKnownSid(WinWorldSid, None, grp_buf, c.byref(grp_size)),
+            "CreateWellKnownSid(WinWorldSid)",
         )
         psid_group = c.cast(grp_buf, wt.LPVOID)
 
