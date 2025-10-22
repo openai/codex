@@ -1,6 +1,7 @@
 //! Bottom pane: shows the ChatComposer or a BottomPaneView, if one is active.
 use std::path::PathBuf;
 
+use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
@@ -199,14 +200,11 @@ impl BottomPane {
             self.request_redraw();
             InputResult::None
         } else {
-            // If a task is running and a status line is visible, allow Esc to
-            // send an interrupt even while the composer has focus.
-            if matches!(key_event.code, crossterm::event::KeyCode::Esc)
-                && self.is_task_running
-                && let Some(status) = &self.status
-            {
-                // Send Op::Interrupt
-                status.interrupt();
+            // If a task is running, allow Esc to send an interrupt even while
+            // the composer has focus, regardless of status widget visibility.
+            if matches!(key_event.code, crossterm::event::KeyCode::Esc) && self.is_task_running {
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(codex_core::protocol::Op::Interrupt));
                 self.request_redraw();
                 return InputResult::None;
             }
