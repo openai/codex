@@ -14,10 +14,6 @@ impl ConversationHistory {
         Self { items: Vec::new() }
     }
 
-    pub(crate) fn create_with_items(items: Vec<ResponseItem>) -> Self {
-        Self { items }
-    }
-
     /// `items` is ordered from oldest to newest.
     pub(crate) fn record_items<I>(&mut self, items: I)
     where
@@ -53,7 +49,7 @@ impl ConversationHistory {
     /// This function enforces a couple of invariants on the in-memory history:
     /// 1. every call (function/custom) has a corresponding output entry
     /// 2. every output has a corresponding call entry
-    pub(crate) fn normalize_history(&mut self) {
+    fn normalize_history(&mut self) {
         // all function/tool calls must have a corresponding output
         self.ensure_call_outputs_present();
 
@@ -352,6 +348,12 @@ mod tests {
         }
     }
 
+    fn create_history_with_items(items: Vec<ResponseItem>) -> ConversationHistory {
+        let mut h = ConversationHistory::new();
+        h.record_items(items.iter());
+        h
+    }
+
     fn user_msg(text: &str) -> ResponseItem {
         ResponseItem::Message {
             id: None,
@@ -419,9 +421,9 @@ mod tests {
                 },
             },
         ];
-        let mut h = ConversationHistory::create_with_items(items);
+        let mut h = create_history_with_items(items);
         h.remove_first_item();
-        assert_eq!(h.contents(), Vec::<ResponseItem>::new());
+        assert_eq!(h.contents(), vec![]);
     }
 
     #[test]
@@ -441,9 +443,9 @@ mod tests {
                 call_id: "call-2".to_string(),
             },
         ];
-        let mut h = ConversationHistory::create_with_items(items);
+        let mut h = create_history_with_items(items);
         h.remove_first_item();
-        assert_eq!(h.contents(), Vec::<ResponseItem>::new());
+        assert_eq!(h.contents(), vec![]);
     }
 
     #[test]
@@ -469,9 +471,9 @@ mod tests {
                 },
             },
         ];
-        let mut h = ConversationHistory::create_with_items(items);
+        let mut h = create_history_with_items(items);
         h.remove_first_item();
-        assert_eq!(h.contents(), Vec::<ResponseItem>::new());
+        assert_eq!(h.contents(), vec![]);
     }
 
     #[test]
@@ -489,9 +491,9 @@ mod tests {
                 output: "ok".to_string(),
             },
         ];
-        let mut h = ConversationHistory::create_with_items(items);
+        let mut h = create_history_with_items(items);
         h.remove_first_item();
-        assert_eq!(h.contents(), Vec::<ResponseItem>::new());
+        assert_eq!(h.contents(), vec![]);
     }
 
     //TODO(aibrahim): run CI in release mode.
@@ -504,7 +506,7 @@ mod tests {
             arguments: "{}".to_string(),
             call_id: "call-x".to_string(),
         }];
-        let mut h = ConversationHistory::create_with_items(items);
+        let mut h = create_history_with_items(items);
 
         h.normalize_history();
 
@@ -538,7 +540,7 @@ mod tests {
             name: "custom".to_string(),
             input: "{}".to_string(),
         }];
-        let mut h = ConversationHistory::create_with_items(items);
+        let mut h = create_history_with_items(items);
 
         h.normalize_history();
 
@@ -575,7 +577,7 @@ mod tests {
                 user: None,
             }),
         }];
-        let mut h = ConversationHistory::create_with_items(items);
+        let mut h = create_history_with_items(items);
 
         h.normalize_history();
 
@@ -615,11 +617,11 @@ mod tests {
                 success: None,
             },
         }];
-        let mut h = ConversationHistory::create_with_items(items);
+        let mut h = create_history_with_items(items);
 
         h.normalize_history();
 
-        assert_eq!(h.contents(), Vec::<ResponseItem>::new());
+        assert_eq!(h.contents(), vec![]);
     }
 
     #[cfg(not(debug_assertions))]
@@ -629,11 +631,11 @@ mod tests {
             call_id: "orphan-2".to_string(),
             output: "ok".to_string(),
         }];
-        let mut h = ConversationHistory::create_with_items(items);
+        let mut h = create_history_with_items(items);
 
         h.normalize_history();
 
-        assert_eq!(h.contents(), Vec::<ResponseItem>::new());
+        assert_eq!(h.contents(), vec![]);
     }
 
     #[cfg(not(debug_assertions))]
@@ -677,7 +679,7 @@ mod tests {
                 }),
             },
         ];
-        let mut h = ConversationHistory::create_with_items(items);
+        let mut h = create_history_with_items(items);
 
         h.normalize_history();
 
@@ -742,7 +744,7 @@ mod tests {
             arguments: "{}".to_string(),
             call_id: "call-x".to_string(),
         }];
-        let mut h = ConversationHistory::create_with_items(items);
+        let mut h = create_history_with_items(items);
         h.normalize_history();
     }
 
@@ -757,7 +759,7 @@ mod tests {
             name: "custom".to_string(),
             input: "{}".to_string(),
         }];
-        let mut h = ConversationHistory::create_with_items(items);
+        let mut h = create_history_with_items(items);
         h.normalize_history();
     }
 
@@ -777,7 +779,7 @@ mod tests {
                 user: None,
             }),
         }];
-        let mut h = ConversationHistory::create_with_items(items);
+        let mut h = create_history_with_items(items);
         h.normalize_history();
     }
 
@@ -792,7 +794,7 @@ mod tests {
                 success: None,
             },
         }];
-        let mut h = ConversationHistory::create_with_items(items);
+        let mut h = create_history_with_items(items);
         h.normalize_history();
     }
 
@@ -804,7 +806,7 @@ mod tests {
             call_id: "orphan-2".to_string(),
             output: "ok".to_string(),
         }];
-        let mut h = ConversationHistory::create_with_items(items);
+        let mut h = create_history_with_items(items);
         h.normalize_history();
     }
 
@@ -846,7 +848,7 @@ mod tests {
                 }),
             },
         ];
-        let mut h = ConversationHistory::create_with_items(items);
+        let mut h = create_history_with_items(items);
         h.normalize_history();
     }
 }

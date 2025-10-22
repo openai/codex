@@ -5,7 +5,6 @@ use super::TurnContext;
 use super::get_last_assistant_message_from_turn;
 use crate::Prompt;
 use crate::client_common::ResponseEvent;
-use crate::conversation_history::ConversationHistory;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::protocol::AgentMessageEvent;
@@ -67,9 +66,7 @@ async fn run_compact_task_inner(
 ) {
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
-    let items = sess.history_snapshot().await;
-
-    let mut history = ConversationHistory::create_with_items(items);
+    let mut history = sess.clone_history().await;
     history.record_items(&[initial_input_for_turn.into()]);
 
     let mut truncated_count = 0usize;

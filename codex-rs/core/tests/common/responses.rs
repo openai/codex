@@ -354,7 +354,7 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
         return;
     };
     let Some(items) = body.get("input").and_then(Value::as_array) else {
-        return;
+        panic!("input array not found in request");
     };
 
     use std::collections::HashSet;
