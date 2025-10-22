@@ -47,9 +47,8 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::LocalShellCall { .. }
-        | ResponseItem::Reasoning { .. }
         | ResponseItem::WebSearchCall { .. } => true,
-        ResponseItem::Other => false,
+        ResponseItem::Reasoning { .. } | ResponseItem::Other => false,
     }
 }
 
@@ -57,6 +56,8 @@ fn is_api_message(message: &ResponseItem) -> bool {
 mod tests {
     use super::*;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ReasoningItemContent;
+    use codex_protocol::models::ReasoningItemReasoningSummary;
 
     fn assistant_msg(text: &str) -> ResponseItem {
         ResponseItem::Message {
@@ -78,10 +79,23 @@ mod tests {
         }
     }
 
+    fn reasoning_msg(text: &str) -> ResponseItem {
+        ResponseItem::Reasoning {
+            id: String::new(),
+            summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                text: "summary".to_string(),
+            }],
+            content: Some(vec![ReasoningItemContent::ReasoningText {
+                text: text.to_string(),
+            }]),
+            encrypted_content: None,
+        }
+    }
+
     #[test]
     fn filters_non_api_messages() {
         let mut h = ConversationHistory::default();
-        // System message is not an API message; Other is ignored.
+        // System message and reasoning message are not API messages; Other is ignored.
         let system = ResponseItem::Message {
             id: None,
             role: "system".to_string(),
@@ -89,7 +103,8 @@ mod tests {
                 text: "ignored".to_string(),
             }],
         };
-        h.record_items([&system, &ResponseItem::Other]);
+        let reasoning = reasoning_msg("thinking...");
+        h.record_items([&system, &reasoning, &ResponseItem::Other]);
 
         // User and assistant should be retained.
         let u = user_msg("hi");
