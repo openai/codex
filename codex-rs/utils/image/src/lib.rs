@@ -101,14 +101,15 @@ pub fn load_and_resize_to_fit(path: &Path) -> Result<EncodedImage, ImageProcessi
 
 fn read_file_bytes(path: &Path, path_for_error: &Path) -> Result<Vec<u8>, ImageProcessingError> {
     match tokio::runtime::Handle::try_current() {
-        Ok(handle) => handle.block_on(async {
-            tokio::fs::read(path)
-                .await
-                .map_err(|source| ImageProcessingError::Read {
-                    path: path_for_error.to_path_buf(),
-                    source,
-                })
+        // If we're inside a Tokio runtime, avoid block_on (it panics on worker threads).
+        // Use block_in_place and do a standard blocking read safely.
+        Ok(_) => tokio::task::block_in_place(|| std::fs::read(path)).map_err(|source| {
+            ImageProcessingError::Read {
+                path: path_for_error.to_path_buf(),
+                source,
+            }
         }),
+        // Outside a runtime, just read synchronously.
         Err(_) => std::fs::read(path).map_err(|source| ImageProcessingError::Read {
             path: path_for_error.to_path_buf(),
             source,
@@ -173,8 +174,8 @@ mod tests {
     use image::Rgba;
     use tempfile::NamedTempFile;
 
-    #[test]
-    fn returns_original_image_when_within_bounds() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn returns_original_image_when_within_bounds() {
         let temp_file = NamedTempFile::new().expect("temp file");
         let image = ImageBuffer::from_pixel(64, 32, Rgba([10u8, 20, 30, 255]));
         image
@@ -191,8 +192,8 @@ mod tests {
         assert_eq!(encoded.bytes, original_bytes);
     }
 
-    #[test]
-    fn downscales_large_image() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn downscales_large_image() {
         let temp_file = NamedTempFile::new().expect("temp file");
         let image = ImageBuffer::from_pixel(4096, 2048, Rgba([200u8, 10, 10, 255]));
         image
@@ -209,8 +210,8 @@ mod tests {
         assert_eq!(loaded.dimensions(), (processed.width, processed.height));
     }
 
-    #[test]
-    fn fails_cleanly_for_invalid_images() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fails_cleanly_for_invalid_images() {
         let temp_file = NamedTempFile::new().expect("temp file");
         std::fs::write(temp_file.path(), b"not an image").expect("write bytes");
 
@@ -221,8 +222,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn reprocesses_updated_file_contents() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reprocesses_updated_file_contents() {
         {
             IMAGE_CACHE.clear();
         }

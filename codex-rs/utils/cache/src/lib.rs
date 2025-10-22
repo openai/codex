@@ -8,7 +8,7 @@ use sha1::Sha1;
 use tokio::sync::Mutex;
 use tokio::sync::MutexGuard;
 
-/// A minimal LRU cache protected by a tokio mutex (requires tokio runtime).
+/// A minimal LRU cache protected by a Tokio mutex.
 pub struct BlockingLruCache<K, V> {
     inner: Mutex<LruCache<K, V>>,
 }
@@ -30,7 +30,7 @@ where
     where
         V: Clone,
     {
-        let mut guard = self.inner.blocking_lock();
+        let mut guard = lock_blocking(&self.inner);
         if let Some(v) = guard.get(&key) {
             return v.clone();
         }
@@ -49,7 +49,7 @@ where
     where
         V: Clone,
     {
-        let mut guard = self.inner.blocking_lock();
+        let mut guard = lock_blocking(&self.inner);
         if let Some(v) = guard.get(&key) {
             return Ok(v.clone());
         }
@@ -71,12 +71,12 @@ where
         Q: Hash + Eq + ?Sized,
         V: Clone,
     {
-        self.inner.blocking_lock().get(key).cloned()
+        lock_blocking(&self.inner).get(key).cloned()
     }
 
     /// Inserts `value` for `key`, returning the previous entry if it existed.
     pub fn insert(&self, key: K, value: V) -> Option<V> {
-        self.inner.blocking_lock().put(key, value)
+        lock_blocking(&self.inner).put(key, value)
     }
 
     /// Removes the entry for `key` if it exists, returning it.
@@ -85,23 +85,33 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.inner.blocking_lock().pop(key)
+        lock_blocking(&self.inner).pop(key)
     }
 
     /// Clears all entries from the cache.
     pub fn clear(&self) {
-        self.inner.blocking_lock().clear();
+        lock_blocking(&self.inner).clear();
     }
 
     /// Executes `callback` with a mutable reference to the underlying cache.
     pub fn with_mut<R>(&self, callback: impl FnOnce(&mut LruCache<K, V>) -> R) -> R {
-        let mut guard = self.inner.blocking_lock();
+        let mut guard = lock_blocking(&self.inner);
         callback(&mut guard)
     }
 
     /// Provides direct access to the cache guard for advanced use cases.
     pub fn blocking_lock(&self) -> MutexGuard<'_, LruCache<K, V>> {
-        self.inner.blocking_lock()
+        lock_blocking(&self.inner)
+    }
+}
+
+fn lock_blocking<K, V>(m: &Mutex<LruCache<K, V>>) -> MutexGuard<'_, LruCache<K, V>>
+where
+    K: Eq + Hash,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(_) => tokio::task::block_in_place(|| m.blocking_lock()),
+        Err(_) => m.blocking_lock(),
     }
 }
 
@@ -124,8 +134,8 @@ mod tests {
     use super::BlockingLruCache;
     use std::num::NonZeroUsize;
 
-    #[test]
-    fn stores_and_retrieves_values() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stores_and_retrieves_values() {
         let cache = BlockingLruCache::new(NonZeroUsize::new(2).expect("capacity"));
 
         assert!(cache.get(&"first").is_none());
@@ -133,8 +143,8 @@ mod tests {
         assert_eq!(cache.get(&"first"), Some(1));
     }
 
-    #[test]
-    fn evicts_least_recently_used() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn evicts_least_recently_used() {
         let cache = BlockingLruCache::new(NonZeroUsize::new(2).expect("capacity"));
         cache.insert("a", 1);
         cache.insert("b", 2);
