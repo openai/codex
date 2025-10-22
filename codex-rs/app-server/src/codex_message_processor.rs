@@ -1417,6 +1417,7 @@ async fn apply_bespoke_event_handling(
             command,
             cwd,
             reason,
+            risk,
             parsed_cmd,
         }) => {
             let params = ExecCommandApprovalParams {
@@ -1425,6 +1426,7 @@ async fn apply_bespoke_event_handling(
                 command,
                 cwd,
                 reason,
+                risk,
                 parsed_cmd,
             };
             let rx = outgoing
@@ -1484,6 +1486,7 @@ async fn derive_config_from_params(
         include_view_image_tool: None,
         show_raw_agent_reasoning: None,
         tools_web_search_request: None,
+        sandbox_command_assessment: None,
         additional_writable_roots: Vec::new(),
     };
 

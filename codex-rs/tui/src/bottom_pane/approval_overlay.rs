@@ -19,6 +19,9 @@ use crate::render::renderable::Renderable;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_core::protocol::SandboxCommandAssessment;
+use codex_core::protocol::SandboxRiskCategory;
+use codex_core::protocol::SandboxRiskLevel;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -38,6 +41,7 @@ pub(crate) enum ApprovalRequest {
         id: String,
         command: Vec<String>,
         reason: Option<String>,
+        risk: Option<SandboxCommandAssessment>,
     },
     ApplyPatch {
         id: String,
@@ -104,6 +108,13 @@ impl ApprovalOverlay {
             ),
         };
 
+        let subtitle = match &variant {
+            ApprovalVariant::Exec {
+                risk: Some(risk), ..
+            } => Some(risk_summary_subtitle(risk)),
+            _ => None,
+        };
+
         let header = Box::new(ColumnRenderable::with([
             Line::from(title.bold()).into(),
             Line::from("").into(),
@@ -130,6 +141,7 @@ impl ApprovalOverlay {
             ])),
             items,
             header,
+            subtitle,
             ..Default::default()
         };
 
@@ -145,7 +157,7 @@ impl ApprovalOverlay {
         };
         if let Some(variant) = self.current_variant.as_ref() {
             match (&variant, option.decision) {
-                (ApprovalVariant::Exec { id, command }, decision) => {
+                (ApprovalVariant::Exec { id, command, .. }, decision) => {
                     self.handle_exec_decision(id, command, decision);
                 }
                 (ApprovalVariant::ApplyPatch { id, .. }, decision) => {
@@ -233,7 +245,7 @@ impl BottomPaneView for ApprovalOverlay {
             && let Some(variant) = self.current_variant.as_ref()
         {
             match &variant {
-                ApprovalVariant::Exec { id, command } => {
+                ApprovalVariant::Exec { id, command, .. } => {
                     self.handle_exec_decision(id, command, ReviewDecision::Abort);
                 }
                 ApprovalVariant::ApplyPatch { id, .. } => {
@@ -285,8 +297,12 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 id,
                 command,
                 reason,
+                risk,
             } => {
                 let mut header: Vec<Line<'static>> = Vec::new();
+                if let Some(risk) = risk.as_ref() {
+                    header.extend(render_risk_lines(risk));
+                }
                 if let Some(reason) = reason
                     && !reason.is_empty()
                 {
@@ -300,7 +316,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 }
                 header.extend(full_cmd_lines);
                 Self {
-                    variant: ApprovalVariant::Exec { id, command },
+                    variant: ApprovalVariant::Exec { id, command, risk },
                     header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
                 }
             }
@@ -330,10 +346,80 @@ impl From<ApprovalRequest> for ApprovalRequestState {
     }
 }
 
+fn render_risk_lines(risk: &SandboxCommandAssessment) -> Vec<Line<'static>> {
+    let level_span = match risk.risk_level {
+        SandboxRiskLevel::Low => "LOW".green().bold(),
+        SandboxRiskLevel::Medium => "MEDIUM".cyan().bold(),
+        SandboxRiskLevel::High => "HIGH".red().bold(),
+    };
+
+    let mut spans: Vec<Span<'static>> = vec!["Risk: ".into(), level_span];
+    if !risk.risk_categories.is_empty() {
+        spans.push(" (".into());
+        for (idx, category) in risk.risk_categories.iter().enumerate() {
+            if idx > 0 {
+                spans.push(", ".into());
+            }
+            spans.push(risk_category_label(*category).into());
+        }
+        spans.push(")".into());
+    }
+
+    let mut lines = vec![Line::from(spans)];
+    let description = risk.description.trim();
+    if !description.is_empty() {
+        lines.push(Line::from(vec![
+            "Summary: ".into(),
+            description.to_string().into(),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines
+}
+
+fn risk_category_label(category: SandboxRiskCategory) -> &'static str {
+    match category {
+        SandboxRiskCategory::DataDeletion => "data deletion",
+        SandboxRiskCategory::DataExfiltration => "data exfiltration",
+        SandboxRiskCategory::PrivilegeEscalation => "privilege escalation",
+        SandboxRiskCategory::SystemModification => "system modification",
+        SandboxRiskCategory::NetworkAccess => "network access",
+        SandboxRiskCategory::ResourceExhaustion => "resource exhaustion",
+        SandboxRiskCategory::Compliance => "compliance",
+    }
+}
+
+fn risk_summary_subtitle(risk: &SandboxCommandAssessment) -> String {
+    let level = risk.risk_level.as_str().to_uppercase();
+    let mut parts = vec![format!("{level} risk")];
+    if !risk.risk_categories.is_empty() {
+        let cats = risk
+            .risk_categories
+            .iter()
+            .map(|category| risk_category_label(*category))
+            .collect::<Vec<_>>()
+            .join(", ");
+        parts.push(format!("Categories: {cats}"));
+    }
+    let summary = parts.join(" · ");
+    let description = risk.description.trim();
+    if description.is_empty() {
+        summary
+    } else {
+        format!("{summary} – {description}")
+    }
+}
+
 #[derive(Clone)]
 enum ApprovalVariant {
-    Exec { id: String, command: Vec<String> },
-    ApplyPatch { id: String },
+    Exec {
+        id: String,
+        command: Vec<String>,
+        risk: Option<SandboxCommandAssessment>,
+    },
+    ApplyPatch {
+        id: String,
+    },
 }
 
 #[derive(Clone)]
@@ -404,6 +490,7 @@ mod tests {
             id: "test".to_string(),
             command: vec!["echo".to_string(), "hi".to_string()],
             reason: Some("reason".to_string()),
+            risk: None,
         }
     }
 
@@ -445,6 +532,7 @@ mod tests {
             id: "test".into(),
             command,
             reason: None,
+            risk: None,
         };
 
         let view = ApprovalOverlay::new(exec_request, tx);

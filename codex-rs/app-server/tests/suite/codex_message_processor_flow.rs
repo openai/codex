@@ -311,6 +311,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
             ],
             cwd: working_directory.clone(),
             reason: None,
+            risk: None,
             parsed_cmd: vec![ParsedCommand::Unknown {
                 cmd: "python3 -c 'print(42)'".to_string()
             }],

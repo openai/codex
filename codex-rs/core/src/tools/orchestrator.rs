@@ -7,6 +7,7 @@ retry without sandbox on denial (no re‑approval thanks to caching).
 */
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
+use crate::error::get_error_message_ui;
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::SandboxManager;
 use crate::tools::sandboxing::ApprovalCtx;
@@ -56,6 +57,7 @@ impl ToolOrchestrator {
                 turn: turn_ctx,
                 call_id: &tool_ctx.call_id,
                 retry_reason: None,
+                risk: None,
             };
             let decision = tool.start_approval_async(req, approval_ctx).await;
 
@@ -107,12 +109,33 @@ impl ToolOrchestrator {
 
                 // Ask for approval before retrying without sandbox.
                 if !tool.should_bypass_approval(approval_policy, already_approved) {
+                    let mut risk = None;
+
+                    if let Some(metadata) = tool.sandbox_retry_data(req) {
+                        let err = SandboxErr::Denied {
+                            output: output.clone(),
+                        };
+                        let friendly = get_error_message_ui(&CodexErr::Sandbox(err));
+                        let failure_summary = format!("failed in sandbox: {friendly}");
+
+                        risk = tool_ctx
+                            .session
+                            .assess_sandbox_command(
+                                turn_ctx,
+                                &tool_ctx.call_id,
+                                &metadata.command,
+                                Some(failure_summary.as_str()),
+                            )
+                            .await;
+                    }
+
                     let reason_msg = build_denial_reason_from_output(output.as_ref());
                     let approval_ctx = ApprovalCtx {
                         session: tool_ctx.session,
                         turn: turn_ctx,
                         call_id: &tool_ctx.call_id,
                         retry_reason: Some(reason_msg),
+                        risk,
                     };
 
                     let decision = tool.start_approval_async(req, approval_ctx).await;

@@ -87,6 +87,7 @@ use crate::protocol::Op;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReviewDecision;
 use crate::protocol::ReviewOutputEvent;
+use crate::protocol::SandboxCommandAssessment;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
@@ -754,6 +755,31 @@ impl Session {
         }
     }
 
+    pub(crate) async fn assess_sandbox_command(
+        &self,
+        turn_context: &TurnContext,
+        call_id: &str,
+        command: &[String],
+        failure_message: Option<&str>,
+    ) -> Option<SandboxCommandAssessment> {
+        let config = turn_context.client.config();
+        let provider = turn_context.client.provider().clone();
+        let auth_manager = Arc::clone(&self.services.auth_manager);
+        let otel = self.services.otel_event_manager.clone();
+        crate::sandboxing::assessment::assess_command(
+            config,
+            provider,
+            auth_manager,
+            &otel,
+            call_id,
+            command,
+            &turn_context.sandbox_policy,
+            &turn_context.cwd,
+            failure_message,
+        )
+        .await
+    }
+
     /// Emit an exec approval request event and await the user's decision.
     ///
     /// The request is keyed by `sub_id`/`call_id` so matching responses are delivered
@@ -766,6 +792,7 @@ impl Session {
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
+        risk: Option<SandboxCommandAssessment>,
     ) -> ReviewDecision {
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
@@ -791,6 +818,7 @@ impl Session {
             command,
             cwd,
             reason,
+            risk,
             parsed_cmd,
         });
         self.send_event(turn_context, event).await;

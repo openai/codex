@@ -778,6 +778,7 @@ impl ChatWidget {
             id,
             command: ev.command,
             reason: ev.reason,
+            risk: ev.risk,
         };
         self.bottom_pane.push_approval_request(request);
         self.request_redraw();

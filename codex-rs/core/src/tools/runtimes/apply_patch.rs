@@ -105,9 +105,10 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let call_id = ctx.call_id.to_string();
         let cwd = req.cwd.clone();
         let retry_reason = ctx.retry_reason.clone();
+        let risk = ctx.risk.clone();
         let user_explicitly_approved = req.user_explicitly_approved;
         Box::pin(async move {
-            with_cached_approval(&session.services, key, || async move {
+            with_cached_approval(&session.services, key, move || async move {
                 if let Some(reason) = retry_reason {
                     session
                         .request_command_approval(
@@ -116,6 +117,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                             vec!["apply_patch".to_string()],
                             cwd,
                             Some(reason),
+                            risk,
                         )
                         .await
                 } else if user_explicitly_approved {
