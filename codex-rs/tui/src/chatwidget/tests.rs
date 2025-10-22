@@ -1280,6 +1280,20 @@ fn approvals_selection_popup_snapshot() {
 }
 
 #[test]
+fn approvals_popup_includes_wsl_note_for_auto_mode() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.open_approvals_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_eq!(
+        popup.contains("Requires Windows Subsystem for Linux (WSL)"),
+        cfg!(target_os = "windows"),
+        "expected auto preset description to mention WSL requirement only on Windows, popup: {popup}"
+    );
+}
+
+#[test]
 fn full_access_confirmation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
@@ -1291,6 +1305,20 @@ fn full_access_confirmation_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("full_access_confirmation_popup", popup);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_auto_mode_instructions_popup_lists_install_steps() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.open_windows_auto_mode_instructions();
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("wsl --install"),
+        "expected WSL instructions popup to include install command, popup: {popup}"
+    );
 }
 
 #[test]

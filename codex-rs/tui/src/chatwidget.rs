@@ -88,6 +88,8 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::markdown::append_markdown;
+#[cfg(target_os = "windows")]
+use crate::onboarding::WSL_INSTRUCTIONS;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
@@ -1791,7 +1793,14 @@ impl ChatWidget {
             let is_current =
                 current_approval == preset.approval && current_sandbox == preset.sandbox;
             let name = preset.label.to_string();
-            let description = Some(preset.description.to_string());
+            let description_text = preset.description;
+            let description = if cfg!(target_os = "windows") && preset.id == "auto" {
+                Some(format!(
+                    "{description_text}\n\nRequires Windows Subsystem for Linux (WSL). Selecting this shows installation instructions."
+                ))
+            } else {
+                Some(description_text.to_string())
+            };
             let requires_confirmation = preset.id == "full-access"
                 && !self
                     .config
@@ -1804,6 +1813,10 @@ impl ChatWidget {
                     tx.send(AppEvent::OpenFullAccessConfirmation {
                         preset: preset_clone.clone(),
                     });
+                })]
+            } else if cfg!(target_os = "windows") && preset.id == "auto" {
+                vec![Box::new(|tx| {
+                    tx.send(AppEvent::ShowWindowsAutoModeInstructions);
                 })]
             } else {
                 Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
@@ -1908,6 +1921,43 @@ impl ChatWidget {
             ..Default::default()
         });
     }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn open_windows_auto_mode_instructions(&mut self) {
+        use ratatui_macros::line;
+
+        let mut header = ColumnRenderable::new();
+        header.push(line![
+            "Auto mode requires Windows Subsystem for Linux (WSL2).".bold()
+        ]);
+        header.push(line!["Run Codex inside WSL to enable sandboxed commands."]);
+        header.push(line![""]);
+        header.push(Paragraph::new(WSL_INSTRUCTIONS).wrap(Wrap { trim: false }));
+
+        let items = vec![SelectionItem {
+            name: "Back".to_string(),
+            description: Some(
+                "Return to the approval mode list. Auto mode stays disabled outside WSL."
+                    .to_string(),
+            ),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenApprovalsPopup);
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: None,
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            header: Box::new(header),
+            ..Default::default()
+        });
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn open_windows_auto_mode_instructions(&mut self) {}
 
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
