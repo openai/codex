@@ -25,6 +25,7 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
 use tracing::debug;
+use tracing::error;
 use tracing::trace;
 use tracing::warn;
 
@@ -688,7 +689,7 @@ async fn process_sse<S>(
         let sse = match response {
             Ok(Some(Ok(sse))) => sse,
             Ok(Some(Err(e))) => {
-                debug!("SSE Error: {e:#}");
+                error!("SSE Error: {e:#}");
                 let event = CodexErr::Stream(e.to_string(), None);
                 let _ = tx_event.send(Err(event)).await;
                 return;
@@ -749,7 +750,7 @@ async fn process_sse<S>(
         let event: SseEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
             Err(e) => {
-                debug!("Failed to parse SSE event: {e}, data: {}", &sse.data);
+                error!("Failed to parse SSE event: {e}, data: {}", &sse.data);
                 continue;
             }
         };
@@ -776,7 +777,7 @@ async fn process_sse<S>(
             "response.output_item.done" => {
                 let Some(item_val) = event.item else { continue };
                 let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) else {
-                    debug!("failed to parse ResponseItem from output_item.done");
+                    error!("failed to parse ResponseItem from output_item.done");
                     continue;
                 };
 
@@ -835,9 +836,7 @@ async fn process_sse<S>(
                                 }
                             }
                             Err(e) => {
-                                let error = format!("failed to parse ErrorResponse: {e}");
-                                debug!(error);
-                                response_error = Some(CodexErr::Stream(error, None))
+                                error!("failed to parse ErrorResponse: {e}");
                             }
                         }
                     }
@@ -851,9 +850,7 @@ async fn process_sse<S>(
                             response_completed = Some(r);
                         }
                         Err(e) => {
-                            let error = format!("failed to parse ResponseCompleted: {e}");
-                            debug!(error);
-                            response_error = Some(CodexErr::Stream(error, None));
+                            error!("failed to parse ResponseCompleted: {e}");
                             continue;
                         }
                     };
