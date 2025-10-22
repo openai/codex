@@ -1386,9 +1386,8 @@ async fn spawn_review_thread(
     let model = config.review_model.clone();
     let review_model_family = find_family_for_model(&model)
         .unwrap_or_else(|| parent_turn_context.client.get_model_family());
-    // For reviews, disable plan, web_search, view_image regardless of global settings.
+    // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = config.features.clone();
-    review_features.disable(crate::features::Feature::PlanTool);
     review_features.disable(crate::features::Feature::WebSearchRequest);
     review_features.disable(crate::features::Feature::ViewImageTool);
     review_features.disable(crate::features::Feature::StreamableShell);
