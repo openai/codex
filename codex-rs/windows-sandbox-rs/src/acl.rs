@@ -35,6 +35,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 const SE_KERNEL_OBJECT: u32 = 6;
+const INHERIT_ONLY_ACE: u8 = 0x08;
 
 pub unsafe fn dacl_has_write_allow_for_sid(p_dacl: *mut ACL, psid: *mut c_void) -> bool {
     if p_dacl.is_null() {
@@ -60,6 +61,10 @@ pub unsafe fn dacl_has_write_allow_for_sid(p_dacl: *mut ACL, psid: *mut c_void) 
         if hdr.AceType != 0 {
             continue; // ACCESS_ALLOWED_ACE_TYPE
         }
+        // Ignore ACEs that are inherit-only (do not apply to the current object)
+        if (hdr.AceFlags & INHERIT_ONLY_ACE) != 0 {
+            continue;
+        }
         let ace = &*(p_ace as *const ACCESS_ALLOWED_ACE);
         let mask = ace.Mask;
         let base = p_ace as usize;
@@ -73,6 +78,38 @@ pub unsafe fn dacl_has_write_allow_for_sid(p_dacl: *mut ACL, psid: *mut c_void) 
     false
 }
 
+// Compute effective rights for a trustee SID against a DACL and decide if write is effectively allowed.
+// This accounts for deny ACEs and ordering; falls back to a conservative per-ACE scan if the API fails.
+pub unsafe fn dacl_effective_allows_write(p_dacl: *mut ACL, psid: *mut c_void) -> bool {
+    if p_dacl.is_null() {
+        return false;
+    }
+    use windows_sys::Win32::Security::Authorization::GetEffectiveRightsFromAclW;
+    use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
+    use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
+    use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
+
+    let mut trustee = TRUSTEE_W {
+        pMultipleTrustee: std::ptr::null_mut(),
+        MultipleTrusteeOperation: 0,
+        TrusteeForm: TRUSTEE_IS_SID,
+        TrusteeType: TRUSTEE_IS_UNKNOWN,
+        ptstrName: psid as *mut u16,
+    };
+    let mut access: u32 = 0;
+    let ok = GetEffectiveRightsFromAclW(p_dacl, &mut trustee, &mut access);
+    if ok != 0 {
+        // Check for generic or specific write bits
+        let write_bits = FILE_GENERIC_WRITE
+            | windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA
+            | windows_sys::Win32::Storage::FileSystem::FILE_APPEND_DATA
+            | windows_sys::Win32::Storage::FileSystem::FILE_WRITE_EA
+            | windows_sys::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES;
+        return (access & write_bits) != 0;
+    }
+    // Fallback: simple allow ACE scan (already ignores inherit-only)
+    dacl_has_write_allow_for_sid(p_dacl, psid)
+}
 pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
     let mut p_sd: *mut c_void = std::ptr::null_mut();
     let mut p_dacl: *mut ACL = std::ptr::null_mut();

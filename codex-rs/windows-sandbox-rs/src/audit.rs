@@ -1,4 +1,4 @@
-use crate::acl::dacl_has_write_allow_for_sid;
+use crate::acl::dacl_effective_allows_write;
 use crate::token::world_sid;
 use crate::winutil::to_wide;
 use anyhow::anyhow;
@@ -86,7 +86,7 @@ unsafe fn path_has_world_write_allow(path: &Path) -> Result<bool> {
     }
     let mut world = world_sid()?;
     let psid_world = world.as_mut_ptr() as *mut c_void;
-    let has = dacl_has_write_allow_for_sid(p_dacl, psid_world);
+    let has = dacl_effective_allows_write(p_dacl, psid_world);
     if !p_sd.is_null() {
         LocalFree(p_sd as HLOCAL);
     }
