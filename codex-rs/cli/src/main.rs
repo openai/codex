@@ -131,6 +131,10 @@ struct ResumeCommand {
     #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
     last: bool,
 
+    /// Start the selected session as a new fork instead of resuming in-place.
+    #[arg(long = "fork", short = 'f', default_value_t = false)]
+    fork: bool,
+
     #[clap(flatten)]
     config_overrides: TuiCli,
 }
@@ -379,6 +383,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::Resume(ResumeCommand {
             session_id,
             last,
+            fork,
             config_overrides,
         })) => {
             interactive = finalize_resume_interactive(
@@ -386,6 +391,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
                 session_id,
                 last,
+                fork,
                 config_overrides,
             );
             let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
@@ -528,6 +534,7 @@ fn finalize_resume_interactive(
     root_config_overrides: CliConfigOverrides,
     session_id: Option<String>,
     last: bool,
+    fork: bool,
     resume_cli: TuiCli,
 ) -> TuiCli {
     // Start with the parsed interactive CLI so resume shares the same
@@ -536,6 +543,7 @@ fn finalize_resume_interactive(
     interactive.resume_picker = resume_session_id.is_none() && !last;
     interactive.resume_last = last;
     interactive.resume_session_id = resume_session_id;
+    interactive.resume_fork = fork;
 
     // Merge resume-scoped flags and overrides with highest precedence.
     merge_resume_cli_flags(&mut interactive, resume_cli);
@@ -618,13 +626,21 @@ mod tests {
         let Subcommand::Resume(ResumeCommand {
             session_id,
             last,
+            fork,
             config_overrides: resume_cli,
         }) = subcommand.expect("resume present")
         else {
             unreachable!()
         };
 
-        finalize_resume_interactive(interactive, root_overrides, session_id, last, resume_cli)
+        finalize_resume_interactive(
+            interactive,
+            root_overrides,
+            session_id,
+            last,
+            fork,
+            resume_cli,
+        )
     }
 
     fn sample_exit_info(conversation: Option<&str>) -> AppExitInfo {
@@ -691,6 +707,7 @@ mod tests {
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
+        assert!(!interactive.resume_fork);
     }
 
     #[test]
@@ -699,6 +716,7 @@ mod tests {
         assert!(!interactive.resume_picker);
         assert!(interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
+        assert!(!interactive.resume_fork);
     }
 
     #[test]
@@ -707,6 +725,7 @@ mod tests {
         assert!(!interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id.as_deref(), Some("1234"));
+        assert!(!interactive.resume_fork);
     }
 
     #[test]
@@ -764,6 +783,7 @@ mod tests {
         assert!(!interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id.as_deref(), Some("sid"));
+        assert!(!interactive.resume_fork);
     }
 
     #[test]
@@ -780,5 +800,13 @@ mod tests {
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn resume_fork_flag_sets_field() {
+        let interactive = finalize_from_args(["codex", "resume", "--fork"].as_ref());
+        assert!(interactive.resume_picker);
+        assert!(interactive.resume_fork);
+        assert!(!interactive.resume_last);
     }
 }
