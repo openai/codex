@@ -4,7 +4,6 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use codex_core::features::Feature;
-use codex_core::parse_command::parse_command;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -81,16 +80,15 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     } = builder.build(&server).await?;
 
     let call_id = "uexec-begin-event";
-    let command = vec!["/bin/echo".to_string(), "hello unified exec".to_string()];
     let args = json!({
-        "input": command.clone(),
-        "timeout_ms": 250,
+        "cmd": "/bin/echo hello unified exec".to_string(),
+        "yield_time_ms": 250,
     });
 
     let responses = vec![
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, "unified_exec", &serde_json::to_string(&args)?),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
         sse(vec![
@@ -122,11 +120,13 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
         EventMsg::ExecCommandBegin(event) if event.call_id == call_id => Some(event.clone()),
         _ => None,
     })
-        .await;
+    .await;
 
-    assert_eq!(begin_event.command, command);
+    assert_eq!(
+        begin_event.command,
+        vec!["/bin/echo hello unified exec".to_string()]
+    );
     assert_eq!(begin_event.cwd, cwd.path());
-    assert_eq!(begin_event.parsed_cmd, parse_command(&command));
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
@@ -154,14 +154,9 @@ async fn unified_exec_skips_begin_event_for_empty_input() -> Result<()> {
     } = builder.build(&server).await?;
 
     let open_call_id = "uexec-open-session";
-    let open_command = vec![
-        "/bin/sh".to_string(),
-        "-c".to_string(),
-        "echo ready".to_string(),
-    ];
     let open_args = json!({
-        "input": open_command.clone(),
-        "timeout_ms": 200,
+        "cmd": "/bin/sh -c echo ready".to_string(),
+        "yield_time_ms": 250,
     });
 
     let poll_call_id = "uexec-poll-empty";
@@ -176,7 +171,7 @@ async fn unified_exec_skips_begin_event_for_empty_input() -> Result<()> {
             ev_response_created("resp-1"),
             ev_function_call(
                 open_call_id,
-                "unified_exec",
+                "exec_command",
                 &serde_json::to_string(&open_args)?,
             ),
             ev_completed("resp-1"),
@@ -185,7 +180,7 @@ async fn unified_exec_skips_begin_event_for_empty_input() -> Result<()> {
             ev_response_created("resp-2"),
             ev_function_call(
                 poll_call_id,
-                "unified_exec",
+                "write_stdin",
                 &serde_json::to_string(&poll_args)?,
             ),
             ev_completed("resp-2"),
@@ -231,7 +226,7 @@ async fn unified_exec_skips_begin_event_for_empty_input() -> Result<()> {
         "expected only the initial command to emit begin event"
     );
     assert_eq!(begin_events[0].call_id, open_call_id);
-    assert_eq!(begin_events[0].command, open_command);
+    assert_eq!(begin_events[0].command[0], "/bin/sh -c echo ready");
 
     Ok(())
 }

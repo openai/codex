@@ -76,6 +76,13 @@ pub(crate) enum ToolEmitter {
         changes: HashMap<PathBuf, FileChange>,
         auto_approved: bool,
     },
+    UnifiedExec {
+        command: String,
+        cwd: PathBuf,
+        // True for `exec_command` and false for `write_stdin`.
+        #[allow(dead_code)]
+        is_startup_command: bool,
+    },
 }
 
 impl ToolEmitter {
@@ -87,6 +94,14 @@ impl ToolEmitter {
         Self::ApplyPatch {
             changes,
             auto_approved,
+        }
+    }
+
+    pub fn unified_exec(command: String, cwd: PathBuf, is_startup_command: bool) -> Self {
+        Self::UnifiedExec {
+            command,
+            cwd,
+            is_startup_command,
         }
     }
 
@@ -180,6 +195,10 @@ impl ToolEmitter {
                 ToolEventStage::Failure(ToolEventFailure::Message(message)),
             ) => {
                 emit_patch_end(ctx, String::new(), (*message).to_string(), false).await;
+            }
+            (Self::UnifiedExec { command, cwd, .. }, _) => {
+                // TODO(jif) add end and failures.
+                emit_exec_command_begin(ctx, &[command.to_string()], cwd.as_path()).await;
             }
         }
     }
