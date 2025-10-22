@@ -3,11 +3,10 @@ use std::time::Instant;
 
 use codex_protocol::parse_command::ParsedCommand;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
-    pub(crate) stdout: String,
-    pub(crate) stderr: String,
+    pub(crate) aggregated_output: String,
     pub(crate) formatted_output: String,
 }
 
@@ -82,9 +81,8 @@ impl ExecCell {
                 call.duration = Some(elapsed);
                 call.output = Some(CommandOutput {
                     exit_code: 1,
-                    stdout: String::new(),
-                    stderr: String::new(),
                     formatted_output: String::new(),
+                    aggregated_output: String::new(),
                 });
             }
         }
