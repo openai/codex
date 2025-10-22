@@ -1,4 +1,4 @@
-use crate::winutil::to_wide;
+﻿use crate::winutil::to_wide;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::ffi::c_void;
@@ -80,6 +80,7 @@ pub unsafe fn dacl_has_write_allow_for_sid(p_dacl: *mut ACL, psid: *mut c_void) 
 
 // Compute effective rights for a trustee SID against a DACL and decide if write is effectively allowed.
 // This accounts for deny ACEs and ordering; falls back to a conservative per-ACE scan if the API fails.
+#[allow(dead_code)]
 pub unsafe fn dacl_effective_allows_write(p_dacl: *mut ACL, psid: *mut c_void) -> bool {
     if p_dacl.is_null() {
         return false;

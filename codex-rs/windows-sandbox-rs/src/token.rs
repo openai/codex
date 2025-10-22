@@ -1,4 +1,4 @@
-use crate::winutil::to_wide;
+﻿use crate::winutil::to_wide;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::ffi::c_void;
@@ -328,6 +328,7 @@ pub unsafe fn create_workspace_write_token_with_cap(
     Ok((new_token, psid_capability))
 }
 
+#[allow(dead_code)]
 pub unsafe fn create_write_restricted_token_compat() -> Result<(HANDLE, *mut c_void)> {
     let base = get_current_token_for_restriction()?;
     let mut entries: [SID_AND_ATTRIBUTES; 2] = std::mem::zeroed();
