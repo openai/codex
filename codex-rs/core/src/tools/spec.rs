@@ -1022,13 +1022,20 @@ mod tests {
     // Avoid order-based assertions; compare via set containment instead.
     fn assert_contains_tool_names(tools: &[ConfiguredToolSpec], expected_subset: &[&str]) {
         use std::collections::HashSet;
-        let names: HashSet<_> = tools
-            .iter()
-            .map(|t| tool_name(&t.spec).to_string())
-            .collect();
+        let mut names = HashSet::new();
+        let mut duplicates = Vec::new();
+        for name in tools.iter().map(|t| tool_name(&t.spec)) {
+            if !names.insert(name) {
+                duplicates.push(name);
+            }
+        }
+        assert!(
+            duplicates.is_empty(),
+            "duplicate tool entries detected: {duplicates:?}"
+        );
         for expected in expected_subset {
             assert!(
-                names.contains(*expected),
+                names.contains(expected),
                 "expected tool {expected} to be present; had: {names:?}"
             );
         }
@@ -1105,9 +1112,17 @@ mod tests {
         use std::collections::BTreeMap;
         use std::collections::HashSet;
         let mut actual: BTreeMap<String, ToolSpec> = BTreeMap::new();
+        let mut duplicate_names = Vec::new();
         for t in &tools {
-            actual.insert(tool_name(&t.spec).to_string(), t.spec.clone());
+            let name = tool_name(&t.spec).to_string();
+            if actual.insert(name.clone(), t.spec.clone()).is_some() {
+                duplicate_names.push(name);
+            }
         }
+        assert!(
+            duplicate_names.is_empty(),
+            "duplicate tool entries detected: {duplicate_names:?}"
+        );
 
         // Build expected from the same helpers used by the builder.
         let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::new();
@@ -1153,22 +1168,18 @@ mod tests {
             features: &features,
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
-
-        // Only assert the subset that must exist; do not fix order or full set.
-        let mut subset = vec![
+        let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
+        assert_eq!(&tool_names, &[
             "exec_command",
             "write_stdin",
+            "local_shell",
             "list_mcp_resources",
             "list_mcp_resource_templates",
             "read_mcp_resource",
             "update_plan",
             "web_search",
             "view_image",
-        ];
-        if let Some(shell_tool) = shell_tool_name(&config) {
-            subset.push(shell_tool);
-        }
-        assert_contains_tool_names(&tools, &subset);
+        ]);
     }
 
     #[test]
