@@ -1,4 +1,4 @@
-use crate::bash::try_parse_bash;
+use crate::bash::try_parse_shell;
 use crate::bash::try_parse_word_only_commands_sequence;
 use codex_protocol::parse_command::ParsedCommand;
 use shlex::split as shlex_split;
@@ -189,6 +189,19 @@ mod tests {
                 cmd: inner.to_string(),
                 name: "README.md".to_string(),
                 path: PathBuf::from("webview/README.md"),
+            }],
+        );
+    }
+
+    #[test]
+    fn zsh_lc_supports_cat() {
+        let inner = "cat README.md";
+        assert_parsed(
+            &vec_str(&["zsh", "-lc", inner]),
+            vec![ParsedCommand::Read {
+                cmd: inner.to_string(),
+                name: "README.md".to_string(),
+                path: PathBuf::from("README.md"),
             }],
         );
     }
@@ -843,7 +856,7 @@ mod tests {
 }
 
 pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
-    if let Some(commands) = parse_bash_lc_commands(command) {
+    if let Some(commands) = parse_shell_lc_commands(command) {
         return commands;
     }
 
@@ -981,7 +994,7 @@ fn is_valid_sed_n_arg(arg: Option<&str>) -> bool {
 }
 
 /// Normalize a command by:
-/// - Removing `yes`/`no`/`bash -c`/`bash -lc` prefixes.
+/// - Removing `yes`/`no`/`bash -c`/`bash -lc`/`zsh -c`/`zsh -lc` prefixes.
 /// - Splitting on `|` and `&&`/`||`/`;
 fn normalize_tokens(cmd: &[String]) -> Vec<String> {
     match cmd {
@@ -993,9 +1006,10 @@ fn normalize_tokens(cmd: &[String]) -> Vec<String> {
             // Do not re-shlex already-tokenized input; just drop the prefix.
             rest.to_vec()
         }
-        [bash, flag, script] if bash == "bash" && (flag == "-c" || flag == "-lc") => {
-            shlex_split(script)
-                .unwrap_or_else(|| vec!["bash".to_string(), flag.clone(), script.clone()])
+        [shell, flag, script]
+            if (shell == "bash" || shell == "zsh") && (flag == "-c" || flag == "-lc") =>
+        {
+            shlex_split(script).unwrap_or_else(|| vec![shell.clone(), flag.clone(), script.clone()])
         }
         _ => cmd.to_vec(),
     }
@@ -1151,19 +1165,19 @@ fn parse_find_query_and_path(tail: &[String]) -> (Option<String>, Option<String>
     (query, path)
 }
 
-fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
-    let [bash, flag, script] = original else {
+fn parse_shell_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
+    let [shell, flag, script] = original else {
         return None;
     };
-    if bash != "bash" || flag != "-lc" {
+    if flag != "-lc" || !(shell == "bash" || shell == "zsh") {
         return None;
     }
-    if let Some(tree) = try_parse_bash(script)
+    if let Some(tree) = try_parse_shell(script)
         && let Some(all_commands) = try_parse_word_only_commands_sequence(&tree, script)
         && !all_commands.is_empty()
     {
         let script_tokens = shlex_split(script)
-            .unwrap_or_else(|| vec!["bash".to_string(), flag.clone(), script.clone()]);
+            .unwrap_or_else(|| vec![shell.clone(), flag.clone(), script.clone()]);
         // Strip small formatting helpers (e.g., head/tail/awk/wc/etc) so we
         // bias toward the primary command when pipelines are present.
         // First, drop obvious small formatting helpers (e.g., wc/awk/etc).

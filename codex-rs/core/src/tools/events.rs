@@ -1,7 +1,7 @@
 use crate::codex::Session;
+use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::parse_command::parse_command;
-use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
@@ -11,6 +11,7 @@ use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::TurnDiffEvent;
 use crate::tools::context::SharedTurnDiffTracker;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -20,7 +21,7 @@ use super::format_exec_output_str;
 #[derive(Clone, Copy)]
 pub(crate) struct ToolEventCtx<'a> {
     pub session: &'a Session,
-    pub sub_id: &'a str,
+    pub turn: &'a TurnContext,
     pub call_id: &'a str,
     pub turn_diff_tracker: Option<&'a SharedTurnDiffTracker>,
 }
@@ -28,13 +29,13 @@ pub(crate) struct ToolEventCtx<'a> {
 impl<'a> ToolEventCtx<'a> {
     pub fn new(
         session: &'a Session,
-        sub_id: &'a str,
+        turn: &'a TurnContext,
         call_id: &'a str,
         turn_diff_tracker: Option<&'a SharedTurnDiffTracker>,
     ) -> Self {
         Self {
             session,
-            sub_id,
+            turn,
             call_id,
             turn_diff_tracker,
         }
@@ -50,6 +51,20 @@ pub(crate) enum ToolEventStage {
 pub(crate) enum ToolEventFailure {
     Output(ExecToolCallOutput),
     Message(String),
+}
+
+pub(crate) async fn emit_exec_command_begin(ctx: ToolEventCtx<'_>, command: &[String], cwd: &Path) {
+    ctx.session
+        .send_event(
+            ctx.turn,
+            EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                call_id: ctx.call_id.to_string(),
+                command: command.to_vec(),
+                cwd: cwd.to_path_buf(),
+                parsed_cmd: parse_command(command),
+            }),
+        )
+        .await;
 }
 // Concrete, allocation-free emitter: avoid trait objects and boxed futures.
 pub(crate) enum ToolEmitter {
@@ -78,17 +93,7 @@ impl ToolEmitter {
     pub async fn emit(&self, ctx: ToolEventCtx<'_>, stage: ToolEventStage) {
         match (self, stage) {
             (Self::Shell { command, cwd }, ToolEventStage::Begin) => {
-                ctx.session
-                    .send_event(Event {
-                        id: ctx.sub_id.to_string(),
-                        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-                            call_id: ctx.call_id.to_string(),
-                            command: command.clone(),
-                            cwd: cwd.clone(),
-                            parsed_cmd: parse_command(command),
-                        }),
-                    })
-                    .await;
+                emit_exec_command_begin(ctx, command, cwd.as_path()).await;
             }
             (Self::Shell { .. }, ToolEventStage::Success(output)) => {
                 emit_exec_end(
@@ -139,14 +144,14 @@ impl ToolEmitter {
                     guard.on_patch_begin(changes);
                 }
                 ctx.session
-                    .send_event(Event {
-                        id: ctx.sub_id.to_string(),
-                        msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+                    .send_event(
+                        ctx.turn,
+                        EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                             call_id: ctx.call_id.to_string(),
                             auto_approved: *auto_approved,
                             changes: changes.clone(),
                         }),
-                    })
+                    )
                     .await;
             }
             (Self::ApplyPatch { .. }, ToolEventStage::Success(output)) => {
@@ -190,9 +195,9 @@ async fn emit_exec_end(
     formatted_output: String,
 ) {
     ctx.session
-        .send_event(Event {
-            id: ctx.sub_id.to_string(),
-            msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+        .send_event(
+            ctx.turn,
+            EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: ctx.call_id.to_string(),
                 stdout,
                 stderr,
@@ -201,21 +206,21 @@ async fn emit_exec_end(
                 duration,
                 formatted_output,
             }),
-        })
+        )
         .await;
 }
 
 async fn emit_patch_end(ctx: ToolEventCtx<'_>, stdout: String, stderr: String, success: bool) {
     ctx.session
-        .send_event(Event {
-            id: ctx.sub_id.to_string(),
-            msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+        .send_event(
+            ctx.turn,
+            EventMsg::PatchApplyEnd(PatchApplyEndEvent {
                 call_id: ctx.call_id.to_string(),
                 stdout,
                 stderr,
                 success,
             }),
-        })
+        )
         .await;
 
     if let Some(tracker) = ctx.turn_diff_tracker {
@@ -225,10 +230,7 @@ async fn emit_patch_end(ctx: ToolEventCtx<'_>, stdout: String, stderr: String, s
         };
         if let Ok(Some(unified_diff)) = unified_diff {
             ctx.session
-                .send_event(Event {
-                    id: ctx.sub_id.to_string(),
-                    msg: EventMsg::TurnDiff(TurnDiffEvent { unified_diff }),
-                })
+                .send_event(ctx.turn, EventMsg::TurnDiff(TurnDiffEvent { unified_diff }))
                 .await;
         }
     }

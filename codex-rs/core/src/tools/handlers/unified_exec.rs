@@ -37,7 +37,6 @@ impl ToolHandler for UnifiedExecHandler {
         let ToolInvocation {
             session,
             turn,
-            sub_id,
             call_id,
             tool_name: _tool_name,
             payload,
@@ -91,7 +90,6 @@ impl ToolHandler for UnifiedExecHandler {
                 crate::unified_exec::UnifiedExecContext {
                     session: &session,
                     turn: turn.as_ref(),
-                    sub_id: &sub_id,
                     call_id: &call_id,
                     session_id: parsed_session_id,
                 },

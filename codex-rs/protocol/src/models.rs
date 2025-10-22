@@ -8,7 +8,7 @@ use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
-use crate::protocol::InputItem;
+use crate::user_input::UserInput;
 use schemars::JsonSchema;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
@@ -206,16 +206,16 @@ pub enum ReasoningItemContent {
     Text { text: String },
 }
 
-impl From<Vec<InputItem>> for ResponseInputItem {
-    fn from(items: Vec<InputItem>) -> Self {
+impl From<Vec<UserInput>> for ResponseInputItem {
+    fn from(items: Vec<UserInput>) -> Self {
         Self::Message {
             role: "user".to_string(),
             content: items
                 .into_iter()
                 .filter_map(|c| match c {
-                    InputItem::Text { text } => Some(ContentItem::InputText { text }),
-                    InputItem::Image { image_url } => Some(ContentItem::InputImage { image_url }),
-                    InputItem::LocalImage { path } => match std::fs::read(&path) {
+                    UserInput::Text { text } => Some(ContentItem::InputText { text }),
+                    UserInput::Image { image_url } => Some(ContentItem::InputImage { image_url }),
+                    UserInput::LocalImage { path } => match std::fs::read(&path) {
                         Ok(bytes) => {
                             let mime = mime_guess::from_path(&path)
                                 .first()

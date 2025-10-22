@@ -542,6 +542,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(codex_api_key)]
     async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
         let codex_home = tempdir().unwrap();
         let fake_jwt = write_auth_file(
@@ -591,6 +592,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(codex_api_key)]
     async fn loads_api_key_from_auth_json() {
         let dir = tempdir().unwrap();
         let auth_file = dir.path().join("auth.json");
@@ -742,6 +744,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(codex_api_key)]
     async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
         let codex_home = tempdir().unwrap();
         let _jwt = write_auth_file(
@@ -767,6 +770,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(codex_api_key)]
     async fn enforce_login_restrictions_allows_matching_workspace() {
         let codex_home = tempdir().unwrap();
         let _jwt = write_auth_file(

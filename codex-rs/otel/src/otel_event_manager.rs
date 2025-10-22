@@ -6,9 +6,9 @@ use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::InputItem;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::user_input::UserInput;
 use eventsource_stream::Event as StreamEvent;
 use eventsource_stream::EventStreamError as StreamError;
 use reqwest::Error;
@@ -308,11 +308,11 @@ impl OtelEventManager {
         );
     }
 
-    pub fn user_prompt(&self, items: &[InputItem]) {
+    pub fn user_prompt(&self, items: &[UserInput]) {
         let prompt = items
             .iter()
             .flat_map(|item| match item {
-                InputItem::Text { text } => Some(text.as_str()),
+                UserInput::Text { text } => Some(text.as_str()),
                 _ => None,
             })
             .collect::<String>();

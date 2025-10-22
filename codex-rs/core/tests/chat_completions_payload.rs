@@ -50,6 +50,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         base_url: Some(format!("{}/v1", server.uri())),
         env_key: None,
         env_key_instructions: None,
+        experimental_bearer_token: None,
         wire_api: WireApi::Chat,
         query_params: None,
         http_headers: None,

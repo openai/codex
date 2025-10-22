@@ -5,10 +5,10 @@ use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
+use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
@@ -108,7 +108,7 @@ async fn summarize_context_three_requests_and_instructions() {
     // 1) Normal user input – should hit server once.
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello world".into(),
             }],
         })
@@ -123,7 +123,7 @@ async fn summarize_context_three_requests_and_instructions() {
     // 3) Next user input – third hit; history should include only the summary.
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: THIRD_USER_MSG.into(),
             }],
         })
@@ -324,7 +324,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
             }],
         })
@@ -335,7 +335,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
             }],
         })
@@ -468,7 +468,7 @@ async fn auto_compact_persists_rollout_entries() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
             }],
         })
@@ -478,7 +478,7 @@ async fn auto_compact_persists_rollout_entries() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
             }],
         })
@@ -580,7 +580,7 @@ async fn auto_compact_stops_after_failed_attempt() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
             }],
         })
@@ -674,7 +674,7 @@ async fn manual_compact_retries_after_context_window_error() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "first turn".into(),
             }],
         })
@@ -802,7 +802,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: MULTI_AUTO_MSG.into(),
             }],
         })
@@ -913,7 +913,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: FUNCTION_CALL_LIMIT_MSG.into(),
             }],
         })

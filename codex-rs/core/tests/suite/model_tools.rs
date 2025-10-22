@@ -7,8 +7,8 @@ use codex_core::built_in_model_providers;
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses;
@@ -57,7 +57,6 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
     config.model = model.to_string();
     config.model_family =
         find_family_for_model(model).unwrap_or_else(|| panic!("unknown model family for {model}"));
-    config.features.disable(Feature::PlanTool);
     config.features.disable(Feature::ApplyPatchFreeform);
     config.features.disable(Feature::ViewImageTool);
     config.features.disable(Feature::WebSearchRequest);
@@ -74,7 +73,7 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello tools".into(),
             }],
         })
@@ -98,7 +97,8 @@ async fn model_selects_expected_tools() {
             "local_shell".to_string(),
             "list_mcp_resources".to_string(),
             "list_mcp_resource_templates".to_string(),
-            "read_mcp_resource".to_string()
+            "read_mcp_resource".to_string(),
+            "update_plan".to_string()
         ],
         "codex-mini-latest should expose the local shell tool",
     );
@@ -110,7 +110,8 @@ async fn model_selects_expected_tools() {
             "shell".to_string(),
             "list_mcp_resources".to_string(),
             "list_mcp_resource_templates".to_string(),
-            "read_mcp_resource".to_string()
+            "read_mcp_resource".to_string(),
+            "update_plan".to_string()
         ],
         "o3 should expose the generic shell tool",
     );
@@ -123,6 +124,7 @@ async fn model_selects_expected_tools() {
             "list_mcp_resources".to_string(),
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
+            "update_plan".to_string(),
             "apply_patch".to_string()
         ],
         "gpt-5-codex should expose the apply_patch tool",

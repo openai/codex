@@ -4,12 +4,13 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use codex_core::features::Feature;
+use codex_core::parse_command::parse_command;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -22,7 +23,10 @@ use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_event_with_timeout;
 use serde_json::Value;
+use serde_json::json;
 
 fn extract_output_text(item: &Value) -> Option<&str> {
     item.get("output").and_then(|value| match value {
@@ -56,6 +60,180 @@ fn collect_tool_outputs(bodies: &[Value]) -> Result<HashMap<String, Value>> {
         }
     }
     Ok(outputs)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let call_id = "uexec-begin-event";
+    let command = vec!["/bin/echo".to_string(), "hello unified exec".to_string()];
+    let args = json!({
+        "input": command.clone(),
+        "timeout_ms": 250,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "unified_exec", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "finished"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "emit begin event".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    let begin_event = wait_for_event_match(&codex, |msg| match msg {
+        EventMsg::ExecCommandBegin(event) if event.call_id == call_id => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(begin_event.command, command);
+    assert_eq!(begin_event.cwd, cwd.path());
+    assert_eq!(begin_event.parsed_cmd, parse_command(&command));
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_skips_begin_event_for_empty_input() -> Result<()> {
+    use tokio::time::Duration;
+
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let open_call_id = "uexec-open-session";
+    let open_command = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "echo ready".to_string(),
+    ];
+    let open_args = json!({
+        "input": open_command.clone(),
+        "timeout_ms": 200,
+    });
+
+    let poll_call_id = "uexec-poll-empty";
+    let poll_args = json!({
+        "input": Vec::<String>::new(),
+        "session_id": "0",
+        "timeout_ms": 150,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                open_call_id,
+                "unified_exec",
+                &serde_json::to_string(&open_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_function_call(
+                poll_call_id,
+                "unified_exec",
+                &serde_json::to_string(&poll_args)?,
+            ),
+            ev_completed("resp-2"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_assistant_message("msg-1", "complete"),
+            ev_completed("resp-3"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "check poll event behavior".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    let mut begin_events = Vec::new();
+    loop {
+        let event_msg = wait_for_event_with_timeout(&codex, |_| true, Duration::from_secs(2)).await;
+        match event_msg {
+            EventMsg::ExecCommandBegin(event) => begin_events.push(event),
+            EventMsg::TaskComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        begin_events.len(),
+        1,
+        "expected only the initial command to emit begin event"
+    );
+    assert_eq!(begin_events[0].call_id, open_call_id);
+    assert_eq!(begin_events[0].command, open_command);
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -118,7 +296,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "run unified exec".into(),
             }],
             final_output_json_schema: None,
@@ -254,7 +432,7 @@ PY
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "exercise lag handling".into(),
             }],
             final_output_json_schema: None,
@@ -360,7 +538,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "check timeout".into(),
             }],
             final_output_json_schema: None,
