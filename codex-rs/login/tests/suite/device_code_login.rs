@@ -2,6 +2,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use codex_core::AuthCredentialsStoreMode;
 use codex_core::auth::get_auth_file;
 use codex_core::auth::try_read_auth_json;
 use codex_login::ServerOptions;
@@ -102,6 +103,7 @@ fn server_opts(codex_home: &tempfile::TempDir, issuer: String) -> ServerOptions 
         "client-id".to_string(),
         None,
     );
+    opts.auth_store_mode = AuthCredentialsStoreMode::File;
     opts.issuer = issuer;
     opts.open_browser = false;
     opts
@@ -228,6 +230,7 @@ async fn device_code_login_integration_persists_without_api_key_on_exchange_fail
         "client-id".to_string(),
         None,
     );
+    opts.auth_store_mode = AuthCredentialsStoreMode::File;
     opts.issuer = issuer;
     opts.open_browser = false;
 
@@ -275,6 +278,7 @@ async fn device_code_login_integration_handles_error_payload() {
         "client-id".to_string(),
         None,
     );
+    opts.auth_store_mode = AuthCredentialsStoreMode::File;
     opts.issuer = issuer;
     opts.open_browser = false;
 

@@ -308,7 +308,11 @@ impl CodexMessageProcessor {
             }
         }
 
-        match login_with_api_key(&self.config.codex_home, &params.api_key) {
+        match login_with_api_key(
+            &self.config.codex_home,
+            &params.api_key,
+            self.config.auth_credentials_store_mode,
+        ) {
             Ok(()) => {
                 self.auth_manager.reload();
                 self.outgoing

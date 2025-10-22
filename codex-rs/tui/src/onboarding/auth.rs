@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use codex_core::AuthCredentialsStoreMode;
 use codex_core::AuthManager;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
@@ -152,6 +153,7 @@ pub(crate) struct AuthModeWidget {
     pub auth_manager: Arc<AuthManager>,
     pub forced_chatgpt_workspace_id: Option<String>,
     pub forced_login_method: Option<ForcedLoginMethod>,
+    pub auth_store_mode: AuthCredentialsStoreMode,
 }
 
 impl AuthModeWidget {
@@ -512,7 +514,7 @@ impl AuthModeWidget {
             self.disallow_api_login();
             return;
         }
-        match login_with_api_key(&self.codex_home, &api_key) {
+        match login_with_api_key(&self.codex_home, &api_key, self.auth_store_mode) {
             Ok(()) => {
                 self.error = None;
                 self.login_status = LoginStatus::AuthMode(AuthMode::ApiKey);

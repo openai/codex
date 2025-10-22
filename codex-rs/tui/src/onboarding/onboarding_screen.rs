@@ -110,6 +110,7 @@ impl OnboardingScreen {
                 auth_manager,
                 forced_chatgpt_workspace_id,
                 forced_login_method,
+                auth_store_mode: config.auth_credentials_store_mode,
             }))
         }
         let is_git_repo = get_git_repo_root(&cwd).is_some();

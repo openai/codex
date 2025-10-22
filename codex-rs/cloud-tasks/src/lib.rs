@@ -58,7 +58,9 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
 
     let auth = match codex_core::config::find_codex_home()
         .ok()
-        .map(|home| codex_login::AuthManager::new(home, false))
+        .map(|home| {
+            codex_login::AuthManager::new(home, false, codex_core::AuthCredentialsStoreMode::File)
+        })
         .and_then(|am| am.auth())
     {
         Some(auth) => auth,

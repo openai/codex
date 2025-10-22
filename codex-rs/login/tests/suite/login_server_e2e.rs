@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use base64::Engine;
+use codex_core::AuthCredentialsStoreMode;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
 use core_test_support::skip_if_no_network;
@@ -116,6 +117,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         open_browser: false,
         force_state: Some(state),
         forced_chatgpt_workspace_id: Some(chatgpt_account_id.to_string()),
+        auth_store_mode: AuthCredentialsStoreMode::File,
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -176,6 +178,7 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
         open_browser: false,
         force_state: Some(state),
         forced_chatgpt_workspace_id: None,
+        auth_store_mode: AuthCredentialsStoreMode::File,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -269,6 +272,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         open_browser: false,
         force_state: Some("cancel_state".to_string()),
         forced_chatgpt_workspace_id: None,
+        auth_store_mode: AuthCredentialsStoreMode::File,
     };
 
     let first_server = run_login_server(first_opts)?;
@@ -288,6 +292,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         open_browser: false,
         force_state: Some("cancel_state_2".to_string()),
         forced_chatgpt_workspace_id: None,
+        auth_store_mode: AuthCredentialsStoreMode::File,
     };
 
     let second_server = run_login_server(second_opts)?;

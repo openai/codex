@@ -53,6 +53,7 @@ pub use codex_protocol::protocol::InitialHistory;
 pub use conversation_manager::ConversationManager;
 pub use conversation_manager::NewConversation;
 // Re-export common auth types for workspace consumers
+pub use auth::AuthCredentialsStoreMode;
 pub use auth::AuthManager;
 pub use auth::CodexAuth;
 pub mod default_client;

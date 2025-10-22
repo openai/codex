@@ -31,6 +31,7 @@ fn create_config_toml_custom_provider(
 model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
+auth_credentials_store = "file"
 
 model_provider = "mock_provider"
 
@@ -54,6 +55,7 @@ fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
 model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
+auth_credentials_store = "file"
 "#,
     )
 }

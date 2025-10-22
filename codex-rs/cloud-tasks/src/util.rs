@@ -70,7 +70,8 @@ pub async fn build_chatgpt_headers() -> HeaderMap {
         HeaderValue::from_str(&ua).unwrap_or(HeaderValue::from_static("codex-cli")),
     );
     if let Ok(home) = codex_core::config::find_codex_home() {
-        let am = codex_login::AuthManager::new(home, false);
+        let am =
+            codex_login::AuthManager::new(home, false, codex_core::AuthCredentialsStoreMode::File);
         if let Some(auth) = am.auth()
             && let Ok(tok) = auth.get_token().await
             && !tok.is_empty()
