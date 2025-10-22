@@ -308,21 +308,13 @@ mod tests {
         let (session, turn) = test_session_and_turn();
         let expected_session_id = session.conversation_id().to_string();
 
-        let open_shell = run_unified_exec_request(
-            &session,
-            &turn,
-            None,
-            vec!["bash".to_string(), "-i".to_string()],
-            Some(2_500),
-        )
-        .await?;
+        let open_shell = exec_command(&session, &turn, "bash -i", Some(2_500)).await?;
         let session_id = open_shell.session_id.expect("expected session id");
 
-        let env_output = run_unified_exec_request(
+        let env_output = write_stdin(
             &session,
-            &turn,
-            Some(session_id),
-            vec!["echo $CODEX_SESSION_ID\n".to_string()],
+            session_id,
+            "echo $CODEX_SESSION_ID\n",
             Some(2_500),
         )
         .await?;
