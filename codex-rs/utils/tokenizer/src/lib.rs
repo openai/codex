@@ -56,7 +56,7 @@ impl Tokenizer {
     }
 
     /// Default to `O200kBase`
-    pub fn default() -> Result<Self, TokenizerError> {
+    pub fn try_default() -> Result<Self, TokenizerError> {
         Self::new(EncodingKind::O200kBase)
     }
 

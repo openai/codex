@@ -15,7 +15,7 @@ pub(crate) fn truncate_middle(s: &str, max_bytes: usize) -> (String, Option<u64>
 
     // Build a tokenizer for counting (default to o200k_base; fall back to cl100k_base).
     // If both fail, fall back to a 4-bytes-per-token estimate.
-    let tok = Tokenizer::default().ok();
+    let tok = Tokenizer::try_default().ok();
     let token_count = |text: &str| -> u64 {
         if let Some(ref t) = tok {
             t.count(text) as u64
