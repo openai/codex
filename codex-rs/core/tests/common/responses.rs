@@ -368,24 +368,24 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
     for item in items {
         match item.get("type").and_then(Value::as_str) {
             Some("function_call") => {
-                if let Some(id) = item.get("call_id").and_then(Value::as_str) {
-                    if !id.is_empty() {
-                        function_calls.insert(id.to_string());
-                    }
+                if let Some(id) = item.get("call_id").and_then(Value::as_str)
+                    && !id.is_empty()
+                {
+                    function_calls.insert(id.to_string());
                 }
             }
             Some("custom_tool_call") => {
-                if let Some(id) = item.get("call_id").and_then(Value::as_str) {
-                    if !id.is_empty() {
-                        custom_tool_calls.insert(id.to_string());
-                    }
+                if let Some(id) = item.get("call_id").and_then(Value::as_str)
+                    && !id.is_empty()
+                {
+                    custom_tool_calls.insert(id.to_string());
                 }
             }
             Some("local_shell_call") => {
-                if let Some(id) = item.get("call_id").and_then(Value::as_str) {
-                    if !id.is_empty() {
-                        local_shell_calls.insert(id.to_string());
-                    }
+                if let Some(id) = item.get("call_id").and_then(Value::as_str)
+                    && !id.is_empty()
+                {
+                    local_shell_calls.insert(id.to_string());
                 }
             }
             Some("function_call_output") => {
