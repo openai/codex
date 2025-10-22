@@ -336,10 +336,11 @@ impl ModelClient {
                 .get("cf-ray")
                 .map(|v| v.to_str().unwrap_or_default().to_string());
 
-            trace!(
-                "Response status: {}, cf-ray: {:?}",
+            debug!(
+                "Response status: {}, cf-ray: {:?}, version: {:?}",
                 resp.status(),
-                request_id
+                request_id,
+                resp.version()
             );
         }
 
@@ -1093,6 +1094,7 @@ mod tests {
             base_url: Some("https://test.com".to_string()),
             env_key: Some("TEST_API_KEY".to_string()),
             env_key_instructions: None,
+            experimental_bearer_token: None,
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
@@ -1156,6 +1158,7 @@ mod tests {
             base_url: Some("https://test.com".to_string()),
             env_key: Some("TEST_API_KEY".to_string()),
             env_key_instructions: None,
+            experimental_bearer_token: None,
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
@@ -1192,6 +1195,7 @@ mod tests {
             base_url: Some("https://test.com".to_string()),
             env_key: Some("TEST_API_KEY".to_string()),
             env_key_instructions: None,
+            experimental_bearer_token: None,
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
@@ -1230,6 +1234,7 @@ mod tests {
             base_url: Some("https://test.com".to_string()),
             env_key: Some("TEST_API_KEY".to_string()),
             env_key_instructions: None,
+            experimental_bearer_token: None,
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
@@ -1264,6 +1269,7 @@ mod tests {
             base_url: Some("https://test.com".to_string()),
             env_key: Some("TEST_API_KEY".to_string()),
             env_key_instructions: None,
+            experimental_bearer_token: None,
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
@@ -1367,6 +1373,7 @@ mod tests {
                 base_url: Some("https://test.com".to_string()),
                 env_key: Some("TEST_API_KEY".to_string()),
                 env_key_instructions: None,
+                experimental_bearer_token: None,
                 wire_api: WireApi::Responses,
                 query_params: None,
                 http_headers: None,

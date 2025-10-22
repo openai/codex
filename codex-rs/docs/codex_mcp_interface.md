@@ -19,6 +19,7 @@ At a glance:
   - `listConversations`, `resumeConversation`, `archiveConversation`
 - Configuration and info
   - `getUserSavedConfig`, `setDefaultModel`, `getUserAgent`, `userInfo`
+  - `model/list` → enumerate available models and reasoning options
 - Auth
   - `loginApiKey`, `loginChatGpt`, `cancelLoginChatGpt`, `logoutChatGpt`, `getAuthStatus`
 - Utilities
@@ -72,6 +73,24 @@ Send input to the active turn:
 Interrupt a running turn: `interruptConversation`.
 
 List/resume/archive: `listConversations`, `resumeConversation`, `archiveConversation`.
+
+## Models
+
+Fetch the catalog of models available in the current Codex build with `model/list`. The request accepts optional pagination inputs:
+
+- `pageSize` – number of models to return (defaults to a server-selected value)
+- `cursor` – opaque string from the previous response’s `nextCursor`
+
+Each response yields:
+
+- `items` – ordered list of models. A model includes:
+  - `id`, `model`, `displayName`, `description`
+  - `supportedReasoningEfforts` – array of objects with:
+    - `reasoningEffort` – one of `minimal|low|medium|high`
+    - `description` – human-friendly label for the effort
+  - `defaultReasoningEffort` – suggested effort for the UI
+  - `isDefault` – whether the model is recommended for most users
+- `nextCursor` – pass into the next request to continue paging (optional)
 
 ## Event stream
 

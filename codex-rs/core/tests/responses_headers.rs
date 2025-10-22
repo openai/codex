@@ -38,6 +38,7 @@ async fn responses_stream_includes_task_type_header() {
         base_url: Some(format!("{}/v1", server.uri())),
         env_key: None,
         env_key_instructions: None,
+        experimental_bearer_token: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,

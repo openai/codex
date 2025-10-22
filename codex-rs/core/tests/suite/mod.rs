@@ -20,6 +20,7 @@ mod model_tools;
 mod otel;
 mod prompt_caching;
 mod read_file;
+mod resume;
 mod review;
 mod rmcp_client;
 mod rollout_list_find;

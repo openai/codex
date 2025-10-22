@@ -84,11 +84,7 @@ macro_rules! model_family {
 
 /// Returns a `ModelFamily` for the given model slug, or `None` if the slug
 /// does not match any known model family.
-pub fn find_family_for_model(mut slug: &str) -> Option<ModelFamily> {
-    // TODO(jif) clean once we have proper feature flags
-    if matches!(std::env::var("CODEX_EXPERIMENTAL").as_deref(), Ok("1")) {
-        slug = "codex-experimental";
-    }
+pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
     if slug.starts_with("o3") {
         model_family!(
             slug, "o3",

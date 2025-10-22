@@ -1,6 +1,7 @@
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
+use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -10,7 +11,6 @@ use crate::tools::registry::ToolKind;
 use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
 use codex_protocol::plan_tool::UpdatePlanArgs;
-use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -68,7 +68,7 @@ impl ToolHandler for PlanHandler {
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         let ToolInvocation {
             session,
-            sub_id,
+            turn,
             call_id,
             payload,
             ..
@@ -84,7 +84,7 @@ impl ToolHandler for PlanHandler {
         };
 
         let content =
-            handle_update_plan(session.as_ref(), arguments, sub_id.clone(), call_id).await?;
+            handle_update_plan(session.as_ref(), turn.as_ref(), arguments, call_id).await?;
 
         Ok(ToolOutput::Function {
             content,
@@ -98,16 +98,13 @@ impl ToolHandler for PlanHandler {
 /// than forcing it to come up and document a plan (TBD how that affects performance).
 pub(crate) async fn handle_update_plan(
     session: &Session,
+    turn_context: &TurnContext,
     arguments: String,
-    sub_id: String,
     _call_id: String,
 ) -> Result<String, FunctionCallError> {
     let args = parse_update_plan_arguments(&arguments)?;
     session
-        .send_event(Event {
-            id: sub_id.to_string(),
-            msg: EventMsg::PlanUpdate(args),
-        })
+        .send_event(turn_context, EventMsg::PlanUpdate(args))
         .await;
     Ok("Plan updated".to_string())
 }
