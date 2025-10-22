@@ -384,6 +384,101 @@ A {file_name}
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_apply_patch_uses_verified_cwd() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::ApplyPatchFreeform);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let worktree_rel = "alternate";
+    let worktree_dir = cwd.path().join(worktree_rel);
+    std::fs::create_dir_all(&worktree_dir)?;
+
+    let file_name = "notes.txt";
+    let file_path = worktree_dir.join(file_name);
+    fs::write(&file_path, "before\n")?;
+
+    let call_id = "shell-apply-patch";
+    let patch_content = format!(
+        r#"*** Begin Patch
+*** Update File: {file_name}
+@@
+-before
++after
+*** End Patch"#,
+    );
+    let shell_script =
+        format!("cd {worktree_rel} && apply_patch <<'PATCH'\n{patch_content}\nPATCH");
+    let args = json!({
+        "command": ["bash", "-lc", shell_script],
+        "timeout_ms": 10_000,
+    });
+
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+        ev_completed("resp-1"),
+    ]);
+    responses::mount_sse_once_match(&server, any(), first_response).await;
+
+    let second_response = sse(vec![
+        ev_assistant_message("msg-1", "patch complete"),
+        ev_completed("resp-2"),
+    ]);
+    let second_mock = responses::mount_sse_once_match(&server, any(), second_response).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "please apply a patch from the worktree".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    let req = second_mock.single_request();
+    let output_item = req.function_call_output(call_id);
+    let output_text = extract_output_text(&output_item).expect("output text present");
+
+    assert!(
+        output_text.contains("Success"),
+        "expected apply_patch success output, got {output_text:?}"
+    );
+
+    let updated_contents = fs::read_to_string(&file_path)?;
+    assert_eq!(
+        updated_contents, "after\n",
+        "expected file to be updated inside the alternate worktree"
+    );
+
+    assert!(
+        !cwd.path().join(file_name).exists(),
+        "should not touch files outside the alternate worktree"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
