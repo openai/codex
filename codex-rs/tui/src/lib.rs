@@ -73,8 +73,38 @@ mod ui_consts;
 mod update_prompt;
 pub mod updates;
 mod version;
-
+#[cfg(not(target_env = "musl"))]
+mod voice;
 mod wrapping;
+
+/// Update action the CLI should perform after the TUI exits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateAction {
+    /// Update via `npm install -g @openai/codex@latest`.
+    NpmGlobalLatest,
+    /// Update via `bun install -g @openai/codex@latest`.
+    BunGlobalLatest,
+    /// Update via `brew upgrade codex`.
+    BrewUpgrade,
+}
+
+impl UpdateAction {
+    /// Returns the list of command-line arguments for invoking the update.
+    pub fn command_args(&self) -> (&'static str, &'static [&'static str]) {
+        match self {
+            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex@latest"]),
+            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex@latest"]),
+            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "codex"]),
+        }
+    }
+
+    /// Returns string representation of the command-line arguments for invoking the update.
+    pub fn command_str(&self) -> String {
+        let (command, args) = self.command_args();
+        let args_str = args.join(" ");
+        format!("{command} {args_str}")
+    }
+}
 
 #[cfg(test)]
 pub mod test_backend;

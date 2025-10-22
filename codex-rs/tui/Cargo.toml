@@ -61,6 +61,7 @@ ratatui = { workspace = true, features = [
 ] }
 ratatui-macros = { workspace = true }
 regex-lite = { workspace = true }
+reqwest = { workspace = true, features = ["json", "multipart"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 shlex = { workspace = true }
@@ -87,6 +88,10 @@ opentelemetry-appender-tracing = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
+
+[target.'cfg(not(target_env = "musl"))'.dependencies]
+cpal = "0.15"
+hound = "3.5"
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
