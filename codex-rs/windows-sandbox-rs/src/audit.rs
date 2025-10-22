@@ -116,7 +116,15 @@ pub fn audit_everyone_writable(
                 if start.elapsed() > Duration::from_secs(5) || checked > 5000 {
                     break;
                 }
-                if p.is_dir() {
+                // Skip reparse points (symlinks/junctions) to avoid auditing link ACLs
+                let ft = match ent.file_type() {
+                    Ok(ft) => ft,
+                    Err(_) => continue,
+                };
+                if ft.is_symlink() {
+                    continue;
+                }
+                if ft.is_dir() {
                     checked += 1;
                     if unsafe { path_has_world_write_allow(&p)? } {
                         flagged.push(p);
