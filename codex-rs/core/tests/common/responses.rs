@@ -97,6 +97,10 @@ impl Match for ResponseMock {
             .lock()
             .unwrap()
             .push(ResponsesRequest(request.clone()));
+
+        // Enforce invariant checks on every request body captured by the mock.
+        // Panic on orphan tool outputs or calls to catch regressions early.
+        validate_request_body_invariants(request);
         true
     }
 }
@@ -335,4 +339,94 @@ pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> Res
         .await;
 
     response_mock
+}
+
+/// Validate invariants on the request body sent to `/v1/responses`.
+///
+/// - No `function_call_output`/`custom_tool_call_output` with missing/empty `call_id`.
+/// - Every `function_call_output` must match a prior `function_call` or
+///   `local_shell_call` with the same `call_id` in the same `input`.
+/// - Every `custom_tool_call_output` must match a prior `custom_tool_call`.
+/// - Additionally, enforce symmetry: every `function_call`/`custom_tool_call`
+///   in the `input` must have a matching output entry.
+fn validate_request_body_invariants(request: &wiremock::Request) {
+    let Ok(body): Result<Value, _> = request.body_json() else {
+        return;
+    };
+    let Some(items) = body.get("input").and_then(Value::as_array) else {
+        return;
+    };
+
+    use std::collections::HashSet;
+    let mut function_calls: HashSet<String> = HashSet::new();
+    let mut custom_tool_calls: HashSet<String> = HashSet::new();
+    let mut local_shell_calls: HashSet<String> = HashSet::new();
+    let mut function_call_outputs: HashSet<String> = HashSet::new();
+    let mut custom_tool_call_outputs: HashSet<String> = HashSet::new();
+
+    // First pass: collect call ids and assert outputs have non-empty call_id.
+    for item in items {
+        match item.get("type").and_then(Value::as_str) {
+            Some("function_call") => {
+                if let Some(id) = item.get("call_id").and_then(Value::as_str) {
+                    if !id.is_empty() {
+                        function_calls.insert(id.to_string());
+                    }
+                }
+            }
+            Some("custom_tool_call") => {
+                if let Some(id) = item.get("call_id").and_then(Value::as_str) {
+                    if !id.is_empty() {
+                        custom_tool_calls.insert(id.to_string());
+                    }
+                }
+            }
+            Some("local_shell_call") => {
+                if let Some(id) = item.get("call_id").and_then(Value::as_str) {
+                    if !id.is_empty() {
+                        local_shell_calls.insert(id.to_string());
+                    }
+                }
+            }
+            Some("function_call_output") => {
+                let call_id = item.get("call_id").and_then(Value::as_str);
+                if call_id.is_none() || call_id == Some("") {
+                    panic!("orphan function_call_output with empty call_id should be dropped");
+                }
+                function_call_outputs.insert(call_id.unwrap().to_string());
+            }
+            Some("custom_tool_call_output") => {
+                let call_id = item.get("call_id").and_then(Value::as_str);
+                if call_id.is_none() || call_id == Some("") {
+                    panic!("orphan custom_tool_call_output with empty call_id should be dropped");
+                }
+                custom_tool_call_outputs.insert(call_id.unwrap().to_string());
+            }
+            _ => {}
+        }
+    }
+
+    // Second pass: ensure outputs refer to existing calls within the same input.
+    for cid in &function_call_outputs {
+        if !function_calls.contains(cid) && !local_shell_calls.contains(cid) {
+            panic!("function_call_output without matching call in input: {cid}");
+        }
+    }
+    for cid in &custom_tool_call_outputs {
+        if !custom_tool_calls.contains(cid) {
+            panic!("custom_tool_call_output without matching call in input: {cid}");
+        }
+    }
+
+    // Symmetry: each function/custom call must have an output.
+    for cid in &function_calls {
+        if !function_call_outputs.contains(cid) {
+            panic!("Function call output is missing for call id: {cid}");
+        }
+    }
+    for cid in &custom_tool_calls {
+        if !custom_tool_call_outputs.contains(cid) {
+            panic!("Custom tool call output is missing for call id: {cid}");
+        }
+    }
 }
