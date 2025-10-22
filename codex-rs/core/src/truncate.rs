@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn truncate_middle_no_newlines_fallback() {
-        let tok = Tokenizer::default().expect("load tokenizer");
+        let tok = Tokenizer::try_default().expect("load tokenizer");
         let s = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ*";
         let max_bytes = 32;
         let (out, original) = truncate_middle(s, max_bytes);
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn truncate_middle_prefers_newline_boundaries() {
-        let tok = Tokenizer::default().expect("load tokenizer");
+        let tok = Tokenizer::try_default().expect("load tokenizer");
         let mut s = String::new();
         for i in 1..=20 {
             s.push_str(&format!("{i:03}\n"));
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn truncate_middle_handles_utf8_content() {
-        let tok = Tokenizer::default().expect("load tokenizer");
+        let tok = Tokenizer::try_default().expect("load tokenizer");
         let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with ascii text\n";
         let max_bytes = 32;
         let (out, tokens) = truncate_middle(s, max_bytes);
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn truncate_middle_prefers_newline_boundaries_2() {
-        let tok = Tokenizer::default().expect("load tokenizer");
+        let tok = Tokenizer::try_default().expect("load tokenizer");
         // Build a multi-line string of 20 numbered lines (each "NNN\n").
         let mut s = String::new();
         for i in 1..=20 {
