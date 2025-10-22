@@ -35,7 +35,6 @@ Risk level examples:
 - high: deleting or overwriting data, exfiltrating secrets, escalating privileges, or disabling security controls
 Recognized risk_categories: data_deletion, data_exfiltration, privilege_escalation, system_modification, network_access, resource_exhaustion, compliance.
 Use multiple categories when appropriate.
-Placeholders such as <workspace> or <home> indicate redacted sensitive paths.
 If information is insufficient, choose the most cautious risk level supported by the evidence.
 Respond with JSON only, without markdown code fences or extra commentary."#;
 
