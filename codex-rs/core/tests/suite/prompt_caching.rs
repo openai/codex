@@ -186,7 +186,6 @@ async fn prompt_tools_are_consistent_across_requests() {
     config.cwd = cwd.path().to_path_buf();
     config.model_provider = model_provider;
     config.user_instructions = Some("be consistent and helpful".to_string());
-    config.features.enable(Feature::PlanTool);
 
     let conversation_manager =
         ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));

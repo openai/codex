@@ -18,7 +18,6 @@ use codex_core::NewConversation;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use codex_core::features::Feature;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
@@ -70,13 +69,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         output_schema: output_schema_path,
-        include_plan_tool,
         config_overrides,
     } = cli;
-
-    if include_plan_tool.is_some() {
-        eprintln!("include-plan-tool is deprecated. Plan tool is now enabled by default.");
-    }
 
     // Determine the prompt source (parent or subcommand) and read from stdin if needed.
     let prompt_arg = match &command {
@@ -181,7 +175,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         model_provider,
         codex_linux_sandbox_exe,
         base_instructions: None,
-        include_plan_tool: Some(include_plan_tool.unwrap_or(true)),
         include_apply_patch_tool: None,
         include_view_image_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
@@ -198,7 +191,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
-    let approve_all_enabled = config.features.enabled(Feature::ApproveAll);
 
     if let Err(err) = enforce_login_restrictions(&config).await {
         eprintln!("{err}");
@@ -371,34 +363,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     while let Some(event) = rx.recv().await {
         if matches!(event.msg, EventMsg::Error(_)) {
             error_seen = true;
-        }
-        // Auto-approve requests when the approve_all feature is enabled.
-        if approve_all_enabled {
-            match &event.msg {
-                EventMsg::ExecApprovalRequest(_) => {
-                    if let Err(e) = conversation
-                        .submit(Op::ExecApproval {
-                            id: event.id.clone(),
-                            decision: codex_core::protocol::ReviewDecision::Approved,
-                        })
-                        .await
-                    {
-                        error!("failed to auto-approve exec: {e}");
-                    }
-                }
-                EventMsg::ApplyPatchApprovalRequest(_) => {
-                    if let Err(e) = conversation
-                        .submit(Op::PatchApproval {
-                            id: event.id.clone(),
-                            decision: codex_core::protocol::ReviewDecision::Approved,
-                        })
-                        .await
-                    {
-                        error!("failed to auto-approve patch: {e}");
-                    }
-                }
-                _ => {}
-            }
         }
         let shutdown: CodexStatus = event_processor.process_event(event);
         match shutdown {

@@ -242,8 +242,7 @@ impl ChatComposer {
         let Some(text) = self.history.on_entry_response(log_id, offset, entry) else {
             return false;
         };
-        self.textarea.set_text(&text);
-        self.textarea.set_cursor(0);
+        self.set_text_content(text);
         true
     }
 
@@ -316,9 +315,15 @@ impl ChatComposer {
         self.sync_file_search_popup();
     }
 
-    pub(crate) fn clear_for_ctrl_c(&mut self) {
+    pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {
+        if self.is_empty() {
+            return None;
+        }
+        let previous = self.current_text();
         self.set_text_content(String::new());
         self.history.reset_navigation();
+        self.history.record_local_submission(&previous);
+        Some(previous)
     }
 
     /// Get the current composer text.
@@ -896,8 +901,7 @@ impl ChatComposer {
                         _ => unreachable!(),
                     };
                     if let Some(text) = replace_text {
-                        self.textarea.set_text(&text);
-                        self.textarea.set_cursor(0);
+                        self.set_text_content(text);
                         return (InputResult::None, true);
                     }
                 }
@@ -1826,6 +1830,28 @@ mod tests {
 
         assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
         assert!(!composer.esc_backtrack_hint);
+    }
+
+    #[test]
+    fn clear_for_ctrl_c_records_cleared_draft() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_text_content("draft text".to_string());
+        assert_eq!(composer.clear_for_ctrl_c(), Some("draft text".to_string()));
+        assert!(composer.is_empty());
+
+        assert_eq!(
+            composer.history.navigate_up(&composer.app_event_tx),
+            Some("draft text".to_string())
+        );
     }
 
     #[test]

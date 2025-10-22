@@ -18,7 +18,6 @@ pub(crate) struct ToolCallRuntime {
     session: Arc<Session>,
     turn_context: Arc<TurnContext>,
     tracker: SharedTurnDiffTracker,
-    sub_id: String,
     parallel_execution: Arc<RwLock<()>>,
 }
 
@@ -28,14 +27,12 @@ impl ToolCallRuntime {
         session: Arc<Session>,
         turn_context: Arc<TurnContext>,
         tracker: SharedTurnDiffTracker,
-        sub_id: String,
     ) -> Self {
         Self {
             router,
             session,
             turn_context,
             tracker,
-            sub_id,
             parallel_execution: Arc::new(RwLock::new(())),
         }
     }
@@ -50,7 +47,6 @@ impl ToolCallRuntime {
         let session = Arc::clone(&self.session);
         let turn = Arc::clone(&self.turn_context);
         let tracker = Arc::clone(&self.tracker);
-        let sub_id = self.sub_id.clone();
         let lock = Arc::clone(&self.parallel_execution);
 
         let handle: AbortOnDropHandle<Result<ResponseInputItem, FunctionCallError>> =
@@ -62,7 +58,7 @@ impl ToolCallRuntime {
                 };
 
                 router
-                    .dispatch_tool_call(session, turn, tracker, sub_id, call)
+                    .dispatch_tool_call(session, turn, tracker, call)
                     .await
             }));
 

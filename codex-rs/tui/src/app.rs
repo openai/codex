@@ -354,8 +354,8 @@ impl App {
                     self.config.model_family = family;
                 }
             }
-            AppEvent::OpenReasoningPopup { model, presets } => {
-                self.chat_widget.open_reasoning_popup(model, presets);
+            AppEvent::OpenReasoningPopup { model } => {
+                self.chat_widget.open_reasoning_popup(model);
             }
             AppEvent::OpenFullAccessConfirmation { preset } => {
                 self.chat_widget.open_full_access_confirmation(preset);

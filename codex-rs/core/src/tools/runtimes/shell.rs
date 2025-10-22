@@ -51,7 +51,7 @@ impl ShellRuntime {
 
     fn stdout_stream(ctx: &ToolCtx<'_>) -> Option<crate::exec::StdoutStream> {
         Some(crate::exec::StdoutStream {
-            sub_id: ctx.sub_id.clone(),
+            sub_id: ctx.turn.sub_id.clone(),
             call_id: ctx.call_id.clone(),
             tx_event: ctx.session.get_tx_event(),
         })
@@ -91,12 +91,12 @@ impl Approvable<ShellRequest> for ShellRuntime {
             .clone()
             .or_else(|| req.justification.clone());
         let session = ctx.session;
-        let sub_id = ctx.sub_id.to_string();
+        let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
             with_cached_approval(&session.services, key, || async move {
                 session
-                    .request_command_approval(sub_id, call_id, command, cwd, reason)
+                    .request_command_approval(turn, call_id, command, cwd, reason)
                     .await
             })
             .await

@@ -320,14 +320,22 @@ async fn unified_exec_spec_toggle_end_to_end() -> Result<()> {
 
     let tools_disabled = collect_tools(false).await?;
     assert!(
-        !tools_disabled.iter().any(|name| name == "unified_exec"),
-        "tools list should not include unified_exec when disabled: {tools_disabled:?}"
+        !tools_disabled.iter().any(|name| name == "exec_command"),
+        "tools list should not include exec_command when disabled: {tools_disabled:?}"
+    );
+    assert!(
+        !tools_disabled.iter().any(|name| name == "write_stdin"),
+        "tools list should not include write_stdin when disabled: {tools_disabled:?}"
     );
 
     let tools_enabled = collect_tools(true).await?;
     assert!(
-        tools_enabled.iter().any(|name| name == "unified_exec"),
-        "tools list should include unified_exec when enabled: {tools_enabled:?}"
+        tools_enabled.iter().any(|name| name == "exec_command"),
+        "tools list should include exec_command when enabled: {tools_enabled:?}"
+    );
+    assert!(
+        tools_enabled.iter().any(|name| name == "write_stdin"),
+        "tools list should include write_stdin when enabled: {tools_enabled:?}"
     );
 
     Ok(())
