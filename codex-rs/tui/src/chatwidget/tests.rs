@@ -23,6 +23,7 @@ use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::InputItem;
 use codex_core::protocol::InputMessageKind;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
@@ -160,6 +161,67 @@ fn entered_review_mode_uses_request_hint() {
     assert!(chat.is_review_mode);
 }
 
+#[test]
+fn auto_next_steps_enqueues_prompt_on_completion() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.auto_next_steps = true;
+    chat.auto_next_idea = false;
+    chat.next_auto_prompt = first_auto_prompt(true, false);
+
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: Some("done".to_string()),
+        }),
+    });
+
+    let _ = drain_insert_history(&mut rx);
+    let text = expect_auto_prompt(&mut op_rx);
+    assert_eq!(text, AUTO_NEXT_STEPS_PROMPT);
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(chat.next_auto_prompt, Some(AutoPromptKind::NextSteps));
+}
+
+#[test]
+fn auto_next_steps_and_idea_alternate_prompts() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.auto_next_steps = true;
+    chat.auto_next_idea = true;
+    chat.next_auto_prompt = first_auto_prompt(true, true);
+
+    chat.handle_codex_event(Event {
+        id: "task-steps".into(),
+        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+    let first = expect_auto_prompt(&mut op_rx);
+    assert_eq!(first, AUTO_NEXT_STEPS_PROMPT);
+
+    chat.handle_codex_event(Event {
+        id: "task-ideas".into(),
+        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+    let second = expect_auto_prompt(&mut op_rx);
+    assert_eq!(second, AUTO_NEXT_IDEA_PROMPT);
+
+    chat.handle_codex_event(Event {
+        id: "task-steps-2".into(),
+        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+    let third = expect_auto_prompt(&mut op_rx);
+    assert_eq!(third, AUTO_NEXT_STEPS_PROMPT);
+}
+
 /// Entering review mode renders the current changes banner when requested.
 #[test]
 fn entered_review_mode_defaults_to_current_changes_banner() {
@@ -236,6 +298,8 @@ async fn helpers_are_available_and_do_not_panic() {
         enhanced_keys_supported: false,
         auth_manager,
         feedback: codex_feedback::CodexFeedback::new(),
+        auto_next_steps: false,
+        auto_next_idea: false,
     };
     let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
@@ -291,6 +355,9 @@ fn make_chatwidget_manual() -> (
         ghost_snapshots: Vec::new(),
         ghost_snapshots_disabled: false,
         needs_final_message_separator: false,
+        auto_next_steps: false,
+        auto_next_idea: false,
+        next_auto_prompt: None,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
     };
@@ -322,6 +389,41 @@ fn drain_insert_history(
         }
     }
     out
+}
+
+fn expect_auto_prompt(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> String {
+    let text = match op_rx
+        .try_recv()
+        .unwrap_or_else(|err| panic!("expected Op::UserInput, got {err:?}"))
+    {
+        Op::UserInput { items } => {
+            assert_eq!(
+                items.len(),
+                1,
+                "auto prompts should emit exactly one input item"
+            );
+            match &items[0] {
+                InputItem::Text { text } => text.clone(),
+                other => panic!("expected text input item, got {other:?}"),
+            }
+        }
+        other => panic!("expected Op::UserInput, got {other:?}"),
+    };
+
+    match op_rx
+        .try_recv()
+        .unwrap_or_else(|err| panic!("expected Op::AddToHistory, got {err:?}"))
+    {
+        Op::AddToHistory { text: history_text } => {
+            assert_eq!(
+                history_text, text,
+                "history should record the same auto prompt text"
+            );
+        }
+        other => panic!("expected Op::AddToHistory, got {other:?}"),
+    }
+
+    text
 }
 
 fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {

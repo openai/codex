@@ -124,6 +124,15 @@ use strum::IntoEnumIterator;
 
 const MAX_TRACKED_GHOST_COMMITS: usize = 20;
 
+const AUTO_NEXT_STEPS_PROMPT: &str = "Follow the natural next steps here, including running any relevant tests and verifications before moving on.";
+const AUTO_NEXT_IDEA_PROMPT: &str = "Pause to look across this project and propose additional improvement ideas, including creative but relevant follow-on work.";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AutoPromptKind {
+    NextSteps,
+    NextIdea,
+}
+
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -225,6 +234,8 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
+    pub(crate) auto_next_steps: bool,
+    pub(crate) auto_next_idea: bool,
 }
 
 pub(crate) struct ChatWidget {
@@ -272,6 +283,10 @@ pub(crate) struct ChatWidget {
     // Whether to add a final message separator after the last message
     needs_final_message_separator: bool,
 
+    auto_next_steps: bool,
+    auto_next_idea: bool,
+    next_auto_prompt: Option<AutoPromptKind>,
+
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
@@ -296,6 +311,15 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
         None
     } else {
         Some(UserMessage { text, image_paths })
+    }
+}
+
+fn first_auto_prompt(auto_next_steps: bool, auto_next_idea: bool) -> Option<AutoPromptKind> {
+    match (auto_next_steps, auto_next_idea) {
+        (false, false) => None,
+        (true, false) => Some(AutoPromptKind::NextSteps),
+        (false, true) => Some(AutoPromptKind::NextIdea),
+        (true, true) => Some(AutoPromptKind::NextSteps),
     }
 }
 
@@ -324,6 +348,32 @@ impl ChatWidget {
         }
         self.current_status_header = header.clone();
         self.bottom_pane.update_status_header(header);
+    }
+
+    fn enqueue_auto_prompt_if_enabled(&mut self) {
+        let Some(kind) = self.next_auto_prompt else {
+            return;
+        };
+        let prompt = match kind {
+            AutoPromptKind::NextSteps => AUTO_NEXT_STEPS_PROMPT,
+            AutoPromptKind::NextIdea => AUTO_NEXT_IDEA_PROMPT,
+        };
+        self.queued_user_messages
+            .push_back(prompt.to_string().into());
+        self.refresh_queued_user_messages();
+        self.next_auto_prompt = self.next_auto_prompt_after(kind);
+    }
+
+    fn next_auto_prompt_after(&self, prior: AutoPromptKind) -> Option<AutoPromptKind> {
+        match (self.auto_next_steps, self.auto_next_idea) {
+            (true, true) => Some(match prior {
+                AutoPromptKind::NextSteps => AutoPromptKind::NextIdea,
+                AutoPromptKind::NextIdea => AutoPromptKind::NextSteps,
+            }),
+            (true, false) => Some(AutoPromptKind::NextSteps),
+            (false, true) => Some(AutoPromptKind::NextIdea),
+            (false, false) => None,
+        }
     }
 
     // --- Small event handlers ---
@@ -424,6 +474,7 @@ impl ChatWidget {
         self.running_commands.clear();
         self.request_redraw();
 
+        self.enqueue_auto_prompt_if_enabled();
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
         // Emit a notification when the turn completes (suppressed if focused).
@@ -492,6 +543,7 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
 
+        self.enqueue_auto_prompt_if_enabled();
         // After an error ends the turn, try sending the next queued input.
         self.maybe_send_next_queued_input();
     }
@@ -921,10 +973,13 @@ impl ChatWidget {
             enhanced_keys_supported,
             auth_manager,
             feedback,
+            auto_next_steps,
+            auto_next_idea,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
+        let next_auto_prompt = first_auto_prompt(auto_next_steps, auto_next_idea);
 
         Self {
             app_event_tx: app_event_tx.clone(),
@@ -966,6 +1021,9 @@ impl ChatWidget {
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
+            auto_next_steps,
+            auto_next_idea,
+            next_auto_prompt,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
         }
@@ -986,12 +1044,15 @@ impl ChatWidget {
             enhanced_keys_supported,
             auth_manager,
             feedback,
+            auto_next_steps,
+            auto_next_idea,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
 
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
+        let next_auto_prompt = first_auto_prompt(auto_next_steps, auto_next_idea);
 
         Self {
             app_event_tx: app_event_tx.clone(),
@@ -1033,6 +1094,9 @@ impl ChatWidget {
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
+            auto_next_steps,
+            auto_next_idea,
+            next_auto_prompt,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
         }
@@ -1125,6 +1189,10 @@ impl ChatWidget {
         self.bottom_pane
             .attach_image(path, width, height, format_label);
         self.request_redraw();
+    }
+
+    pub(crate) fn auto_prompt_flags(&self) -> (bool, bool) {
+        (self.auto_next_steps, self.auto_next_idea)
     }
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {

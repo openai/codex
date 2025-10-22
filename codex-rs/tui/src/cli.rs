@@ -54,6 +54,14 @@ pub struct Cli {
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
 
+    /// After each Codex response, automatically ask it to continue with the natural next steps (including testing).
+    #[arg(long = "auto-next-steps", default_value_t = false)]
+    pub auto_next_steps: bool,
+
+    /// After each Codex response, automatically ask it to brainstorm new follow-on improvement ideas for this project.
+    #[arg(long = "auto-next-idea", default_value_t = false)]
+    pub auto_next_idea: bool,
+
     /// Skip all confirmation prompts and execute commands without sandboxing.
     /// EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed.
     #[arg(

@@ -90,6 +90,8 @@ impl App {
         initial_images: Vec<PathBuf>,
         resume_selection: ResumeSelection,
         feedback: codex_feedback::CodexFeedback,
+        auto_next_steps: bool,
+        auto_next_idea: bool,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -113,6 +115,8 @@ impl App {
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
+                    auto_next_steps,
+                    auto_next_idea,
                 };
                 ChatWidget::new(init, conversation_manager.clone())
             }
@@ -136,6 +140,8 @@ impl App {
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
+                    auto_next_steps,
+                    auto_next_idea,
                 };
                 ChatWidget::new_from_existing(
                     init,
@@ -233,6 +239,7 @@ impl App {
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
+                let (auto_next_steps, auto_next_idea) = self.chat_widget.auto_prompt_flags();
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -242,6 +249,8 @@ impl App {
                     enhanced_keys_supported: self.enhanced_keys_supported,
                     auth_manager: self.auth_manager.clone(),
                     feedback: self.feedback.clone(),
+                    auto_next_steps,
+                    auto_next_idea,
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 tui.frame_requester().schedule_frame();

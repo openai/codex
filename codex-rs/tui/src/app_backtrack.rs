@@ -331,6 +331,7 @@ impl App {
     ) {
         let conv = new_conv.conversation;
         let session_configured = new_conv.session_configured;
+        let (auto_next_steps, auto_next_idea) = self.chat_widget.auto_prompt_flags();
         let init = crate::chatwidget::ChatWidgetInit {
             config: cfg,
             frame_requester: tui.frame_requester(),
@@ -340,6 +341,8 @@ impl App {
             enhanced_keys_supported: self.enhanced_keys_supported,
             auth_manager: self.auth_manager.clone(),
             feedback: self.feedback.clone(),
+            auto_next_steps,
+            auto_next_idea,
         };
         self.chat_widget =
             crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
