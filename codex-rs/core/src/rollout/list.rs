@@ -63,6 +63,21 @@ const MAX_SCAN_FILES: usize = 10000;
 const HEAD_RECORD_LIMIT: usize = 10;
 const TAIL_RECORD_LIMIT: usize = 10;
 
+/// Check if a conversation's cwd matches the filter path.
+/// Looks for SessionMeta in the head records and compares the cwd field.
+fn matches_cwd_filter(head: &[serde_json::Value], filter_cwd: &Path) -> bool {
+    for record in head {
+        // SessionMeta records have a "cwd" field at the top level
+        if let Some(cwd_value) = record.get("cwd") {
+            if let Some(cwd_str) = cwd_value.as_str() {
+                let conversation_cwd = PathBuf::from(cwd_str);
+                return conversation_cwd == filter_cwd;
+            }
+        }
+    }
+    false
+}
+
 /// Pagination cursor identifying a file by timestamp and UUID.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cursor {
@@ -104,11 +119,13 @@ impl<'de> serde::Deserialize<'de> for Cursor {
 /// Retrieve recorded conversation file paths with token pagination. The returned `next_cursor`
 /// can be supplied on the next call to resume after the last returned item, resilient to
 /// concurrent new sessions being appended. Ordering is stable by timestamp desc, then UUID desc.
+/// If `cwd_filter` is provided, only conversations from that working directory are included.
 pub(crate) async fn get_conversations(
     codex_home: &Path,
     page_size: usize,
     cursor: Option<&Cursor>,
     allowed_sources: &[SessionSource],
+    cwd_filter: Option<&Path>,
 ) -> io::Result<ConversationsPage> {
     let mut root = codex_home.to_path_buf();
     root.push(SESSIONS_SUBDIR);
@@ -125,7 +142,7 @@ pub(crate) async fn get_conversations(
     let anchor = cursor.cloned();
 
     let result =
-        traverse_directories_for_paths(root.clone(), page_size, anchor, allowed_sources).await?;
+        traverse_directories_for_paths(root.clone(), page_size, anchor, allowed_sources, cwd_filter).await?;
     Ok(result)
 }
 
@@ -145,6 +162,7 @@ async fn traverse_directories_for_paths(
     page_size: usize,
     anchor: Option<Cursor>,
     allowed_sources: &[SessionSource],
+    cwd_filter: Option<&Path>,
 ) -> io::Result<ConversationsPage> {
     let mut items: Vec<ConversationItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
@@ -217,6 +235,14 @@ async fn traverse_directories_for_paths(
                             mut updated_at,
                             ..
                         } = summary;
+
+                        // If cwd_filter is set, check if conversation matches
+                        if let Some(filter_cwd) = cwd_filter {
+                            if !matches_cwd_filter(&head, filter_cwd) {
+                                continue;
+                            }
+                        }
+
                         updated_at = updated_at.or_else(|| created_at.clone());
                         items.push(ConversationItem {
                             path,

@@ -131,6 +131,10 @@ struct ResumeCommand {
     #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
     last: bool,
 
+    /// Show all conversations across all directories (default: current directory only).
+    #[arg(long = "all", default_value_t = false)]
+    all: bool,
+
     #[clap(flatten)]
     config_overrides: TuiCli,
 }
@@ -379,6 +383,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::Resume(ResumeCommand {
             session_id,
             last,
+            all,
             config_overrides,
         })) => {
             interactive = finalize_resume_interactive(
@@ -386,6 +391,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
                 session_id,
                 last,
+                all,
                 config_overrides,
             );
             let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
@@ -528,6 +534,7 @@ fn finalize_resume_interactive(
     root_config_overrides: CliConfigOverrides,
     session_id: Option<String>,
     last: bool,
+    all: bool,
     resume_cli: TuiCli,
 ) -> TuiCli {
     // Start with the parsed interactive CLI so resume shares the same
@@ -535,6 +542,7 @@ fn finalize_resume_interactive(
     let resume_session_id = session_id;
     interactive.resume_picker = resume_session_id.is_none() && !last;
     interactive.resume_last = last;
+    interactive.resume_all = all;
     interactive.resume_session_id = resume_session_id;
 
     // Merge resume-scoped flags and overrides with highest precedence.
@@ -618,13 +626,14 @@ mod tests {
         let Subcommand::Resume(ResumeCommand {
             session_id,
             last,
+            all,
             config_overrides: resume_cli,
         }) = subcommand.expect("resume present")
         else {
             unreachable!()
         };
 
-        finalize_resume_interactive(interactive, root_overrides, session_id, last, resume_cli)
+        finalize_resume_interactive(interactive, root_overrides, session_id, last, all, resume_cli)
     }
 
     fn sample_exit_info(conversation: Option<&str>) -> AppExitInfo {
