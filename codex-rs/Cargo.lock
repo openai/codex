@@ -1061,7 +1061,6 @@ dependencies = [
  "codex-apply-patch",
  "codex-async-utils",
  "codex-file-search",
- "codex-mcp-client",
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
@@ -1247,19 +1246,6 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "wiremock",
-]
-
-[[package]]
-name = "codex-mcp-client"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "mcp-types",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

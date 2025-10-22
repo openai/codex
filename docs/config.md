@@ -451,11 +451,7 @@ When both `enabled_tools` and `disabled_tools` are specified, Codex first restri
 
 #### Experimental RMCP client
 
-Codex is transitioning to the [official Rust MCP SDK](https://github.com/modelcontextprotocol/rust-sdk).
-
-This flag enables OAuth support for streamable HTTP servers and switches STDIO servers over to the new client implementation.
-
-Please try and report issues with the new client. To enable it, add this to the top level of your `config.toml`
+This flag enables OAuth support for streamable HTTP servers.
 
 ```toml
 experimental_use_rmcp_client = true

@@ -31,7 +31,7 @@ pub enum Feature {
     UnifiedExec,
     /// Use the streamable exec-command/write-stdin tool pair.
     StreamableShell,
-    /// Use the official Rust MCP client (rmcp).
+    /// Enable experimental RMCP features such as OAuth login.
     RmcpClient,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
