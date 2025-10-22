@@ -238,9 +238,7 @@ impl ToolEmitter {
                 let message = format!("execution error: {err:?}");
                 let response = super::format_exec_output(&message);
                 event = ToolEventStage::Failure(ToolEventFailure::Message(message));
-                Err(FunctionCallError::RespondToModel(
-                    super::format_exec_output(&response),
-                ))
+                Err(FunctionCallError::RespondToModel(response))
             }
             Err(ToolError::Rejected(msg)) | Err(ToolError::SandboxDenied(msg)) => {
                 // Normalize common rejection messages for exec tools so tests and
@@ -252,9 +250,7 @@ impl ToolEmitter {
                 };
                 let response = super::format_exec_output(&normalized);
                 event = ToolEventStage::Failure(ToolEventFailure::Message(normalized));
-                Err(FunctionCallError::RespondToModel(
-                    super::format_exec_output(&response),
-                ))
+                Err(FunctionCallError::RespondToModel(response))
             }
         };
         self.emit(ctx, event).await;

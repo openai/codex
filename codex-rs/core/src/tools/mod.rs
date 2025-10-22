@@ -28,7 +28,6 @@ pub(crate) const TELEMETRY_PREVIEW_MAX_LINES: usize = 64; // lines
 pub(crate) const TELEMETRY_PREVIEW_TRUNCATION_NOTICE: &str =
     "[... telemetry preview truncated ...]";
 
-
 /// Format the combined exec output for sending back to the model.
 /// Includes exit code and duration metadata; truncates large bodies safely.
 pub fn format_exec_output_for_model(exec_output: &ExecToolCallOutput) -> String {

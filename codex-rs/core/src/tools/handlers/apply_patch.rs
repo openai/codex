@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 
 use crate::apply_patch;
 use crate::apply_patch::InternalApplyPatchInvocation;
@@ -8,7 +7,6 @@ use crate::client_common::tools::FreeformTool;
 use crate::client_common::tools::FreeformToolFormat;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
-use crate::exec::ExecParams;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -71,19 +69,11 @@ impl ToolHandler for ApplyPatchHandler {
             }
         };
 
-        let exec_params = ExecParams {
-            command: vec!["apply_patch".to_string(), patch_input.clone()],
-            cwd: turn.cwd.clone(),
-            timeout_ms: None,
-            env: HashMap::new(),
-            with_escalated_permissions: None,
-            justification: None,
-            arg0: None,
-        };
-
-        // Re-parse and verify the patch so we can compute changes and approval
+        // Re-parse and verify the patch so we can compute changes and approval.
+        // Avoid building temporary ExecParams/command vectors; derive directly from inputs.
+        let cwd = turn.cwd.clone();
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
-        match codex_apply_patch::maybe_parse_apply_patch_verified(&command, &exec_params.cwd) {
+        match codex_apply_patch::maybe_parse_apply_patch_verified(&command, &cwd) {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
                 match apply_patch::apply_patch(session.as_ref(), turn.as_ref(), &call_id, changes)
                     .await
@@ -110,8 +100,8 @@ impl ToolHandler for ApplyPatchHandler {
 
                         let req = ApplyPatchRequest {
                             patch: apply.action.patch.clone(),
-                            cwd: exec_params.cwd,
-                            timeout_ms: exec_params.timeout_ms,
+                            cwd,
+                            timeout_ms: None,
                             user_explicitly_approved: apply.user_explicitly_approved_this_action,
                             codex_exe: turn.codex_linux_sandbox_exe.clone(),
                         };
