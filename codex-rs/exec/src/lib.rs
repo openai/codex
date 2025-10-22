@@ -192,7 +192,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
-    let approve_all_enabled = config.features.enabled(Feature::ApproveAll);
 
     if let Err(err) = enforce_login_restrictions(&config).await {
         eprintln!("{err}");
@@ -365,34 +364,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     while let Some(event) = rx.recv().await {
         if matches!(event.msg, EventMsg::Error(_)) {
             error_seen = true;
-        }
-        // Auto-approve requests when the approve_all feature is enabled.
-        if approve_all_enabled {
-            match &event.msg {
-                EventMsg::ExecApprovalRequest(_) => {
-                    if let Err(e) = conversation
-                        .submit(Op::ExecApproval {
-                            id: event.id.clone(),
-                            decision: codex_core::protocol::ReviewDecision::Approved,
-                        })
-                        .await
-                    {
-                        error!("failed to auto-approve exec: {e}");
-                    }
-                }
-                EventMsg::ApplyPatchApprovalRequest(_) => {
-                    if let Err(e) = conversation
-                        .submit(Op::PatchApproval {
-                            id: event.id.clone(),
-                            decision: codex_core::protocol::ReviewDecision::Approved,
-                        })
-                        .await
-                    {
-                        error!("failed to auto-approve patch: {e}");
-                    }
-                }
-                _ => {}
-            }
         }
         let shutdown: CodexStatus = event_processor.process_event(event);
         match shutdown {
