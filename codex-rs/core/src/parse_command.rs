@@ -157,7 +157,7 @@ mod tests {
             vec![ParsedCommand::Search {
                 cmd: "rg --files webview/src".to_string(),
                 query: None,
-                path: Some("webview".to_string()),
+                path: Some("webview/src".to_string()),
             }],
         );
     }
@@ -341,7 +341,7 @@ mod tests {
             vec![ParsedCommand::Search {
                 cmd: "grep -R CODEX_SANDBOX_ENV_VAR -n core/src/spawn.rs".to_string(),
                 query: Some("CODEX_SANDBOX_ENV_VAR".to_string()),
-                path: Some("spawn.rs".to_string()),
+                path: Some("core/src/spawn.rs".to_string()),
             }],
         );
     }
@@ -618,7 +618,7 @@ mod tests {
             ParsedCommand::Search {
                 cmd: shlex_join(&shlex_split_safe("rg -n '^\\[package\\]' -n */Cargo.toml")),
                 query: Some("^\\[package\\]".to_string()),
-                path: Some("Cargo.toml".to_string()),
+                path: Some("*/Cargo.toml".to_string()),
             },
             ParsedCommand::Unknown {
                 cmd: shlex_join(&shlex_split_safe("cargo --version")),
@@ -802,8 +802,7 @@ mod tests {
             &shlex_split_safe("ls --time-style=long-iso ./dist"),
             vec![ParsedCommand::ListFiles {
                 cmd: "ls '--time-style=long-iso' ./dist".to_string(),
-                // short_display_path drops "dist" and shows "." as the last useful segment
-                path: Some(".".to_string()),
+                path: Some("./dist".to_string()),
             }],
         );
     }
@@ -815,7 +814,7 @@ mod tests {
             vec![ParsedCommand::Search {
                 cmd: "fd -t f src/".to_string(),
                 query: None,
-                path: Some("src".to_string()),
+                path: Some("src/".to_string()),
             }],
         );
 
@@ -1129,12 +1128,12 @@ fn parse_fd_query_and_path(tail: &[String]) -> (Option<String>, Option<String>) 
     match non_flags.as_slice() {
         [one] => {
             if is_pathish(one) {
-                (None, Some(short_display_path(one)))
+                (None, Some((*one).clone()))
             } else {
                 (Some((*one).clone()), None)
             }
         }
-        [q, p, ..] => (Some((*q).clone()), Some(short_display_path(p))),
+        [q, p, ..] => (Some((*q).clone()), Some((*p).clone())),
         _ => (None, None),
     }
 }
@@ -1145,7 +1144,7 @@ fn parse_find_query_and_path(tail: &[String]) -> (Option<String>, Option<String>
     let mut path: Option<String> = None;
     for a in &args_no_connector {
         if !a.starts_with('-') && *a != "!" && *a != "(" && *a != ")" {
-            path = Some(short_display_path(a));
+            path = Some(a.clone());
             break;
         }
     }
@@ -1358,7 +1357,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
             let path = candidates
                 .into_iter()
                 .find(|p| !p.starts_with('-'))
-                .map(|p| short_display_path(p));
+                .map(|p| p.clone());
             ParsedCommand::ListFiles {
                 cmd: shlex_join(main_cmd),
                 path,
@@ -1372,11 +1371,11 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 .filter(|p| !p.starts_with('-'))
                 .collect();
             let (query, path) = if has_files_flag {
-                (None, non_flags.first().map(|s| short_display_path(s)))
+                (None, non_flags.first().map(|s| (*s).clone()))
             } else {
                 (
                     non_flags.first().cloned().map(String::from),
-                    non_flags.get(1).map(|s| short_display_path(s)),
+                    non_flags.get(1).map(|s| (*s).clone()),
                 )
             };
             ParsedCommand::Search {
@@ -1409,9 +1408,9 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 .filter(|p| !p.starts_with('-'))
                 .collect();
             // Do not shorten the query: grep patterns may legitimately contain slashes
-            // and should be preserved verbatim. Only paths should be shortened.
+            // and should be preserved verbatim. Paths should also be preserved.
             let query = non_flags.first().cloned().map(String::from);
-            let path = non_flags.get(1).map(|s| short_display_path(s));
+            let path = non_flags.get(1).map(|s| (*s).clone());
             ParsedCommand::Search {
                 cmd: shlex_join(main_cmd),
                 query,
