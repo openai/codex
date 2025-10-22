@@ -124,7 +124,7 @@ pub(crate) async fn handle_container_exec_with_params(
         // Route apply_patch execution through the new orchestrator/runtime.
         let req = ApplyPatchRequest {
             patch: exec.action.patch.clone(),
-            cwd: params.cwd.clone(),
+            cwd: exec.action.cwd.clone(),
             timeout_ms: params.timeout_ms,
             user_explicitly_approved: exec.user_explicitly_approved_this_action,
             codex_exe: turn_context.codex_linux_sandbox_exe.clone(),
