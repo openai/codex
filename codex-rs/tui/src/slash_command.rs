@@ -18,6 +18,7 @@ pub enum SlashCommand {
     Alarm,
     Review,
     New,
+    Restart,
     Init,
     Compact,
     Checkpoint,
@@ -41,6 +42,7 @@ impl SlashCommand {
     pub fn description(self) -> &'static str {
         match self {
             SlashCommand::New => "start a new chat during a conversation",
+            SlashCommand::Restart => "restart Codex without closing the TUI",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
@@ -75,6 +77,7 @@ impl SlashCommand {
     pub fn available_during_task(self) -> bool {
         match self {
             SlashCommand::New
+            | SlashCommand::Restart
             | SlashCommand::Init
             | SlashCommand::Compact
             | SlashCommand::Undo

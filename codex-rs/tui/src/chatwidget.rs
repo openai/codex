@@ -1269,7 +1269,7 @@ impl ChatWidget {
             return;
         }
         match cmd {
-            SlashCommand::New => {
+            SlashCommand::New | SlashCommand::Restart => {
                 self.app_event_tx.send(AppEvent::NewSession);
             }
             SlashCommand::Init => {
