@@ -1169,17 +1169,20 @@ mod tests {
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
-        assert_eq!(&tool_names, &[
-            "exec_command",
-            "write_stdin",
-            "local_shell",
-            "list_mcp_resources",
-            "list_mcp_resource_templates",
-            "read_mcp_resource",
-            "update_plan",
-            "web_search",
-            "view_image",
-        ]);
+        assert_eq!(
+            &tool_names,
+            &[
+                "exec_command",
+                "write_stdin",
+                "local_shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "web_search",
+                "view_image",
+            ]
+        );
     }
 
     #[test]
