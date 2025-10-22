@@ -1,3 +1,4 @@
+pub mod account;
 mod conversation_id;
 pub use conversation_id::ConversationId;
 pub mod config_types;
