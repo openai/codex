@@ -33,8 +33,6 @@ pub enum Feature {
     StreamableShell,
     /// Use the official Rust MCP client (rmcp).
     RmcpClient,
-    /// Include the plan tool.
-    PlanTool,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
     /// Include the view_image tool.
@@ -74,7 +72,6 @@ pub struct Features {
 
 #[derive(Debug, Clone, Default)]
 pub struct FeatureOverrides {
-    pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
     pub web_search_request: Option<bool>,
@@ -83,7 +80,6 @@ pub struct FeatureOverrides {
 impl FeatureOverrides {
     fn apply(self, features: &mut Features) {
         LegacyFeatureToggles {
-            include_plan_tool: self.include_plan_tool,
             include_apply_patch_tool: self.include_apply_patch_tool,
             include_view_image_tool: self.include_view_image_tool,
             tools_web_search: self.web_search_request,
@@ -158,7 +154,6 @@ impl Features {
         }
 
         let profile_legacy = LegacyFeatureToggles {
-            include_plan_tool: config_profile.include_plan_tool,
             include_apply_patch_tool: config_profile.include_apply_patch_tool,
             include_view_image_tool: config_profile.include_view_image_tool,
             experimental_use_freeform_apply_patch: config_profile
@@ -223,12 +218,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::RmcpClient,
         key: "rmcp_client",
         stage: Stage::Experimental,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::PlanTool,
-        key: "plan_tool",
-        stage: Stage::Stable,
         default_enabled: false,
     },
     FeatureSpec {

@@ -62,10 +62,10 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) -> String {
+fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) -> i64 {
     (*captured_at + ChronoDuration::seconds(seconds))
         .with_timezone(&Utc)
-        .to_rfc3339()
+        .timestamp()
 }
 
 #[test]
