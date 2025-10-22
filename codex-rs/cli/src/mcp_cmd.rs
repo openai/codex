@@ -150,6 +150,10 @@ pub struct RemoveArgs {
 pub struct LoginArgs {
     /// Name of the MCP server to authenticate with oauth.
     pub name: String,
+
+    /// Comma-separated list of OAuth scopes to request.
+    #[arg(long, value_delimiter = ',', value_name = "SCOPE,SCOPE")]
+    pub scopes: Vec<String>,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -279,6 +283,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
             config.mcp_oauth_credentials_store_mode,
             http_headers.clone(),
             env_http_headers.clone(),
+            &Vec::new(),
         )
         .await?;
         println!("Successfully logged in.");
@@ -327,7 +332,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         );
     }
 
-    let LoginArgs { name } = login_args;
+    let LoginArgs { name, scopes } = login_args;
 
     let Some(server) = config.mcp_servers.get(&name) else {
         bail!("No MCP server named '{name}' found.");
@@ -349,6 +354,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         config.mcp_oauth_credentials_store_mode,
         http_headers,
         env_http_headers,
+        &scopes,
     )
     .await?;
     println!("Successfully logged in to MCP server '{name}'.");
