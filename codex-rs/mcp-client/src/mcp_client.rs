@@ -441,7 +441,9 @@ const DEFAULT_ENV_VARS: &[&str] = &[
 
 #[cfg(windows)]
 const DEFAULT_ENV_VARS: &[&str] = &[
-    // TODO: More research is necessary to curate this list.
+    // Windows networking & OS integration
+    "SYSTEMROOT", // Required by Windows networking/DNS resolution and many Win32 APIs
+    // Core execution/user context that existed prior to 979db0fb
     "PATH",
     "PATHEXT",
     "USERNAME",
@@ -449,6 +451,18 @@ const DEFAULT_ENV_VARS: &[&str] = &[
     "USERPROFILE",
     "TEMP",
     "TMP",
+    // Suggested for shell-wrapping shims and CLI tools
+    "COMSPEC",      // Default command processor (usually cmd.exe)
+    "APPDATA", // npm configuration and cache location (e.g. %APPDATA%\npm, %APPDATA%\npm-cache)
+    "LOCALAPPDATA", // Per-user local cache/data (many Node-based tools write here)
+    // Bun installer directories (required when using bun/bunx shims)
+    "BUN_INSTALL_GLOBAL_DIR",
+    "BUN_INSTALL_CACHE_DIR",
+    "BUN_INSTALL_BIN",
+    // Keep program files roots for compatibility
+    // Playwright needs these to locate system Edge when using `--browser=msedge`
+    "PROGRAMFILES",      // e.g., C:\\Program Files
+    "PROGRAMFILES(X86)", // e.g., C:\\Program Files (x86) on 64-bit systems
 ];
 
 /// `extra_env` comes from the config for an entry in `mcp_servers` in
