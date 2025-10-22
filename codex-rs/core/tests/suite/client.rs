@@ -1127,7 +1127,7 @@ async fn auto_next_steps_queues_follow_up_prompt() -> anyhow::Result<()> {
     // Wait until the follow-up request is issued.
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if follow_mock.requests().len() >= 1 {
+            if !follow_mock.requests().is_empty() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
