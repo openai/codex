@@ -344,11 +344,19 @@ async fn exec(
         arg0,
         cwd,
         sandbox_policy,
-        StdioPolicy::RedirectForShellTool,
+        if passthrough_stdio {
+            StdioPolicy::Inherit
+        } else {
+            StdioPolicy::RedirectForShellTool
+        },
         env,
     )
     .await?;
-    consume_truncated_output(child, timeout, stdout_stream, passthrough_stdio).await
+    if passthrough_stdio {
+        consume_passthrough_output(child, timeout).await
+    } else {
+        consume_truncated_output(child, timeout, stdout_stream, false).await
+    }
 }
 
 /// Consumes the output of a child process, truncating it so it is suitable for
@@ -448,6 +456,66 @@ async fn consume_truncated_output(
         stdout,
         stderr,
         aggregated_output,
+        timed_out,
+    })
+}
+
+async fn consume_passthrough_output(
+    mut child: Child,
+    timeout: Option<Duration>,
+) -> Result<RawExecToolCallOutput> {
+    let ctrl_c = tokio::signal::ctrl_c();
+    tokio::pin!(ctrl_c);
+
+    let (exit_status, timed_out) = match timeout {
+        Some(timeout) => {
+            tokio::select! {
+                result = tokio::time::timeout(timeout, child.wait()) => {
+                    match result {
+                        Ok(status_result) => {
+                            let exit_status = status_result?;
+                            (exit_status, false)
+                        }
+                        Err(_) => {
+                            child.start_kill()?;
+                            (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true)
+                        }
+                    }
+                }
+                _ = &mut ctrl_c => {
+                    child.start_kill()?;
+                    (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
+                }
+            }
+        }
+        None => {
+            tokio::select! {
+                result = child.wait() => {
+                    let exit_status = result?;
+                    (exit_status, false)
+                }
+                _ = &mut ctrl_c => {
+                    child.start_kill()?;
+                    (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
+                }
+            }
+        }
+    };
+
+    Ok(RawExecToolCallOutput {
+        exit_status,
+        stdout: StreamOutput {
+            text: Vec::new(),
+            truncated_after_lines: None,
+        },
+        stderr: StreamOutput {
+            text: Vec::new(),
+            truncated_after_lines: None,
+        },
+        aggregated_output: StreamOutput {
+            text: Vec::new(),
+            truncated_after_lines: None,
+        },
         timed_out,
     })
 }
