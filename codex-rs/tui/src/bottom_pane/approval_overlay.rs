@@ -108,13 +108,6 @@ impl ApprovalOverlay {
             ),
         };
 
-        let subtitle = match &variant {
-            ApprovalVariant::Exec {
-                risk: Some(risk), ..
-            } => Some(risk_summary_subtitle(risk)),
-            _ => None,
-        };
-
         let header = Box::new(ColumnRenderable::with([
             Line::from(title.bold()).into(),
             Line::from("").into(),
@@ -141,7 +134,6 @@ impl ApprovalOverlay {
             ])),
             items,
             header,
-            subtitle,
             ..Default::default()
         };
 
@@ -157,7 +149,7 @@ impl ApprovalOverlay {
         };
         if let Some(variant) = self.current_variant.as_ref() {
             match (&variant, option.decision) {
-                (ApprovalVariant::Exec { id, command, .. }, decision) => {
+                (ApprovalVariant::Exec { id, command }, decision) => {
                     self.handle_exec_decision(id, command, decision);
                 }
                 (ApprovalVariant::ApplyPatch { id, .. }, decision) => {
@@ -245,7 +237,7 @@ impl BottomPaneView for ApprovalOverlay {
             && let Some(variant) = self.current_variant.as_ref()
         {
             match &variant {
-                ApprovalVariant::Exec { id, command, .. } => {
+                ApprovalVariant::Exec { id, command } => {
                     self.handle_exec_decision(id, command, ReviewDecision::Abort);
                 }
                 ApprovalVariant::ApplyPatch { id, .. } => {
@@ -300,14 +292,14 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 risk,
             } => {
                 let mut header: Vec<Line<'static>> = Vec::new();
-                if let Some(risk) = risk.as_ref() {
-                    header.extend(render_risk_lines(risk));
-                }
                 if let Some(reason) = reason
                     && !reason.is_empty()
                 {
                     header.push(Line::from(vec!["Reason: ".into(), reason.italic()]));
                     header.push(Line::from(""));
+                }
+                if let Some(risk) = risk.as_ref() {
+                    header.extend(render_risk_lines(risk));
                 }
                 let full_cmd = strip_bash_lc_and_escape(&command);
                 let mut full_cmd_lines = highlight_bash_to_lines(&full_cmd);
@@ -316,7 +308,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 }
                 header.extend(full_cmd_lines);
                 Self {
-                    variant: ApprovalVariant::Exec { id, command, risk },
+                    variant: ApprovalVariant::Exec { id, command },
                     header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
                 }
             }
@@ -389,37 +381,10 @@ fn risk_category_label(category: SandboxRiskCategory) -> &'static str {
     }
 }
 
-fn risk_summary_subtitle(risk: &SandboxCommandAssessment) -> String {
-    let level = risk.risk_level.as_str().to_uppercase();
-    let mut parts = vec![format!("{level} risk")];
-    if !risk.risk_categories.is_empty() {
-        let cats = risk
-            .risk_categories
-            .iter()
-            .map(|category| risk_category_label(*category))
-            .collect::<Vec<_>>()
-            .join(", ");
-        parts.push(format!("Categories: {cats}"));
-    }
-    let summary = parts.join(" · ");
-    let description = risk.description.trim();
-    if description.is_empty() {
-        summary
-    } else {
-        format!("{summary} – {description}")
-    }
-}
-
 #[derive(Clone)]
 enum ApprovalVariant {
-    Exec {
-        id: String,
-        command: Vec<String>,
-        risk: Option<SandboxCommandAssessment>,
-    },
-    ApplyPatch {
-        id: String,
-    },
+    Exec { id: String, command: Vec<String> },
+    ApplyPatch { id: String },
 }
 
 #[derive(Clone)]
