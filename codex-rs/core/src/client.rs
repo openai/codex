@@ -336,10 +336,11 @@ impl ModelClient {
                 .get("cf-ray")
                 .map(|v| v.to_str().unwrap_or_default().to_string());
 
-            trace!(
-                "Response status: {}, cf-ray: {:?}",
+            debug!(
+                "Response status: {}, cf-ray: {:?}, version: {:?}",
                 resp.status(),
-                request_id
+                request_id,
+                resp.version()
             );
         }
 

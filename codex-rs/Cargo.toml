@@ -37,6 +37,7 @@ members = [
     "utils/readiness",
     "utils/pty",
     "utils/string",
+    "utils/tokenizer",
 ]
 resolver = "2"
 
@@ -82,6 +83,7 @@ codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-string = { path = "utils/string" }
+codex-utils-tokenizer = { path = "utils/tokenizer" }
 core_test_support = { path = "core/tests/common" }
 mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
@@ -246,7 +248,7 @@ unwrap_used = "deny"
 # cargo-shear cannot see the platform-specific openssl-sys usage, so we
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
-ignored = ["openssl-sys", "codex-utils-readiness"]
+ignored = ["openssl-sys", "codex-utils-readiness", "codex-utils-tokenizer"]
 
 [profile.release]
 lto = "fat"

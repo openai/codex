@@ -90,9 +90,8 @@ use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ForcedLoginMethod;
-use codex_protocol::models::ContentItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::InputMessageKind;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
@@ -940,18 +939,9 @@ impl CodexMessageProcessor {
                         },
                     ))
                     .await;
-                let initial_messages = session_configured.initial_messages.map(|msgs| {
-                    msgs.into_iter()
-                        .filter(|event| {
-                            // Don't send non-plain user messages (like user instructions
-                            // or environment context) back so they don't get rendered.
-                            if let EventMsg::UserMessage(user_message) = event {
-                                return matches!(user_message.kind, Some(InputMessageKind::Plain));
-                            }
-                            true
-                        })
-                        .collect()
-                });
+                let initial_messages = session_configured
+                    .initial_messages
+                    .map(|msgs| msgs.into_iter().collect());
 
                 // Reply with conversation id + model and initial messages (when present)
                 let response = codex_app_server_protocol::ResumeConversationResponse {
@@ -1596,18 +1586,8 @@ fn extract_conversation_summary(
     let preview = head
         .iter()
         .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
-        .find_map(|item| match item {
-            ResponseItem::Message { content, .. } => {
-                content.into_iter().find_map(|content| match content {
-                    ContentItem::InputText { text } => {
-                        match InputMessageKind::from(("user", &text)) {
-                            InputMessageKind::Plain => Some(text),
-                            _ => None,
-                        }
-                    }
-                    _ => None,
-                })
-            }
+        .find_map(|item| match codex_core::parse_turn_item(&item) {
+            Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
         })?;
 

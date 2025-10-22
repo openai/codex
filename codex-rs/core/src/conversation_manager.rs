@@ -3,8 +3,6 @@ use crate::CodexAuth;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
-use crate::codex::compact::content_items_to_text;
-use crate::codex::compact::is_session_prefix_message;
 use crate::codex_conversation::CodexConversation;
 use crate::config::Config;
 use crate::error::CodexErr;
@@ -14,6 +12,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
 use codex_protocol::ConversationId;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::RolloutItem;
@@ -182,9 +181,11 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
     // Find indices of user message inputs in rollout order.
     let mut user_positions: Vec<usize> = Vec::new();
     for (idx, item) in items.iter().enumerate() {
-        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = item
-            && role == "user"
-            && content_items_to_text(content).is_some_and(|text| !is_session_prefix_message(&text))
+        if let RolloutItem::ResponseItem(item @ ResponseItem::Message { .. }) = item
+            && matches!(
+                crate::event_mapping::parse_turn_item(item),
+                Some(TurnItem::UserMessage(_))
+            )
         {
             user_positions.push(idx);
         }

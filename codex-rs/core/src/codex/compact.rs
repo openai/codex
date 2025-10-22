@@ -11,13 +11,13 @@ use crate::protocol::AgentMessageEvent;
 use crate::protocol::CompactedItem;
 use crate::protocol::ErrorEvent;
 use crate::protocol::EventMsg;
-use crate::protocol::InputMessageKind;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
 use crate::state::TaskKind;
 use crate::truncate::truncate_middle;
 use crate::util::backoff;
 use askama::Template;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -181,21 +181,11 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
 pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
     items
         .iter()
-        .filter_map(|item| match item {
-            ResponseItem::Message { role, content, .. } if role == "user" => {
-                content_items_to_text(content)
-            }
+        .filter_map(|item| match crate::event_mapping::parse_turn_item(item) {
+            Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
         })
-        .filter(|text| !is_session_prefix_message(text))
         .collect()
-}
-
-pub fn is_session_prefix_message(text: &str) -> bool {
-    matches!(
-        InputMessageKind::from(("user", text)),
-        InputMessageKind::UserInstructions | InputMessageKind::EnvironmentContext
-    )
 }
 
 pub(crate) fn build_compacted_history(
@@ -319,21 +309,16 @@ mod tests {
             ResponseItem::Message {
                 id: Some("user".to_string()),
                 role: "user".to_string(),
-                content: vec![
-                    ContentItem::InputText {
-                        text: "first".to_string(),
-                    },
-                    ContentItem::OutputText {
-                        text: "second".to_string(),
-                    },
-                ],
+                content: vec![ContentItem::InputText {
+                    text: "first".to_string(),
+                }],
             },
             ResponseItem::Other,
         ];
 
         let collected = collect_user_messages(&items);
 
-        assert_eq!(vec!["first\nsecond".to_string()], collected);
+        assert_eq!(vec!["first".to_string()], collected);
     }
 
     #[test]

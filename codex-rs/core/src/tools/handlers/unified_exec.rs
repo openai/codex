@@ -1,35 +1,68 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde::Serialize;
 
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::events::ToolEmitter;
+use crate::tools::events::ToolEventCtx;
+use crate::tools::events::ToolEventStage;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use crate::unified_exec::UnifiedExecRequest;
+use crate::unified_exec::ExecCommandRequest;
+use crate::unified_exec::UnifiedExecContext;
+use crate::unified_exec::UnifiedExecResponse;
+use crate::unified_exec::UnifiedExecSessionManager;
+use crate::unified_exec::WriteStdinRequest;
 
 pub struct UnifiedExecHandler;
 
-#[derive(Deserialize)]
-struct UnifiedExecArgs {
-    input: Vec<String>,
+#[derive(Debug, Deserialize)]
+struct ExecCommandArgs {
+    cmd: String,
+    #[serde(default = "default_shell")]
+    shell: String,
+    #[serde(default = "default_login")]
+    login: bool,
     #[serde(default)]
-    session_id: Option<String>,
+    yield_time_ms: Option<u64>,
     #[serde(default)]
-    timeout_ms: Option<u64>,
+    max_output_tokens: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WriteStdinArgs {
+    session_id: i32,
+    #[serde(default)]
+    chars: String,
+    #[serde(default)]
+    yield_time_ms: Option<u64>,
+    #[serde(default)]
+    max_output_tokens: Option<usize>,
+}
+
+fn default_shell() -> String {
+    "/bin/bash".to_string()
+}
+
+fn default_login() -> bool {
+    true
 }
 
 #[async_trait]
 impl ToolHandler for UnifiedExecHandler {
     fn kind(&self) -> ToolKind {
-        ToolKind::UnifiedExec
+        ToolKind::Function
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(
             payload,
-            ToolPayload::UnifiedExec { .. } | ToolPayload::Function { .. }
+            ToolPayload::Function { .. } | ToolPayload::UnifiedExec { .. }
         )
     }
 
@@ -38,19 +71,14 @@ impl ToolHandler for UnifiedExecHandler {
             session,
             turn,
             call_id,
-            tool_name: _tool_name,
+            tool_name,
             payload,
             ..
         } = invocation;
 
-        let args = match payload {
-            ToolPayload::UnifiedExec { arguments } | ToolPayload::Function { arguments } => {
-                serde_json::from_str::<UnifiedExecArgs>(&arguments).map_err(|err| {
-                    FunctionCallError::RespondToModel(format!(
-                        "failed to parse function arguments: {err:?}"
-                    ))
-                })?
-            }
+        let arguments = match payload {
+            ToolPayload::Function { arguments } => arguments,
+            ToolPayload::UnifiedExec { arguments } => arguments,
             _ => {
                 return Err(FunctionCallError::RespondToModel(
                     "unified_exec handler received unsupported payload".to_string(),
@@ -58,58 +86,69 @@ impl ToolHandler for UnifiedExecHandler {
             }
         };
 
-        let UnifiedExecArgs {
-            input,
-            session_id,
-            timeout_ms,
-        } = args;
+        let manager: &UnifiedExecSessionManager = &session.services.unified_exec_manager;
+        let context = UnifiedExecContext {
+            session: &session,
+            turn: turn.as_ref(),
+            call_id: &call_id,
+        };
 
-        let parsed_session_id = if let Some(session_id) = session_id {
-            match session_id.parse::<i32>() {
-                Ok(parsed) => Some(parsed),
-                Err(output) => {
-                    return Err(FunctionCallError::RespondToModel(format!(
-                        "invalid session_id: {session_id} due to error {output:?}"
-                    )));
-                }
+        let response = match tool_name.as_str() {
+            "exec_command" => {
+                let args: ExecCommandArgs = serde_json::from_str(&arguments).map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to parse exec_command arguments: {err:?}"
+                    ))
+                })?;
+
+                let event_ctx =
+                    ToolEventCtx::new(context.session, context.turn, context.call_id, None);
+                let emitter =
+                    ToolEmitter::unified_exec(args.cmd.clone(), context.turn.cwd.clone(), true);
+                emitter.emit(event_ctx, ToolEventStage::Begin).await;
+
+                manager
+                    .exec_command(
+                        ExecCommandRequest {
+                            command: &args.cmd,
+                            shell: &args.shell,
+                            login: args.login,
+                            yield_time_ms: args.yield_time_ms,
+                            max_output_tokens: args.max_output_tokens,
+                        },
+                        &context,
+                    )
+                    .await
+                    .map_err(|err| {
+                        FunctionCallError::RespondToModel(format!("exec_command failed: {err:?}"))
+                    })?
             }
-        } else {
-            None
+            "write_stdin" => {
+                let args: WriteStdinArgs = serde_json::from_str(&arguments).map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to parse write_stdin arguments: {err:?}"
+                    ))
+                })?;
+                manager
+                    .write_stdin(WriteStdinRequest {
+                        session_id: args.session_id,
+                        input: &args.chars,
+                        yield_time_ms: args.yield_time_ms,
+                        max_output_tokens: args.max_output_tokens,
+                    })
+                    .await
+                    .map_err(|err| {
+                        FunctionCallError::RespondToModel(format!("write_stdin failed: {err:?}"))
+                    })?
+            }
+            other => {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "unsupported unified exec function {other}"
+                )));
+            }
         };
 
-        let request = UnifiedExecRequest {
-            input_chunks: &input,
-            timeout_ms,
-        };
-
-        let value = session
-            .services
-            .unified_exec_manager
-            .handle_request(
-                request,
-                crate::unified_exec::UnifiedExecContext {
-                    session: &session,
-                    turn: turn.as_ref(),
-                    call_id: &call_id,
-                    session_id: parsed_session_id,
-                },
-            )
-            .await
-            .map_err(|err| {
-                FunctionCallError::RespondToModel(format!("unified exec failed: {err:?}"))
-            })?;
-
-        #[derive(serde::Serialize)]
-        struct SerializedUnifiedExecResult {
-            session_id: Option<String>,
-            output: String,
-        }
-
-        let content = serde_json::to_string(&SerializedUnifiedExecResult {
-            session_id: value.session_id.map(|id| id.to_string()),
-            output: value.output,
-        })
-        .map_err(|err| {
+        let content = serialize_response(&response).map_err(|err| {
             FunctionCallError::RespondToModel(format!(
                 "failed to serialize unified exec output: {err:?}"
             ))
@@ -120,4 +159,34 @@ impl ToolHandler for UnifiedExecHandler {
             success: Some(true),
         })
     }
+}
+
+#[derive(Serialize)]
+struct SerializedUnifiedExecResponse<'a> {
+    chunk_id: &'a str,
+    wall_time_seconds: f64,
+    output: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    original_token_count: Option<usize>,
+}
+
+fn serialize_response(response: &UnifiedExecResponse) -> Result<String, serde_json::Error> {
+    let payload = SerializedUnifiedExecResponse {
+        chunk_id: &response.chunk_id,
+        wall_time_seconds: duration_to_seconds(response.wall_time),
+        output: &response.output,
+        session_id: response.session_id,
+        exit_code: response.exit_code,
+        original_token_count: response.original_token_count,
+    };
+
+    serde_json::to_string(&payload)
+}
+
+fn duration_to_seconds(duration: Duration) -> f64 {
+    duration.as_secs_f64()
 }
