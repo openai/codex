@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openai-codex-sdk"
+version = "0.0.1a0"
+description = "Python SDK for Codex APIs."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [{ name = "OpenAI" }]
+keywords = ["codex", "sdk", "agents", "cli"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.4", "mypy>=1.18", "ruff>=0.5", "pydantic>=2.7"]
+
+[project.urls]
+Homepage = "https://github.com/openai/codex"
+Repository = "https://github.com/openai/codex/tree/main/sdk/python"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build]
+packages = ["src/codex"]
+include = ["examples", "src/codex/vendor", "src/codex/py.typed"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+filterwarnings = ["error"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+files = "src/codex"
+strict = true
