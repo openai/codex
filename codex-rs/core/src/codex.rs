@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::path::PathBuf;
@@ -7,12 +6,11 @@ use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
-use crate::event_mapping::map_response_item_to_event_messages;
 use crate::function_tool::FunctionCallError;
 use crate::mcp::auth::McpAuthStatusEntry;
 use crate::parse_command::parse_command;
+use crate::parse_turn_item;
 use crate::review_format::format_review_findings_block;
-use crate::state::ItemCollector;
 use crate::terminal;
 use crate::user_notification::UserNotifier;
 use async_channel::Receiver;
@@ -20,9 +18,10 @@ use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
 use codex_protocol::ConversationId;
 use codex_protocol::items::TurnItem;
-use codex_protocol::items::UserMessageItem;
 use codex_protocol::protocol::ConversationPathResponseEvent;
 use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -269,7 +268,6 @@ pub(crate) struct TurnContext {
     pub(crate) is_review_mode: bool,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
-    pub(crate) item_collector: ItemCollector,
 }
 
 impl TurnContext {
@@ -358,7 +356,6 @@ impl Session {
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
         conversation_id: ConversationId,
-        tx_event: Sender<Event>,
         sub_id: String,
     ) -> TurnContext {
         let config = session_configuration.original_config_do_not_use.clone();
@@ -393,8 +390,6 @@ impl Session {
             features: &config.features,
         });
 
-        let item_collector = ItemCollector::new(tx_event, conversation_id, sub_id.clone());
-
         TurnContext {
             sub_id,
             client,
@@ -408,7 +403,6 @@ impl Session {
             is_review_mode: false,
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
-            item_collector,
         }
     }
 
@@ -462,9 +456,6 @@ impl Session {
 
         let mcp_fut = McpConnectionManager::new(
             config.mcp_servers.clone(),
-            config
-                .features
-                .enabled(crate::features::Feature::RmcpClient),
             config.mcp_oauth_credentials_store_mode,
         );
         let default_shell_fut = shell::default_user_shell();
@@ -664,7 +655,6 @@ impl Session {
             session_configuration.provider.clone(),
             &session_configuration,
             self.conversation_id,
-            self.get_tx_event(),
             sub_id,
         );
         if let Some(final_schema) = updates.final_output_json_schema {
@@ -706,6 +696,59 @@ impl Session {
         self.persist_rollout_items(&rollout_items).await;
         if let Err(e) = self.tx_event.send(event).await {
             error!("failed to send tool call event: {e}");
+        }
+    }
+
+    async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
+        self.send_event(
+            turn_context,
+            EventMsg::ItemStarted(ItemStartedEvent {
+                thread_id: self.conversation_id,
+                turn_id: turn_context.sub_id.clone(),
+                item: item.clone(),
+            }),
+        )
+        .await;
+    }
+
+    async fn emit_turn_item_completed(
+        &self,
+        turn_context: &TurnContext,
+        item: TurnItem,
+        emit_raw_agent_reasoning: bool,
+    ) {
+        self.send_event(
+            turn_context,
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id: self.conversation_id,
+                turn_id: turn_context.sub_id.clone(),
+                item: item.clone(),
+            }),
+        )
+        .await;
+        self.emit_turn_item_legacy_events(turn_context, &item, emit_raw_agent_reasoning)
+            .await;
+    }
+
+    async fn emit_turn_item_started_completed(
+        &self,
+        turn_context: &TurnContext,
+        item: TurnItem,
+        emit_raw_agent_reasoning: bool,
+    ) {
+        self.emit_turn_item_started(turn_context, &item).await;
+        self.emit_turn_item_completed(turn_context, item, emit_raw_agent_reasoning)
+            .await;
+    }
+
+    async fn emit_turn_item_legacy_events(
+        &self,
+        turn_context: &TurnContext,
+        item: &TurnItem,
+        emit_raw_agent_reasoning: bool,
+    ) {
+        for event in item.as_legacy_events(emit_raw_agent_reasoning) {
+            self.send_event(turn_context, event).await;
         }
     }
 
@@ -828,7 +871,7 @@ impl Session {
                     history.record_items(std::iter::once(response_item));
                 }
                 RolloutItem::Compacted(compacted) => {
-                    let snapshot = history.contents();
+                    let snapshot = history.get_history();
                     let user_messages = collect_user_messages(&snapshot);
                     let rebuilt = build_compacted_history(
                         self.build_initial_context(turn_context),
@@ -840,7 +883,7 @@ impl Session {
                 _ => {}
             }
         }
-        history.contents()
+        history.get_history()
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
@@ -889,9 +932,15 @@ impl Session {
         }
     }
 
+    // todo (aibrahim): get rid of this method. we shouldn't deal with vec[resposne_item] and rather use ConversationHistory.
     pub(crate) async fn history_snapshot(&self) -> Vec<ResponseItem> {
-        let state = self.state.lock().await;
+        let mut state = self.state.lock().await;
         state.history_snapshot()
+    }
+
+    pub(crate) async fn clone_history(&self) -> ConversationHistory {
+        let state = self.state.lock().await;
+        state.clone_history()
     }
 
     async fn update_token_usage_info(
@@ -945,24 +994,22 @@ impl Session {
 
     /// Record a user input item to conversation history and also persist a
     /// corresponding UserMessage EventMsg to rollout.
-    async fn record_input_and_rollout_usermsg(&self, response_input: &ResponseInputItem) {
+    async fn record_input_and_rollout_usermsg(
+        &self,
+        turn_context: &TurnContext,
+        response_input: &ResponseInputItem,
+    ) {
         let response_item: ResponseItem = response_input.clone().into();
         // Add to conversation history and persist response item to rollout
         self.record_conversation_items(std::slice::from_ref(&response_item))
             .await;
 
         // Derive user message events and persist only UserMessage to rollout
-        let msgs =
-            map_response_item_to_event_messages(&response_item, self.show_raw_agent_reasoning());
-        let user_msgs: Vec<RolloutItem> = msgs
-            .into_iter()
-            .filter_map(|m| match m {
-                EventMsg::UserMessage(ev) => Some(RolloutItem::EventMsg(EventMsg::UserMessage(ev))),
-                _ => None,
-            })
-            .collect();
-        if !user_msgs.is_empty() {
-            self.persist_rollout_items(&user_msgs).await;
+        let turn_item = parse_turn_item(&response_item);
+
+        if let Some(item @ TurnItem::UserMessage(_)) = turn_item {
+            self.emit_turn_item_started_completed(turn_context, item, false)
+                .await;
         }
     }
 
@@ -985,16 +1032,6 @@ impl Session {
             message: message.into(),
         });
         self.send_event(turn_context, event).await;
-    }
-
-    /// Build the full turn input by concatenating the current conversation
-    /// history with additional items for this turn.
-    pub async fn turn_input_with_history(&self, extra: Vec<ResponseItem>) -> Vec<ResponseItem> {
-        let history = {
-            let state = self.state.lock().await;
-            state.history_snapshot()
-        };
-        [history, extra].concat()
     }
 
     /// Returns the input if there was no task running to inject into
@@ -1157,18 +1194,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     {
                         sess.record_conversation_items(std::slice::from_ref(&env_item))
                             .await;
-                        for msg in map_response_item_to_event_messages(
-                            &env_item,
-                            sess.show_raw_agent_reasoning(),
-                        ) {
-                            sess.send_event(&current_context, msg).await;
-                        }
                     }
-
-                    current_context
-                        .item_collector
-                        .started_completed(TurnItem::UserMessage(UserMessageItem::new(&items)))
-                        .await;
 
                     sess.spawn_task(Arc::clone(&current_context), items, RegularTask)
                         .await;
@@ -1446,11 +1472,6 @@ async fn spawn_review_thread(
         is_review_mode: true,
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
-        item_collector: ItemCollector::new(
-            sess.get_tx_event(),
-            sess.conversation_id,
-            sub_id.to_string(),
-        ),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -1502,13 +1523,15 @@ pub(crate) async fn run_task(
     // model sees a fresh conversation without the parent session's history.
     // For normal turns, continue recording to the session history as before.
     let is_review_mode = turn_context.is_review_mode;
-    let mut review_thread_history: Vec<ResponseItem> = Vec::new();
+
+    let mut review_thread_history: ConversationHistory = ConversationHistory::new();
     if is_review_mode {
         // Seed review threads with environment context so the model knows the working directory.
-        review_thread_history.extend(sess.build_initial_context(turn_context.as_ref()));
-        review_thread_history.push(initial_input_for_turn.into());
+        review_thread_history
+            .record_items(sess.build_initial_context(turn_context.as_ref()).iter());
+        review_thread_history.record_items(std::iter::once(&initial_input_for_turn.into()));
     } else {
-        sess.record_input_and_rollout_usermsg(&initial_input_for_turn)
+        sess.record_input_and_rollout_usermsg(turn_context.as_ref(), &initial_input_for_turn)
             .await;
     }
 
@@ -1541,12 +1564,12 @@ pub(crate) async fn run_task(
         //   represents an append-only log without duplicates.
         let turn_input: Vec<ResponseItem> = if is_review_mode {
             if !pending_input.is_empty() {
-                review_thread_history.extend(pending_input);
+                review_thread_history.record_items(&pending_input);
             }
-            review_thread_history.clone()
+            review_thread_history.get_history()
         } else {
             sess.record_conversation_items(&pending_input).await;
-            sess.turn_input_with_history(pending_input).await
+            sess.history_snapshot().await
         };
 
         let turn_input_messages: Vec<String> = turn_input
@@ -1684,7 +1707,7 @@ pub(crate) async fn run_task(
                 if !items_to_record_in_conversation_history.is_empty() {
                     if is_review_mode {
                         review_thread_history
-                            .extend(items_to_record_in_conversation_history.clone());
+                            .record_items(items_to_record_in_conversation_history.iter());
                     } else {
                         sess.record_conversation_items(&items_to_record_in_conversation_history)
                             .await;
@@ -1903,61 +1926,6 @@ async fn try_run_turn(
     task_kind: TaskKind,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
-    // call_ids that are part of this response.
-    let completed_call_ids = prompt
-        .input
-        .iter()
-        .filter_map(|ri| match ri {
-            ResponseItem::FunctionCallOutput { call_id, .. } => Some(call_id),
-            ResponseItem::LocalShellCall {
-                call_id: Some(call_id),
-                ..
-            } => Some(call_id),
-            ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    // call_ids that were pending but are not part of this response.
-    // This usually happens because the user interrupted the model before we responded to one of its tool calls
-    // and then the user sent a follow-up message.
-    let missing_calls = {
-        prompt
-            .input
-            .iter()
-            .filter_map(|ri| match ri {
-                ResponseItem::FunctionCall { call_id, .. } => Some(call_id),
-                ResponseItem::LocalShellCall {
-                    call_id: Some(call_id),
-                    ..
-                } => Some(call_id),
-                ResponseItem::CustomToolCall { call_id, .. } => Some(call_id),
-                _ => None,
-            })
-            .filter_map(|call_id| {
-                if completed_call_ids.contains(&call_id) {
-                    None
-                } else {
-                    Some(call_id.clone())
-                }
-            })
-            .map(|call_id| ResponseItem::CustomToolCallOutput {
-                call_id,
-                output: "aborted".to_string(),
-            })
-            .collect::<Vec<_>>()
-    };
-    let prompt: Cow<Prompt> = if missing_calls.is_empty() {
-        Cow::Borrowed(prompt)
-    } else {
-        // Add the synthetic aborted missing calls to the beginning of the input to ensure all call ids have responses.
-        let input = [missing_calls, prompt.input.clone()].concat();
-        Cow::Owned(Prompt {
-            input,
-            ..prompt.clone()
-        })
-    };
-
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
@@ -1966,11 +1934,12 @@ async fn try_run_turn(
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
     });
+
     sess.persist_rollout_items(&[rollout_item]).await;
     let mut stream = turn_context
         .client
         .clone()
-        .stream_with_task_kind(prompt.as_ref(), task_kind)
+        .stream_with_task_kind(prompt, task_kind)
         .or_cancel(&cancellation_token)
         .await??;
 
@@ -2025,9 +1994,10 @@ async fn try_run_turn(
                     }
                     Ok(None) => {
                         let response = handle_non_tool_response_item(
-                            Arc::clone(&sess),
+                            sess.as_ref(),
                             Arc::clone(&turn_context),
                             item.clone(),
+                            sess.show_raw_agent_reasoning(),
                         )
                         .await?;
                         add_completed(ProcessedResponseItem { item, response });
@@ -2146,9 +2116,10 @@ async fn try_run_turn(
 }
 
 async fn handle_non_tool_response_item(
-    sess: Arc<Session>,
+    sess: &Session,
     turn_context: Arc<TurnContext>,
     item: ResponseItem,
+    show_raw_agent_reasoning: bool,
 ) -> CodexResult<Option<ResponseInputItem>> {
     debug!(?item, "Output item");
 
@@ -2156,15 +2127,20 @@ async fn handle_non_tool_response_item(
         ResponseItem::Message { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::WebSearchCall { .. } => {
-            let msgs = match &item {
+            let turn_item = match &item {
                 ResponseItem::Message { .. } if turn_context.is_review_mode => {
                     trace!("suppressing assistant Message in review mode");
-                    Vec::new()
+                    None
                 }
-                _ => map_response_item_to_event_messages(&item, sess.show_raw_agent_reasoning()),
+                _ => parse_turn_item(&item),
             };
-            for msg in msgs {
-                sess.send_event(&turn_context, msg).await;
+            if let Some(turn_item) = turn_item {
+                sess.emit_turn_item_started_completed(
+                    turn_context.as_ref(),
+                    turn_item,
+                    show_raw_agent_reasoning,
+                )
+                .await;
             }
         }
         ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. } => {
@@ -2651,7 +2627,6 @@ mod tests {
             session_configuration.provider.clone(),
             &session_configuration,
             conversation_id,
-            tx_event.clone(),
             "turn_id".to_string(),
         );
 
@@ -2720,7 +2695,6 @@ mod tests {
             session_configuration.provider.clone(),
             &session_configuration,
             conversation_id,
-            tx_event.clone(),
             "turn_id".to_string(),
         ));
 
@@ -2953,7 +2927,7 @@ mod tests {
         rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
 
         let summary1 = "summary one";
-        let snapshot1 = live_history.contents();
+        let snapshot1 = live_history.get_history();
         let user_messages1 = collect_user_messages(&snapshot1);
         let rebuilt1 = build_compacted_history(
             session.build_initial_context(turn_context),
@@ -2986,7 +2960,7 @@ mod tests {
         rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
 
         let summary2 = "summary two";
-        let snapshot2 = live_history.contents();
+        let snapshot2 = live_history.get_history();
         let user_messages2 = collect_user_messages(&snapshot2);
         let rebuilt2 = build_compacted_history(
             session.build_initial_context(turn_context),
@@ -3018,7 +2992,7 @@ mod tests {
         live_history.record_items(std::iter::once(&assistant3));
         rollout_items.push(RolloutItem::ResponseItem(assistant3.clone()));
 
-        (rollout_items, live_history.contents())
+        (rollout_items, live_history.get_history())
     }
 
     #[tokio::test]

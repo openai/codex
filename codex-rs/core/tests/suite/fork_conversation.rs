@@ -1,17 +1,15 @@
 use codex_core::CodexAuth;
-use codex_core::ContentItem;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
-use codex_core::ResponseItem;
 use codex_core::built_in_model_providers;
-use codex_core::content_items_to_text;
-use codex_core::is_session_prefix_message;
+use codex_core::parse_turn_item;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
+use codex_protocol::items::TurnItem;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
@@ -115,19 +113,12 @@ async fn fork_conversation_twice_drops_to_first_message() {
     let find_user_input_positions = |items: &[RolloutItem]| -> Vec<usize> {
         let mut pos = Vec::new();
         for (i, it) in items.iter().enumerate() {
-            if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = it
-                && role == "user"
-                && content_items_to_text(content)
-                    .is_some_and(|text| !is_session_prefix_message(&text))
+            if let RolloutItem::ResponseItem(response_item) = it
+                && let Some(TurnItem::UserMessage(_)) = parse_turn_item(response_item)
             {
                 // Consider any user message as an input boundary; recorder stores both EventMsg and ResponseItem.
                 // We specifically look for input items, which are represented as ContentItem::InputText.
-                if content
-                    .iter()
-                    .any(|c| matches!(c, ContentItem::InputText { .. }))
-                {
-                    pos.push(i);
-                }
+                pos.push(i);
             }
         }
         pos

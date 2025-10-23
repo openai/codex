@@ -31,7 +31,7 @@ pub enum Feature {
     UnifiedExec,
     /// Use the streamable exec-command/write-stdin tool pair.
     StreamableShell,
-    /// Use the official Rust MCP client (rmcp).
+    /// Enable experimental RMCP features such as OAuth login.
     RmcpClient,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
@@ -39,8 +39,6 @@ pub enum Feature {
     ViewImageTool,
     /// Allow the model to request web searches.
     WebSearchRequest,
-    /// Automatically approve all approval requests from the harness.
-    ApproveAll,
 }
 
 impl Feature {
@@ -236,12 +234,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::WebSearchRequest,
         key: "web_search_request",
         stage: Stage::Stable,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::ApproveAll,
-        key: "approve_all",
-        stage: Stage::Experimental,
         default_enabled: false,
     },
 ];
