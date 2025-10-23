@@ -5,6 +5,9 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::function_tool::FunctionCallError;
+use crate::protocol::EventMsg;
+use crate::protocol::ExecCommandOutputDeltaEvent;
+use crate::protocol::ExecOutputStream;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -147,6 +150,18 @@ impl ToolHandler for UnifiedExecHandler {
                 )));
             }
         };
+
+        // Emit a delta event with the chunk of output we just produced, if any.
+        if !response.output.is_empty() {
+            let delta = ExecCommandOutputDeltaEvent {
+                call_id: call_id.clone(),
+                stream: ExecOutputStream::Stdout,
+                chunk: response.output.as_bytes().to_vec(),
+            };
+            session
+                .send_event(turn.as_ref(), EventMsg::ExecCommandOutputDelta(delta))
+                .await;
+        }
 
         let content = serialize_response(&response).map_err(|err| {
             FunctionCallError::RespondToModel(format!(
