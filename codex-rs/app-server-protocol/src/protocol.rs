@@ -134,13 +134,15 @@ client_request_definitions! {
     #[ts(rename = "config/read")]
     GetConfig {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: Config,
+        response: UserSavedConfig,
     },
 
     #[serde(rename = "config/update")]
     #[ts(rename = "config/update")]
     UpdateConfig {
         params: UpdateConfigParams,
+        // TODO(owen): or should we return UserSavedConfig directly?
+        // First, figure out how we want to represent errors.
         response: UpdateConfigResponse,
     },
 
@@ -426,13 +428,13 @@ pub struct LogoutAccountResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateConfigParams {
-    pub config: Config,
+    pub config: UserSavedConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateConfigResponse {
-    pub config: Config,
+    pub config: UserSavedConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -652,6 +654,12 @@ pub struct UserSavedConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Tools>,
 
+    /// MCP servers
+    #[serde(default)]
+    pub mcp_servers: HashMap<String, McpServerConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_oauth_credentials_store: Option<McpOAuthCredentialsStoreMode>,
+
     /// Profiles
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
@@ -672,6 +680,58 @@ pub struct Profile {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub chatgpt_base_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerConfig {
+    pub transport: McpServerTransportConfig,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub startup_timeout_sec: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_timeout_sec: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled_tools: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled_tools: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum McpServerTransportConfig {
+    #[serde(rename_all = "camelCase")]
+    Stdio {
+        command: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        args: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        env: Option<HashMap<String, String>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        env_vars: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cwd: Option<PathBuf>,
+    },
+    #[serde(rename_all = "camelCase")]
+    StreamableHttp {
+        url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bearer_token_env_var: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        http_headers: Option<HashMap<String, String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        env_http_headers: Option<HashMap<String, String>>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum McpOAuthCredentialsStoreMode {
+    #[default]
+    Auto,
+    File,
+    Keyring,
 }
 /// MCP representation of a [`codex_core::config::ToolsToml`].
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]

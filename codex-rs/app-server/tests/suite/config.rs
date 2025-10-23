@@ -5,6 +5,9 @@ use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::McpOAuthCredentialsStoreMode;
+use codex_app_server_protocol::McpServerConfig as ProtocolMcpServerConfig;
+use codex_app_server_protocol::McpServerTransportConfig as ProtocolMcpServerTransportConfig;
 use codex_app_server_protocol::Profile;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxSettings;
@@ -36,6 +39,7 @@ model_verbosity = "medium"
 profile = "test"
 forced_chatgpt_workspace_id = "12345678-0000-0000-0000-000000000000"
 forced_login_method = "chatgpt"
+mcp_oauth_credentials_store = "keyring"
 
 [sandbox_workspace_write]
 writable_roots = ["/tmp"]
@@ -55,6 +59,32 @@ model_reasoning_summary = "detailed"
 model_verbosity = "medium"
 model_provider = "openai"
 chatgpt_base_url = "https://api.chatgpt.com"
+
+[mcp_servers.docs]
+command = "codex-docs"
+args = ["serve"]
+env_vars = ["DOCS_TOKEN"]
+cwd = "/tmp/docs"
+startup_timeout_sec = 12.5
+tool_timeout_sec = 42.0
+enabled = false
+enabled_tools = ["read_docs"]
+disabled_tools = ["delete_docs"]
+
+[mcp_servers.docs.env]
+PLAN = "gold"
+
+[mcp_servers.issues]
+url = "https://example.com/mcp"
+bearer_token_env_var = "MCP_TOKEN"
+startup_timeout_sec = 30.0
+tool_timeout_sec = 15.0
+
+[mcp_servers.issues.http_headers]
+"X-Test" = "42"
+
+[mcp_servers.issues.env_http_headers]
+"X-Token" = "TOKEN_ENV"
 "#,
     )
 }
@@ -105,6 +135,45 @@ async fn get_config_toml_parses_all_fields() {
                 web_search: Some(false),
                 view_image: Some(true),
             }),
+            mcp_servers: HashMap::from([
+                (
+                    "docs".into(),
+                    ProtocolMcpServerConfig {
+                        transport: ProtocolMcpServerTransportConfig::Stdio {
+                            command: "codex-docs".into(),
+                            args: vec!["serve".into()],
+                            env: Some(HashMap::from([("PLAN".into(), "gold".into())])),
+                            env_vars: vec!["DOCS_TOKEN".into()],
+                            cwd: Some("/tmp/docs".into()),
+                        },
+                        enabled: false,
+                        startup_timeout_sec: Some(12.5),
+                        tool_timeout_sec: Some(42.0),
+                        enabled_tools: Some(vec!["read_docs".into()]),
+                        disabled_tools: Some(vec!["delete_docs".into()]),
+                    },
+                ),
+                (
+                    "issues".into(),
+                    ProtocolMcpServerConfig {
+                        transport: ProtocolMcpServerTransportConfig::StreamableHttp {
+                            url: "https://example.com/mcp".into(),
+                            bearer_token_env_var: Some("MCP_TOKEN".into()),
+                            http_headers: Some(HashMap::from([("X-Test".into(), "42".into())])),
+                            env_http_headers: Some(HashMap::from([(
+                                "X-Token".into(),
+                                "TOKEN_ENV".into(),
+                            )])),
+                        },
+                        enabled: true,
+                        startup_timeout_sec: Some(30.0),
+                        tool_timeout_sec: Some(15.0),
+                        enabled_tools: None,
+                        disabled_tools: None,
+                    },
+                ),
+            ]),
+            mcp_oauth_credentials_store: Some(McpOAuthCredentialsStoreMode::Keyring),
             profile: Some("test".to_string()),
             profiles: HashMap::from([(
                 "test".into(),
@@ -161,6 +230,8 @@ async fn get_config_toml_empty() {
             model_reasoning_summary: None,
             model_verbosity: None,
             tools: None,
+            mcp_servers: HashMap::new(),
+            mcp_oauth_credentials_store: None,
             profile: None,
             profiles: HashMap::new(),
         },

@@ -967,6 +967,11 @@ impl From<ConfigToml> for UserSavedConfig {
             .into_iter()
             .map(|(k, v)| (k, v.into()))
             .collect();
+        let mcp_servers = config_toml
+            .mcp_servers
+            .into_iter()
+            .map(|(k, v)| (k, v.into()))
+            .collect();
 
         Self {
             approval_policy: config_toml.approval_policy,
@@ -979,8 +984,20 @@ impl From<ConfigToml> for UserSavedConfig {
             model_reasoning_summary: config_toml.model_reasoning_summary,
             model_verbosity: config_toml.model_verbosity,
             tools: config_toml.tools.map(From::from),
+            mcp_servers,
+            mcp_oauth_credentials_store: config_toml.mcp_oauth_credentials_store.map(From::from),
             profile: config_toml.profile,
             profiles,
+        }
+    }
+}
+
+impl From<OAuthCredentialsStoreMode> for codex_app_server_protocol::McpOAuthCredentialsStoreMode {
+    fn from(mode: OAuthCredentialsStoreMode) -> Self {
+        match mode {
+            OAuthCredentialsStoreMode::Auto => Self::Auto,
+            OAuthCredentialsStoreMode::File => Self::File,
+            OAuthCredentialsStoreMode::Keyring => Self::Keyring,
         }
     }
 }

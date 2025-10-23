@@ -78,6 +78,9 @@ macro_rules! for_each_schema_type {
         $macro!(crate::LoginChatGptResponse);
         $macro!(crate::LogoutChatGptParams);
         $macro!(crate::LogoutChatGptResponse);
+        $macro!(crate::McpOAuthCredentialsStoreMode);
+        $macro!(crate::McpServerConfig);
+        $macro!(crate::McpServerTransportConfig);
         $macro!(crate::NewConversationParams);
         $macro!(crate::NewConversationResponse);
         $macro!(crate::Profile);

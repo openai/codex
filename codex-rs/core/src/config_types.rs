@@ -388,6 +388,52 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
     }
 }
 
+impl From<McpServerConfig> for codex_app_server_protocol::McpServerConfig {
+    fn from(cfg: McpServerConfig) -> Self {
+        Self {
+            transport: cfg.transport.into(),
+            enabled: cfg.enabled,
+            startup_timeout_sec: cfg
+                .startup_timeout_sec
+                .map(|duration| duration.as_secs_f64()),
+            tool_timeout_sec: cfg.tool_timeout_sec.map(|duration| duration.as_secs_f64()),
+            enabled_tools: cfg.enabled_tools,
+            disabled_tools: cfg.disabled_tools,
+        }
+    }
+}
+
+impl From<McpServerTransportConfig> for codex_app_server_protocol::McpServerTransportConfig {
+    fn from(cfg: McpServerTransportConfig) -> Self {
+        match cfg {
+            McpServerTransportConfig::Stdio {
+                command,
+                args,
+                env,
+                env_vars,
+                cwd,
+            } => Self::Stdio {
+                command,
+                args,
+                env,
+                env_vars,
+                cwd,
+            },
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                bearer_token_env_var,
+                http_headers,
+                env_http_headers,
+            } => Self::StreamableHttp {
+                url,
+                bearer_token_env_var,
+                http_headers,
+                env_http_headers,
+            },
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShellEnvironmentPolicyInherit {
