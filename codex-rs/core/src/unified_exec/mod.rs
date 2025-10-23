@@ -82,6 +82,7 @@ pub(crate) struct WriteStdinRequest<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct UnifiedExecResponse {
+    pub event_call_id: String,
     pub chunk_id: String,
     pub wall_time: Duration,
     pub output: String,

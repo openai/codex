@@ -72,6 +72,7 @@ impl UnifiedExecSessionManager {
         };
 
         let response = UnifiedExecResponse {
+            event_call_id: context.call_id.clone(),
             chunk_id,
             wall_time,
             output,
@@ -123,15 +124,21 @@ impl UnifiedExecSessionManager {
         let chunk_id = generate_chunk_id();
 
         let status = self.refresh_session_state(session_id).await;
-        let (session_id, exit_code, completion_entry) = match status {
-            SessionStatus::Alive { exit_code } => (Some(session_id), exit_code, None),
-            SessionStatus::Exited { exit_code, entry } => (None, exit_code, Some(*entry)),
+        let (session_id, exit_code, completion_entry, event_call_id) = match status {
+            SessionStatus::Alive { exit_code, call_id } => {
+                (Some(session_id), exit_code, None, call_id)
+            }
+            SessionStatus::Exited { exit_code, entry } => {
+                let call_id = entry.call_id.clone();
+                (None, exit_code, Some(*entry), call_id)
+            }
             SessionStatus::Unknown => {
                 return Err(UnifiedExecError::UnknownSessionId { session_id });
             }
         };
 
         let response = UnifiedExecResponse {
+            event_call_id,
             chunk_id,
             wall_time,
             output,
@@ -166,7 +173,10 @@ impl UnifiedExecSessionManager {
                 entry: Box::new(entry),
             }
         } else {
-            SessionStatus::Alive { exit_code }
+            SessionStatus::Alive {
+                exit_code,
+                call_id: entry.call_id.clone(),
+            }
         }
     }
 
@@ -365,6 +375,7 @@ impl UnifiedExecSessionManager {
 enum SessionStatus {
     Alive {
         exit_code: Option<i32>,
+        call_id: String,
     },
     Exited {
         exit_code: Option<i32>,

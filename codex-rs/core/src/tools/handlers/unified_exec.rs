@@ -154,7 +154,7 @@ impl ToolHandler for UnifiedExecHandler {
         // Emit a delta event with the chunk of output we just produced, if any.
         if !response.output.is_empty() {
             let delta = ExecCommandOutputDeltaEvent {
-                call_id: call_id.clone(),
+                call_id: response.event_call_id.clone(),
                 stream: ExecOutputStream::Stdout,
                 chunk: response.output.as_bytes().to_vec(),
             };
