@@ -1,6 +1,7 @@
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
-use tracing::error;
+
+use crate::util::error_or_panic;
 
 /// Transcript of conversation history
 #[derive(Debug, Clone, Default)]
@@ -300,15 +301,6 @@ impl ConversationHistory {
         if let Some(pos) = self.items.iter().position(predicate) {
             self.items.remove(pos);
         }
-    }
-}
-
-#[inline]
-fn error_or_panic(message: String) {
-    if cfg!(debug_assertions) || env!("CARGO_PKG_VERSION").contains("alpha") {
-        panic!("{message}");
-    } else {
-        error!("{message}");
     }
 }
 

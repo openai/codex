@@ -192,6 +192,7 @@ fn strip_total_output_header(output: &str) -> Option<&str> {
 pub enum ResponseEvent {
     Created,
     OutputItemDone(ResponseItem),
+    OutputItemAdded(ResponseItem),
     Completed {
         response_id: String,
         token_usage: Option<TokenUsage>,
@@ -200,9 +201,6 @@ pub enum ResponseEvent {
     ReasoningSummaryDelta(String),
     ReasoningContentDelta(String),
     ReasoningSummaryPartAdded,
-    WebSearchCallBegin {
-        call_id: String,
-    },
     RateLimits(RateLimitSnapshot),
 }
 

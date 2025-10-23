@@ -866,21 +866,15 @@ async fn process_sse<S>(
             | "response.in_progress"
             | "response.output_text.done" => {}
             "response.output_item.added" => {
-                if let Some(item) = event.item.as_ref() {
-                    // Detect web_search_call begin and forward a synthetic event upstream.
-                    if let Some(ty) = item.get("type").and_then(|v| v.as_str())
-                        && ty == "web_search_call"
-                    {
-                        let call_id = item
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let ev = ResponseEvent::WebSearchCallBegin { call_id };
-                        if tx_event.send(Ok(ev)).await.is_err() {
-                            return;
-                        }
-                    }
+                let Some(item_val) = event.item else { continue };
+                let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) else {
+                    debug!("failed to parse ResponseItem from output_item.done");
+                    continue;
+                };
+
+                let event = ResponseEvent::OutputItemAdded(item);
+                if tx_event.send(Ok(event)).await.is_err() {
+                    return;
                 }
             }
             "response.reasoning_summary_part.added" => {

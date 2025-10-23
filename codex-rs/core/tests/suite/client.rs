@@ -1258,6 +1258,10 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Build a small SSE stream with deltas and a final assistant message.
     // We emit the same body for all 3 turns; ids vary but are unused by assertions.
     let sse_raw = r##"[
+        {"type":"response.output_item.added", "item":{
+            "type":"message", "role":"assistant",
+            "content":[{"type":"output_text","text":""}]
+        }},
         {"type":"response.output_text.delta", "delta":"Hey "},
         {"type":"response.output_text.delta", "delta":"there"},
         {"type":"response.output_text.delta", "delta":"!\n"},
