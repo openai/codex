@@ -62,13 +62,14 @@ The following phases outline the order specs will be written. Within each phase,
 1. **Analyze context**: trace module exports/imports, note upstream dependencies, identify external services, and record invariants.
 2. **Draft spec**: capture overview, responsibilities, key functions/types, call flow, error handling, sandbox considerations, and TODO/tech debt.
 3. **Apply canonical outline**: structure each spec with sections `## Overview`, `## Detailed Behavior`, `## Broader Context`, and `## Technical Debt`. When broader context remains unknown, record `Context can't yet be determined` as a placeholder to revisit in later passes.
-4. **Cross-link**: link to related specs using relative paths (e.g., `[State Service](../../state/service.rs.spec.md)`).
-5. **Context compaction checkpoint**: after finishing all files within a directory or module (i.e., after producing or updating its `mod.spec.md`), pause to hand control back to the user so they can run an updated compaction pass. Resume with the next sibling directory/module only after the user confirms the context is refreshed. Within a submodule walk (from entry file through its children) continue uninterrupted to maintain local continuity.
-6. **Review & update index**: add entry to `docs/code-specs/README.md` once spec is merged; flag open questions for follow-up.
+4. **Footer metadata**: append YAML at the end of the file with `tech_debt` (containing `severity` and `highest_priority_items`) and `related_specs`. Use `low`/`medium`/`high` severity. `related_specs` should reference the parent `mod.spec.md` plus any known siblings or children; omit comments when unknown.
+5. **Cross-link**: link to related specs using relative paths (e.g., `[State Service](../../state/service.rs.spec.md)`).
+6. **Context compaction checkpoint**: after finishing all files within a directory or module (i.e., after producing or updating its `mod.spec.md`), pause to hand control back to the user so they can run an updated compaction pass. Resume with the next sibling directory/module only after the user confirms the context is refreshed. Within a submodule walk (from entry file through its children) continue uninterrupted to maintain local continuity.
+7. **Review & update index**: add entry to `docs/code-specs/README.md` once spec is merged; flag open questions for follow-up.
 
 ## Plan File Layout & Tracking
 - For each source file: create `<filename>.spec.md` alongside it. Directory overviews use `mod.spec.md`.
-- Include a YAML front matter block in each spec with fields `status`, `owner`, `last_updated`, `tech_debt`, and `related_specs`.
+- Append footer YAML to each spec instead of front matter. Only include `tech_debt` (with `severity` and `highest_priority_items`) and `related_specs` as described above.
 - Maintain hierarchical links: the top-level index points to each crate's `mod.spec.md`, and every module spec links onward to its child file specs.
 - Track completion in `docs/code-specs/README.md` with a checklist organized by crate and phase.
 - For crates with generated code, create a single `generated.spec.md` describing regeneration steps and boundaries.
