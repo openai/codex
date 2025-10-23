@@ -1,5 +1,12 @@
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
+use http::Error as HttpError;
+use reqwest::IntoUrl;
+use reqwest::Method;
+use reqwest::Response;
+use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
+use serde::Serialize;
+use std::fmt::Display;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -22,6 +29,156 @@ use std::sync::OnceLock;
 pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
+
+#[derive(Clone, Debug)]
+pub struct CodexHttpClient {
+    inner: reqwest::Client,
+}
+
+impl CodexHttpClient {
+    fn new(inner: reqwest::Client) -> Self {
+        Self { inner }
+    }
+
+    pub fn get<U>(&self, url: U) -> CodexRequestBuilder
+    where
+        U: IntoUrl,
+    {
+        CodexRequestBuilder::new(self.inner.get(url))
+    }
+
+    pub fn post<U>(&self, url: U) -> CodexRequestBuilder
+    where
+        U: IntoUrl,
+    {
+        CodexRequestBuilder::new(self.inner.post(url))
+    }
+
+    pub fn put<U>(&self, url: U) -> CodexRequestBuilder
+    where
+        U: IntoUrl,
+    {
+        CodexRequestBuilder::new(self.inner.put(url))
+    }
+
+    pub fn delete<U>(&self, url: U) -> CodexRequestBuilder
+    where
+        U: IntoUrl,
+    {
+        CodexRequestBuilder::new(self.inner.delete(url))
+    }
+
+    pub fn patch<U>(&self, url: U) -> CodexRequestBuilder
+    where
+        U: IntoUrl,
+    {
+        CodexRequestBuilder::new(self.inner.patch(url))
+    }
+
+    pub fn head<U>(&self, url: U) -> CodexRequestBuilder
+    where
+        U: IntoUrl,
+    {
+        CodexRequestBuilder::new(self.inner.head(url))
+    }
+
+    pub fn request<U>(&self, method: Method, url: U) -> CodexRequestBuilder
+    where
+        U: IntoUrl,
+    {
+        CodexRequestBuilder::new(self.inner.request(method, url))
+    }
+}
+
+#[must_use = "requests are not sent unless `send` is awaited"]
+#[derive(Debug)]
+pub struct CodexRequestBuilder {
+    builder: reqwest::RequestBuilder,
+}
+
+impl CodexRequestBuilder {
+    fn new(builder: reqwest::RequestBuilder) -> Self {
+        Self { builder }
+    }
+
+    fn map(self, f: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder) -> Self {
+        Self {
+            builder: f(self.builder),
+        }
+    }
+
+    pub fn header<K, V>(self, key: K, value: V) -> Self
+    where
+        HeaderName: TryFrom<K>,
+        <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
+        HeaderValue: TryFrom<V>,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
+    {
+        self.map(|builder| builder.header(key, value))
+    }
+
+    pub fn bearer_auth<T>(self, token: T) -> Self
+    where
+        T: Display,
+    {
+        self.map(|builder| builder.bearer_auth(token))
+    }
+
+    pub fn json<T>(self, value: &T) -> Self
+    where
+        T: ?Sized + Serialize,
+    {
+        self.map(|builder| builder.json(value))
+    }
+
+    pub async fn send(self) -> Result<Response, reqwest::Error> {
+        let context = self.request_context();
+        match self.builder.send().await {
+            Ok(response) => {
+                if let Some((method, url)) = context.as_ref() {
+                    tracing::debug!(
+                        method = %method,
+                        url = %url,
+                        status = %response.status(),
+                        "Codex HTTP request completed"
+                    );
+                } else {
+                    tracing::debug!(
+                        status = %response.status(),
+                        "Codex HTTP request completed"
+                    );
+                }
+                Ok(response)
+            }
+            Err(error) => {
+                let status = error.status();
+                if let Some((method, url)) = context.as_ref() {
+                    tracing::debug!(
+                        method = %method,
+                        url = %url,
+                        status = status.map(|s| s.as_u16()),
+                        error = %error,
+                        "Codex HTTP request failed"
+                    );
+                } else {
+                    tracing::debug!(
+                        status = status.map(|s| s.as_u16()),
+                        error = %error,
+                        "Codex HTTP request failed"
+                    );
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn request_context(&self) -> Option<(Method, String)> {
+        self.builder
+            .try_clone()
+            .and_then(|builder| builder.build().ok())
+            .map(|request| (request.method().clone(), request.url().to_string()))
+    }
+}
 #[derive(Debug, Clone)]
 pub struct Originator {
     pub value: String,
@@ -124,8 +281,8 @@ fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
     }
 }
 
-/// Create a reqwest client with default `originator` and `User-Agent` headers set.
-pub fn create_client() -> reqwest::Client {
+/// Create an HTTP client with default `originator` and `User-Agent` headers set.
+pub fn create_client() -> CodexHttpClient {
     use reqwest::header::HeaderMap;
 
     let mut headers = HeaderMap::new();
@@ -140,7 +297,8 @@ pub fn create_client() -> reqwest::Client {
         builder = builder.no_proxy();
     }
 
-    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+    let inner = builder.build().unwrap_or_else(|_| reqwest::Client::new());
+    CodexHttpClient::new(inner)
 }
 
 fn is_sandboxed() -> bool {
