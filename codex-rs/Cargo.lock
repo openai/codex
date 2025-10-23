@@ -1633,6 +1633,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "codex-core",
+ "codex-protocol",
  "notify",
  "regex-lite",
  "serde_json",

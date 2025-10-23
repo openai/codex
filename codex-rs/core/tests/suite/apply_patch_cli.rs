@@ -3,8 +3,6 @@
 use anyhow::Result;
 use pretty_assertions::assert_eq;
 use std::fs;
-use std::path::Path;
-use std::path::PathBuf;
 
 use codex_core::config::Config;
 use codex_core::features::Feature;
@@ -23,136 +21,36 @@ use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
-use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::wait_for_event;
-use serde_json::Value;
 use serde_json::json;
 
-async fn submit_turn(test: &TestCodex, prompt: &str) -> Result<()> {
-    submit_turn_with_policy(test, prompt, SandboxPolicy::DangerFullAccess).await
+async fn apply_patch_harness() -> Result<TestCodexHarness> {
+    apply_patch_harness_with(|_| {}).await
 }
 
-async fn submit_turn_with_policy(
-    test: &TestCodex,
-    prompt: &str,
-    sandbox_policy: SandboxPolicy,
-) -> Result<()> {
-    let session_model = test.session_configured.model.clone();
-    test.codex
-        .submit(Op::UserTurn {
-            items: vec![UserInput::Text {
-                text: prompt.into(),
-            }],
-            final_output_json_schema: None,
-            cwd: test.cwd.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            sandbox_policy,
-            model: session_model,
-            effort: None,
-            summary: ReasoningSummary::Auto,
-        })
-        .await?;
-
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TaskComplete(_))
+async fn apply_patch_harness_with(
+    configure: impl FnOnce(&mut Config) + Send + 'static,
+) -> Result<TestCodexHarness> {
+    TestCodexHarness::with_config(|config| {
+        config.include_apply_patch_tool = true;
+        configure(config);
     })
+    .await
+}
+
+async fn mount_apply_patch(
+    harness: &TestCodexHarness,
+    call_id: &str,
+    patch: &str,
+    assistant_msg: &str,
+) {
+    mount_sse_sequence(
+        harness.server(),
+        apply_patch_responses(call_id, patch, assistant_msg),
+    )
     .await;
-    Ok(())
-}
-
-fn function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
-    for body in bodies {
-        if let Some(items) = body.get("input").and_then(Value::as_array) {
-            for item in items {
-                if item.get("type").and_then(Value::as_str) == Some("function_call_output")
-                    && item.get("call_id").and_then(Value::as_str) == Some(call_id)
-                {
-                    return item;
-                }
-            }
-        }
-    }
-    panic!("function_call_output {call_id} not found");
-}
-
-struct ApplyPatchHarness {
-    server: wiremock::MockServer,
-    test: TestCodex,
-}
-
-impl ApplyPatchHarness {
-    async fn new() -> Result<Self> {
-        Self::with_config(|_| {}).await
-    }
-
-    async fn with_config(configure: impl FnOnce(&mut Config) + Send + 'static) -> Result<Self> {
-        let server = start_mock_server().await;
-        let mut builder = test_codex().with_config(|config| {
-            config.include_apply_patch_tool = true;
-        });
-        builder = builder.with_config(configure);
-        let test = builder.build(&server).await?;
-        Ok(Self { server, test })
-    }
-
-    fn cwd(&self) -> &Path {
-        self.test.cwd.path()
-    }
-
-    fn path(&self, rel: impl AsRef<Path>) -> PathBuf {
-        self.cwd().join(rel)
-    }
-
-    fn server(&self) -> &wiremock::MockServer {
-        &self.server
-    }
-
-    fn test(&self) -> &TestCodex {
-        &self.test
-    }
-
-    async fn submit(&self, prompt: &str) -> Result<()> {
-        submit_turn(&self.test, prompt).await
-    }
-
-    async fn submit_with_policy(&self, prompt: &str, sandbox_policy: SandboxPolicy) -> Result<()> {
-        submit_turn_with_policy(&self.test, prompt, sandbox_policy).await
-    }
-
-    async fn mount_apply_patch(&self, call_id: &str, patch: &str, assistant_msg: &str) {
-        mount_sse_sequence(
-            self.server(),
-            apply_patch_responses(call_id, patch, assistant_msg),
-        )
-        .await;
-    }
-
-    async fn request_bodies(&self) -> Vec<Value> {
-        self.server
-            .received_requests()
-            .await
-            .expect("requests")
-            .into_iter()
-            .map(|req| serde_json::from_slice(&req.body).expect("request body json"))
-            .collect()
-    }
-
-    async fn function_call_output_value(&self, call_id: &str) -> Value {
-        let bodies = self.request_bodies().await;
-        function_call_output(&bodies, call_id).clone()
-    }
-
-    async fn function_call_stdout(&self, call_id: &str) -> String {
-        self.function_call_output_value(call_id)
-            .await
-            .get("output")
-            .and_then(Value::as_str)
-            .expect("output string")
-            .to_string()
-    }
 }
 
 fn apply_patch_responses(call_id: &str, patch: &str, assistant_msg: &str) -> Vec<String> {
@@ -173,7 +71,7 @@ fn apply_patch_responses(call_id: &str, patch: &str, assistant_msg: &str) -> Vec
 async fn apply_patch_cli_multiple_operations_integration() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::with_config(|config| {
+    let harness = apply_patch_harness_with(|config| {
         config.model = "gpt-5".to_string();
         config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is valid");
     })
@@ -188,7 +86,7 @@ async fn apply_patch_cli_multiple_operations_integration() -> Result<()> {
     let patch = "*** Begin Patch\n*** Add File: nested/new.txt\n+created\n*** Delete File: delete.txt\n*** Update File: modify.txt\n@@\n-line2\n+changed\n*** End Patch";
 
     let call_id = "apply-multi-ops";
-    harness.mount_apply_patch(call_id, patch, "done").await;
+    mount_apply_patch(&harness, call_id, patch, "done").await;
 
     harness.submit("please apply multi-ops patch").await?;
 
@@ -218,14 +116,14 @@ D delete.txt
 async fn apply_patch_cli_multiple_chunks() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     let target = harness.path("multi.txt");
     fs::write(&target, "line1\nline2\nline3\nline4\n")?;
 
     let patch = "*** Begin Patch\n*** Update File: multi.txt\n@@\n-line2\n+changed2\n@@\n-line4\n+changed4\n*** End Patch";
     let call_id = "apply-multi-chunks";
-    harness.mount_apply_patch(call_id, patch, "ok").await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply multi-chunk patch").await?;
 
@@ -240,7 +138,7 @@ async fn apply_patch_cli_multiple_chunks() -> Result<()> {
 async fn apply_patch_cli_moves_file_to_new_directory() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     let original = harness.path("old/name.txt");
     let new_path = harness.path("renamed/dir/name.txt");
@@ -249,7 +147,7 @@ async fn apply_patch_cli_moves_file_to_new_directory() -> Result<()> {
 
     let patch = "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/dir/name.txt\n@@\n-old content\n+new content\n*** End Patch";
     let call_id = "apply-move";
-    harness.mount_apply_patch(call_id, patch, "ok").await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply move patch").await?;
 
@@ -262,14 +160,14 @@ async fn apply_patch_cli_moves_file_to_new_directory() -> Result<()> {
 async fn apply_patch_cli_updates_file_appends_trailing_newline() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     let target = harness.path("no_newline.txt");
     fs::write(&target, "no newline at end")?;
 
     let patch = "*** Begin Patch\n*** Update File: no_newline.txt\n@@\n-no newline at end\n+first line\n+second line\n*** End Patch";
     let call_id = "apply-append-nl";
-    harness.mount_apply_patch(call_id, patch, "ok").await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply newline patch").await?;
 
@@ -283,14 +181,14 @@ async fn apply_patch_cli_updates_file_appends_trailing_newline() -> Result<()> {
 async fn apply_patch_cli_insert_only_hunk_modifies_file() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     let target = harness.path("insert_only.txt");
     fs::write(&target, "alpha\nomega\n")?;
 
     let patch = "*** Begin Patch\n*** Update File: insert_only.txt\n@@\n alpha\n+beta\n omega\n*** End Patch";
     let call_id = "apply-insert-only";
-    harness.mount_apply_patch(call_id, patch, "ok").await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("insert lines via apply_patch").await?;
 
@@ -302,7 +200,7 @@ async fn apply_patch_cli_insert_only_hunk_modifies_file() -> Result<()> {
 async fn apply_patch_cli_move_overwrites_existing_destination() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     let original = harness.path("old/name.txt");
     let destination = harness.path("renamed/dir/name.txt");
@@ -313,7 +211,7 @@ async fn apply_patch_cli_move_overwrites_existing_destination() -> Result<()> {
 
     let patch = "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/dir/name.txt\n@@\n-from\n+new\n*** End Patch";
     let call_id = "apply-move-overwrite";
-    harness.mount_apply_patch(call_id, patch, "ok").await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply move overwrite patch").await?;
 
@@ -326,7 +224,7 @@ async fn apply_patch_cli_move_overwrites_existing_destination() -> Result<()> {
 async fn apply_patch_cli_move_without_content_change_has_no_turn_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
     let test = harness.test();
     let codex = test.codex.clone();
     let cwd = test.cwd.clone();
@@ -338,7 +236,7 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff() -> Resul
 
     let patch = "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/name.txt\n@@\n same\n*** End Patch";
     let call_id = "apply-move-no-change";
-    harness.mount_apply_patch(call_id, patch, "ok").await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     let model = test.session_configured.model.clone();
     codex
@@ -377,14 +275,14 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff() -> Resul
 async fn apply_patch_cli_add_overwrites_existing_file() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     let path = harness.path("duplicate.txt");
     fs::write(&path, "old content\n")?;
 
     let patch = "*** Begin Patch\n*** Add File: duplicate.txt\n+new content\n*** End Patch";
     let call_id = "apply-add-overwrite";
-    harness.mount_apply_patch(call_id, patch, "ok").await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply add overwrite patch").await?;
 
@@ -396,11 +294,11 @@ async fn apply_patch_cli_add_overwrites_existing_file() -> Result<()> {
 async fn apply_patch_cli_rejects_invalid_hunk_header() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     let patch = "*** Begin Patch\n*** Frobnicate File: foo\n*** End Patch";
     let call_id = "apply-invalid-header";
-    harness.mount_apply_patch(call_id, patch, "ok").await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply invalid header patch").await?;
 
@@ -421,7 +319,7 @@ async fn apply_patch_cli_rejects_invalid_hunk_header() -> Result<()> {
 async fn apply_patch_cli_reports_missing_context() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     let target = harness.path("modify.txt");
     fs::write(&target, "line1\nline2\n")?;
@@ -429,7 +327,7 @@ async fn apply_patch_cli_reports_missing_context() -> Result<()> {
     let patch =
         "*** Begin Patch\n*** Update File: modify.txt\n@@\n-missing\n+changed\n*** End Patch";
     let call_id = "apply-missing-context";
-    harness.mount_apply_patch(call_id, patch, "ok").await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply missing context patch").await?;
 
@@ -448,11 +346,11 @@ async fn apply_patch_cli_reports_missing_context() -> Result<()> {
 async fn apply_patch_cli_reports_missing_target_file() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     let patch = "*** Begin Patch\n*** Update File: missing.txt\n@@\n-nope\n+better\n*** End Patch";
     let call_id = "apply-missing-file";
-    harness.mount_apply_patch(call_id, patch, "fail").await;
+    mount_apply_patch(&harness, call_id, patch, "fail").await;
 
     harness.submit("attempt to update a missing file").await?;
 
@@ -477,11 +375,11 @@ async fn apply_patch_cli_reports_missing_target_file() -> Result<()> {
 async fn apply_patch_cli_delete_missing_file_reports_error() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     let patch = "*** Begin Patch\n*** Delete File: missing.txt\n*** End Patch";
     let call_id = "apply-delete-missing";
-    harness.mount_apply_patch(call_id, patch, "fail").await;
+    mount_apply_patch(&harness, call_id, patch, "fail").await;
 
     harness.submit("attempt to delete missing file").await?;
 
@@ -507,11 +405,11 @@ async fn apply_patch_cli_delete_missing_file_reports_error() -> Result<()> {
 async fn apply_patch_cli_rejects_empty_patch() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     let patch = "*** Begin Patch\n*** End Patch";
     let call_id = "apply-empty";
-    harness.mount_apply_patch(call_id, patch, "ok").await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply empty patch").await?;
 
@@ -527,13 +425,13 @@ async fn apply_patch_cli_rejects_empty_patch() -> Result<()> {
 async fn apply_patch_cli_delete_directory_reports_verification_error() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     fs::create_dir(harness.path("dir"))?;
 
     let patch = "*** Begin Patch\n*** Delete File: dir\n*** End Patch";
     let call_id = "apply-delete-dir";
-    harness.mount_apply_patch(call_id, patch, "ok").await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("delete a directory via apply_patch").await?;
 
@@ -547,7 +445,7 @@ async fn apply_patch_cli_delete_directory_reports_verification_error() -> Result
 async fn apply_patch_cli_rejects_path_traversal_outside_workspace() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     let escape_path = harness
         .test()
@@ -560,7 +458,7 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace() -> Result<()
 
     let patch = "*** Begin Patch\n*** Add File: ../escape.txt\n+outside\n*** End Patch";
     let call_id = "apply-path-traversal";
-    harness.mount_apply_patch(call_id, patch, "fail").await;
+    mount_apply_patch(&harness, call_id, patch, "fail").await;
 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
@@ -593,7 +491,7 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace() -> Result<()
 async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     let escape_path = harness
         .test()
@@ -609,7 +507,7 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace() -> Resu
 
     let patch = "*** Begin Patch\n*** Update File: stay.txt\n*** Move to: ../escape-move.txt\n@@\n-from\n+to\n*** End Patch";
     let call_id = "apply-move-traversal";
-    harness.mount_apply_patch(call_id, patch, "fail").await;
+    mount_apply_patch(&harness, call_id, patch, "fail").await;
 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
@@ -640,7 +538,7 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace() -> Resu
 async fn apply_patch_cli_verification_failure_has_no_side_effects() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::with_config(|config| {
+    let harness = apply_patch_harness_with(|config| {
         config.features.enable(Feature::ApplyPatchFreeform);
     })
     .await?;
@@ -649,7 +547,7 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects() -> Result<()
     let call_id = "apply-partial-no-side-effects";
     let patch = "*** Begin Patch\n*** Add File: created.txt\n+hello\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch";
 
-    harness.mount_apply_patch(call_id, patch, "failed").await;
+    mount_apply_patch(&harness, call_id, patch, "failed").await;
 
     harness.submit("attempt partial apply patch").await?;
 
@@ -665,7 +563,7 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects() -> Result<()
 async fn apply_patch_shell_heredoc_with_cd_updates_relative_workdir() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::with_config(|config| {
+    let harness = apply_patch_harness_with(|config| {
         config.model = "gpt-5".to_string();
         config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is valid");
     })
@@ -711,7 +609,7 @@ async fn apply_patch_shell_heredoc_with_cd_updates_relative_workdir() -> Result<
 async fn apply_patch_shell_failure_propagates_error_and_skips_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::with_config(|config| {
+    let harness = apply_patch_harness_with(|config| {
         config.model = "gpt-5".to_string();
         config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is valid");
     })
@@ -795,14 +693,14 @@ async fn apply_patch_shell_failure_propagates_error_and_skips_diff() -> Result<(
 async fn apply_patch_function_accepts_lenient_heredoc_wrapped_patch() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     let file_name = "lenient.txt";
     let patch_inner =
         format!("*** Begin Patch\n*** Add File: {file_name}\n+lenient\n*** End Patch\n");
     let wrapped = format!("<<'EOF'\n{patch_inner}EOF\n");
     let call_id = "apply-lenient";
-    harness.mount_apply_patch(call_id, &wrapped, "ok").await;
+    mount_apply_patch(&harness, call_id, &wrapped, "ok").await;
 
     harness.submit("apply lenient heredoc patch").await?;
 
@@ -815,14 +713,14 @@ async fn apply_patch_function_accepts_lenient_heredoc_wrapped_patch() -> Result<
 async fn apply_patch_cli_end_of_file_anchor() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     let target = harness.path("tail.txt");
     fs::write(&target, "alpha\nlast\n")?;
 
     let patch = "*** Begin Patch\n*** Update File: tail.txt\n@@\n-last\n+end\n*** End of File\n*** End Patch";
     let call_id = "apply-eof";
-    harness.mount_apply_patch(call_id, patch, "ok").await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply EOF-anchored patch").await?;
     assert_eq!(fs::read_to_string(&target)?, "alpha\nend\n");
@@ -833,7 +731,7 @@ async fn apply_patch_cli_end_of_file_anchor() -> Result<()> {
 async fn apply_patch_cli_missing_second_chunk_context_rejected() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     let target = harness.path("two_chunks.txt");
     fs::write(&target, "a\nb\nc\nd\n")?;
@@ -842,7 +740,7 @@ async fn apply_patch_cli_missing_second_chunk_context_rejected() -> Result<()> {
     let patch =
         "*** Begin Patch\n*** Update File: two_chunks.txt\n@@\n-b\n+B\n\n-d\n+D\n*** End Patch";
     let call_id = "apply-missing-ctx-2nd";
-    harness.mount_apply_patch(call_id, patch, "fail").await;
+    mount_apply_patch(&harness, call_id, patch, "fail").await;
 
     harness.submit("apply missing context second chunk").await?;
 
@@ -861,7 +759,7 @@ async fn apply_patch_cli_missing_second_chunk_context_rejected() -> Result<()> {
 async fn apply_patch_emits_turn_diff_event_with_unified_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
     let test = harness.test();
     let codex = test.codex.clone();
     let cwd = test.cwd.clone();
@@ -919,7 +817,7 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff() -> Result<()> {
 async fn apply_patch_turn_diff_for_rename_with_content_change() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
     let test = harness.test();
     let codex = test.codex.clone();
     let cwd = test.cwd.clone();
@@ -984,7 +882,7 @@ async fn apply_patch_turn_diff_for_rename_with_content_change() -> Result<()> {
 async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
     let test = harness.test();
     let codex = test.codex.clone();
     let cwd = test.cwd.clone();
@@ -1049,7 +947,7 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
 async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
     let test = harness.test();
     let codex = test.codex.clone();
     let cwd = test.cwd.clone();
@@ -1136,7 +1034,7 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
 async fn apply_patch_change_context_disambiguates_target() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = ApplyPatchHarness::new().await?;
+    let harness = apply_patch_harness().await?;
 
     let target = harness.path("multi_ctx.txt");
     fs::write(&target, "fn a\nx=10\ny=2\nfn b\nx=10\ny=20\n")?;
@@ -1144,7 +1042,7 @@ async fn apply_patch_change_context_disambiguates_target() -> Result<()> {
     let patch =
         "*** Begin Patch\n*** Update File: multi_ctx.txt\n@@ fn b\n-x=10\n+x=11\n*** End Patch";
     let call_id = "apply-ctx";
-    harness.mount_apply_patch(call_id, patch, "ok").await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply with change_context").await?;
 
