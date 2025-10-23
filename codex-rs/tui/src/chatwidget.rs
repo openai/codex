@@ -745,9 +745,8 @@ impl ChatWidget {
                 &ev.call_id,
                 CommandOutput {
                     exit_code: ev.exit_code,
-                    stdout: ev.stdout.clone(),
-                    stderr: ev.stderr.clone(),
                     formatted_output: ev.formatted_output.clone(),
+                    aggregated_output: ev.aggregated_output.clone(),
                 },
                 ev.duration,
             );

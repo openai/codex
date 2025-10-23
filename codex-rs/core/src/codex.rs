@@ -10,6 +10,7 @@ use crate::function_tool::FunctionCallError;
 use crate::mcp::auth::McpAuthStatusEntry;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
+use crate::response_processing::process_items;
 use crate::review_format::format_review_findings_block;
 use crate::terminal;
 use crate::user_notification::UserNotifier;
@@ -854,7 +855,7 @@ impl Session {
 
     /// Records input items: always append to conversation history and
     /// persist these response items to rollout.
-    async fn record_conversation_items(&self, items: &[ResponseItem]) {
+    pub(crate) async fn record_conversation_items(&self, items: &[ResponseItem]) {
         self.record_into_history(items).await;
         self.persist_rollout_response_items(items).await;
     }
@@ -1610,109 +1611,13 @@ pub(crate) async fn run_task(
                 let token_limit_reached = total_usage_tokens
                     .map(|tokens| tokens >= limit)
                     .unwrap_or(false);
-                let mut items_to_record_in_conversation_history = Vec::<ResponseItem>::new();
-                let mut responses = Vec::<ResponseInputItem>::new();
-                for processed_response_item in processed_items {
-                    let ProcessedResponseItem { item, response } = processed_response_item;
-                    match (&item, &response) {
-                        (ResponseItem::Message { role, .. }, None) if role == "assistant" => {
-                            // If the model returned a message, we need to record it.
-                            items_to_record_in_conversation_history.push(item);
-                        }
-                        (
-                            ResponseItem::LocalShellCall { .. },
-                            Some(ResponseInputItem::FunctionCallOutput { call_id, output }),
-                        ) => {
-                            items_to_record_in_conversation_history.push(item);
-                            items_to_record_in_conversation_history.push(
-                                ResponseItem::FunctionCallOutput {
-                                    call_id: call_id.clone(),
-                                    output: output.clone(),
-                                },
-                            );
-                        }
-                        (
-                            ResponseItem::FunctionCall { .. },
-                            Some(ResponseInputItem::FunctionCallOutput { call_id, output }),
-                        ) => {
-                            items_to_record_in_conversation_history.push(item);
-                            items_to_record_in_conversation_history.push(
-                                ResponseItem::FunctionCallOutput {
-                                    call_id: call_id.clone(),
-                                    output: output.clone(),
-                                },
-                            );
-                        }
-                        (
-                            ResponseItem::CustomToolCall { .. },
-                            Some(ResponseInputItem::CustomToolCallOutput { call_id, output }),
-                        ) => {
-                            items_to_record_in_conversation_history.push(item);
-                            items_to_record_in_conversation_history.push(
-                                ResponseItem::CustomToolCallOutput {
-                                    call_id: call_id.clone(),
-                                    output: output.clone(),
-                                },
-                            );
-                        }
-                        (
-                            ResponseItem::FunctionCall { .. },
-                            Some(ResponseInputItem::McpToolCallOutput { call_id, result }),
-                        ) => {
-                            items_to_record_in_conversation_history.push(item);
-                            let output = match result {
-                                Ok(call_tool_result) => {
-                                    convert_call_tool_result_to_function_call_output_payload(
-                                        call_tool_result,
-                                    )
-                                }
-                                Err(err) => FunctionCallOutputPayload {
-                                    content: err.clone(),
-                                    success: Some(false),
-                                },
-                            };
-                            items_to_record_in_conversation_history.push(
-                                ResponseItem::FunctionCallOutput {
-                                    call_id: call_id.clone(),
-                                    output,
-                                },
-                            );
-                        }
-                        (
-                            ResponseItem::Reasoning {
-                                id,
-                                summary,
-                                content,
-                                encrypted_content,
-                            },
-                            None,
-                        ) => {
-                            items_to_record_in_conversation_history.push(ResponseItem::Reasoning {
-                                id: id.clone(),
-                                summary: summary.clone(),
-                                content: content.clone(),
-                                encrypted_content: encrypted_content.clone(),
-                            });
-                        }
-                        _ => {
-                            warn!("Unexpected response item: {item:?} with response: {response:?}");
-                        }
-                    };
-                    if let Some(response) = response {
-                        responses.push(response);
-                    }
-                }
-
-                // Only attempt to take the lock if there is something to record.
-                if !items_to_record_in_conversation_history.is_empty() {
-                    if is_review_mode {
-                        review_thread_history
-                            .record_items(items_to_record_in_conversation_history.iter());
-                    } else {
-                        sess.record_conversation_items(&items_to_record_in_conversation_history)
-                            .await;
-                    }
-                }
+                let (responses, items_to_record_in_conversation_history) = process_items(
+                    processed_items,
+                    is_review_mode,
+                    &mut review_thread_history,
+                    &sess,
+                )
+                .await;
 
                 if token_limit_reached {
                     if auto_compact_recently_attempted {
@@ -1751,7 +1656,16 @@ pub(crate) async fn run_task(
                 }
                 continue;
             }
-            Err(CodexErr::TurnAborted) => {
+            Err(CodexErr::TurnAborted {
+                dangling_artifacts: processed_items,
+            }) => {
+                let _ = process_items(
+                    processed_items,
+                    is_review_mode,
+                    &mut review_thread_history,
+                    &sess,
+                )
+                .await;
                 // Aborted turn is reported via a different event.
                 break;
             }
@@ -1852,7 +1766,13 @@ async fn run_turn(
         .await
         {
             Ok(output) => return Ok(output),
-            Err(CodexErr::TurnAborted) => return Err(CodexErr::TurnAborted),
+            Err(CodexErr::TurnAborted {
+                dangling_artifacts: processed_items,
+            }) => {
+                return Err(CodexErr::TurnAborted {
+                    dangling_artifacts: processed_items,
+                });
+            }
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
             Err(e @ CodexErr::Fatal(_)) => return Err(e),
@@ -1905,9 +1825,9 @@ async fn run_turn(
 /// "handled" such that it produces a `ResponseInputItem` that needs to be
 /// sent back to the model on the next turn.
 #[derive(Debug)]
-pub(crate) struct ProcessedResponseItem {
-    pub(crate) item: ResponseItem,
-    pub(crate) response: Option<ResponseInputItem>,
+pub struct ProcessedResponseItem {
+    pub item: ResponseItem,
+    pub response: Option<ResponseInputItem>,
 }
 
 #[derive(Debug)]
@@ -1956,7 +1876,15 @@ async fn try_run_turn(
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
         // cases so that transient stream failures (e.g., dropped SSE connection before
         // `response.completed`) bubble up and trigger the caller's retry logic.
-        let event = stream.next().or_cancel(&cancellation_token).await?;
+        let event = match stream.next().or_cancel(&cancellation_token).await {
+            Ok(event) => event,
+            Err(codex_async_utils::CancelErr::Cancelled) => {
+                let processed_items = output.try_collect().await?;
+                return Err(CodexErr::TurnAborted {
+                    dangling_artifacts: processed_items,
+                });
+            }
+        };
 
         let event = match event {
             Some(res) => res?,
@@ -1980,7 +1908,8 @@ async fn try_run_turn(
                         let payload_preview = call.payload.log_payload().into_owned();
                         tracing::info!("ToolCall: {} {}", call.tool_name, payload_preview);
 
-                        let response = tool_runtime.handle_tool_call(call);
+                        let response =
+                            tool_runtime.handle_tool_call(call, cancellation_token.child_token());
 
                         output.push_back(
                             async move {
@@ -2062,12 +1991,7 @@ async fn try_run_turn(
             } => {
                 sess.update_token_usage_info(turn_context.as_ref(), token_usage.as_ref())
                     .await;
-
-                let processed_items = output
-                    .try_collect()
-                    .or_cancel(&cancellation_token)
-                    .await??;
-
+                let processed_items = output.try_collect().await?;
                 let unified_diff = {
                     let mut tracker = turn_diff_tracker.lock().await;
                     tracker.get_unified_diff()
@@ -2171,7 +2095,7 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
         }
     })
 }
-fn convert_call_tool_result_to_function_call_output_payload(
+pub(crate) fn convert_call_tool_result_to_function_call_output_payload(
     call_tool_result: &CallToolResult,
 ) -> FunctionCallOutputPayload {
     let CallToolResult {
@@ -2318,7 +2242,11 @@ mod tests {
     use crate::tools::MODEL_FORMAT_MAX_LINES;
     use crate::tools::MODEL_FORMAT_TAIL_LINES;
     use crate::tools::ToolRouter;
-    use crate::tools::handle_container_exec_with_params;
+    use crate::tools::context::ToolInvocation;
+    use crate::tools::context::ToolOutput;
+    use crate::tools::context::ToolPayload;
+    use crate::tools::handlers::ShellHandler;
+    use crate::tools::registry::ToolHandler;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
@@ -3041,15 +2969,26 @@ mod tests {
         let tool_name = "shell";
         let call_id = "test-call".to_string();
 
-        let resp = handle_container_exec_with_params(
-            tool_name,
-            params,
-            Arc::clone(&session),
-            Arc::clone(&turn_context),
-            Arc::clone(&turn_diff_tracker),
-            call_id,
-        )
-        .await;
+        let handler = ShellHandler;
+        let resp = handler
+            .handle(ToolInvocation {
+                session: Arc::clone(&session),
+                turn: Arc::clone(&turn_context),
+                tracker: Arc::clone(&turn_diff_tracker),
+                call_id,
+                tool_name: tool_name.to_string(),
+                payload: ToolPayload::Function {
+                    arguments: serde_json::json!({
+                        "command": params.command.clone(),
+                        "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                        "timeout_ms": params.timeout_ms,
+                        "with_escalated_permissions": params.with_escalated_permissions,
+                        "justification": params.justification.clone(),
+                    })
+                    .to_string(),
+                },
+            })
+            .await;
 
         let Err(FunctionCallError::RespondToModel(output)) = resp else {
             panic!("expected error result");
@@ -3068,17 +3007,30 @@ mod tests {
             .expect("unique turn context Arc")
             .sandbox_policy = SandboxPolicy::DangerFullAccess;
 
-        let resp2 = handle_container_exec_with_params(
-            tool_name,
-            params2,
-            Arc::clone(&session),
-            Arc::clone(&turn_context),
-            Arc::clone(&turn_diff_tracker),
-            "test-call-2".to_string(),
-        )
-        .await;
+        let resp2 = handler
+            .handle(ToolInvocation {
+                session: Arc::clone(&session),
+                turn: Arc::clone(&turn_context),
+                tracker: Arc::clone(&turn_diff_tracker),
+                call_id: "test-call-2".to_string(),
+                tool_name: tool_name.to_string(),
+                payload: ToolPayload::Function {
+                    arguments: serde_json::json!({
+                        "command": params2.command.clone(),
+                        "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                        "timeout_ms": params2.timeout_ms,
+                        "with_escalated_permissions": params2.with_escalated_permissions,
+                        "justification": params2.justification.clone(),
+                    })
+                    .to_string(),
+                },
+            })
+            .await;
 
-        let output = resp2.expect("expected Ok result");
+        let output = match resp2.expect("expected Ok result") {
+            ToolOutput::Function { content, .. } => content,
+            _ => panic!("unexpected tool output"),
+        };
 
         #[derive(Deserialize, PartialEq, Eq, Debug)]
         struct ResponseExecMetadata {

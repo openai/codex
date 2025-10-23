@@ -35,6 +35,22 @@ impl ResponseMock {
     pub fn requests(&self) -> Vec<ResponsesRequest> {
         self.requests.lock().unwrap().clone()
     }
+
+    /// Returns true if any captured request contains a `function_call` with the
+    /// provided `call_id`.
+    pub fn saw_function_call(&self, call_id: &str) -> bool {
+        self.requests()
+            .iter()
+            .any(|req| req.has_function_call(call_id))
+    }
+
+    /// Returns the `output` string for a matching `function_call_output` with
+    /// the provided `call_id`, searching across all captured requests.
+    pub fn function_call_output_text(&self, call_id: &str) -> Option<String> {
+        self.requests()
+            .iter()
+            .find_map(|req| req.function_call_output_text(call_id))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +84,28 @@ impl ResponsesRequest {
             })
             .cloned()
             .unwrap_or_else(|| panic!("function call output {call_id} item not found in request"))
+    }
+
+    /// Returns true if this request's `input` contains a `function_call` with
+    /// the specified `call_id`.
+    pub fn has_function_call(&self, call_id: &str) -> bool {
+        self.input().iter().any(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call")
+                && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+        })
+    }
+
+    /// If present, returns the `output` string of the `function_call_output`
+    /// entry matching `call_id` in this request's `input`.
+    pub fn function_call_output_text(&self, call_id: &str) -> Option<String> {
+        let binding = self.input();
+        let item = binding.iter().find(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+        })?;
+        item.get("output")
+            .and_then(Value::as_str)
+            .map(str::to_string)
     }
 
     pub fn header(&self, name: &str) -> Option<String> {

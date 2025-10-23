@@ -36,6 +36,7 @@ mod mcp_tool_call;
 mod message_history;
 mod model_provider_info;
 pub mod parse_command;
+mod response_processing;
 pub mod sandboxing;
 pub mod token_data;
 mod truncate;
