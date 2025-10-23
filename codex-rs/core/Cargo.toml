@@ -28,6 +28,7 @@ codex-rmcp-client = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-utils-pty = { workspace = true }
+codex-utils-tokenizer = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
 env-flags = { workspace = true }

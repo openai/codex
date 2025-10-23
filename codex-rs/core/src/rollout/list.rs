@@ -1,12 +1,11 @@
 use std::cmp::Reverse;
 use std::io::{self};
+use std::num::NonZero;
 use std::path::Path;
 use std::path::PathBuf;
-
-use codex_file_search as file_search;
-use std::num::NonZero;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+
 use time::OffsetDateTime;
 use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
@@ -15,6 +14,7 @@ use uuid::Uuid;
 
 use super::SESSIONS_SUBDIR;
 use crate::protocol::EventMsg;
+use codex_file_search as file_search;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionSource;
@@ -515,6 +515,7 @@ pub async fn find_conversation_path_by_id_str(
         threads,
         cancel,
         compute_indices,
+        false,
     )
     .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
 
