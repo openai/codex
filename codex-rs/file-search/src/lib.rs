@@ -105,6 +105,7 @@ pub async fn run_main<T: Reporter>(
         threads,
         cancel_flag,
         compute_indices,
+        true,
     )?;
     let match_count = matches.len();
     let matches_truncated = total_match_count > match_count;
@@ -129,6 +130,7 @@ pub fn run(
     threads: NonZero<usize>,
     cancel_flag: Arc<AtomicBool>,
     compute_indices: bool,
+    respect_gitignore: bool,
 ) -> anyhow::Result<FileSearchResults> {
     let pattern = create_pattern(pattern_text);
     // Create one BestMatchesList per worker thread so that each worker can
@@ -157,6 +159,14 @@ pub fn run(
         .hidden(false)
         // Don't require git to be present to apply to apply git-related ignore rules.
         .require_git(false);
+    if !respect_gitignore {
+        walk_builder
+            .git_ignore(false)
+            .git_global(false)
+            .git_exclude(false)
+            .ignore(false)
+            .parents(false);
+    }
 
     if !exclude.is_empty() {
         let mut override_builder = OverrideBuilder::new(search_directory);

@@ -1060,7 +1060,6 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-async-utils",
- "codex-mcp-client",
  "codex-file-search",
  "codex-otel",
  "codex-protocol",
