@@ -14,6 +14,7 @@ use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
 use base64::Engine;
 use chrono::Utc;
+use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::AuthDotJson;
 use codex_core::auth::save_auth;
 use codex_core::default_client::originator;
@@ -39,6 +40,7 @@ pub struct ServerOptions {
     pub open_browser: bool,
     pub force_state: Option<String>,
     pub forced_chatgpt_workspace_id: Option<String>,
+    pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 }
 
 impl ServerOptions {
@@ -46,6 +48,7 @@ impl ServerOptions {
         codex_home: PathBuf,
         client_id: String,
         forced_chatgpt_workspace_id: Option<String>,
+        cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> Self {
         Self {
             codex_home,
@@ -55,6 +58,7 @@ impl ServerOptions {
             open_browser: true,
             force_state: None,
             forced_chatgpt_workspace_id,
+            cli_auth_credentials_store_mode,
         }
     }
 }
@@ -270,6 +274,7 @@ async fn process_request(
                         tokens.id_token.clone(),
                         tokens.access_token.clone(),
                         tokens.refresh_token.clone(),
+                        opts.cli_auth_credentials_store_mode,
                     )
                     .await
                     {
@@ -536,6 +541,7 @@ pub(crate) async fn persist_tokens_async(
     id_token: String,
     access_token: String,
     refresh_token: String,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
     let codex_home = codex_home.to_path_buf();
@@ -557,7 +563,7 @@ pub(crate) async fn persist_tokens_async(
             tokens: Some(tokens),
             last_refresh: Some(Utc::now()),
         };
-        save_auth(&codex_home, &auth)
+        save_auth(&codex_home, &auth, auth_credentials_store_mode)
     })
     .await
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?

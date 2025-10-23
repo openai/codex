@@ -9,6 +9,7 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::RequestId;
+use codex_core::auth::AuthCredentialsStoreMode;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use pretty_assertions::assert_eq;
@@ -106,6 +107,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
         ChatGptAuthFixture::new("chatgpt-token")
             .account_id("account-123")
             .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
     )
     .context("write chatgpt auth")?;
 
