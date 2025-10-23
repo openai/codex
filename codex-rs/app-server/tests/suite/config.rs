@@ -3,7 +3,6 @@ use std::path::Path;
 
 use app_test_support::McpProcess;
 use app_test_support::to_response;
-use codex_app_server_protocol::GetUserSavedConfigResponse;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::McpOAuthCredentialsStoreMode;
 use codex_app_server_protocol::McpServerConfig as ProtocolMcpServerConfig;
@@ -103,91 +102,89 @@ async fn get_config_toml_parses_all_fields() {
         .expect("init failed");
 
     let request_id = mcp
-        .send_get_user_saved_config_request()
+        .send_get_config_request()
         .await
-        .expect("send getUserSavedConfig");
+        .expect("send config/read");
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await
-    .expect("getUserSavedConfig timeout")
-    .expect("getUserSavedConfig response");
+    .expect("config/read timeout")
+    .expect("config/read response");
 
-    let config: GetUserSavedConfigResponse = to_response(resp).expect("deserialize config");
-    let expected = GetUserSavedConfigResponse {
-        config: UserSavedConfig {
-            approval_policy: Some(AskForApproval::OnRequest),
-            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
-            sandbox_settings: Some(SandboxSettings {
-                writable_roots: vec!["/tmp".into()],
-                network_access: Some(true),
-                exclude_tmpdir_env_var: Some(true),
-                exclude_slash_tmp: Some(true),
-            }),
-            forced_chatgpt_workspace_id: Some("12345678-0000-0000-0000-000000000000".into()),
-            forced_login_method: Some(ForcedLoginMethod::Chatgpt),
-            model: Some("gpt-5-codex".into()),
-            model_reasoning_effort: Some(ReasoningEffort::High),
-            model_reasoning_summary: Some(ReasoningSummary::Detailed),
-            model_verbosity: Some(Verbosity::Medium),
-            tools: Some(Tools {
-                web_search: Some(false),
-                view_image: Some(true),
-            }),
-            mcp_servers: HashMap::from([
-                (
-                    "docs".into(),
-                    ProtocolMcpServerConfig {
-                        transport: ProtocolMcpServerTransportConfig::Stdio {
-                            command: "codex-docs".into(),
-                            args: vec!["serve".into()],
-                            env: Some(HashMap::from([("PLAN".into(), "gold".into())])),
-                            env_vars: vec!["DOCS_TOKEN".into()],
-                            cwd: Some("/tmp/docs".into()),
-                        },
-                        enabled: false,
-                        startup_timeout_sec: Some(12.5),
-                        tool_timeout_sec: Some(42.0),
-                        enabled_tools: Some(vec!["read_docs".into()]),
-                        disabled_tools: Some(vec!["delete_docs".into()]),
+    let config: UserSavedConfig = to_response(resp).expect("deserialize config");
+    let expected = UserSavedConfig {
+        approval_policy: Some(AskForApproval::OnRequest),
+        sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+        sandbox_settings: Some(SandboxSettings {
+            writable_roots: vec!["/tmp".into()],
+            network_access: Some(true),
+            exclude_tmpdir_env_var: Some(true),
+            exclude_slash_tmp: Some(true),
+        }),
+        forced_chatgpt_workspace_id: Some("12345678-0000-0000-0000-000000000000".into()),
+        forced_login_method: Some(ForcedLoginMethod::Chatgpt),
+        model: Some("gpt-5-codex".into()),
+        model_reasoning_effort: Some(ReasoningEffort::High),
+        model_reasoning_summary: Some(ReasoningSummary::Detailed),
+        model_verbosity: Some(Verbosity::Medium),
+        tools: Some(Tools {
+            web_search: Some(false),
+            view_image: Some(true),
+        }),
+        mcp_servers: HashMap::from([
+            (
+                "docs".into(),
+                ProtocolMcpServerConfig {
+                    transport: ProtocolMcpServerTransportConfig::Stdio {
+                        command: "codex-docs".into(),
+                        args: vec!["serve".into()],
+                        env: Some(HashMap::from([("PLAN".into(), "gold".into())])),
+                        env_vars: vec!["DOCS_TOKEN".into()],
+                        cwd: Some("/tmp/docs".into()),
                     },
-                ),
-                (
-                    "issues".into(),
-                    ProtocolMcpServerConfig {
-                        transport: ProtocolMcpServerTransportConfig::StreamableHttp {
-                            url: "https://example.com/mcp".into(),
-                            bearer_token_env_var: Some("MCP_TOKEN".into()),
-                            http_headers: Some(HashMap::from([("X-Test".into(), "42".into())])),
-                            env_http_headers: Some(HashMap::from([(
-                                "X-Token".into(),
-                                "TOKEN_ENV".into(),
-                            )])),
-                        },
-                        enabled: true,
-                        startup_timeout_sec: Some(30.0),
-                        tool_timeout_sec: Some(15.0),
-                        enabled_tools: None,
-                        disabled_tools: None,
-                    },
-                ),
-            ]),
-            mcp_oauth_credentials_store: Some(McpOAuthCredentialsStoreMode::Keyring),
-            profile: Some("test".to_string()),
-            profiles: HashMap::from([(
-                "test".into(),
-                Profile {
-                    model: Some("gpt-4o".into()),
-                    approval_policy: Some(AskForApproval::OnRequest),
-                    model_reasoning_effort: Some(ReasoningEffort::High),
-                    model_reasoning_summary: Some(ReasoningSummary::Detailed),
-                    model_verbosity: Some(Verbosity::Medium),
-                    model_provider: Some("openai".into()),
-                    chatgpt_base_url: Some("https://api.chatgpt.com".into()),
+                    enabled: false,
+                    startup_timeout_sec: Some(12.5),
+                    tool_timeout_sec: Some(42.0),
+                    enabled_tools: Some(vec!["read_docs".into()]),
+                    disabled_tools: Some(vec!["delete_docs".into()]),
                 },
-            )]),
-        },
+            ),
+            (
+                "issues".into(),
+                ProtocolMcpServerConfig {
+                    transport: ProtocolMcpServerTransportConfig::StreamableHttp {
+                        url: "https://example.com/mcp".into(),
+                        bearer_token_env_var: Some("MCP_TOKEN".into()),
+                        http_headers: Some(HashMap::from([("X-Test".into(), "42".into())])),
+                        env_http_headers: Some(HashMap::from([(
+                            "X-Token".into(),
+                            "TOKEN_ENV".into(),
+                        )])),
+                    },
+                    enabled: true,
+                    startup_timeout_sec: Some(30.0),
+                    tool_timeout_sec: Some(15.0),
+                    enabled_tools: None,
+                    disabled_tools: None,
+                },
+            ),
+        ]),
+        mcp_oauth_credentials_store: Some(McpOAuthCredentialsStoreMode::Keyring),
+        profile: Some("test".to_string()),
+        profiles: HashMap::from([(
+            "test".into(),
+            Profile {
+                model: Some("gpt-4o".into()),
+                approval_policy: Some(AskForApproval::OnRequest),
+                model_reasoning_effort: Some(ReasoningEffort::High),
+                model_reasoning_summary: Some(ReasoningSummary::Detailed),
+                model_verbosity: Some(Verbosity::Medium),
+                model_provider: Some("openai".into()),
+                chatgpt_base_url: Some("https://api.chatgpt.com".into()),
+            },
+        )]),
     };
 
     assert_eq!(config, expected);
@@ -206,35 +203,33 @@ async fn get_config_toml_empty() {
         .expect("init failed");
 
     let request_id = mcp
-        .send_get_user_saved_config_request()
+        .send_get_config_request()
         .await
-        .expect("send getUserSavedConfig");
+        .expect("send config/read");
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await
-    .expect("getUserSavedConfig timeout")
-    .expect("getUserSavedConfig response");
+    .expect("config/read timeout")
+    .expect("config/read response");
 
-    let config: GetUserSavedConfigResponse = to_response(resp).expect("deserialize config");
-    let expected = GetUserSavedConfigResponse {
-        config: UserSavedConfig {
-            approval_policy: None,
-            sandbox_mode: None,
-            sandbox_settings: None,
-            forced_chatgpt_workspace_id: None,
-            forced_login_method: None,
-            model: None,
-            model_reasoning_effort: None,
-            model_reasoning_summary: None,
-            model_verbosity: None,
-            tools: None,
-            mcp_servers: HashMap::new(),
-            mcp_oauth_credentials_store: None,
-            profile: None,
-            profiles: HashMap::new(),
-        },
+    let config: UserSavedConfig = to_response(resp).expect("deserialize config");
+    let expected = UserSavedConfig {
+        approval_policy: None,
+        sandbox_mode: None,
+        sandbox_settings: None,
+        forced_chatgpt_workspace_id: None,
+        forced_login_method: None,
+        model: None,
+        model_reasoning_effort: None,
+        model_reasoning_summary: None,
+        model_verbosity: None,
+        tools: None,
+        mcp_servers: HashMap::new(),
+        mcp_oauth_credentials_store: None,
+        profile: None,
+        profiles: HashMap::new(),
     };
 
     assert_eq!(config, expected);
