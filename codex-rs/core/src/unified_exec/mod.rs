@@ -22,6 +22,8 @@
 //! - `session_manager.rs`: orchestration (approvals, sandboxing, reuse) and request handling.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 use std::time::Duration;
 
@@ -45,10 +47,20 @@ pub(crate) const MAX_YIELD_TIME_MS: u64 = 30_000;
 pub(crate) const DEFAULT_MAX_OUTPUT_TOKENS: usize = 10_000;
 pub(crate) const UNIFIED_EXEC_OUTPUT_MAX_BYTES: usize = 1024 * 1024; // 1 MiB
 
-pub(crate) struct UnifiedExecContext<'a> {
-    pub session: &'a Session,
-    pub turn: &'a TurnContext,
-    pub call_id: &'a str,
+pub(crate) struct UnifiedExecContext {
+    pub session: Arc<Session>,
+    pub turn: Arc<TurnContext>,
+    pub call_id: String,
+}
+
+impl UnifiedExecContext {
+    pub fn new(session: Arc<Session>, turn: Arc<TurnContext>, call_id: String) -> Self {
+        Self {
+            session,
+            turn,
+            call_id,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -70,6 +82,7 @@ pub(crate) struct WriteStdinRequest<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct UnifiedExecResponse {
+    pub event_call_id: String,
     pub chunk_id: String,
     pub wall_time: Duration,
     pub output: String,
@@ -78,10 +91,20 @@ pub(crate) struct UnifiedExecResponse {
     pub original_token_count: Option<usize>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct UnifiedExecSessionManager {
     next_session_id: AtomicI32,
-    sessions: Mutex<HashMap<i32, session::UnifiedExecSession>>,
+    sessions: Mutex<HashMap<i32, SessionEntry>>,
+}
+
+struct SessionEntry {
+    session: session::UnifiedExecSession,
+    session_ref: Arc<Session>,
+    turn_ref: Arc<TurnContext>,
+    call_id: String,
+    command: String,
+    cwd: PathBuf,
+    started_at: tokio::time::Instant,
 }
 
 pub(crate) fn clamp_yield_time(yield_time_ms: Option<u64>) -> u64 {
@@ -163,11 +186,8 @@ mod tests {
         cmd: &str,
         yield_time_ms: Option<u64>,
     ) -> Result<UnifiedExecResponse, UnifiedExecError> {
-        let context = UnifiedExecContext {
-            session,
-            turn: turn.as_ref(),
-            call_id: "call",
-        };
+        let context =
+            UnifiedExecContext::new(Arc::clone(session), Arc::clone(turn), "call".to_string());
 
         session
             .services
