@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -92,31 +93,21 @@ tool_timeout_sec = 15.0
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn get_config_toml_parses_all_fields() {
-    let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
-    create_config_toml(codex_home.path()).expect("write config.toml");
+async fn get_config_toml_parses_all_fields() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path())
-        .await
-        .expect("spawn mcp process");
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
-        .await
-        .expect("init timeout")
-        .expect("init failed");
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let request_id = mcp
-        .send_get_config_request()
-        .await
-        .expect("send config/read");
+    let request_id = mcp.send_get_config_request().await?;
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
-    .await
-    .expect("config/read timeout")
-    .expect("config/read response");
+    .await??;
 
-    let config: UserSavedConfig = to_response(resp).expect("deserialize config");
+    let config: UserSavedConfig = to_response(resp)?;
     let expected = UserSavedConfig {
         approval_policy: Some(AskForApproval::OnRequest),
         sandbox_mode: Some(SandboxMode::WorkspaceWrite),
@@ -191,33 +182,24 @@ async fn get_config_toml_parses_all_fields() {
     };
 
     assert_eq!(config, expected);
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn get_config_toml_empty() {
-    let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
+async fn get_config_toml_empty() -> Result<()> {
+    let codex_home = TempDir::new()?;
 
-    let mut mcp = McpProcess::new(codex_home.path())
-        .await
-        .expect("spawn mcp process");
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
-        .await
-        .expect("init timeout")
-        .expect("init failed");
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let request_id = mcp
-        .send_get_config_request()
-        .await
-        .expect("send config/read");
+    let request_id = mcp.send_get_config_request().await?;
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
-    .await
-    .expect("config/read timeout")
-    .expect("config/read response");
+    .await??;
 
-    let config: UserSavedConfig = to_response(resp).expect("deserialize config");
+    let config: UserSavedConfig = to_response(resp)?;
     let expected = UserSavedConfig {
         approval_policy: None,
         sandbox_mode: None,
@@ -236,18 +218,14 @@ async fn get_config_toml_empty() {
     };
 
     assert_eq!(config, expected);
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn update_config_persists_all_fields() {
-    let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
-    let mut mcp = McpProcess::new(codex_home.path())
-        .await
-        .expect("spawn mcp process");
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
-        .await
-        .expect("init timeout")
-        .expect("init failed");
+async fn update_config_persists_all_fields() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let desired = sample_user_saved_config();
 
@@ -255,92 +233,67 @@ async fn update_config_persists_all_fields() {
         .send_update_config_request(UpdateConfigParams {
             config: desired.clone(),
         })
-        .await
-        .expect("send config/update");
+        .await?;
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
-    .await
-    .expect("config/update timeout")
-    .expect("config/update response");
-    let response: UpdateConfigResponse =
-        to_response(resp).expect("deserialize update config response");
+    .await??;
+    let response: UpdateConfigResponse = to_response(resp)?;
     assert_eq!(response.config, desired);
 
-    let config_contents =
-        std::fs::read_to_string(codex_home.path().join("config.toml")).expect("read config.toml");
-    let config_toml: ConfigToml = toml::from_str(&config_contents).expect("parse config.toml");
+    let config_contents = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    let config_toml: ConfigToml = toml::from_str(&config_contents)?;
     let persisted: UserSavedConfig = config_toml.into();
     assert_eq!(persisted, desired);
 
-    let read_request_id = mcp
-        .send_get_config_request()
-        .await
-        .expect("send config/read");
+    let read_request_id = mcp.send_get_config_request().await?;
     let read_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(read_request_id)),
     )
-    .await
-    .expect("config/read timeout")
-    .expect("config/read response");
-    let read_config: UserSavedConfig =
-        to_response(read_resp).expect("deserialize config/read response");
+    .await??;
+    let read_config: UserSavedConfig = to_response(read_resp)?;
     assert_eq!(read_config, desired);
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn update_config_clears_missing_fields() {
-    let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
-    create_config_toml(codex_home.path()).expect("write config.toml");
+async fn update_config_clears_missing_fields() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path())
-        .await
-        .expect("spawn mcp process");
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
-        .await
-        .expect("init timeout")
-        .expect("init failed");
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let desired = empty_user_saved_config();
     let request_id = mcp
         .send_update_config_request(UpdateConfigParams {
             config: desired.clone(),
         })
-        .await
-        .expect("send config/update");
+        .await?;
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
-    .await
-    .expect("config/update timeout")
-    .expect("config/update response");
-    let response: UpdateConfigResponse =
-        to_response(resp).expect("deserialize update config response");
+    .await??;
+    let response: UpdateConfigResponse = to_response(resp)?;
     assert_eq!(response.config, desired);
 
-    let config_contents =
-        std::fs::read_to_string(codex_home.path().join("config.toml")).expect("read config.toml");
-    let config_toml: ConfigToml = toml::from_str(&config_contents).expect("parse config.toml");
+    let config_contents = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    let config_toml: ConfigToml = toml::from_str(&config_contents)?;
     let persisted: UserSavedConfig = config_toml.into();
     assert_eq!(persisted, desired);
 
-    let read_request_id = mcp
-        .send_get_config_request()
-        .await
-        .expect("send config/read");
+    let read_request_id = mcp.send_get_config_request().await?;
     let read_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(read_request_id)),
     )
-    .await
-    .expect("config/read timeout")
-    .expect("config/read response");
-    let read_config: UserSavedConfig =
-        to_response(read_resp).expect("deserialize config/read response");
+    .await??;
+    let read_config: UserSavedConfig = to_response(read_resp)?;
     assert_eq!(read_config, desired);
+    Ok(())
 }
 
 fn empty_user_saved_config() -> UserSavedConfig {
