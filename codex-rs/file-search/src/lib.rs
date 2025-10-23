@@ -122,6 +122,7 @@ pub async fn run_main<T: Reporter>(
 
 /// The worker threads will periodically check `cancel_flag` to see if they
 /// should stop processing files.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     pattern_text: &str,
     limit: NonZero<usize>,
