@@ -100,3 +100,7 @@ If you don’t have the tool:
   let request = mock.single_request();
   // assert using request.function_call_output(call_id) or request.json_body() or other helpers.
   ```
+
+
+## NOTES
+- It's important to read files in full, so always read files in full. 
