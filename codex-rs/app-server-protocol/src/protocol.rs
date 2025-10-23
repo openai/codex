@@ -130,6 +130,20 @@ client_request_definitions! {
         response: GetAccountResponse,
     },
 
+    #[serde(rename = "config/read")]
+    #[ts(rename = "config/read")]
+    GetConfig {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: Config,
+    },
+
+    #[serde(rename = "config/update")]
+    #[ts(rename = "config/update")]
+    UpdateConfig {
+        params: UpdateConfigParams,
+        response: UpdateConfigResponse,
+    },
+
     /// DEPRECATED APIs below
     Initialize {
         params: InitializeParams,
@@ -408,6 +422,18 @@ pub struct LoginAccountResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct LogoutAccountResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateConfigParams {
+    pub config: Config,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateConfigResponse {
+    pub config: Config,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
