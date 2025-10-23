@@ -1,15 +1,19 @@
 use std::time::Instant;
 
 use tracing::error;
+use tracing::warn;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::protocol::EventMsg;
+use crate::protocol::InputItem;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use mcp_types::CallToolResult;
+use mcp_types::ContentBlock;
 
 /// Handles the specified tool call dispatches the appropriate
 /// `McpToolCallBegin` and `McpToolCallEnd` events to the `Session`.
@@ -71,9 +75,41 @@ pub(crate) async fn handle_mcp_tool_call(
 
     notify_mcp_tool_call_event(sess, turn_context, tool_call_end_event.clone()).await;
 
+    if let Ok(call_tool_result) = &result
+        && let Some(items) = build_input_items_for_call_tool_result(call_tool_result)
+            && let Err(unqueued) = sess.inject_input(items).await {
+                warn!(
+                    "failed to queue MCP tool output for model consumption ({} items)",
+                    unqueued.len()
+                );
+            }
+
     ResponseInputItem::McpToolCallOutput { call_id, result }
 }
 
 async fn notify_mcp_tool_call_event(sess: &Session, turn_context: &TurnContext, event: EventMsg) {
     sess.send_event(turn_context, event).await;
+}
+
+fn build_input_items_for_call_tool_result(result: &CallToolResult) -> Option<Vec<InputItem>> {
+    let mut items: Vec<InputItem> = Vec::new();
+    let mut saw_image = false;
+
+    for block in &result.content {
+        match block {
+            ContentBlock::TextContent(text) if !text.text.is_empty() => {
+                items.push(InputItem::Text {
+                    text: text.text.clone(),
+                });
+            }
+            ContentBlock::ImageContent(image) => {
+                let image_url = format!("data:{};base64,{}", image.mime_type, image.data);
+                items.push(InputItem::Image { image_url });
+                saw_image = true;
+            }
+            _ => {}
+        }
+    }
+
+    if saw_image { Some(items) } else { None }
 }
