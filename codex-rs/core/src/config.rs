@@ -34,6 +34,7 @@ use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use anyhow::Context;
+use codex_app_server_protocol::McpOAuthCredentialsStoreMode;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -985,19 +986,11 @@ impl From<ConfigToml> for UserSavedConfig {
             model_verbosity: config_toml.model_verbosity,
             tools: config_toml.tools.map(From::from),
             mcp_servers,
-            mcp_oauth_credentials_store: config_toml.mcp_oauth_credentials_store.map(From::from),
+            mcp_oauth_credentials_store: config_toml
+                .mcp_oauth_credentials_store
+                .map(map_oauth_credentials_store_mode),
             profile: config_toml.profile,
             profiles,
-        }
-    }
-}
-
-impl From<OAuthCredentialsStoreMode> for codex_app_server_protocol::McpOAuthCredentialsStoreMode {
-    fn from(mode: OAuthCredentialsStoreMode) -> Self {
-        match mode {
-            OAuthCredentialsStoreMode::Auto => Self::Auto,
-            OAuthCredentialsStoreMode::File => Self::File,
-            OAuthCredentialsStoreMode::Keyring => Self::Keyring,
         }
     }
 }
@@ -1503,6 +1496,16 @@ fn default_model() -> String {
 
 fn default_review_model() -> String {
     OPENAI_DEFAULT_REVIEW_MODEL.to_string()
+}
+
+fn map_oauth_credentials_store_mode(
+    mode: OAuthCredentialsStoreMode,
+) -> McpOAuthCredentialsStoreMode {
+    match mode {
+        OAuthCredentialsStoreMode::Auto => McpOAuthCredentialsStoreMode::Auto,
+        OAuthCredentialsStoreMode::File => McpOAuthCredentialsStoreMode::File,
+        OAuthCredentialsStoreMode::Keyring => McpOAuthCredentialsStoreMode::Keyring,
+    }
 }
 
 /// Returns the path to the Codex configuration directory, which can be
