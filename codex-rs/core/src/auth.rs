@@ -26,13 +26,112 @@ use crate::token_data::PlanType;
 use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;
 
+/// Determine where Codex should store CLI auth credentials.
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthCredentialsStoreMode {
+    #[default]
+    /// Persist credentials in CODEX_HOME/auth.json.
+    File,
+    // TODO: Implement keyring support.
+}
+
+#[derive(Clone)]
+struct AuthStorage {
+    codex_home: PathBuf,
+    mode: AuthCredentialsStoreMode,
+}
+
+impl AuthStorage {
+    fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
+        match self.mode {
+            AuthCredentialsStoreMode::File => self.load_from_file(),
+        }
+    }
+
+    fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
+        match self.mode {
+            AuthCredentialsStoreMode::File => self.save_to_file(auth),
+        }
+    }
+
+    fn delete(&self) -> std::io::Result<bool> {
+        let file_removed = match self.delete_file_if_exists() {
+            Ok(removed) => removed,
+            Err(err) => {
+                return Err(err);
+            }
+        };
+        Ok(file_removed)
+    }
+
+    fn load_from_file(&self) -> std::io::Result<Option<AuthDotJson>> {
+        let auth_file = self.get_auth_file(&self.codex_home);
+        let auth_dot_json = match self.try_read_auth_json(&auth_file) {
+            Ok(auth) => auth,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        Ok(Some(auth_dot_json))
+    }
+
+    fn save_to_file(&self, auth: &AuthDotJson) -> std::io::Result<()> {
+        self.write_auth_json(&self.get_auth_file(&self.codex_home), auth)
+    }
+
+    fn delete_file_if_exists(&self) -> std::io::Result<bool> {
+        let auth_file = self.get_auth_file(&self.codex_home);
+        match std::fs::remove_file(&auth_file) {
+            Ok(()) => Ok(true),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Attempt to read and refresh the `auth.json` file in the given `CODEX_HOME` directory.
+    /// Returns the full AuthDotJson structure after refreshing if necessary.
+    fn try_read_auth_json(&self, auth_file: &Path) -> std::io::Result<AuthDotJson> {
+        let mut file = File::open(auth_file)?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+        let auth_dot_json: AuthDotJson = serde_json::from_str(&contents)?;
+
+        Ok(auth_dot_json)
+    }
+
+    fn get_auth_file(&self, codex_home: &Path) -> PathBuf {
+        codex_home.join("auth.json")
+    }
+
+    fn write_auth_json(
+        &self,
+        auth_file: &Path,
+        auth_dot_json: &AuthDotJson,
+    ) -> std::io::Result<()> {
+        if let Some(parent) = auth_file.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json_data = serde_json::to_string_pretty(auth_dot_json)?;
+        let mut options = OpenOptions::new();
+        options.truncate(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            options.mode(0o600);
+        }
+        let mut file = options.open(auth_file)?;
+        file.write_all(json_data.as_bytes())?;
+        file.flush()?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CodexAuth {
     pub mode: AuthMode,
 
     pub(crate) api_key: Option<String>,
     pub(crate) auth_dot_json: Arc<Mutex<Option<AuthDotJson>>>,
-    pub(crate) auth_file: PathBuf,
+    pub(crate) storage: Arc<AuthStorage>,
     pub(crate) client: CodexHttpClient,
 }
 
@@ -56,7 +155,7 @@ impl CodexAuth {
             .map_err(std::io::Error::other)?;
 
         let updated = update_tokens(
-            &self.auth_file,
+            &self.storage,
             refresh_response.id_token,
             refresh_response.access_token,
             refresh_response.refresh_token,
@@ -103,7 +202,7 @@ impl CodexAuth {
                     .map_err(std::io::Error::other)?;
 
                     let updated_auth_dot_json = update_tokens(
-                        &self.auth_file,
+                        &self.storage,
                         refresh_response.id_token,
                         refresh_response.access_token,
                         refresh_response.refresh_token,
@@ -215,19 +314,11 @@ pub fn read_codex_api_key_from_env() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-pub fn get_auth_file(codex_home: &Path) -> PathBuf {
-    codex_home.join("auth.json")
-}
-
 /// Delete the auth.json file inside `codex_home` if it exists. Returns `Ok(true)`
 /// if a file was removed, `Ok(false)` if no auth file was present.
 pub fn logout(codex_home: &Path) -> std::io::Result<bool> {
-    let auth_file = get_auth_file(codex_home);
-    match std::fs::remove_file(&auth_file) {
-        Ok(_) => Ok(true),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(err) => Err(err),
-    }
+    let storage = AuthStorage::new(codex_home.to_path_buf(), AuthCredentialsStoreMode::File);
+    storage.delete()
 }
 
 /// Writes an `auth.json` that contains only the API key.
@@ -237,7 +328,8 @@ pub fn login_with_api_key(codex_home: &Path, api_key: &str) -> std::io::Result<(
         tokens: None,
         last_refresh: None,
     };
-    write_auth_json(&get_auth_file(codex_home), &auth_dot_json)
+    let storage = AuthStorage::new(codex_home.to_path_buf(), AuthCredentialsStoreMode::File);
+    storage.save(&auth_dot_json)
 }
 
 pub async fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
@@ -320,12 +412,12 @@ fn load_auth(
         )));
     }
 
-    let auth_file = get_auth_file(codex_home);
+    let storage = AuthStorage::new(codex_home.to_path_buf(), AuthCredentialsStoreMode::File);
+
     let client = crate::default_client::create_client();
-    let auth_dot_json = match try_read_auth_json(&auth_file) {
-        Ok(auth) => auth,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err),
+    let auth_dot_json = match storage.load()? {
+        Some(auth) => auth,
+        None => return Ok(None),
     };
 
     let AuthDotJson {
@@ -342,7 +434,7 @@ fn load_auth(
     Ok(Some(CodexAuth {
         api_key: None,
         mode: AuthMode::ChatGPT,
-        auth_file,
+        storage: Arc::new(storage),
         auth_dot_json: Arc::new(Mutex::new(Some(AuthDotJson {
             openai_api_key: None,
             tokens,
@@ -352,41 +444,15 @@ fn load_auth(
     }))
 }
 
-/// Attempt to read and refresh the `auth.json` file in the given `CODEX_HOME` directory.
-/// Returns the full AuthDotJson structure after refreshing if necessary.
-pub fn try_read_auth_json(auth_file: &Path) -> std::io::Result<AuthDotJson> {
-    let mut file = File::open(auth_file)?;
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)?;
-    let auth_dot_json: AuthDotJson = serde_json::from_str(&contents)?;
-
-    Ok(auth_dot_json)
-}
-
-pub fn write_auth_json(auth_file: &Path, auth_dot_json: &AuthDotJson) -> std::io::Result<()> {
-    if let Some(parent) = auth_file.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let json_data = serde_json::to_string_pretty(auth_dot_json)?;
-    let mut options = OpenOptions::new();
-    options.truncate(true).write(true).create(true);
-    #[cfg(unix)]
-    {
-        options.mode(0o600);
-    }
-    let mut file = options.open(auth_file)?;
-    file.write_all(json_data.as_bytes())?;
-    file.flush()?;
-    Ok(())
-}
-
 async fn update_tokens(
-    auth_file: &Path,
+    storage: &AuthStorage,
     id_token: Option<String>,
     access_token: Option<String>,
     refresh_token: Option<String>,
 ) -> std::io::Result<AuthDotJson> {
-    let mut auth_dot_json = try_read_auth_json(auth_file)?;
+    let mut auth_dot_json = storage
+        .load()?
+        .ok_or(std::io::Error::other("Token data is not available."))?;
 
     let tokens = auth_dot_json.tokens.get_or_insert_with(TokenData::default);
     if let Some(id_token) = id_token {
@@ -399,7 +465,7 @@ async fn update_tokens(
         tokens.refresh_token = refresh_token;
     }
     auth_dot_json.last_refresh = Some(Utc::now());
-    write_auth_json(auth_file, &auth_dot_json)?;
+    storage.save(&auth_dot_json)?;
     Ok(auth_dot_json)
 }
 
