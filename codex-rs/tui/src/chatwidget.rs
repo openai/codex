@@ -1796,7 +1796,7 @@ impl ChatWidget {
             let description_text = preset.description;
             let description = if cfg!(target_os = "windows") && preset.id == "auto" {
                 Some(format!(
-                    "{description_text}\n\nRequires Windows Subsystem for Linux (WSL). Selecting this shows installation instructions."
+                    "{description_text}\nRequires Windows Subsystem for Linux (WSL). Show installation instructions..."
                 ))
             } else {
                 Some(description_text.to_string())
