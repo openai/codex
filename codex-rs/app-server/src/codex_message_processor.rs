@@ -197,6 +197,21 @@ impl CodexMessageProcessor {
                 self.send_unimplemented_error(request_id, "account/read")
                     .await;
             }
+            ClientRequest::GetAccountRateLimits {
+                request_id,
+                params: _,
+            } => {
+                self.get_account_rate_limits(request_id).await;
+            }
+            ClientRequest::GetConfig {
+                request_id,
+                params: _,
+            } => {
+                self.get_user_saved_config(request_id).await;
+            }
+            ClientRequest::UpdateConfig { request_id, params } => {
+                self.update_user_saved_config(request_id, params).await;
+            }
             ClientRequest::ResumeConversation { request_id, params } => {
                 self.handle_resume_conversation(request_id, params).await;
             }
@@ -268,12 +283,6 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
-            }
-            ClientRequest::GetAccountRateLimits {
-                request_id,
-                params: _,
-            } => {
-                self.get_account_rate_limits(request_id).await;
             }
         }
     }
@@ -650,6 +659,14 @@ impl CodexMessageProcessor {
         let response = GetUserSavedConfigResponse {
             config: user_saved_config,
         };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn update_user_saved_config(&self, request_id: RequestId, params: UpdateConfigParams) {
+        let UpdateConfigParams { config } = params;
+        let config: UserSavedConfig = config.into();
+        // TODO(owen): actually persist config
+        let response = UpdateConfigResponse { config };
         self.outgoing.send_response(request_id, response).await;
     }
 
