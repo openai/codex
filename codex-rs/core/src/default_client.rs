@@ -44,49 +44,22 @@ impl CodexHttpClient {
     where
         U: IntoUrl,
     {
-        CodexRequestBuilder::new(self.inner.get(url))
+        self.request(Method::GET, url)
     }
 
     pub fn post<U>(&self, url: U) -> CodexRequestBuilder
     where
         U: IntoUrl,
     {
-        CodexRequestBuilder::new(self.inner.post(url))
-    }
-
-    pub fn put<U>(&self, url: U) -> CodexRequestBuilder
-    where
-        U: IntoUrl,
-    {
-        CodexRequestBuilder::new(self.inner.put(url))
-    }
-
-    pub fn delete<U>(&self, url: U) -> CodexRequestBuilder
-    where
-        U: IntoUrl,
-    {
-        CodexRequestBuilder::new(self.inner.delete(url))
-    }
-
-    pub fn patch<U>(&self, url: U) -> CodexRequestBuilder
-    where
-        U: IntoUrl,
-    {
-        CodexRequestBuilder::new(self.inner.patch(url))
-    }
-
-    pub fn head<U>(&self, url: U) -> CodexRequestBuilder
-    where
-        U: IntoUrl,
-    {
-        CodexRequestBuilder::new(self.inner.head(url))
+        self.request(Method::POST, url)
     }
 
     pub fn request<U>(&self, method: Method, url: U) -> CodexRequestBuilder
     where
         U: IntoUrl,
     {
-        CodexRequestBuilder::new(self.inner.request(method, url))
+        let url_str = url.as_str().to_string();
+        CodexRequestBuilder::new(self.inner.request(method.clone(), url), method, url_str)
     }
 }
 
@@ -94,16 +67,24 @@ impl CodexHttpClient {
 #[derive(Debug)]
 pub struct CodexRequestBuilder {
     builder: reqwest::RequestBuilder,
+    method: Method,
+    url: String,
 }
 
 impl CodexRequestBuilder {
-    fn new(builder: reqwest::RequestBuilder) -> Self {
-        Self { builder }
+    fn new(builder: reqwest::RequestBuilder, method: Method, url: String) -> Self {
+        Self {
+            builder,
+            method,
+            url,
+        }
     }
 
     fn map(self, f: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder) -> Self {
         Self {
             builder: f(self.builder),
+            method: self.method,
+            url: self.url,
         }
     }
 
@@ -132,51 +113,39 @@ impl CodexRequestBuilder {
     }
 
     pub async fn send(self) -> Result<Response, reqwest::Error> {
-        let context = self.request_context();
         match self.builder.send().await {
             Ok(response) => {
-                if let Some((method, url)) = context.as_ref() {
-                    tracing::debug!(
-                        method = %method,
-                        url = %url,
-                        status = %response.status(),
-                        "Codex HTTP request completed"
-                    );
-                } else {
-                    tracing::debug!(
-                        status = %response.status(),
-                        "Codex HTTP request completed"
-                    );
-                }
+                let request_id = response
+                    .headers()
+                    .get("cf-ray")
+                    .map(|v| v.to_str().unwrap_or_default().to_string())
+                    .unwrap_or_default();
+
+                let version = format!("{:?}", response.version());
+
+                tracing::debug!(
+                    method = %self.method,
+                    url = %self.url,
+                    status = %response.status(),
+                    request_id = %request_id,
+                    version = %version,
+                    "Request completed"
+                );
+
                 Ok(response)
             }
             Err(error) => {
                 let status = error.status();
-                if let Some((method, url)) = context.as_ref() {
-                    tracing::debug!(
-                        method = %method,
-                        url = %url,
-                        status = status.map(|s| s.as_u16()),
-                        error = %error,
-                        "Codex HTTP request failed"
-                    );
-                } else {
-                    tracing::debug!(
-                        status = status.map(|s| s.as_u16()),
-                        error = %error,
-                        "Codex HTTP request failed"
-                    );
-                }
+                tracing::debug!(
+                    method = %self.method,
+                    url = %self.url,
+                    status = status.map(|s| s.as_u16()),
+                    error = %error,
+                    "Request failed"
+                );
                 Err(error)
             }
         }
-    }
-
-    fn request_context(&self) -> Option<(Method, String)> {
-        self.builder
-            .try_clone()
-            .and_then(|builder| builder.build().ok())
-            .map(|request| (request.method().clone(), request.url().to_string()))
     }
 }
 #[derive(Debug, Clone)]

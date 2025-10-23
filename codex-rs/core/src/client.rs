@@ -336,13 +336,6 @@ impl ModelClient {
                 .headers()
                 .get("cf-ray")
                 .map(|v| v.to_str().unwrap_or_default().to_string());
-
-            debug!(
-                "Response status: {}, cf-ray: {:?}, version: {:?}",
-                resp.status(),
-                request_id,
-                resp.version()
-            );
         }
 
         match res {
