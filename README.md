@@ -3,6 +3,7 @@ Codex but with a --yolo3 command to avoid timeouts and sandboxing
 ```
 cargo build --release -p codex-cli
 ./codex-rs/target/release/codex --yolo3
+also the --auto-next-steps and --auto-next-idea args together make it fully autonomous
 ```
 
 ## Quickstart

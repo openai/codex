@@ -111,6 +111,7 @@ pub struct Config {
     pub passthrough_shell_environment: bool,
     pub passthrough_shell_stdio: bool,
     pub auto_next_steps: bool,
+    pub auto_next_idea: bool,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
     /// suppressed from the frontend output. This can reduce visual noise when
@@ -852,6 +853,9 @@ pub struct ConfigToml {
     /// Continue automatically by prompting for detailed next steps.
     pub auto_next_steps: Option<bool>,
 
+    /// Continue autonomously by identifying fresh tasks when current work is done.
+    pub auto_next_idea: Option<bool>,
+
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
@@ -1114,6 +1118,7 @@ pub struct ConfigOverrides {
     pub passthrough_shell_environment: Option<bool>,
     pub passthrough_shell_stdio: Option<bool>,
     pub auto_next_steps: Option<bool>,
+    pub auto_next_idea: Option<bool>,
 }
 
 impl Config {
@@ -1146,6 +1151,7 @@ impl Config {
             passthrough_shell_environment,
             passthrough_shell_stdio,
             auto_next_steps,
+            auto_next_idea,
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -1257,6 +1263,10 @@ impl Config {
             .or(config_profile.auto_next_steps)
             .or(cfg.auto_next_steps)
             .unwrap_or(false);
+        let auto_next_idea = auto_next_idea
+            .or(config_profile.auto_next_idea)
+            .or(cfg.auto_next_idea)
+            .unwrap_or(false);
 
         let include_plan_tool_flag = features.enabled(Feature::PlanTool);
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
@@ -1307,6 +1317,14 @@ impl Config {
             Self::get_base_instructions(experimental_instructions_path, &resolved_cwd)?;
         let base_instructions = base_instructions.or(file_base_instructions);
 
+        let workspace_mcp_servers = load_workspace_mcp_servers(&resolved_cwd);
+        let mut mcp_servers = cfg.mcp_servers;
+        if !workspace_mcp_servers.is_empty() {
+            for (name, server) in workspace_mcp_servers {
+                mcp_servers.insert(name, server);
+            }
+        }
+
         // Default review model when not set in config; allow CLI override to take precedence.
         let review_model = override_review_model
             .or(cfg.review_model)
@@ -1334,10 +1352,11 @@ impl Config {
             passthrough_shell_environment,
             passthrough_shell_stdio,
             auto_next_steps,
+            auto_next_idea,
             notify: cfg.notify,
             user_instructions,
             base_instructions,
-            mcp_servers: cfg.mcp_servers,
+            mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: cfg.mcp_oauth_credentials_store.unwrap_or_default(),
@@ -1469,6 +1488,72 @@ impl Config {
             Ok(Some(s))
         }
     }
+}
+
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceFile {
+    #[serde(default)]
+    mcp_servers: HashMap<String, McpServerConfig>,
+}
+
+const WORKSPACE_CONFIG_LOCATIONS: &[&[&str]] = &[
+    &[".openai", "workspace.json"],
+    &[".codex", "workspace.json"],
+    &["workspace.json"],
+];
+
+fn load_workspace_mcp_servers(start: &Path) -> HashMap<String, McpServerConfig> {
+    let Some(path) = find_workspace_config_path(start) else {
+        return HashMap::new();
+    };
+
+    match read_workspace_mcp_servers(&path) {
+        Ok(servers) => servers,
+        Err(err) => {
+            tracing::warn!(
+                "failed to load workspace MCP config {}: {err}",
+                path.display()
+            );
+            HashMap::new()
+        }
+    }
+}
+
+fn read_workspace_mcp_servers(path: &Path) -> std::io::Result<HashMap<String, McpServerConfig>> {
+    let contents = std::fs::read_to_string(path)?;
+    let workspace: WorkspaceFile = serde_json::from_str(&contents).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("failed to parse workspace config {}: {err}", path.display()),
+        )
+    })?;
+    Ok(workspace.mcp_servers)
+}
+
+fn find_workspace_config_path(start: &Path) -> Option<PathBuf> {
+    let mut current = match dunce::canonicalize(start) {
+        Ok(path) => path,
+        Err(_) => start.to_path_buf(),
+    };
+
+    loop {
+        for components in WORKSPACE_CONFIG_LOCATIONS {
+            let mut candidate = current.clone();
+            for component in *components {
+                candidate.push(component);
+            }
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+
+        if !current.pop() {
+            break;
+        }
+    }
+
+    None
 }
 
 fn default_model() -> String {
@@ -1984,6 +2069,113 @@ bearer_token = "secret"
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("bearer_token"));
         assert!(err.to_string().contains("bearer_token_env_var"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_config_adds_mcp_servers() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let workspace_root = TempDir::new()?;
+        let workspace_dir = workspace_root.path();
+        let openai_dir = workspace_dir.join(".openai");
+        std::fs::create_dir_all(&openai_dir)?;
+        std::fs::write(
+            openai_dir.join("workspace.json"),
+            r#"{"mcpServers":{"fal":{"url":"https://docs.fal.ai/mcp"}}}"#,
+        )?;
+
+        let mut cfg = ConfigToml::default();
+        cfg.mcp_servers.insert(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "docs".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+            },
+        );
+
+        let mut overrides = ConfigOverrides::default();
+        overrides.cwd = Some(workspace_dir.to_path_buf());
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            overrides,
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(config.mcp_servers.contains_key("docs"));
+        assert_eq!(config.mcp_servers.len(), 2);
+
+        let fal = config
+            .mcp_servers
+            .get("fal")
+            .expect("workspace config should add fal server");
+        match &fal.transport {
+            McpServerTransportConfig::StreamableHttp { url, .. } => {
+                assert_eq!(url, "https://docs.fal.ai/mcp");
+            }
+            other => panic!("unexpected transport {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_config_overrides_existing_mcp_server() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let workspace_root = TempDir::new()?;
+        let workspace_dir = workspace_root.path();
+        let openai_dir = workspace_dir.join(".openai");
+        std::fs::create_dir_all(&openai_dir)?;
+        std::fs::write(
+            openai_dir.join("workspace.json"),
+            r#"{"mcpServers":{"fal":{"url":"https://docs.fal.ai/mcp"}}}"#,
+        )?;
+
+        let mut cfg = ConfigToml::default();
+        cfg.mcp_servers.insert(
+            "fal".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "fal-local".to_string(),
+                    args: vec!["--flag".to_string()],
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+            },
+        );
+
+        let mut overrides = ConfigOverrides::default();
+        overrides.cwd = Some(workspace_dir.to_path_buf());
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            overrides,
+            codex_home.path().to_path_buf(),
+        )?;
+
+        let fal = config
+            .mcp_servers
+            .get("fal")
+            .expect("workspace config should override fal server");
+        match &fal.transport {
+            McpServerTransportConfig::StreamableHttp { url, .. } => {
+                assert_eq!(url, "https://docs.fal.ai/mcp");
+            }
+            other => panic!("expected workspace override to win, got {other:?}"),
+        }
 
         Ok(())
     }
@@ -2765,6 +2957,7 @@ model_verbosity = "high"
                 passthrough_shell_environment: false,
                 passthrough_shell_stdio: false,
                 auto_next_steps: false,
+                auto_next_idea: false,
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -2836,6 +3029,7 @@ model_verbosity = "high"
             passthrough_shell_environment: false,
             passthrough_shell_stdio: false,
             auto_next_steps: false,
+            auto_next_idea: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -2922,6 +3116,7 @@ model_verbosity = "high"
             passthrough_shell_environment: false,
             passthrough_shell_stdio: false,
             auto_next_steps: false,
+            auto_next_idea: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -2994,6 +3189,7 @@ model_verbosity = "high"
             passthrough_shell_environment: false,
             passthrough_shell_stdio: false,
             auto_next_steps: false,
+            auto_next_idea: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),

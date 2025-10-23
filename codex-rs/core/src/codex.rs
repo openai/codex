@@ -277,6 +277,7 @@ pub(crate) struct TurnContext {
     pub(crate) passthrough_shell_environment: bool,
     pub(crate) passthrough_shell_stdio: bool,
     pub(crate) auto_next_steps: bool,
+    pub(crate) auto_next_idea: bool,
 }
 
 impl TurnContext {
@@ -508,6 +509,7 @@ impl Session {
             passthrough_shell_environment: config.passthrough_shell_environment,
             passthrough_shell_stdio: config.passthrough_shell_stdio,
             auto_next_steps: config.auto_next_steps,
+            auto_next_idea: config.auto_next_idea,
         };
         let services = SessionServices {
             mcp_connection_manager,
@@ -1299,6 +1301,7 @@ async fn submission_loop(
                     passthrough_shell_environment: prev.passthrough_shell_environment,
                     passthrough_shell_stdio: prev.passthrough_shell_stdio,
                     auto_next_steps: prev.auto_next_steps,
+                    auto_next_idea: prev.auto_next_idea,
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
@@ -1396,6 +1399,7 @@ async fn submission_loop(
                         passthrough_shell_environment: turn_context.passthrough_shell_environment,
                         passthrough_shell_stdio: turn_context.passthrough_shell_stdio,
                         auto_next_steps: turn_context.auto_next_steps,
+                        auto_next_idea: turn_context.auto_next_idea,
                     };
 
                     // if the environment context has changed, record it in the conversation history
@@ -1686,6 +1690,7 @@ async fn spawn_review_thread(
         passthrough_shell_environment: parent_turn_context.passthrough_shell_environment,
         passthrough_shell_stdio: parent_turn_context.passthrough_shell_stdio,
         auto_next_steps: parent_turn_context.auto_next_steps,
+        auto_next_idea: parent_turn_context.auto_next_idea,
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -1966,10 +1971,15 @@ pub(crate) async fn run_task(
                         &items_to_record_in_conversation_history,
                     );
 
-                    if turn_context.auto_next_steps
+                    let auto_next_steps = turn_context.auto_next_steps;
+                    let auto_next_idea = turn_context.auto_next_idea;
+                    if (auto_next_steps || auto_next_idea)
                         && !sess.has_pending_input().await
-                        && let Some(next_prompt) =
-                            build_auto_next_steps_prompt(last_agent_message.as_deref())
+                        && let Some(next_prompt) = build_autonomy_follow_up_prompt(
+                            last_agent_message.as_deref(),
+                            auto_next_steps,
+                            auto_next_idea,
+                        )
                     {
                         match sess
                             .inject_input(vec![InputItem::Text {
@@ -1980,13 +1990,17 @@ pub(crate) async fn run_task(
                             Ok(()) => {
                                 sess.notify_background_event(
                                     &sub_id,
-                                    "Auto-next-steps: queuing detailed follow-up tasks.",
+                                    background_autonomy_message(auto_next_steps, auto_next_idea),
                                 )
                                 .await;
                                 continue;
                             }
                             Err(_) => {
-                                tracing::warn!("auto-next-steps: failed to queue follow-up prompt");
+                                tracing::warn!(
+                                    auto_next_steps,
+                                    auto_next_idea,
+                                    "autonomy: failed to queue follow-up prompt"
+                                );
                             }
                         }
                     }
@@ -2496,19 +2510,50 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
     })
 }
 
-fn build_auto_next_steps_prompt(last_agent_message: Option<&str>) -> Option<String> {
-    const BASE_DIRECTIVE: &str = "Continue working autonomously. Identify detailed next steps based on the current state, execute them sequentially, and provide concise progress updates after each step. Stop only if the user interrupts.";
+fn build_autonomy_follow_up_prompt(
+    last_agent_message: Option<&str>,
+    auto_next_steps: bool,
+    auto_next_idea: bool,
+) -> Option<String> {
+    if !auto_next_steps && !auto_next_idea {
+        return None;
+    }
 
-    let summary = last_agent_message
+    const STEPS_DIRECTIVE: &str = "Continue working autonomously. Break the overall goal into concrete next steps, execute them sequentially, and after each step write a concise progress update before deciding what to do next. Treat this follow-up as a fresh thinking prompt instead of wrapping up early.";
+    const IDEA_DIRECTIVE: &str = "Whenever you run out of meaningful next steps or reach a natural stopping point, shift into ideation mode. Inspect the repository and surrounding context, brainstorm at least three concrete improvements for this product, explain the expected impact, rank them, choose the top opportunity, and immediately begin executing it.";
+    const INTERRUPT_DIRECTIVE: &str = "Always check for new user instructions, review requests, or approvals before acting, and respond to them first. If the session resumes after an interruption, briefly summarize where you left off before continuing.";
+    const LOOP_DIRECTIVE: &str = "Repeat this cycle indefinitely while autonomy is enabled. Only stop if the user explicitly intervenes or ends the session.";
+
+    let mut sections: Vec<&'static str> = Vec::new();
+    if auto_next_steps {
+        sections.push(STEPS_DIRECTIVE);
+    }
+    if auto_next_idea {
+        sections.push(IDEA_DIRECTIVE);
+    }
+    sections.push(INTERRUPT_DIRECTIVE);
+    sections.push(LOOP_DIRECTIVE);
+
+    let mut prompt = sections.join("\n\n");
+
+    if let Some(summary) = last_agent_message
         .map(str::trim)
-        .filter(|summary| !summary.is_empty());
+        .filter(|summary| !summary.is_empty())
+    {
+        prompt.push_str("\n\nLatest summary from your previous work:\n");
+        prompt.push_str(summary);
+    }
 
-    Some(match summary {
-        Some(summary) => {
-            format!("{BASE_DIRECTIVE}\n\nLatest summary from your previous work:\n{summary}")
-        }
-        None => BASE_DIRECTIVE.to_string(),
-    })
+    Some(prompt)
+}
+
+fn background_autonomy_message(auto_next_steps: bool, auto_next_idea: bool) -> &'static str {
+    match (auto_next_steps, auto_next_idea) {
+        (true, true) => "Autonomy: continuing with next steps and fresh ideas.",
+        (true, false) => "Auto-next-steps: queuing detailed follow-up tasks.",
+        (false, true) => "Auto-next-idea: proposing new high-impact work.",
+        (false, false) => "Autonomy disabled.",
+    }
 }
 fn convert_call_tool_result_to_function_call_output_payload(
     call_tool_result: &CallToolResult,
@@ -2933,6 +2978,7 @@ mod tests {
             passthrough_shell_environment: config.passthrough_shell_environment,
             passthrough_shell_stdio: config.passthrough_shell_stdio,
             auto_next_steps: config.auto_next_steps,
+            auto_next_idea: config.auto_next_idea,
         };
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
@@ -3006,6 +3052,7 @@ mod tests {
             passthrough_shell_environment: config.passthrough_shell_environment,
             passthrough_shell_stdio: config.passthrough_shell_stdio,
             auto_next_steps: config.auto_next_steps,
+            auto_next_idea: config.auto_next_idea,
         });
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),

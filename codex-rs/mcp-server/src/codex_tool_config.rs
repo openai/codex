@@ -168,6 +168,7 @@ impl CodexToolCallParam {
             passthrough_shell_environment: None,
             passthrough_shell_stdio: None,
             auto_next_steps: None,
+            auto_next_idea: None,
         };
 
         let cli_overrides = cli_overrides

@@ -95,6 +95,10 @@ pub struct Cli {
     #[arg(long = "auto-next-steps", default_value_t = false)]
     pub auto_next_steps: bool,
 
+    /// After current tasks finish, brainstorm and kick off the next improvement automatically.
+    #[arg(long = "auto-next-idea", default_value_t = false)]
+    pub auto_next_idea: bool,
+
     /// Tell the agent to use the specified directory as its working root.
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,

@@ -79,6 +79,14 @@ pub struct Cli {
     )]
     pub auto_next_steps: bool,
 
+    /// After completing the current plan, autonomously ideate and begin the next high-impact task.
+    #[arg(
+        long = "auto-next-idea",
+        default_value_t = false,
+        conflicts_with = "full_auto"
+    )]
+    pub auto_next_idea: bool,
+
     /// Tell the agent to use the specified directory as its working root.
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
