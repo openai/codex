@@ -90,11 +90,7 @@ impl ToolHandler for UnifiedExecHandler {
         };
 
         let manager: &UnifiedExecSessionManager = &session.services.unified_exec_manager;
-        let context = UnifiedExecContext {
-            session: &session,
-            turn: turn.as_ref(),
-            call_id: &call_id,
-        };
+        let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
 
         let response = match tool_name.as_str() {
             "exec_command" => {
@@ -104,8 +100,12 @@ impl ToolHandler for UnifiedExecHandler {
                     ))
                 })?;
 
-                let event_ctx =
-                    ToolEventCtx::new(context.session, context.turn, context.call_id, None);
+                let event_ctx = ToolEventCtx::new(
+                    context.session.as_ref(),
+                    context.turn.as_ref(),
+                    &context.call_id,
+                    None,
+                );
                 let emitter =
                     ToolEmitter::unified_exec(args.cmd.clone(), context.turn.cwd.clone(), true);
                 emitter.emit(event_ctx, ToolEventStage::Begin).await;
