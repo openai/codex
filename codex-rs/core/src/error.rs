@@ -1,3 +1,4 @@
+use crate::codex::ProcessedResponseItem;
 use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
@@ -53,8 +54,11 @@ pub enum SandboxErr {
 
 #[derive(Error, Debug)]
 pub enum CodexErr {
+    // todo(aibrahim): git rid of this error carrying the dangling artifacts
     #[error("turn aborted")]
-    TurnAborted,
+    TurnAborted {
+        dangling_artifacts: Vec<ProcessedResponseItem>,
+    },
 
     /// Returned by ResponsesClient when the SSE stream disconnects or errors out **after** the HTTP
     /// handshake has succeeded but **before** it finished emitting `response.completed`.
@@ -158,7 +162,9 @@ pub enum CodexErr {
 
 impl From<CancelErr> for CodexErr {
     fn from(_: CancelErr) -> Self {
-        CodexErr::TurnAborted
+        CodexErr::TurnAborted {
+            dangling_artifacts: Vec::new(),
+        }
     }
 }
 

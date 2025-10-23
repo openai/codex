@@ -90,9 +90,8 @@ use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ForcedLoginMethod;
-use codex_protocol::models::ContentItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::InputMessageKind;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
@@ -177,6 +176,27 @@ impl CodexMessageProcessor {
             ClientRequest::ListModels { request_id, params } => {
                 self.list_models(request_id, params).await;
             }
+            ClientRequest::LoginAccount {
+                request_id,
+                params: _,
+            } => {
+                self.send_unimplemented_error(request_id, "account/login")
+                    .await;
+            }
+            ClientRequest::LogoutAccount {
+                request_id,
+                params: _,
+            } => {
+                self.send_unimplemented_error(request_id, "account/logout")
+                    .await;
+            }
+            ClientRequest::GetAccount {
+                request_id,
+                params: _,
+            } => {
+                self.send_unimplemented_error(request_id, "account/read")
+                    .await;
+            }
             ClientRequest::ResumeConversation { request_id, params } => {
                 self.handle_resume_conversation(request_id, params).await;
             }
@@ -256,6 +276,15 @@ impl CodexMessageProcessor {
                 self.get_account_rate_limits(request_id).await;
             }
         }
+    }
+
+    async fn send_unimplemented_error(&self, request_id: RequestId, method: &str) {
+        let error = JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            message: format!("{method} is not implemented yet"),
+            data: None,
+        };
+        self.outgoing.send_error(request_id, error).await;
     }
 
     async fn login_api_key(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
@@ -940,18 +969,9 @@ impl CodexMessageProcessor {
                         },
                     ))
                     .await;
-                let initial_messages = session_configured.initial_messages.map(|msgs| {
-                    msgs.into_iter()
-                        .filter(|event| {
-                            // Don't send non-plain user messages (like user instructions
-                            // or environment context) back so they don't get rendered.
-                            if let EventMsg::UserMessage(user_message) = event {
-                                return matches!(user_message.kind, Some(InputMessageKind::Plain));
-                            }
-                            true
-                        })
-                        .collect()
-                });
+                let initial_messages = session_configured
+                    .initial_messages
+                    .map(|msgs| msgs.into_iter().collect());
 
                 // Reply with conversation id + model and initial messages (when present)
                 let response = codex_app_server_protocol::ResumeConversationResponse {
@@ -1446,6 +1466,15 @@ async fn apply_bespoke_event_handling(
                 on_exec_approval_response(event_id, rx, conversation).await;
             });
         }
+        EventMsg::TokenCount(token_count_event) => {
+            if let Some(rate_limits) = token_count_event.rate_limits {
+                outgoing
+                    .send_server_notification(ServerNotification::AccountRateLimitsUpdated(
+                        rate_limits,
+                    ))
+                    .await;
+            }
+        }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {
             let pending = {
@@ -1596,18 +1625,8 @@ fn extract_conversation_summary(
     let preview = head
         .iter()
         .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
-        .find_map(|item| match item {
-            ResponseItem::Message { content, .. } => {
-                content.into_iter().find_map(|content| match content {
-                    ContentItem::InputText { text } => {
-                        match InputMessageKind::from(("user", &text)) {
-                            InputMessageKind::Plain => Some(text),
-                            _ => None,
-                        }
-                    }
-                    _ => None,
-                })
-            }
+        .find_map(|item| match codex_core::parse_turn_item(&item) {
+            Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
         })?;
 

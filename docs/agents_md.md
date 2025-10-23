@@ -44,7 +44,6 @@ If the repository root contains `TEAM_GUIDE.md` and the `backend/` directory con
 You can configure those fallbacks in `~/.codex/config.toml` (or another profile) like this:
 
 ```toml
-[project]
 project_doc_fallback_filenames = ["TEAM_GUIDE.md", ".agents.md"]
 ```
 
