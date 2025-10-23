@@ -1256,7 +1256,10 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: AddConversationListenerParams,
     ) {
-        let AddConversationListenerParams { conversation_id } = params;
+        let AddConversationListenerParams {
+            conversation_id,
+            experimental_raw_events,
+        } = params;
         let Ok(conversation) = self
             .conversation_manager
             .get_conversation(conversation_id)
@@ -1292,6 +1295,11 @@ impl CodexMessageProcessor {
                                 break;
                             }
                         };
+
+                        if let EventMsg::RawResponseItem(_) = &event.msg
+                            && !experimental_raw_events {
+                                continue;
+                            }
 
                         // For now, we send a notification for every event,
                         // JSON-serializing the `Event` as-is, but these should

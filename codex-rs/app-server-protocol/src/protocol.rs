@@ -716,6 +716,8 @@ pub struct SendUserMessageResponse {}
 #[serde(rename_all = "camelCase")]
 pub struct AddConversationListenerParams {
     pub conversation_id: ConversationId,
+    #[serde(default)]
+    pub experimental_raw_events: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
