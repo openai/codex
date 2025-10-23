@@ -52,6 +52,8 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
+use codex_app_server_protocol::UpdateConfigParams;
+use codex_app_server_protocol::UpdateConfigResponse;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_backend_client::Client as BackendClient;
@@ -74,6 +76,7 @@ use codex_core::config::load_config_as_toml;
 use codex_core::config_edit::CONFIG_KEY_EFFORT;
 use codex_core::config_edit::CONFIG_KEY_MODEL;
 use codex_core::config_edit::persist_overrides_and_clear_if_none;
+use codex_core::config_edit::persist_user_saved_config;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
@@ -664,9 +667,43 @@ impl CodexMessageProcessor {
 
     async fn update_user_saved_config(&self, request_id: RequestId, params: UpdateConfigParams) {
         let UpdateConfigParams { config } = params;
-        let config: UserSavedConfig = config.into();
-        // TODO(owen): actually persist config
-        let response = UpdateConfigResponse { config };
+        if let Err(err) = persist_user_saved_config(&self.config.codex_home, &config).await {
+            let error = JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to persist config.toml: {err}"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let toml_value = match load_config_as_toml(&self.config.codex_home).await {
+            Ok(val) => val,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to load config.toml: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let cfg: ConfigToml = match toml_value.try_into() {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to parse config.toml: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let response = UpdateConfigResponse { config: cfg.into() };
         self.outgoing.send_response(request_id, response).await;
     }
 
