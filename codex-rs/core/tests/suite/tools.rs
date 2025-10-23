@@ -227,62 +227,6 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn local_shell_missing_ids_maps_to_function_output_error() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let mut builder = test_codex();
-    let test = builder.build(&server).await?;
-
-    let local_shell_event = json!({
-        "type": "response.output_item.done",
-        "item": {
-            "type": "local_shell_call",
-            "status": "completed",
-            "action": {
-                "type": "exec",
-                "command": ["/bin/echo", "hi"],
-            }
-        }
-    });
-
-    mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-1"),
-            local_shell_event,
-            ev_completed("resp-1"),
-        ]),
-    )
-    .await;
-    let second_mock = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-2"),
-        ]),
-    )
-    .await;
-
-    submit_turn(
-        &test,
-        "check shell output",
-        AskForApproval::Never,
-        SandboxPolicy::DangerFullAccess,
-    )
-    .await?;
-
-    let item = second_mock.single_request().function_call_output("");
-    assert_eq!(item.get("call_id").and_then(Value::as_str), Some(""));
-    assert_eq!(
-        item.get("output").and_then(Value::as_str),
-        Some("LocalShellCall without call_id or id"),
-    );
-
-    Ok(())
-}
-
 async fn collect_tools(use_unified_exec: bool) -> Result<Vec<String>> {
     let server = start_mock_server().await;
 
@@ -320,14 +264,22 @@ async fn unified_exec_spec_toggle_end_to_end() -> Result<()> {
 
     let tools_disabled = collect_tools(false).await?;
     assert!(
-        !tools_disabled.iter().any(|name| name == "unified_exec"),
-        "tools list should not include unified_exec when disabled: {tools_disabled:?}"
+        !tools_disabled.iter().any(|name| name == "exec_command"),
+        "tools list should not include exec_command when disabled: {tools_disabled:?}"
+    );
+    assert!(
+        !tools_disabled.iter().any(|name| name == "write_stdin"),
+        "tools list should not include write_stdin when disabled: {tools_disabled:?}"
     );
 
     let tools_enabled = collect_tools(true).await?;
     assert!(
-        tools_enabled.iter().any(|name| name == "unified_exec"),
-        "tools list should include unified_exec when enabled: {tools_enabled:?}"
+        tools_enabled.iter().any(|name| name == "exec_command"),
+        "tools list should include exec_command when enabled: {tools_enabled:?}"
+    );
+    assert!(
+        tools_enabled.iter().any(|name| name == "write_stdin"),
+        "tools list should include write_stdin when enabled: {tools_enabled:?}"
     );
 
     Ok(())

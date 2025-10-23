@@ -28,7 +28,6 @@ use unicode_width::UnicodeWidthStr;
 pub(crate) const TOOL_CALL_MAX_LINES: usize = 5;
 
 pub(crate) struct OutputLinesParams {
-    pub(crate) only_err: bool,
     pub(crate) include_angle_pipe: bool,
     pub(crate) include_prefix: bool,
 }
@@ -59,22 +58,12 @@ pub(crate) fn output_lines(
     params: OutputLinesParams,
 ) -> OutputLines {
     let OutputLinesParams {
-        only_err,
         include_angle_pipe,
         include_prefix,
     } = params;
     let CommandOutput {
-        exit_code,
-        stdout,
-        stderr,
-        ..
+        aggregated_output, ..
     } = match output {
-        Some(output) if only_err && output.exit_code == 0 => {
-            return OutputLines {
-                lines: Vec::new(),
-                omitted: None,
-            };
-        }
         Some(output) => output,
         None => {
             return OutputLines {
@@ -84,7 +73,7 @@ pub(crate) fn output_lines(
         }
     };
 
-    let src = if *exit_code == 0 { stdout } else { stderr };
+    let src = aggregated_output;
     let lines: Vec<&str> = src.lines().collect();
     let total = lines.len();
     let limit = TOOL_CALL_MAX_LINES;
@@ -398,7 +387,6 @@ impl ExecCell {
             let raw_output = output_lines(
                 Some(output),
                 OutputLinesParams {
-                    only_err: false,
                     include_angle_pipe: false,
                     include_prefix: false,
                 },

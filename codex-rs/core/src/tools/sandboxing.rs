@@ -121,6 +121,11 @@ pub(crate) trait Approvable<Req> {
         }
     }
 
+    /// Decide we can request an approval for no-sandbox execution.
+    fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
+        !matches!(policy, AskForApproval::Never | AskForApproval::OnRequest)
+    }
+
     fn start_approval_async<'a>(
         &'a mut self,
         req: &'a Req,

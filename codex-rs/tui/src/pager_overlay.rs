@@ -724,8 +724,7 @@ mod tests {
             "exec-1",
             CommandOutput {
                 exit_code: 0,
-                stdout: "src\nREADME.md\n".into(),
-                stderr: String::new(),
+                aggregated_output: "src\nREADME.md\n".into(),
                 formatted_output: "src\nREADME.md\n".into(),
             },
             Duration::from_millis(420),

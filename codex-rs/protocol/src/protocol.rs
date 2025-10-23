@@ -771,66 +771,10 @@ pub struct AgentMessageEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum InputMessageKind {
-    /// Plain user text (default)
-    Plain,
-    /// XML-wrapped user instructions (<user_instructions>...)
-    UserInstructions,
-    /// XML-wrapped environment context (<environment_context>...)
-    EnvironmentContext,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct UserMessageEvent {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<InputMessageKind>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<String>>,
-}
-
-impl<T, U> From<(T, U)> for InputMessageKind
-where
-    T: AsRef<str>,
-    U: AsRef<str>,
-{
-    fn from(value: (T, U)) -> Self {
-        let (_role, message) = value;
-        let message = message.as_ref();
-        let trimmed = message.trim();
-        if starts_with_ignore_ascii_case(trimmed, ENVIRONMENT_CONTEXT_OPEN_TAG)
-            && ends_with_ignore_ascii_case(trimmed, ENVIRONMENT_CONTEXT_CLOSE_TAG)
-        {
-            InputMessageKind::EnvironmentContext
-        } else if starts_with_ignore_ascii_case(trimmed, USER_INSTRUCTIONS_OPEN_TAG)
-            && ends_with_ignore_ascii_case(trimmed, USER_INSTRUCTIONS_CLOSE_TAG)
-        {
-            InputMessageKind::UserInstructions
-        } else {
-            InputMessageKind::Plain
-        }
-    }
-}
-
-fn starts_with_ignore_ascii_case(text: &str, prefix: &str) -> bool {
-    let text_bytes = text.as_bytes();
-    let prefix_bytes = prefix.as_bytes();
-    text_bytes.len() >= prefix_bytes.len()
-        && text_bytes
-            .iter()
-            .zip(prefix_bytes.iter())
-            .all(|(a, b)| a.eq_ignore_ascii_case(b))
-}
-
-fn ends_with_ignore_ascii_case(text: &str, suffix: &str) -> bool {
-    let text_bytes = text.as_bytes();
-    let suffix_bytes = suffix.as_bytes();
-    text_bytes.len() >= suffix_bytes.len()
-        && text_bytes[text_bytes.len() - suffix_bytes.len()..]
-            .iter()
-            .zip(suffix_bytes.iter())
-            .all(|(a, b)| a.eq_ignore_ascii_case(b))
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

@@ -1220,7 +1220,7 @@ impl Config {
                 }
             }
         }
-        let mut approval_policy = approval_policy_override
+        let approval_policy = approval_policy_override
             .or(config_profile.approval_policy)
             .or(cfg.approval_policy)
             .unwrap_or_else(|| {
@@ -1327,10 +1327,6 @@ impl Config {
         let review_model = override_review_model
             .or(cfg.review_model)
             .unwrap_or_else(default_review_model);
-
-        if features.enabled(Feature::ApproveAll) {
-            approval_policy = AskForApproval::OnRequest;
-        }
 
         let config = Self {
             model,
@@ -1708,26 +1704,6 @@ trust_level = "trusted"
             other => panic!("expected workspace-write policy, got {other:?}"),
         }
 
-        Ok(())
-    }
-
-    #[test]
-    fn approve_all_feature_forces_on_request_policy() -> std::io::Result<()> {
-        let cfg = r#"
-[features]
-approve_all = true
-"#;
-        let parsed = toml::from_str::<ConfigToml>(cfg)
-            .expect("TOML deserialization should succeed for approve_all feature");
-        let temp_dir = TempDir::new()?;
-        let config = Config::load_from_base_config_with_overrides(
-            parsed,
-            ConfigOverrides::default(),
-            temp_dir.path().to_path_buf(),
-        )?;
-
-        assert!(config.features.enabled(Feature::ApproveAll));
-        assert_eq!(config.approval_policy, AskForApproval::OnRequest);
         Ok(())
     }
 

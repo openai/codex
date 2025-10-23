@@ -98,9 +98,9 @@ impl ToolOrchestrator {
                         "sandbox denied and no retry".to_string(),
                     ));
                 }
-                // Under `Never`, do not retry without sandbox; surface a concise message
+                // Under `Never` or `OnRequest`, do not retry without sandbox; surface a concise message
                 // derived from the actual output (platform-agnostic).
-                if matches!(approval_policy, AskForApproval::Never) {
+                if !tool.wants_no_sandbox_approval(approval_policy) {
                     let msg = build_never_denied_message_from_output(output.as_ref());
                     return Err(ToolError::SandboxDenied(msg));
                 }

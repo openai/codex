@@ -2070,6 +2070,35 @@ mod tests {
     }
 
     #[test]
+    fn ascii_prefix_survives_non_ascii_followup() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+        assert!(composer.is_in_paste_burst());
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('あ'), KeyModifiers::NONE));
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted(text) => assert_eq!(text, "1あ"),
+            _ => panic!("expected Submitted"),
+        }
+    }
+
+    #[test]
     fn handle_paste_small_inserts_text() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
