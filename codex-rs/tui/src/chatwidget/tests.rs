@@ -287,6 +287,7 @@ fn make_chatwidget_manual() -> (
         todo_items: Vec::new(),
         todo_auto_enabled: false,
         auto_commit_enabled: false,
+        last_agent_commit_summary: None,
         aliases: HashMap::new(),
         presets: HashMap::new(),
         show_welcome_banner: true,

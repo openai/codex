@@ -857,7 +857,7 @@ impl App {
             final_message = format!("Auto commit: {final_message}");
         }
 
-        let mut commit_body = agent_summary
+        let commit_body = agent_summary
             .map(|msg| msg.trim().to_string())
             .filter(|msg| !msg.is_empty());
 
@@ -927,15 +927,14 @@ impl App {
             hint_parts.push(format!("Summary: {summary}"));
         }
 
-        if let Some(body) = commit_body.as_ref() {
-            if let Some(first_line) = body
+        if let Some(body) = commit_body.as_ref()
+            && let Some(first_line) = body
                 .lines()
                 .next()
                 .map(str::trim)
                 .filter(|line| !line.is_empty())
-            {
-                hint_parts.push(format!("Response: {first_line}"));
-            }
+        {
+            hint_parts.push(format!("Response: {first_line}"));
         }
 
         if !preview.is_empty() {
@@ -1344,9 +1343,9 @@ impl App {
         bytes[4] == b'-'
             && bytes[7] == b'-'
             && bytes[10] == b'-'
-            && bytes[..4].iter().all(|b| b.is_ascii_digit())
-            && bytes[5..7].iter().all(|b| b.is_ascii_digit())
-            && bytes[8..10].iter().all(|b| b.is_ascii_digit())
+            && bytes[..4].iter().all(u8::is_ascii_digit)
+            && bytes[5..7].iter().all(u8::is_ascii_digit)
+            && bytes[8..10].iter().all(u8::is_ascii_digit)
     }
 
     fn handle_checkpoint_load(&mut self, name: Option<String>) {
