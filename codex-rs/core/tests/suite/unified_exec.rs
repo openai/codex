@@ -352,7 +352,14 @@ async fn unified_exec_emits_output_delta_for_write_stdin() -> Result<()> {
 
     // Expect a delta event corresponding to the write_stdin call.
     let delta = wait_for_event_match(&codex, |msg| match msg {
-        EventMsg::ExecCommandOutputDelta(ev) if ev.call_id == open_call_id => Some(ev.clone()),
+        EventMsg::ExecCommandOutputDelta(ev) if ev.call_id == open_call_id => {
+            let text = String::from_utf8_lossy(&ev.chunk);
+            if text.contains("WSTDIN-MARK") {
+                Some(ev.clone())
+            } else {
+                None
+            }
+        }
         _ => None,
     })
     .await;
