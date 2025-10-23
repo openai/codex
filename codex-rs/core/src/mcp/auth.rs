@@ -10,10 +10,16 @@ use tracing::warn;
 use crate::config_types::McpServerConfig;
 use crate::config_types::McpServerTransportConfig;
 
+#[derive(Debug, Clone)]
+pub struct McpAuthStatusEntry {
+    pub config: McpServerConfig,
+    pub auth_status: McpAuthStatus,
+}
+
 pub async fn compute_auth_statuses<'a, I>(
     servers: I,
     store_mode: OAuthCredentialsStoreMode,
-) -> HashMap<String, McpAuthStatus>
+) -> HashMap<String, McpAuthStatusEntry>
 where
     I: IntoIterator<Item = (&'a String, &'a McpServerConfig)>,
 {
@@ -21,14 +27,18 @@ where
         let name = name.clone();
         let config = config.clone();
         async move {
-            let status = match compute_auth_status(&name, &config, store_mode).await {
+            let auth_status = match compute_auth_status(&name, &config, store_mode).await {
                 Ok(status) => status,
                 Err(error) => {
                     warn!("failed to determine auth status for MCP server `{name}`: {error:?}");
                     McpAuthStatus::Unsupported
                 }
             };
-            (name, status)
+            let entry = McpAuthStatusEntry {
+                config,
+                auth_status,
+            };
+            (name, entry)
         }
     });
 
@@ -45,11 +55,15 @@ async fn compute_auth_status(
         McpServerTransportConfig::StreamableHttp {
             url,
             bearer_token_env_var,
+            http_headers,
+            env_http_headers,
         } => {
             determine_streamable_http_auth_status(
                 server_name,
                 url,
                 bearer_token_env_var.as_deref(),
+                http_headers.clone(),
+                env_http_headers.clone(),
                 store_mode,
             )
             .await

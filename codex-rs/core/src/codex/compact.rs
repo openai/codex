@@ -10,20 +10,21 @@ use crate::error::Result as CodexResult;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::CompactedItem;
 use crate::protocol::ErrorEvent;
-use crate::protocol::Event;
 use crate::protocol::EventMsg;
-use crate::protocol::InputItem;
-use crate::protocol::InputMessageKind;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
+use crate::state::TaskKind;
 use crate::truncate::truncate_middle;
 use crate::util::backoff;
 use askama::Template;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
+use tracing::error;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
@@ -39,40 +40,35 @@ pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) {
-    let sub_id = sess.next_internal_sub_id();
-    let input = vec![InputItem::Text {
+    let input = vec![UserInput::Text {
         text: SUMMARIZATION_PROMPT.to_string(),
     }];
-    run_compact_task_inner(sess, turn_context, sub_id, input).await;
+    run_compact_task_inner(sess, turn_context, input).await;
 }
 
 pub(crate) async fn run_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    sub_id: String,
-    input: Vec<InputItem>,
+    input: Vec<UserInput>,
 ) -> Option<String> {
-    let start_event = Event {
-        id: sub_id.clone(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
-            model_context_window: turn_context.client.get_model_context_window(),
-        }),
-    };
-    sess.send_event(start_event).await;
-    run_compact_task_inner(sess.clone(), turn_context, sub_id.clone(), input).await;
+    let start_event = EventMsg::TaskStarted(TaskStartedEvent {
+        model_context_window: turn_context.client.get_model_context_window(),
+    });
+    sess.send_event(&turn_context, start_event).await;
+    run_compact_task_inner(sess.clone(), turn_context, input).await;
     None
 }
 
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    sub_id: String,
-    input: Vec<InputItem>,
+    input: Vec<UserInput>,
 ) {
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    let mut turn_input = sess
-        .turn_input_with_history(vec![initial_input_for_turn.clone().into()])
-        .await;
+
+    let mut history = sess.clone_history().await;
+    history.record_items(&[initial_input_for_turn.into()]);
+
     let mut truncated_count = 0usize;
 
     let max_retries = turn_context.client.get_provider().stream_max_retries();
@@ -89,18 +85,18 @@ async fn run_compact_task_inner(
     sess.persist_rollout_items(&[rollout_item]).await;
 
     loop {
+        let turn_input = history.get_history();
         let prompt = Prompt {
             input: turn_input.clone(),
             ..Default::default()
         };
-        let attempt_result =
-            drain_to_completed(&sess, turn_context.as_ref(), &sub_id, &prompt).await;
+        let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
 
         match attempt_result {
             Ok(()) => {
                 if truncated_count > 0 {
                     sess.notify_background_event(
-                        &sub_id,
+                        turn_context.as_ref(),
                         format!(
                             "Trimmed {truncated_count} older conversation item(s) before compacting so the prompt fits the model context window."
                         ),
@@ -114,20 +110,20 @@ async fn run_compact_task_inner(
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
                 if turn_input.len() > 1 {
-                    turn_input.remove(0);
+                    // Trim from the beginning to preserve cache (prefix-based) and keep recent messages intact.
+                    error!(
+                        "Context window exceeded while compacting; removing oldest history item. Error: {e}"
+                    );
+                    history.remove_first_item();
                     truncated_count += 1;
                     retries = 0;
                     continue;
                 }
-                sess.set_total_tokens_full(&sub_id, turn_context.as_ref())
-                    .await;
-                let event = Event {
-                    id: sub_id.clone(),
-                    msg: EventMsg::Error(ErrorEvent {
-                        message: e.to_string(),
-                    }),
-                };
-                sess.send_event(event).await;
+                sess.set_total_tokens_full(turn_context.as_ref()).await;
+                let event = EventMsg::Error(ErrorEvent {
+                    message: e.to_string(),
+                });
+                sess.send_event(&turn_context, event).await;
                 return;
             }
             Err(e) => {
@@ -135,22 +131,17 @@ async fn run_compact_task_inner(
                     retries += 1;
                     let delay = backoff(retries);
                     sess.notify_stream_error(
-                        &sub_id,
-                        format!(
-                            "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
-                        ),
+                        turn_context.as_ref(),
+                        format!("Re-connecting... {retries}/{max_retries}"),
                     )
                     .await;
                     tokio::time::sleep(delay).await;
                     continue;
                 } else {
-                    let event = Event {
-                        id: sub_id.clone(),
-                        msg: EventMsg::Error(ErrorEvent {
-                            message: e.to_string(),
-                        }),
-                    };
-                    sess.send_event(event).await;
+                    let event = EventMsg::Error(ErrorEvent {
+                        message: e.to_string(),
+                    });
+                    sess.send_event(&turn_context, event).await;
                     return;
                 }
             }
@@ -169,13 +160,10 @@ async fn run_compact_task_inner(
     });
     sess.persist_rollout_items(&[rollout_item]).await;
 
-    let event = Event {
-        id: sub_id.clone(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: "Compact task completed".to_string(),
-        }),
-    };
-    sess.send_event(event).await;
+    let event = EventMsg::AgentMessage(AgentMessageEvent {
+        message: "Compact task completed".to_string(),
+    });
+    sess.send_event(&turn_context, event).await;
 }
 
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
@@ -200,21 +188,11 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
 pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
     items
         .iter()
-        .filter_map(|item| match item {
-            ResponseItem::Message { role, content, .. } if role == "user" => {
-                content_items_to_text(content)
-            }
+        .filter_map(|item| match crate::event_mapping::parse_turn_item(item) {
+            Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
         })
-        .filter(|text| !is_session_prefix_message(text))
         .collect()
-}
-
-pub fn is_session_prefix_message(text: &str) -> bool {
-    matches!(
-        InputMessageKind::from(("user", text)),
-        InputMessageKind::UserInstructions | InputMessageKind::EnvironmentContext
-    )
 }
 
 pub(crate) fn build_compacted_history(
@@ -257,10 +235,13 @@ pub(crate) fn build_compacted_history(
 async fn drain_to_completed(
     sess: &Session,
     turn_context: &TurnContext,
-    sub_id: &str,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    let mut stream = turn_context.client.clone().stream(prompt).await?;
+    let mut stream = turn_context
+        .client
+        .clone()
+        .stream_with_task_kind(prompt, TaskKind::Compact)
+        .await?;
     loop {
         let maybe_event = stream.next().await;
         let Some(event) = maybe_event else {
@@ -274,10 +255,10 @@ async fn drain_to_completed(
                 sess.record_into_history(std::slice::from_ref(&item)).await;
             }
             Ok(ResponseEvent::RateLimits(snapshot)) => {
-                sess.update_rate_limits(sub_id, snapshot).await;
+                sess.update_rate_limits(turn_context, snapshot).await;
             }
             Ok(ResponseEvent::Completed { token_usage, .. }) => {
-                sess.update_token_usage_info(sub_id, turn_context, token_usage.as_ref())
+                sess.update_token_usage_info(turn_context, token_usage.as_ref())
                     .await;
                 return Ok(());
             }
@@ -335,21 +316,16 @@ mod tests {
             ResponseItem::Message {
                 id: Some("user".to_string()),
                 role: "user".to_string(),
-                content: vec![
-                    ContentItem::InputText {
-                        text: "first".to_string(),
-                    },
-                    ContentItem::OutputText {
-                        text: "second".to_string(),
-                    },
-                ],
+                content: vec![ContentItem::InputText {
+                    text: "first".to_string(),
+                }],
             },
             ResponseItem::Other,
         ];
 
         let collected = collect_user_messages(&items);
 
-        assert_eq!(vec!["first\nsecond".to_string()], collected);
+        assert_eq!(vec!["first".to_string()], collected);
     }
 
     #[test]

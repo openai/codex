@@ -15,18 +15,19 @@ use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
+use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::user_input::UserInput;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
@@ -68,7 +69,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         output_schema: output_schema_path,
-        include_plan_tool,
         config_overrides,
     } = cli;
 
@@ -168,19 +168,18 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         model,
         review_model: None,
         config_profile,
-        // This CLI is intended to be headless and has no affordances for asking
-        // the user for approval.
+        // Default to never ask for approvals in headless mode. Feature flags can override.
         approval_policy: Some(AskForApproval::Never),
         sandbox_mode,
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
         model_provider,
         codex_linux_sandbox_exe,
         base_instructions: None,
-        include_plan_tool: Some(include_plan_tool),
         include_apply_patch_tool: None,
         include_view_image_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
+        additional_writable_roots: Vec::new(),
     };
     // Parse `-c` overrides.
     let cli_kv_overrides = match config_overrides.parse_overrides() {
@@ -192,6 +191,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
+
+    if let Err(err) = enforce_login_restrictions(&config).await {
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
 
     let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
 
@@ -316,9 +320,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // Send images first, if any.
     if !images.is_empty() {
-        let items: Vec<InputItem> = images
+        let items: Vec<UserInput> = images
             .into_iter()
-            .map(|path| InputItem::LocalImage { path })
+            .map(|path| UserInput::LocalImage { path })
             .collect();
         let initial_images_event_id = conversation.submit(Op::UserInput { items }).await?;
         info!("Sent images with event ID: {initial_images_event_id}");
@@ -337,7 +341,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     }
 
     // Send the prompt.
-    let items: Vec<InputItem> = vec![InputItem::Text { text: prompt }];
+    let items: Vec<UserInput> = vec![UserInput::Text { text: prompt }];
     let initial_prompt_task_id = conversation
         .submit(Op::UserTurn {
             items,

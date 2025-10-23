@@ -1,7 +1,9 @@
 use super::new_status_output;
 use super::rate_limit_snapshot_display;
 use crate::history_cell::HistoryCell;
+use chrono::Duration as ChronoDuration;
 use chrono::TimeZone;
+use chrono::Utc;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
@@ -60,6 +62,12 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) -> i64 {
+    (*captured_at + ChronoDuration::seconds(seconds))
+        .with_timezone(&Utc)
+        .timestamp()
+}
+
 #[test]
 fn status_snapshot_includes_reasoning_details() {
     let temp_home = TempDir::new().expect("temp home");
@@ -85,22 +93,22 @@ fn status_snapshot_includes_reasoning_details() {
         total_tokens: 2_250,
     };
 
-    let snapshot = RateLimitSnapshot {
-        primary: Some(RateLimitWindow {
-            used_percent: 72.5,
-            window_minutes: Some(300),
-            resets_in_seconds: Some(600),
-        }),
-        secondary: Some(RateLimitWindow {
-            used_percent: 45.0,
-            window_minutes: Some(10080),
-            resets_in_seconds: Some(1_200),
-        }),
-    };
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
         .single()
         .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: 72.5,
+            window_minutes: Some(300),
+            resets_at: Some(reset_at_from(&captured_at, 600)),
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: 45.0,
+            window_minutes: Some(10080),
+            resets_at: Some(reset_at_from(&captured_at, 1_200)),
+        }),
+    };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
     let composite = new_status_output(&config, &usage, Some(&usage), &None, Some(&rate_display));
@@ -130,18 +138,18 @@ fn status_snapshot_includes_monthly_limit() {
         total_tokens: 1_200,
     };
 
-    let snapshot = RateLimitSnapshot {
-        primary: Some(RateLimitWindow {
-            used_percent: 12.0,
-            window_minutes: Some(43_200),
-            resets_in_seconds: Some(86_400),
-        }),
-        secondary: None,
-    };
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 5, 6, 7, 8, 9)
         .single()
         .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: 12.0,
+            window_minutes: Some(43_200),
+            resets_at: Some(reset_at_from(&captured_at, 86_400)),
+        }),
+        secondary: None,
+    };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
     let composite = new_status_output(&config, &usage, Some(&usage), &None, Some(&rate_display));
@@ -197,18 +205,18 @@ fn status_snapshot_truncates_in_narrow_terminal() {
         total_tokens: 2_250,
     };
 
-    let snapshot = RateLimitSnapshot {
-        primary: Some(RateLimitWindow {
-            used_percent: 72.5,
-            window_minutes: Some(300),
-            resets_in_seconds: Some(600),
-        }),
-        secondary: None,
-    };
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
         .single()
         .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: 72.5,
+            window_minutes: Some(300),
+            resets_at: Some(reset_at_from(&captured_at, 600)),
+        }),
+        secondary: None,
+    };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
     let composite = new_status_output(&config, &usage, Some(&usage), &None, Some(&rate_display));

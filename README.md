@@ -1,4 +1,4 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install codex</code></p>
+<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
 
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 </br>
@@ -24,7 +24,7 @@ npm install -g @openai/codex
 Alternatively, if you use Homebrew:
 
 ```shell
-brew install codex
+brew install --cask codex
 ```
 
 Then simply run `codex` to get started:
@@ -75,6 +75,7 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
   - [CLI usage](./docs/getting-started.md#cli-usage)
   - [Running with a prompt as input](./docs/getting-started.md#running-with-a-prompt-as-input)
   - [Example prompts](./docs/getting-started.md#example-prompts)
+  - [Custom prompts](./docs/prompts.md)
   - [Memory with AGENTS.md](./docs/getting-started.md#memory-with-agentsmd)
   - [Configuration](./docs/config.md)
 - [**Sandbox & approvals**](./docs/sandbox.md)

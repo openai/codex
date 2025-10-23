@@ -1,6 +1,7 @@
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
+use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
@@ -9,6 +10,7 @@ use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
 use codex_app_server_protocol::ArchiveConversationParams;
 use codex_app_server_protocol::ArchiveConversationResponse;
+use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthStatusChangeNotification;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConversationSummary;
@@ -18,6 +20,7 @@ use codex_app_server_protocol::ExecOneOffCommandParams;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
 use codex_app_server_protocol::FuzzyFileSearchParams;
 use codex_app_server_protocol::FuzzyFileSearchResponse;
+use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetUserAgentResponse;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
@@ -27,6 +30,8 @@ use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::ListConversationsResponse;
+use codex_app_server_protocol::ListModelsParams;
+use codex_app_server_protocol::ListModelsResponse;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::LoginApiKeyResponse;
 use codex_app_server_protocol::LoginChatGptCompleteNotification;
@@ -49,6 +54,7 @@ use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_backend_client::Client as BackendClient;
 use codex_core::AuthManager;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
@@ -77,17 +83,18 @@ use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
 use codex_protocol::ConversationId;
-use codex_protocol::models::ContentItem;
+use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::InputMessageKind;
+use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_utils_json_to_toml::json_to_toml;
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -106,7 +113,6 @@ use uuid::Uuid;
 
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-
 struct ActiveLogin {
     shutdown_handle: ShutdownHandle,
     login_id: Uuid,
@@ -166,6 +172,30 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ListConversations { request_id, params } => {
                 self.handle_list_conversations(request_id, params).await;
+            }
+            ClientRequest::ListModels { request_id, params } => {
+                self.list_models(request_id, params).await;
+            }
+            ClientRequest::LoginAccount {
+                request_id,
+                params: _,
+            } => {
+                self.send_unimplemented_error(request_id, "account/login")
+                    .await;
+            }
+            ClientRequest::LogoutAccount {
+                request_id,
+                params: _,
+            } => {
+                self.send_unimplemented_error(request_id, "account/logout")
+                    .await;
+            }
+            ClientRequest::GetAccount {
+                request_id,
+                params: _,
+            } => {
+                self.send_unimplemented_error(request_id, "account/read")
+                    .await;
             }
             ClientRequest::ResumeConversation { request_id, params } => {
                 self.handle_resume_conversation(request_id, params).await;
@@ -239,10 +269,38 @@ impl CodexMessageProcessor {
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
             }
+            ClientRequest::GetAccountRateLimits {
+                request_id,
+                params: _,
+            } => {
+                self.get_account_rate_limits(request_id).await;
+            }
         }
     }
 
+    async fn send_unimplemented_error(&self, request_id: RequestId, method: &str) {
+        let error = JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            message: format!("{method} is not implemented yet"),
+            data: None,
+        };
+        self.outgoing.send_error(request_id, error).await;
+    }
+
     async fn login_api_key(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
+        if matches!(
+            self.config.forced_login_method,
+            Some(ForcedLoginMethod::Chatgpt)
+        ) {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "API key login is disabled. Use ChatGPT login instead.".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
         {
             let mut guard = self.active_login.lock().await;
             if let Some(active) = guard.take() {
@@ -278,9 +336,23 @@ impl CodexMessageProcessor {
     async fn login_chatgpt(&mut self, request_id: RequestId) {
         let config = self.config.as_ref();
 
+        if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "ChatGPT login is disabled. Use API key login instead.".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
         let opts = LoginServerOptions {
             open_browser: false,
-            ..LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string())
+            ..LoginServerOptions::new(
+                config.codex_home.clone(),
+                CLIENT_ID.to_string(),
+                config.forced_chatgpt_workspace_id.clone(),
+            )
         };
 
         enum LoginChatGptReply {
@@ -499,6 +571,53 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    async fn get_account_rate_limits(&self, request_id: RequestId) {
+        match self.fetch_account_rate_limits().await {
+            Ok(rate_limits) => {
+                let response = GetAccountRateLimitsResponse { rate_limits };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn fetch_account_rate_limits(&self) -> Result<RateLimitSnapshot, JSONRPCErrorError> {
+        let Some(auth) = self.auth_manager.auth() else {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "codex account authentication required to read rate limits".to_string(),
+                data: None,
+            });
+        };
+
+        if auth.mode != AuthMode::ChatGPT {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "chatgpt authentication required to read rate limits".to_string(),
+                data: None,
+            });
+        }
+
+        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to construct backend client: {err}"),
+                data: None,
+            })?;
+
+        client
+            .get_rate_limits()
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to fetch codex rate limits: {err}"),
+                data: None,
+            })
+    }
+
     async fn get_user_saved_config(&self, request_id: RequestId) {
         let toml_value = match load_config_as_toml(&self.config.codex_home).await {
             Ok(val) => val,
@@ -603,6 +722,7 @@ impl CodexMessageProcessor {
             env,
             with_escalated_permissions: None,
             justification: None,
+            arg0: None,
         };
 
         let effective_policy = params
@@ -745,6 +865,58 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    async fn list_models(&self, request_id: RequestId, params: ListModelsParams) {
+        let ListModelsParams { page_size, cursor } = params;
+        let models = supported_models();
+        let total = models.len();
+
+        if total == 0 {
+            let response = ListModelsResponse {
+                items: Vec::new(),
+                next_cursor: None,
+            };
+            self.outgoing.send_response(request_id, response).await;
+            return;
+        }
+
+        let effective_page_size = page_size.unwrap_or(total).max(1).min(total);
+        let start = match cursor {
+            Some(cursor) => match cursor.parse::<usize>() {
+                Ok(idx) => idx,
+                Err(_) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid cursor: {cursor}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            },
+            None => 0,
+        };
+
+        if start > total {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("cursor {start} exceeds total models {total}"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let end = start.saturating_add(effective_page_size).min(total);
+        let items = models[start..end].to_vec();
+        let next_cursor = if end < total {
+            Some(end.to_string())
+        } else {
+            None
+        };
+        let response = ListModelsResponse { items, next_cursor };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
     async fn handle_resume_conversation(
         &self,
         request_id: RequestId,
@@ -797,18 +969,9 @@ impl CodexMessageProcessor {
                         },
                     ))
                     .await;
-                let initial_messages = session_configured.initial_messages.map(|msgs| {
-                    msgs.into_iter()
-                        .filter(|event| {
-                            // Don't send non-plain user messages (like user instructions
-                            // or environment context) back so they don't get rendered.
-                            if let EventMsg::UserMessage(user_message) = event {
-                                return matches!(user_message.kind, Some(InputMessageKind::Plain));
-                            }
-                            true
-                        })
-                        .collect()
-                });
+                let initial_messages = session_configured
+                    .initial_messages
+                    .map(|msgs| msgs.into_iter().collect());
 
                 // Reply with conversation id + model and initial messages (when present)
                 let response = codex_app_server_protocol::ResumeConversationResponse {
@@ -1284,6 +1447,7 @@ async fn apply_bespoke_event_handling(
             command,
             cwd,
             reason,
+            parsed_cmd,
         }) => {
             let params = ExecCommandApprovalParams {
                 conversation_id,
@@ -1291,6 +1455,7 @@ async fn apply_bespoke_event_handling(
                 command,
                 cwd,
                 reason,
+                parsed_cmd,
             };
             let rx = outgoing
                 .send_request(ServerRequestPayload::ExecCommandApproval(params))
@@ -1300,6 +1465,15 @@ async fn apply_bespoke_event_handling(
             tokio::spawn(async move {
                 on_exec_approval_response(event_id, rx, conversation).await;
             });
+        }
+        EventMsg::TokenCount(token_count_event) => {
+            if let Some(rate_limits) = token_count_event.rate_limits {
+                outgoing
+                    .send_server_notification(ServerNotification::AccountRateLimitsUpdated(
+                        rate_limits,
+                    ))
+                    .await;
+            }
         }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {
@@ -1333,7 +1507,6 @@ async fn derive_config_from_params(
         sandbox: sandbox_mode,
         config: cli_overrides,
         base_instructions,
-        include_plan_tool,
         include_apply_patch_tool,
     } = params;
     let overrides = ConfigOverrides {
@@ -1346,11 +1519,11 @@ async fn derive_config_from_params(
         model_provider: None,
         codex_linux_sandbox_exe,
         base_instructions,
-        include_plan_tool,
         include_apply_patch_tool,
         include_view_image_tool: None,
         show_raw_agent_reasoning: None,
         tools_web_search_request: None,
+        additional_writable_roots: Vec::new(),
     };
 
     let cli_overrides = cli_overrides
@@ -1452,18 +1625,8 @@ fn extract_conversation_summary(
     let preview = head
         .iter()
         .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
-        .find_map(|item| match item {
-            ResponseItem::Message { content, .. } => {
-                content.into_iter().find_map(|content| match content {
-                    ContentItem::InputText { text } => {
-                        match InputMessageKind::from(("user", &text)) {
-                            InputMessageKind::Plain => Some(text),
-                            _ => None,
-                        }
-                    }
-                    _ => None,
-                })
-            }
+        .find_map(|item| match codex_core::parse_turn_item(&item) {
+            Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
         })?;
 

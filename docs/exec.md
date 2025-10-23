@@ -27,6 +27,7 @@ Supported event types:
 - `turn.completed` - when a turn completes; includes token usage.
 - `turn.failed` - when a turn fails; includes error details.
 - `item.started`/`item.updated`/`item.completed` - when a thread item is added/updated/completed.
+- `error` - when the stream reports an unrecoverable error; includes the error message.
 
 Supported item types:
 
@@ -36,6 +37,7 @@ Supported item types:
 - `file_change` - assistant making file changes.
 - `mcp_tool_call` - assistant calling an MCP tool.
 - `web_search` - assistant performing a web search.
+- `todo_list` - the agent's running plan when the plan tool is active, updating as steps change.
 
 Typically, an `agent_message` is added at the end of the turn.
 

@@ -7,7 +7,6 @@ use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
-use crate::markdown::MarkdownCitationContext;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
@@ -16,10 +15,13 @@ use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
 use crate::ui_consts::LIVE_PREFIX_COLS;
+use crate::updates::UpdateAction;
+use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use base64::Engine;
+use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
 use codex_core::config_types::McpServerTransportConfig;
 use codex_core::config_types::ReasoningSummaryFormat;
@@ -34,7 +36,9 @@ use codex_protocol::plan_tool::UpdatePlanArgs;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
+use mcp_types::Resource;
 use mcp_types::ResourceLink;
+use mcp_types::ResourceTemplate;
 use ratatui::prelude::*;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
@@ -114,7 +118,11 @@ impl HistoryCell for UserHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        let wrap_width = width.saturating_sub(LIVE_PREFIX_COLS);
+        let wrap_width = width
+            .saturating_sub(
+                LIVE_PREFIX_COLS + 1, /* keep a one-column right margin for wrapping */
+            )
+            .max(1);
 
         let style = user_message_style();
 
@@ -125,7 +133,8 @@ impl HistoryCell for UserHistoryCell {
                 .map(|l| Line::from(l).style(style))
                 .collect::<Vec<_>>(),
             // Wrap algorithm matches textarea.rs.
-            RtOptions::new(wrap_width as usize).wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
+            RtOptions::new(usize::from(wrap_width))
+                .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
         );
 
         lines.push(Line::from("").style(style));
@@ -139,21 +148,14 @@ impl HistoryCell for UserHistoryCell {
 pub(crate) struct ReasoningSummaryCell {
     _header: String,
     content: String,
-    citation_context: MarkdownCitationContext,
     transcript_only: bool,
 }
 
 impl ReasoningSummaryCell {
-    pub(crate) fn new(
-        header: String,
-        content: String,
-        citation_context: MarkdownCitationContext,
-        transcript_only: bool,
-    ) -> Self {
+    pub(crate) fn new(header: String, content: String, transcript_only: bool) -> Self {
         Self {
             _header: header,
             content,
-            citation_context,
             transcript_only,
         }
     }
@@ -164,7 +166,6 @@ impl ReasoningSummaryCell {
             &self.content,
             Some((width as usize).saturating_sub(2)),
             &mut lines,
-            self.citation_context.clone(),
         );
         let summary_style = Style::default().dim().italic();
         let summary_lines = lines
@@ -262,6 +263,60 @@ impl PlainHistoryCell {
 impl HistoryCell for PlainHistoryCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         self.lines.clone()
+    }
+}
+
+#[cfg_attr(debug_assertions, allow(dead_code))]
+#[derive(Debug)]
+pub(crate) struct UpdateAvailableHistoryCell {
+    latest_version: String,
+    update_action: Option<UpdateAction>,
+}
+
+#[cfg_attr(debug_assertions, allow(dead_code))]
+impl UpdateAvailableHistoryCell {
+    pub(crate) fn new(latest_version: String, update_action: Option<UpdateAction>) -> Self {
+        Self {
+            latest_version,
+            update_action,
+        }
+    }
+}
+
+impl HistoryCell for UpdateAvailableHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        use ratatui_macros::line;
+        use ratatui_macros::text;
+        let update_instruction = if let Some(update_action) = self.update_action {
+            line!["Run ", update_action.command_str().cyan(), " to update."]
+        } else {
+            line![
+                "See ",
+                "https://github.com/openai/codex".cyan().underlined(),
+                " for installation options."
+            ]
+        };
+
+        let content = text![
+            line![
+                padded_emoji("✨").bold().cyan(),
+                "Update available!".bold().cyan(),
+                " ",
+                format!("{CODEX_CLI_VERSION} -> {}", self.latest_version).bold(),
+            ],
+            update_instruction,
+            "",
+            "See full release notes:",
+            "https://github.com/openai/codex/releases/latest"
+                .cyan()
+                .underlined(),
+        ];
+
+        let inner_width = content
+            .width()
+            .min(usize::from(width.saturating_sub(4)))
+            .max(1);
+        with_border_with_inner_width(content.lines, inner_width)
     }
 }
 
@@ -846,7 +901,12 @@ impl HistoryCell for McpToolCallCell {
                     }
                 }
                 Err(err) => {
-                    let err_line = Line::from(format!("Error: {err}").dim());
+                    let err_text = format_and_truncate_tool_result(
+                        &format!("Error: {err}"),
+                        TOOL_CALL_MAX_LINES,
+                        width as usize,
+                    );
+                    let err_line = Line::from(err_text.dim());
                     let wrapped = word_wrap_line(
                         &err_line,
                         RtOptions::new((width as usize).saturating_sub(4))
@@ -970,6 +1030,8 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
 pub(crate) fn new_mcp_tools_output(
     config: &Config,
     tools: HashMap<String, mcp_types::Tool>,
+    resources: HashMap<String, Vec<Resource>>,
+    resource_templates: HashMap<String, Vec<ResourceTemplate>>,
     auth_statuses: &HashMap<String, McpAuthStatus>,
 ) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = vec![
@@ -986,7 +1048,7 @@ pub(crate) fn new_mcp_tools_output(
     }
 
     for (server, cfg) in config.mcp_servers.iter() {
-        let prefix = format!("{server}__");
+        let prefix = format!("mcp__{server}__");
         let mut names: Vec<String> = tools
             .keys()
             .filter(|k| k.starts_with(&prefix))
@@ -994,21 +1056,30 @@ pub(crate) fn new_mcp_tools_output(
             .collect();
         names.sort();
 
-        let status = auth_statuses
+        let auth_status = auth_statuses
             .get(server.as_str())
             .copied()
             .unwrap_or(McpAuthStatus::Unsupported);
-        lines.push(vec!["  • Server: ".into(), server.clone().into()].into());
-        let status_line = if cfg.enabled {
-            vec!["    • Status: ".into(), "enabled".green()].into()
-        } else {
-            vec!["    • Status: ".into(), "disabled".red()].into()
-        };
-        lines.push(status_line);
-        lines.push(vec!["    • Auth: ".into(), status.to_string().into()].into());
+        let mut header: Vec<Span<'static>> = vec!["  • ".into(), server.clone().into()];
+        if !cfg.enabled {
+            header.push(" ".into());
+            header.push("(disabled)".red());
+            lines.push(header.into());
+            lines.push(Line::from(""));
+            continue;
+        }
+        lines.push(header.into());
+        lines.push(vec!["    • Status: ".into(), "enabled".green()].into());
+        lines.push(vec!["    • Auth: ".into(), auth_status.to_string().into()].into());
 
         match &cfg.transport {
-            McpServerTransportConfig::Stdio { command, args, env } => {
+            McpServerTransportConfig::Stdio {
+                command,
+                args,
+                env,
+                env_vars,
+                cwd,
+            } => {
                 let args_suffix = if args.is_empty() {
                     String::new()
                 } else {
@@ -1017,33 +1088,104 @@ pub(crate) fn new_mcp_tools_output(
                 let cmd_display = format!("{command}{args_suffix}");
                 lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
 
-                if let Some(env) = env.as_ref()
-                    && !env.is_empty()
-                {
-                    let mut env_pairs: Vec<String> =
-                        env.iter().map(|(k, v)| format!("{k}={v}")).collect();
-                    env_pairs.sort();
-                    lines.push(vec!["    • Env: ".into(), env_pairs.join(" ").into()].into());
+                if let Some(cwd) = cwd.as_ref() {
+                    lines.push(vec!["    • Cwd: ".into(), cwd.display().to_string().into()].into());
+                }
+
+                let env_display = format_env_display(env.as_ref(), env_vars);
+                if env_display != "-" {
+                    lines.push(vec!["    • Env: ".into(), env_display.into()].into());
                 }
             }
-            McpServerTransportConfig::StreamableHttp { url, .. } => {
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                http_headers,
+                env_http_headers,
+                ..
+            } => {
                 lines.push(vec!["    • URL: ".into(), url.clone().into()].into());
+                if let Some(headers) = http_headers.as_ref()
+                    && !headers.is_empty()
+                {
+                    let mut pairs: Vec<_> = headers.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    let display = pairs
+                        .into_iter()
+                        .map(|(name, value)| format!("{name}={value}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    lines.push(vec!["    • HTTP headers: ".into(), display.into()].into());
+                }
+                if let Some(headers) = env_http_headers.as_ref()
+                    && !headers.is_empty()
+                {
+                    let mut pairs: Vec<_> = headers.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    let display = pairs
+                        .into_iter()
+                        .map(|(name, env_var)| format!("{name}={env_var}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    lines.push(vec!["    • Env HTTP headers: ".into(), display.into()].into());
+                }
             }
         }
 
-        if !cfg.enabled {
-            lines.push(vec!["    • Tools: ".into(), "(disabled)".red()].into());
-        } else if names.is_empty() {
+        if names.is_empty() {
             lines.push("    • Tools: (none)".into());
         } else {
             lines.push(vec!["    • Tools: ".into(), names.join(", ").into()].into());
         }
+
+        let server_resources: Vec<Resource> =
+            resources.get(server.as_str()).cloned().unwrap_or_default();
+        if server_resources.is_empty() {
+            lines.push("    • Resources: (none)".into());
+        } else {
+            let mut spans: Vec<Span<'static>> = vec!["    • Resources: ".into()];
+
+            for (idx, resource) in server_resources.iter().enumerate() {
+                if idx > 0 {
+                    spans.push(", ".into());
+                }
+
+                let label = resource.title.as_ref().unwrap_or(&resource.name);
+                spans.push(label.clone().into());
+                spans.push(" ".into());
+                spans.push(format!("({})", resource.uri).dim());
+            }
+
+            lines.push(spans.into());
+        }
+
+        let server_templates: Vec<ResourceTemplate> = resource_templates
+            .get(server.as_str())
+            .cloned()
+            .unwrap_or_default();
+        if server_templates.is_empty() {
+            lines.push("    • Resource templates: (none)".into());
+        } else {
+            let mut spans: Vec<Span<'static>> = vec!["    • Resource templates: ".into()];
+
+            for (idx, template) in server_templates.iter().enumerate() {
+                if idx > 0 {
+                    spans.push(", ".into());
+                }
+
+                let label = template.title.as_ref().unwrap_or(&template.name);
+                spans.push(label.clone().into());
+                spans.push(" ".into());
+                spans.push(format!("({})", template.uri_template).dim());
+            }
+
+            lines.push(spans.into());
+        }
+
         lines.push(Line::from(""));
     }
 
     PlainHistoryCell { lines }
 }
-
 pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHistoryCell {
     let mut line = vec!["• ".dim(), message.into()];
     if let Some(hint) = hint {
@@ -1059,11 +1201,6 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // before the text. VS16 is intentionally omitted to keep spacing tighter
     // in terminals like Ghostty.
     let lines: Vec<Line<'static>> = vec![vec![format!("■ {message}").red()].into()];
-    PlainHistoryCell { lines }
-}
-
-pub(crate) fn new_stream_error_event(message: String) -> PlainHistoryCell {
-    let lines: Vec<Line<'static>> = vec![vec![padded_emoji("⚠️").into(), message.dim()].into()];
     PlainHistoryCell { lines }
 }
 
@@ -1153,19 +1290,18 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     lines.push(Line::from("✘ Failed to apply patch".magenta().bold()));
 
     if !stderr.trim().is_empty() {
-        lines.extend(output_lines(
+        let output = output_lines(
             Some(&CommandOutput {
                 exit_code: 1,
-                stdout: String::new(),
-                stderr,
                 formatted_output: String::new(),
+                aggregated_output: stderr,
             }),
             OutputLinesParams {
-                only_err: true,
                 include_angle_pipe: true,
                 include_prefix: true,
             },
-        ));
+        );
+        lines.extend(output.lines);
     }
 
     PlainHistoryCell { lines }
@@ -1206,7 +1342,6 @@ pub(crate) fn new_reasoning_summary_block(
                     return Box::new(ReasoningSummaryCell::new(
                         header_buffer,
                         summary_buffer,
-                        config.into(),
                         false,
                     ));
                 }
@@ -1216,7 +1351,6 @@ pub(crate) fn new_reasoning_summary_block(
     Box::new(ReasoningSummaryCell::new(
         "".to_string(),
         full_reasoning_buffer,
-        config.into(),
         true,
     ))
 }
@@ -1590,10 +1724,12 @@ mod tests {
                 ParsedCommand::Read {
                     name: "shimmer.rs".into(),
                     cmd: "cat shimmer.rs".into(),
+                    path: "shimmer.rs".into(),
                 },
                 ParsedCommand::Read {
                     name: "status_indicator_widget.rs".into(),
                     cmd: "cat status_indicator_widget.rs".into(),
+                    path: "status_indicator_widget.rs".into(),
                 },
             ],
             output: None,
@@ -1601,16 +1737,7 @@ mod tests {
             duration: None,
         });
         // Mark call complete so markers are ✓
-        cell.complete_call(
-            &call_id,
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
 
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
@@ -1632,16 +1759,7 @@ mod tests {
             duration: None,
         });
         // Call 1: Search only
-        cell.complete_call(
-            "c1",
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
         // Call 2: Read A
         cell = cell
             .with_added_call(
@@ -1650,19 +1768,11 @@ mod tests {
                 vec![ParsedCommand::Read {
                     name: "shimmer.rs".into(),
                     cmd: "cat shimmer.rs".into(),
+                    path: "shimmer.rs".into(),
                 }],
             )
             .unwrap();
-        cell.complete_call(
-            "c2",
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call("c2", CommandOutput::default(), Duration::from_millis(1));
         // Call 3: Read B
         cell = cell
             .with_added_call(
@@ -1671,19 +1781,11 @@ mod tests {
                 vec![ParsedCommand::Read {
                     name: "status_indicator_widget.rs".into(),
                     cmd: "cat status_indicator_widget.rs".into(),
+                    path: "status_indicator_widget.rs".into(),
                 }],
             )
             .unwrap();
-        cell.complete_call(
-            "c3",
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call("c3", CommandOutput::default(), Duration::from_millis(1));
 
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
@@ -1699,30 +1801,24 @@ mod tests {
                 ParsedCommand::Read {
                     name: "auth.rs".into(),
                     cmd: "cat auth.rs".into(),
+                    path: "auth.rs".into(),
                 },
                 ParsedCommand::Read {
                     name: "auth.rs".into(),
                     cmd: "cat auth.rs".into(),
+                    path: "auth.rs".into(),
                 },
                 ParsedCommand::Read {
                     name: "shimmer.rs".into(),
                     cmd: "cat shimmer.rs".into(),
+                    path: "shimmer.rs".into(),
                 },
             ],
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
         });
-        cell.complete_call(
-            "c1",
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
@@ -1742,16 +1838,7 @@ mod tests {
             duration: None,
         });
         // Mark call complete so it renders as "Ran"
-        cell.complete_call(
-            &call_id,
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
 
         // Small width to force wrapping on both lines
         let width: u16 = 28;
@@ -1771,16 +1858,7 @@ mod tests {
             start_time: Some(Instant::now()),
             duration: None,
         });
-        cell.complete_call(
-            &call_id,
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         // Wide enough that it fits inline
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
@@ -1799,16 +1877,7 @@ mod tests {
             start_time: Some(Instant::now()),
             duration: None,
         });
-        cell.complete_call(
-            &call_id,
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(24);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
@@ -1826,16 +1895,7 @@ mod tests {
             start_time: Some(Instant::now()),
             duration: None,
         });
-        cell.complete_call(
-            &call_id,
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
@@ -1854,16 +1914,7 @@ mod tests {
             start_time: Some(Instant::now()),
             duration: None,
         });
-        cell.complete_call(
-            &call_id,
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(28);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
@@ -1890,9 +1941,8 @@ mod tests {
             &call_id,
             CommandOutput {
                 exit_code: 1,
-                stdout: String::new(),
-                stderr,
                 formatted_output: String::new(),
+                aggregated_output: stderr,
             },
             Duration::from_millis(1),
         );
@@ -1934,9 +1984,8 @@ mod tests {
             &call_id,
             CommandOutput {
                 exit_code: 1,
-                stdout: String::new(),
-                stderr,
                 formatted_output: String::new(),
+                aggregated_output: stderr,
             },
             Duration::from_millis(5),
         );

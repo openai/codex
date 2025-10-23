@@ -7,6 +7,7 @@ use crate::config_types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
 use crate::config_types::McpServerTransportConfig;
+use crate::config_types::Notice;
 use crate::config_types::Notifications;
 use crate::config_types::OtelConfig;
 use crate::config_types::OtelConfigToml;
@@ -17,6 +18,10 @@ use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
+use crate::features::Feature;
+use crate::features::FeatureOverrides;
+use crate::features::Features;
+use crate::features::FeaturesToml;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_family::ModelFamily;
 use crate::model_family::derive_default_model_family;
@@ -24,18 +29,23 @@ use crate::model_family::find_family_for_model;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
+use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
+use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use anyhow::Context;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use dirs::home_dir;
+use dunce::canonicalize;
 use serde::Deserialize;
+use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::io::ErrorKind;
@@ -75,10 +85,10 @@ pub struct Config {
     pub model_family: ModelFamily,
 
     /// Size of the context window for the model, in tokens.
-    pub model_context_window: Option<u64>,
+    pub model_context_window: Option<i64>,
 
     /// Maximum number of output tokens.
-    pub model_max_output_tokens: Option<u64>,
+    pub model_max_output_tokens: Option<i64>,
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
@@ -93,6 +103,10 @@ pub struct Config {
     pub approval_policy: AskForApproval,
 
     pub sandbox_policy: SandboxPolicy,
+
+    /// True if the user passed in an override or set a value in config.toml
+    /// for either of approval_policy or sandbox_mode.
+    pub did_user_set_custom_approval_policy_or_sandbox_mode: bool,
 
     pub shell_environment_policy: ShellEnvironmentPolicy,
 
@@ -196,8 +210,11 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
-    /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
-    pub include_plan_tool: bool,
+    /// When set, restricts ChatGPT login to a specific workspace identifier.
+    pub forced_chatgpt_workspace_id: Option<String>,
+
+    /// When set, restricts the login mechanism users may use.
+    pub forced_login_method: Option<ForcedLoginMethod>,
 
     /// Include the `apply_patch` tool for models that benefit from invoking
     /// file edits as a structured tool call. When unset, this falls back to the
@@ -218,11 +235,21 @@ pub struct Config {
     /// Include the `view_image` tool that lets the agent attach a local image path to context.
     pub include_view_image_tool: bool,
 
+    /// Centralized feature flags; source of truth for feature gating.
+    pub features: Features,
+
     /// The active profile name used to derive this `Config` (if any).
     pub active_profile: Option<String>,
 
+    /// The currently active project config, resolved by checking if cwd:
+    /// is (1) part of a git repo, (2) a git worktree, or (3) just using the cwd
+    pub active_project: ProjectConfig,
+
     /// Tracks whether the Windows onboarding screen has been acknowledged.
     pub windows_wsl_setup_acknowledged: bool,
+
+    /// Collection of various notices we show the user
+    pub notices: Notice,
 
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
@@ -366,7 +393,13 @@ pub fn write_global_mcp_servers(
             let mut entry = TomlTable::new();
             entry.set_implicit(false);
             match &config.transport {
-                McpServerTransportConfig::Stdio { command, args, env } => {
+                McpServerTransportConfig::Stdio {
+                    command,
+                    args,
+                    env,
+                    env_vars,
+                    cwd,
+                } => {
                     entry["command"] = toml_edit::value(command.clone());
 
                     if !args.is_empty() {
@@ -389,14 +422,49 @@ pub fn write_global_mcp_servers(
                         }
                         entry["env"] = TomlItem::Table(env_table);
                     }
+
+                    if !env_vars.is_empty() {
+                        entry["env_vars"] =
+                            TomlItem::Value(env_vars.iter().collect::<TomlArray>().into());
+                    }
+
+                    if let Some(cwd) = cwd {
+                        entry["cwd"] = toml_edit::value(cwd.to_string_lossy().to_string());
+                    }
                 }
                 McpServerTransportConfig::StreamableHttp {
                     url,
                     bearer_token_env_var,
+                    http_headers,
+                    env_http_headers,
                 } => {
                     entry["url"] = toml_edit::value(url.clone());
                     if let Some(env_var) = bearer_token_env_var {
                         entry["bearer_token_env_var"] = toml_edit::value(env_var.clone());
+                    }
+                    if let Some(headers) = http_headers
+                        && !headers.is_empty()
+                    {
+                        let mut table = TomlTable::new();
+                        table.set_implicit(false);
+                        let mut pairs: Vec<_> = headers.iter().collect();
+                        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                        for (key, value) in pairs {
+                            table.insert(key, toml_edit::value(value.clone()));
+                        }
+                        entry["http_headers"] = TomlItem::Table(table);
+                    }
+                    if let Some(headers) = env_http_headers
+                        && !headers.is_empty()
+                    {
+                        let mut table = TomlTable::new();
+                        table.set_implicit(false);
+                        let mut pairs: Vec<_> = headers.iter().collect();
+                        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                        for (key, value) in pairs {
+                            table.insert(key, toml_edit::value(value.clone()));
+                        }
+                        entry["env_http_headers"] = TomlItem::Table(table);
                     }
                 }
             }
@@ -411,6 +479,16 @@ pub fn write_global_mcp_servers(
 
             if let Some(timeout) = config.tool_timeout_sec {
                 entry["tool_timeout_sec"] = toml_edit::value(timeout.as_secs_f64());
+            }
+
+            if let Some(enabled_tools) = &config.enabled_tools {
+                entry["enabled_tools"] =
+                    TomlItem::Value(enabled_tools.iter().collect::<TomlArray>().into());
+            }
+
+            if let Some(disabled_tools) = &config.disabled_tools {
+                entry["disabled_tools"] =
+                    TomlItem::Value(disabled_tools.iter().collect::<TomlArray>().into());
             }
 
             doc["mcp_servers"][name.as_str()] = TomlItem::Table(entry);
@@ -537,6 +615,54 @@ pub fn set_windows_wsl_setup_acknowledged(
     tmp_file.persist(config_path)?;
 
     Ok(())
+}
+
+/// Persist the acknowledgement flag for the full access warning prompt.
+pub fn set_hide_full_access_warning(codex_home: &Path, acknowledged: bool) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let mut doc = match std::fs::read_to_string(config_path.clone()) {
+        Ok(s) => s.parse::<DocumentMut>()?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(e) => return Err(e.into()),
+    };
+
+    let notices_table = load_or_create_top_level_table(&mut doc, Notice::TABLE_KEY)?;
+
+    notices_table["hide_full_access_warning"] = toml_edit::value(acknowledged);
+
+    std::fs::create_dir_all(codex_home)?;
+    let tmp_file = NamedTempFile::new_in(codex_home)?;
+    std::fs::write(tmp_file.path(), doc.to_string())?;
+    tmp_file.persist(config_path)?;
+
+    Ok(())
+}
+
+fn load_or_create_top_level_table<'a>(
+    doc: &'a mut DocumentMut,
+    key: &str,
+) -> anyhow::Result<&'a mut toml_edit::Table> {
+    let mut created_table = false;
+
+    let root = doc.as_table_mut();
+    let needs_table =
+        !root.contains_key(key) || root.get(key).and_then(|item| item.as_table()).is_none();
+    if needs_table {
+        root.insert(key, toml_edit::table());
+        created_table = true;
+    }
+
+    let Some(table) = doc[key].as_table_mut() else {
+        return Err(anyhow::anyhow!(format!(
+            "table [{key}] missing after initialization"
+        )));
+    };
+
+    if created_table {
+        table.set_implicit(true);
+    }
+
+    Ok(table)
 }
 
 fn ensure_profile_table<'a>(
@@ -705,10 +831,10 @@ pub struct ConfigToml {
     pub model_provider: Option<String>,
 
     /// Size of the context window for the model, in tokens.
-    pub model_context_window: Option<u64>,
+    pub model_context_window: Option<i64>,
 
     /// Maximum number of output tokens.
-    pub model_max_output_tokens: Option<u64>,
+    pub model_max_output_tokens: Option<i64>,
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
@@ -731,6 +857,14 @@ pub struct ConfigToml {
 
     /// System instructions.
     pub instructions: Option<String>,
+
+    /// When set, restricts ChatGPT login to a specific workspace identifier.
+    #[serde(default)]
+    pub forced_chatgpt_workspace_id: Option<String>,
+
+    /// When set, restricts the login mechanism users may use.
+    #[serde(default)]
+    pub forced_login_method: Option<ForcedLoginMethod>,
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     #[serde(default)]
@@ -794,18 +928,14 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
-    /// Experimental path to a file whose contents replace the built-in BASE_INSTRUCTIONS.
-    pub experimental_instructions_file: Option<PathBuf>,
-
-    pub experimental_use_exec_command_tool: Option<bool>,
-    pub experimental_use_unified_exec_tool: Option<bool>,
-    pub experimental_use_rmcp_client: Option<bool>,
-    pub experimental_use_freeform_apply_patch: Option<bool>,
-
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
+
+    /// Centralized feature flags (new). Prefer this over individual toggles.
+    #[serde(default)]
+    pub features: Option<FeaturesToml>,
 
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
@@ -817,6 +947,17 @@ pub struct ConfigToml {
 
     /// Tracks whether the Windows onboarding screen has been acknowledged.
     pub windows_wsl_setup_acknowledged: Option<bool>,
+
+    /// Collection of in-product notices (different from notifications)
+    /// See [`crate::config_types::Notices`] for more details
+    pub notice: Option<Notice>,
+
+    /// Legacy, now use features
+    pub experimental_instructions_file: Option<PathBuf>,
+    pub experimental_use_exec_command_tool: Option<bool>,
+    pub experimental_use_unified_exec_tool: Option<bool>,
+    pub experimental_use_rmcp_client: Option<bool>,
+    pub experimental_use_freeform_apply_patch: Option<bool>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -831,6 +972,8 @@ impl From<ConfigToml> for UserSavedConfig {
             approval_policy: config_toml.approval_policy,
             sandbox_mode: config_toml.sandbox_mode,
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
+            forced_chatgpt_workspace_id: config_toml.forced_chatgpt_workspace_id,
+            forced_login_method: config_toml.forced_login_method,
             model: config_toml.model,
             model_reasoning_effort: config_toml.model_reasoning_effort,
             model_reasoning_summary: config_toml.model_reasoning_summary,
@@ -845,6 +988,15 @@ impl From<ConfigToml> for UserSavedConfig {
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
     pub trust_level: Option<String>,
+}
+
+impl ProjectConfig {
+    pub fn is_trusted(&self) -> bool {
+        match &self.trust_level {
+            Some(trust_level) => trust_level == "trusted",
+            None => false,
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
@@ -868,9 +1020,23 @@ impl From<ToolsToml> for Tools {
 
 impl ConfigToml {
     /// Derive the effective sandbox policy from the configuration.
-    fn derive_sandbox_policy(&self, sandbox_mode_override: Option<SandboxMode>) -> SandboxPolicy {
+    fn derive_sandbox_policy(
+        &self,
+        sandbox_mode_override: Option<SandboxMode>,
+        resolved_cwd: &Path,
+    ) -> SandboxPolicy {
         let resolved_sandbox_mode = sandbox_mode_override
             .or(self.sandbox_mode)
+            .or_else(|| {
+                // if no sandbox_mode is set, but user has marked directory as trusted, use WorkspaceWrite
+                self.get_active_project(resolved_cwd).and_then(|p| {
+                    if p.is_trusted() {
+                        Some(SandboxMode::WorkspaceWrite)
+                    } else {
+                        None
+                    }
+                })
+            })
             .unwrap_or_default();
         match resolved_sandbox_mode {
             SandboxMode::ReadOnly => SandboxPolicy::new_read_only_policy(),
@@ -892,30 +1058,26 @@ impl ConfigToml {
         }
     }
 
-    pub fn is_cwd_trusted(&self, resolved_cwd: &Path) -> bool {
+    /// Resolves the cwd to an existing project, or returns None if ConfigToml
+    /// does not contain a project corresponding to cwd or a git repo for cwd
+    pub fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
         let projects = self.projects.clone().unwrap_or_default();
 
-        let is_path_trusted = |path: &Path| {
-            let path_str = path.to_string_lossy().to_string();
-            projects
-                .get(&path_str)
-                .map(|p| p.trust_level.as_deref() == Some("trusted"))
-                .unwrap_or(false)
-        };
-
-        // Fast path: exact cwd match
-        if is_path_trusted(resolved_cwd) {
-            return true;
+        if let Some(project_config) = projects.get(&resolved_cwd.to_string_lossy().to_string()) {
+            return Some(project_config.clone());
         }
 
-        // If cwd lives inside a git worktree, check whether the root git project
+        // If cwd lives inside a git repo/worktree, check whether the root git project
         // (the primary repository working directory) is trusted. This lets
         // worktrees inherit trust from the main project.
-        if let Some(root_project) = resolve_root_git_project_for_trust(resolved_cwd) {
-            return is_path_trusted(&root_project);
+        if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd)
+            && let Some(project_config_for_root) =
+                projects.get(&repo_root.to_string_lossy().to_string_lossy().to_string())
+        {
+            return Some(project_config_for_root.clone());
         }
 
-        false
+        None
     }
 
     pub fn get_config_profile(
@@ -952,11 +1114,12 @@ pub struct ConfigOverrides {
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
-    pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    /// Additional directories that should be treated as writable roots for this session.
+    pub additional_writable_roots: Vec<PathBuf>,
 }
 
 impl Config {
@@ -974,17 +1137,17 @@ impl Config {
             model,
             review_model: override_review_model,
             cwd,
-            approval_policy,
+            approval_policy: approval_policy_override,
             sandbox_mode,
             model_provider,
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
             base_instructions,
-            include_plan_tool,
-            include_apply_patch_tool,
-            include_view_image_tool,
+            include_apply_patch_tool: include_apply_patch_tool_override,
+            include_view_image_tool: include_view_image_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            additional_writable_roots,
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -1005,7 +1168,76 @@ impl Config {
             None => ConfigProfile::default(),
         };
 
-        let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode);
+        let feature_overrides = FeatureOverrides {
+            include_apply_patch_tool: include_apply_patch_tool_override,
+            include_view_image_tool: include_view_image_tool_override,
+            web_search_request: override_tools_web_search_request,
+        };
+
+        let features = Features::from_config(&cfg, &config_profile, feature_overrides);
+
+        let resolved_cwd = {
+            use std::env;
+
+            match cwd {
+                None => {
+                    tracing::info!("cwd not set, using current dir");
+                    env::current_dir()?
+                }
+                Some(p) if p.is_absolute() => p,
+                Some(p) => {
+                    // Resolve relative path against the current working directory.
+                    tracing::info!("cwd is relative, resolving against current dir");
+                    let mut current = env::current_dir()?;
+                    current.push(p);
+                    current
+                }
+            }
+        };
+        let additional_writable_roots: Vec<PathBuf> = additional_writable_roots
+            .into_iter()
+            .map(|path| {
+                let absolute = if path.is_absolute() {
+                    path
+                } else {
+                    resolved_cwd.join(path)
+                };
+                match canonicalize(&absolute) {
+                    Ok(canonical) => canonical,
+                    Err(_) => absolute,
+                }
+            })
+            .collect();
+        let active_project = cfg
+            .get_active_project(&resolved_cwd)
+            .unwrap_or(ProjectConfig { trust_level: None });
+
+        let mut sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode, &resolved_cwd);
+        if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
+            for path in additional_writable_roots {
+                if !writable_roots.iter().any(|existing| existing == &path) {
+                    writable_roots.push(path);
+                }
+            }
+        }
+        let approval_policy = approval_policy_override
+            .or(config_profile.approval_policy)
+            .or(cfg.approval_policy)
+            .unwrap_or_else(|| {
+                if active_project.is_trusted() {
+                    // If no explicit approval policy is set, but we trust cwd, default to OnRequest
+                    AskForApproval::OnRequest
+                } else {
+                    AskForApproval::default()
+                }
+            });
+        let did_user_set_custom_approval_policy_or_sandbox_mode = approval_policy_override
+            .is_some()
+            || config_profile.approval_policy.is_some()
+            || cfg.approval_policy.is_some()
+            // TODO(#3034): profile.sandbox_mode is not implemented
+            || sandbox_mode.is_some()
+            || cfg.sandbox_mode.is_some();
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
@@ -1029,34 +1261,26 @@ impl Config {
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
 
-        let resolved_cwd = {
-            use std::env;
-
-            match cwd {
-                None => {
-                    tracing::info!("cwd not set, using current dir");
-                    env::current_dir()?
-                }
-                Some(p) if p.is_absolute() => p,
-                Some(p) => {
-                    // Resolve relative path against the current working directory.
-                    tracing::info!("cwd is relative, resolving against current dir");
-                    let mut current = env::current_dir()?;
-                    current.push(p);
-                    current
-                }
-            }
-        };
-
         let history = cfg.history.unwrap_or_default();
 
-        let tools_web_search_request = override_tools_web_search_request
-            .or(cfg.tools.as_ref().and_then(|t| t.web_search))
-            .unwrap_or(false);
+        let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
+        let include_view_image_tool_flag = features.enabled(Feature::ViewImageTool);
+        let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
+        let use_experimental_streamable_shell_tool = features.enabled(Feature::StreamableShell);
+        let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
+        let use_experimental_use_rmcp_client = features.enabled(Feature::RmcpClient);
 
-        let include_view_image_tool = include_view_image_tool
-            .or(cfg.tools.as_ref().and_then(|t| t.view_image))
-            .unwrap_or(true);
+        let forced_chatgpt_workspace_id =
+            cfg.forced_chatgpt_workspace_id.as_ref().and_then(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
+
+        let forced_login_method = cfg.forced_login_method;
 
         let model = model
             .or(config_profile.model)
@@ -1114,11 +1338,9 @@ impl Config {
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
-            approval_policy: approval_policy
-                .or(config_profile.approval_policy)
-                .or(cfg.approval_policy)
-                .unwrap_or_else(AskForApproval::default),
+            approval_policy,
             sandbox_policy,
+            did_user_set_custom_approval_policy_or_sandbox_mode,
             shell_environment_policy,
             notify: cfg.notify,
             user_instructions,
@@ -1164,21 +1386,19 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
-            include_plan_tool: include_plan_tool.unwrap_or(false),
-            include_apply_patch_tool: include_apply_patch_tool
-                .or(cfg.experimental_use_freeform_apply_patch)
-                .unwrap_or(false),
+            forced_chatgpt_workspace_id,
+            forced_login_method,
+            include_apply_patch_tool: include_apply_patch_tool_flag,
             tools_web_search_request,
-            use_experimental_streamable_shell_tool: cfg
-                .experimental_use_exec_command_tool
-                .unwrap_or(false),
-            use_experimental_unified_exec_tool: cfg
-                .experimental_use_unified_exec_tool
-                .unwrap_or(false),
-            use_experimental_use_rmcp_client: cfg.experimental_use_rmcp_client.unwrap_or(false),
-            include_view_image_tool,
+            use_experimental_streamable_shell_tool,
+            use_experimental_unified_exec_tool,
+            use_experimental_use_rmcp_client,
+            include_view_image_tool: include_view_image_tool_flag,
+            features,
             active_profile: active_profile_name,
+            active_project,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
+            notices: cfg.notice.unwrap_or_default(),
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
             tui_notifications: cfg
                 .tui
@@ -1203,20 +1423,18 @@ impl Config {
     }
 
     fn load_instructions(codex_dir: Option<&Path>) -> Option<String> {
-        let mut p = match codex_dir {
-            Some(p) => p.to_path_buf(),
-            None => return None,
-        };
-
-        p.push("AGENTS.md");
-        std::fs::read_to_string(&p).ok().and_then(|s| {
-            let s = s.trim();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s.to_string())
+        let base = codex_dir?;
+        for candidate in [LOCAL_PROJECT_DOC_FILENAME, DEFAULT_PROJECT_DOC_FILENAME] {
+            let mut path = base.to_path_buf();
+            path.push(candidate);
+            if let Ok(contents) = std::fs::read_to_string(&path) {
+                let trimmed = contents.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
             }
-        })
+        }
+        None
     }
 
     fn get_base_instructions(
@@ -1309,6 +1527,7 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
 mod tests {
     use crate::config_types::HistoryPersistence;
     use crate::config_types::Notifications;
+    use crate::features::Feature;
 
     use super::*;
     use pretty_assertions::assert_eq;
@@ -1374,7 +1593,8 @@ network_access = false  # This should be ignored.
         let sandbox_mode_override = None;
         assert_eq!(
             SandboxPolicy::DangerFullAccess,
-            sandbox_full_access_cfg.derive_sandbox_policy(sandbox_mode_override)
+            sandbox_full_access_cfg
+                .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
         );
 
         let sandbox_read_only = r#"
@@ -1389,7 +1609,8 @@ network_access = true  # This should be ignored.
         let sandbox_mode_override = None;
         assert_eq!(
             SandboxPolicy::ReadOnly,
-            sandbox_read_only_cfg.derive_sandbox_policy(sandbox_mode_override)
+            sandbox_read_only_cfg
+                .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
         );
 
         let sandbox_workspace_write = r#"
@@ -1413,8 +1634,77 @@ exclude_slash_tmp = true
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             },
-            sandbox_workspace_write_cfg.derive_sandbox_policy(sandbox_mode_override)
+            sandbox_workspace_write_cfg
+                .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
         );
+
+        let sandbox_workspace_write = r#"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+writable_roots = [
+    "/my/workspace",
+]
+exclude_tmpdir_env_var = true
+exclude_slash_tmp = true
+
+[projects."/tmp/test"]
+trust_level = "trusted"
+"#;
+
+        let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
+            .expect("TOML deserialization should succeed");
+        let sandbox_mode_override = None;
+        assert_eq!(
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![PathBuf::from("/my/workspace")],
+                network_access: false,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            },
+            sandbox_workspace_write_cfg
+                .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
+        );
+    }
+
+    #[test]
+    fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let frontend = temp_dir.path().join("frontend");
+        let backend = temp_dir.path().join("backend");
+        std::fs::create_dir_all(&frontend)?;
+        std::fs::create_dir_all(&backend)?;
+
+        let overrides = ConfigOverrides {
+            cwd: Some(frontend),
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            additional_writable_roots: vec![PathBuf::from("../backend"), backend.clone()],
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            overrides,
+            temp_dir.path().to_path_buf(),
+        )?;
+
+        let expected_backend = canonicalize(&backend).expect("canonicalize backend directory");
+        match config.sandbox_policy {
+            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                assert_eq!(
+                    writable_roots
+                        .iter()
+                        .filter(|root| **root == expected_backend)
+                        .count(),
+                    1,
+                    "expected single writable root entry for {}",
+                    expected_backend.display()
+                );
+            }
+            other => panic!("expected workspace-write policy, got {other:?}"),
+        }
+
+        Ok(())
     }
 
     #[test]
@@ -1432,6 +1722,87 @@ exclude_slash_tmp = true
             config.mcp_oauth_credentials_store_mode,
             OAuthCredentialsStoreMode::Auto,
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn profile_legacy_toggles_override_base() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "work".to_string(),
+            ConfigProfile {
+                include_view_image_tool: Some(false),
+                ..Default::default()
+            },
+        );
+        let cfg = ConfigToml {
+            profiles,
+            profile: Some("work".to_string()),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(!config.features.enabled(Feature::ViewImageTool));
+        assert!(!config.include_view_image_tool);
+
+        Ok(())
+    }
+
+    #[test]
+    fn feature_table_overrides_legacy_flags() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut entries = BTreeMap::new();
+        entries.insert("apply_patch_freeform".to_string(), false);
+        let cfg = ConfigToml {
+            features: Some(crate::features::FeaturesToml { entries }),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(!config.features.enabled(Feature::ApplyPatchFreeform));
+        assert!(!config.include_apply_patch_tool);
+
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_toggles_map_to_features() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml {
+            experimental_use_exec_command_tool: Some(true),
+            experimental_use_unified_exec_tool: Some(true),
+            experimental_use_rmcp_client: Some(true),
+            experimental_use_freeform_apply_patch: Some(true),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(config.features.enabled(Feature::ApplyPatchFreeform));
+        assert!(config.features.enabled(Feature::StreamableShell));
+        assert!(config.features.enabled(Feature::UnifiedExec));
+        assert!(config.features.enabled(Feature::RmcpClient));
+
+        assert!(config.include_apply_patch_tool);
+        assert!(config.use_experimental_streamable_shell_tool);
+        assert!(config.use_experimental_unified_exec_tool);
+        assert!(config.use_experimental_use_rmcp_client);
 
         Ok(())
     }
@@ -1518,10 +1889,14 @@ exclude_slash_tmp = true
                     command: "echo".to_string(),
                     args: vec!["hello".to_string()],
                     env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
                 },
                 enabled: true,
                 startup_timeout_sec: Some(Duration::from_secs(3)),
                 tool_timeout_sec: Some(Duration::from_secs(5)),
+                enabled_tools: None,
+                disabled_tools: None,
             },
         );
 
@@ -1531,10 +1906,18 @@ exclude_slash_tmp = true
         assert_eq!(loaded.len(), 1);
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
-            McpServerTransportConfig::Stdio { command, args, env } => {
+            McpServerTransportConfig::Stdio {
+                command,
+                args,
+                env,
+                env_vars,
+                cwd,
+            } => {
                 assert_eq!(command, "echo");
                 assert_eq!(args, &vec!["hello".to_string()]);
                 assert!(env.is_none());
+                assert!(env_vars.is_empty());
+                assert!(cwd.is_none());
             }
             other => panic!("unexpected transport {other:?}"),
         }
@@ -1644,10 +2027,14 @@ bearer_token = "secret"
                         ("ZIG_VAR".to_string(), "3".to_string()),
                         ("ALPHA_VAR".to_string(), "1".to_string()),
                     ])),
+                    env_vars: Vec::new(),
+                    cwd: None,
                 },
                 enabled: true,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         )]);
 
@@ -1670,7 +2057,13 @@ ZIG_VAR = "3"
         let loaded = load_global_mcp_servers(codex_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
-            McpServerTransportConfig::Stdio { command, args, env } => {
+            McpServerTransportConfig::Stdio {
+                command,
+                args,
+                env,
+                env_vars,
+                cwd,
+            } => {
                 assert_eq!(command, "docs-server");
                 assert_eq!(args, &vec!["--verbose".to_string()]);
                 let env = env
@@ -1678,6 +2071,8 @@ ZIG_VAR = "3"
                     .expect("env should be preserved for stdio transport");
                 assert_eq!(env.get("ALPHA_VAR"), Some(&"1".to_string()));
                 assert_eq!(env.get("ZIG_VAR"), Some(&"3".to_string()));
+                assert!(env_vars.is_empty());
+                assert!(cwd.is_none());
             }
             other => panic!("unexpected transport {other:?}"),
         }
@@ -1686,19 +2081,111 @@ ZIG_VAR = "3"
     }
 
     #[tokio::test]
-    async fn write_global_mcp_servers_serializes_streamable_http() -> anyhow::Result<()> {
+    async fn write_global_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
-        let mut servers = BTreeMap::from([(
+        let servers = BTreeMap::from([(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "docs-server".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: vec!["ALPHA".to_string(), "BETA".to_string()],
+                    cwd: None,
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+        )]);
+
+        write_global_mcp_servers(codex_home.path(), &servers)?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = std::fs::read_to_string(&config_path)?;
+        assert!(
+            serialized.contains(r#"env_vars = ["ALPHA", "BETA"]"#),
+            "serialized config missing env_vars field:\n{serialized}"
+        );
+
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let docs = loaded.get("docs").expect("docs entry");
+        match &docs.transport {
+            McpServerTransportConfig::Stdio { env_vars, .. } => {
+                assert_eq!(env_vars, &vec!["ALPHA".to_string(), "BETA".to_string()]);
+            }
+            other => panic!("unexpected transport {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_global_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let cwd_path = PathBuf::from("/tmp/codex-mcp");
+        let servers = BTreeMap::from([(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "docs-server".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: Some(cwd_path.clone()),
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+        )]);
+
+        write_global_mcp_servers(codex_home.path(), &servers)?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = std::fs::read_to_string(&config_path)?;
+        assert!(
+            serialized.contains(r#"cwd = "/tmp/codex-mcp""#),
+            "serialized config missing cwd field:\n{serialized}"
+        );
+
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let docs = loaded.get("docs").expect("docs entry");
+        match &docs.transport {
+            McpServerTransportConfig::Stdio { cwd, .. } => {
+                assert_eq!(cwd.as_deref(), Some(Path::new("/tmp/codex-mcp")));
+            }
+            other => panic!("unexpected transport {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_global_mcp_servers_streamable_http_serializes_bearer_token() -> anyhow::Result<()>
+    {
+        let codex_home = TempDir::new()?;
+
+        let servers = BTreeMap::from([(
             "docs".to_string(),
             McpServerConfig {
                 transport: McpServerTransportConfig::StreamableHttp {
                     url: "https://example.com/mcp".to_string(),
                     bearer_token_env_var: Some("MCP_TOKEN".to_string()),
+                    http_headers: None,
+                    env_http_headers: None,
                 },
                 enabled: true,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         )]);
 
@@ -1721,13 +2208,122 @@ startup_timeout_sec = 2.0
             McpServerTransportConfig::StreamableHttp {
                 url,
                 bearer_token_env_var,
+                http_headers,
+                env_http_headers,
             } => {
                 assert_eq!(url, "https://example.com/mcp");
                 assert_eq!(bearer_token_env_var.as_deref(), Some("MCP_TOKEN"));
+                assert!(http_headers.is_none());
+                assert!(env_http_headers.is_none());
             }
             other => panic!("unexpected transport {other:?}"),
         }
         assert_eq!(docs.startup_timeout_sec, Some(Duration::from_secs(2)));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_global_mcp_servers_streamable_http_serializes_custom_headers()
+    -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let servers = BTreeMap::from([(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "https://example.com/mcp".to_string(),
+                    bearer_token_env_var: Some("MCP_TOKEN".to_string()),
+                    http_headers: Some(HashMap::from([("X-Doc".to_string(), "42".to_string())])),
+                    env_http_headers: Some(HashMap::from([(
+                        "X-Auth".to_string(),
+                        "DOCS_AUTH".to_string(),
+                    )])),
+                },
+                enabled: true,
+                startup_timeout_sec: Some(Duration::from_secs(2)),
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+        )]);
+        write_global_mcp_servers(codex_home.path(), &servers)?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = std::fs::read_to_string(&config_path)?;
+        assert_eq!(
+            serialized,
+            r#"[mcp_servers.docs]
+url = "https://example.com/mcp"
+bearer_token_env_var = "MCP_TOKEN"
+startup_timeout_sec = 2.0
+
+[mcp_servers.docs.http_headers]
+X-Doc = "42"
+
+[mcp_servers.docs.env_http_headers]
+X-Auth = "DOCS_AUTH"
+"#
+        );
+
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let docs = loaded.get("docs").expect("docs entry");
+        match &docs.transport {
+            McpServerTransportConfig::StreamableHttp {
+                http_headers,
+                env_http_headers,
+                ..
+            } => {
+                assert_eq!(
+                    http_headers,
+                    &Some(HashMap::from([("X-Doc".to_string(), "42".to_string())]))
+                );
+                assert_eq!(
+                    env_http_headers,
+                    &Some(HashMap::from([(
+                        "X-Auth".to_string(),
+                        "DOCS_AUTH".to_string()
+                    )]))
+                );
+            }
+            other => panic!("unexpected transport {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_global_mcp_servers_streamable_http_removes_optional_sections()
+    -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        let mut servers = BTreeMap::from([(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "https://example.com/mcp".to_string(),
+                    bearer_token_env_var: Some("MCP_TOKEN".to_string()),
+                    http_headers: Some(HashMap::from([("X-Doc".to_string(), "42".to_string())])),
+                    env_http_headers: Some(HashMap::from([(
+                        "X-Auth".to_string(),
+                        "DOCS_AUTH".to_string(),
+                    )])),
+                },
+                enabled: true,
+                startup_timeout_sec: Some(Duration::from_secs(2)),
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+        )]);
+
+        write_global_mcp_servers(codex_home.path(), &servers)?;
+        let serialized_with_optional = std::fs::read_to_string(&config_path)?;
+        assert!(serialized_with_optional.contains("bearer_token_env_var = \"MCP_TOKEN\""));
+        assert!(serialized_with_optional.contains("[mcp_servers.docs.http_headers]"));
+        assert!(serialized_with_optional.contains("[mcp_servers.docs.env_http_headers]"));
 
         servers.insert(
             "docs".to_string(),
@@ -1735,10 +2331,14 @@ startup_timeout_sec = 2.0
                 transport: McpServerTransportConfig::StreamableHttp {
                     url: "https://example.com/mcp".to_string(),
                     bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
                 },
                 enabled: true,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         );
         write_global_mcp_servers(codex_home.path(), &servers)?;
@@ -1757,9 +2357,116 @@ url = "https://example.com/mcp"
             McpServerTransportConfig::StreamableHttp {
                 url,
                 bearer_token_env_var,
+                http_headers,
+                env_http_headers,
             } => {
                 assert_eq!(url, "https://example.com/mcp");
                 assert!(bearer_token_env_var.is_none());
+                assert!(http_headers.is_none());
+                assert!(env_http_headers.is_none());
+            }
+            other => panic!("unexpected transport {other:?}"),
+        }
+
+        assert!(docs.startup_timeout_sec.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_global_mcp_servers_streamable_http_isolates_headers_between_servers()
+    -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        let servers = BTreeMap::from([
+            (
+                "docs".to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::StreamableHttp {
+                        url: "https://example.com/mcp".to_string(),
+                        bearer_token_env_var: Some("MCP_TOKEN".to_string()),
+                        http_headers: Some(HashMap::from([(
+                            "X-Doc".to_string(),
+                            "42".to_string(),
+                        )])),
+                        env_http_headers: Some(HashMap::from([(
+                            "X-Auth".to_string(),
+                            "DOCS_AUTH".to_string(),
+                        )])),
+                    },
+                    enabled: true,
+                    startup_timeout_sec: Some(Duration::from_secs(2)),
+                    tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                },
+            ),
+            (
+                "logs".to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: "logs-server".to_string(),
+                        args: vec!["--follow".to_string()],
+                        env: None,
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    enabled: true,
+                    startup_timeout_sec: None,
+                    tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                },
+            ),
+        ]);
+
+        write_global_mcp_servers(codex_home.path(), &servers)?;
+
+        let serialized = std::fs::read_to_string(&config_path)?;
+        assert!(
+            serialized.contains("[mcp_servers.docs.http_headers]"),
+            "serialized config missing docs headers section:\n{serialized}"
+        );
+        assert!(
+            !serialized.contains("[mcp_servers.logs.http_headers]"),
+            "serialized config should not add logs headers section:\n{serialized}"
+        );
+        assert!(
+            !serialized.contains("[mcp_servers.logs.env_http_headers]"),
+            "serialized config should not add logs env headers section:\n{serialized}"
+        );
+        assert!(
+            !serialized.contains("mcp_servers.logs.bearer_token_env_var"),
+            "serialized config should not add bearer token to logs:\n{serialized}"
+        );
+
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let docs = loaded.get("docs").expect("docs entry");
+        match &docs.transport {
+            McpServerTransportConfig::StreamableHttp {
+                http_headers,
+                env_http_headers,
+                ..
+            } => {
+                assert_eq!(
+                    http_headers,
+                    &Some(HashMap::from([("X-Doc".to_string(), "42".to_string())]))
+                );
+                assert_eq!(
+                    env_http_headers,
+                    &Some(HashMap::from([(
+                        "X-Auth".to_string(),
+                        "DOCS_AUTH".to_string()
+                    )]))
+                );
+            }
+            other => panic!("unexpected transport {other:?}"),
+        }
+        let logs = loaded.get("logs").expect("logs entry");
+        match &logs.transport {
+            McpServerTransportConfig::Stdio { env, .. } => {
+                assert!(env.is_none());
             }
             other => panic!("unexpected transport {other:?}"),
         }
@@ -1778,10 +2485,14 @@ url = "https://example.com/mcp"
                     command: "docs-server".to_string(),
                     args: Vec::new(),
                     env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
                 },
                 enabled: false,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
             },
         )]);
 
@@ -1797,6 +2508,49 @@ url = "https://example.com/mcp"
         let loaded = load_global_mcp_servers(codex_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         assert!(!docs.enabled);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_global_mcp_servers_serializes_tool_filters() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let servers = BTreeMap::from([(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "docs-server".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: Some(vec!["allowed".to_string()]),
+                disabled_tools: Some(vec!["blocked".to_string()]),
+            },
+        )]);
+
+        write_global_mcp_servers(codex_home.path(), &servers)?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = std::fs::read_to_string(&config_path)?;
+        assert!(serialized.contains(r#"enabled_tools = ["allowed"]"#));
+        assert!(serialized.contains(r#"disabled_tools = ["blocked"]"#));
+
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let docs = loaded.get("docs").expect("docs entry");
+        assert_eq!(
+            docs.enabled_tools.as_ref(),
+            Some(&vec!["allowed".to_string()])
+        );
+        assert_eq!(
+            docs.disabled_tools.as_ref(),
+            Some(&vec!["blocked".to_string()])
+        );
 
         Ok(())
     }
@@ -2023,6 +2777,7 @@ model_verbosity = "high"
             env_key: Some("OPENAI_API_KEY".to_string()),
             wire_api: crate::WireApi::Chat,
             env_key_instructions: None,
+            experimental_bearer_token: None,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -2088,11 +2843,12 @@ model_verbosity = "high"
                 model_family: find_family_for_model("o3").expect("known model slug"),
                 model_context_window: Some(200_000),
                 model_max_output_tokens: Some(100_000),
-                model_auto_compact_token_limit: None,
+                model_auto_compact_token_limit: Some(180_000),
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
@@ -2113,15 +2869,19 @@ model_verbosity = "high"
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
-                include_plan_tool: false,
+                forced_chatgpt_workspace_id: None,
+                forced_login_method: None,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
                 use_experimental_streamable_shell_tool: false,
                 use_experimental_unified_exec_tool: false,
                 use_experimental_use_rmcp_client: false,
                 include_view_image_tool: true,
+                features: Features::with_defaults(),
                 active_profile: Some("o3".to_string()),
+                active_project: ProjectConfig { trust_level: None },
                 windows_wsl_setup_acknowledged: false,
+                notices: Default::default(),
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
                 otel: OtelConfig::default(),
@@ -2151,11 +2911,12 @@ model_verbosity = "high"
             model_family: find_family_for_model("gpt-3.5-turbo").expect("known model slug"),
             model_context_window: Some(16_385),
             model_max_output_tokens: Some(4_096),
-            model_auto_compact_token_limit: None,
+            model_auto_compact_token_limit: Some(14_746),
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
             approval_policy: AskForApproval::UnlessTrusted,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            did_user_set_custom_approval_policy_or_sandbox_mode: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
@@ -2176,15 +2937,19 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
-            include_plan_tool: false,
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            features: Features::with_defaults(),
             active_profile: Some("gpt3".to_string()),
+            active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
+            notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
@@ -2229,11 +2994,12 @@ model_verbosity = "high"
             model_family: find_family_for_model("o3").expect("known model slug"),
             model_context_window: Some(200_000),
             model_max_output_tokens: Some(100_000),
-            model_auto_compact_token_limit: None,
+            model_auto_compact_token_limit: Some(180_000),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            did_user_set_custom_approval_policy_or_sandbox_mode: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
@@ -2254,15 +3020,19 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
-            include_plan_tool: false,
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            features: Features::with_defaults(),
             active_profile: Some("zdr".to_string()),
+            active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
+            notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
@@ -2293,11 +3063,12 @@ model_verbosity = "high"
             model_family: find_family_for_model("gpt-5").expect("known model slug"),
             model_context_window: Some(272_000),
             model_max_output_tokens: Some(128_000),
-            model_auto_compact_token_limit: None,
+            model_auto_compact_token_limit: Some(244_800),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            did_user_set_custom_approval_policy_or_sandbox_mode: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
@@ -2318,21 +3089,43 @@ model_verbosity = "high"
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
-            include_plan_tool: false,
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            features: Features::with_defaults(),
             active_profile: Some("gpt5".to_string()),
+            active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
+            notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_did_user_set_custom_approval_policy_or_sandbox_mode_defaults_no() -> anyhow::Result<()>
+    {
+        let fixture = create_test_fixture()?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            ConfigOverrides {
+                ..Default::default()
+            },
+            fixture.codex_home(),
+        )?;
+
+        assert!(config.did_user_set_custom_approval_policy_or_sandbox_mode);
 
         Ok(())
     }
