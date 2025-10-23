@@ -97,6 +97,10 @@ use self::interrupts::InterruptManager;
 mod agent;
 use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
+mod oss_markup;
+use self::oss_markup::OssSegment;
+use self::oss_markup::parse_oss_segments;
+use self::oss_markup::strip_markup;
 mod session_header;
 use self::session_header::SessionHeader;
 use crate::streaming::controller::StreamController;
@@ -344,9 +348,18 @@ impl ChatWidget {
     }
 
     fn on_agent_message(&mut self, message: String) {
-        // If we have a stream_controller, then the final agent message is redundant and will be a
-        // duplicate of what has already been streamed.
+        // If we have a stream controller (i.e., deltas already rendered), do not
+        // attempt to parse/stream the final aggregated message again. Just
+        // finalize the stream.
         if self.stream_controller.is_none() {
+            // No deltas were seen. Try to parse OSS markup; if not present,
+            // stream the message as-is.
+            if self.try_handle_oss_message(&message) {
+                self.flush_answer_stream_with_separator();
+                self.handle_stream_finished();
+                self.request_redraw();
+                return;
+            }
             self.handle_streaming_delta(message);
         }
         self.flush_answer_stream_with_separator();
@@ -713,6 +726,153 @@ impl ChatWidget {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
         }
         self.request_redraw();
+    }
+
+    fn try_handle_oss_message(&mut self, original: &str) -> bool {
+        let Some(segments) = parse_oss_segments(original) else {
+            return false;
+        };
+
+        // Prefer the most recent OSS blocks within the single aggregated message.
+        let mut last_reasoning: Option<String> = None;
+        let mut last_final: Option<String> = None;
+        let mut supplemental_sections: Vec<String> = Vec::new();
+        let mut last_tool: Option<String> = None;
+
+        for segment in segments {
+            match segment {
+                OssSegment::Analysis(text) => {
+                    if !text.trim().is_empty() {
+                        last_reasoning = Some(text);
+                    }
+                }
+                OssSegment::Final(text) => {
+                    if !text.trim().is_empty() {
+                        last_final = Some(text);
+                    }
+                }
+                OssSegment::ToolRequest { tool, payload } => {
+                    last_tool = Some(tool.clone());
+                    if let Some(formatted) = Self::format_tool_request(&tool, &payload) {
+                        supplemental_sections.push(formatted);
+                    }
+                }
+                OssSegment::ToolOutput { payload } => {
+                    let label = last_tool.as_deref();
+                    if let Some(formatted) = Self::format_tool_output(label, &payload) {
+                        supplemental_sections.push(formatted);
+                    } else if !payload.trim().is_empty() {
+                        supplemental_sections.push(payload);
+                    }
+                }
+                OssSegment::Other { payload, .. } => {
+                    if !payload.trim().is_empty() {
+                        supplemental_sections.push(payload);
+                    }
+                }
+            }
+        }
+
+        if let Some(reasoning) = last_reasoning {
+            self.on_agent_reasoning_delta(reasoning);
+            self.on_agent_reasoning_final();
+        }
+
+        let mut final_output = String::new();
+        if let Some(text) = last_final {
+            final_output.push_str(&text);
+        }
+        if !supplemental_sections.is_empty() {
+            if !final_output.trim().is_empty() {
+                final_output.push_str("\n\n");
+            }
+            final_output.push_str(&supplemental_sections.join("\n\n"));
+        }
+
+        if final_output.trim().is_empty() {
+            let stripped = strip_markup(original);
+            if stripped.trim().is_empty() {
+                return false;
+            }
+            final_output = stripped;
+        }
+
+        if final_output.trim().is_empty() {
+            return false;
+        }
+
+        self.handle_streaming_delta(final_output);
+        true
+    }
+
+    fn format_tool_request(tool: &str, payload: &str) -> Option<String> {
+        let parsed: serde_json::Value = serde_json::from_str(payload).ok()?;
+        let command = parsed
+            .get("command")
+            .and_then(|cmd| cmd.as_array())
+            .map(|cmds| {
+                cmds.iter()
+                    .filter_map(|value| value.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            });
+        let cwd = parsed
+            .get("cwd")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+
+        if command.as_deref().is_none_or(str::is_empty) {
+            return Some(format!("Tool call ({tool}):\n{payload}"));
+        }
+
+        let mut formatted = format!("Tool call ({tool})");
+        if !cwd.is_empty() {
+            formatted.push_str(&format!("\nDirectory: {cwd}"));
+        }
+        formatted.push_str("\n```shell\n");
+        formatted.push_str(command.as_deref().unwrap_or_default());
+        formatted.push_str("\n```");
+        Some(formatted)
+    }
+
+    fn format_tool_output(tool: Option<&str>, payload: &str) -> Option<String> {
+        let parsed: serde_json::Value = serde_json::from_str(payload).ok()?;
+        let output = parsed
+            .get("output")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let metadata = parsed
+            .get("metadata")
+            .and_then(serde_json::Value::as_object);
+        let exit_code = metadata
+            .and_then(|meta| meta.get("exit_code"))
+            .and_then(serde_json::Value::as_i64);
+        let duration = metadata
+            .and_then(|meta| meta.get("duration_seconds"))
+            .and_then(serde_json::Value::as_f64);
+
+        if output.is_empty() && exit_code.is_none() && duration.is_none() {
+            return Some(format!(
+                "Tool output ({}):\n{payload}",
+                tool.unwrap_or("tool")
+            ));
+        }
+
+        let mut formatted = format!("Tool output ({})", tool.unwrap_or("tool"));
+        if exit_code.is_some() || duration.is_some() {
+            let exit_str = exit_code.map_or_else(|| "unknown".to_string(), |code| code.to_string());
+            let duration_str =
+                duration.map_or_else(|| "unknown".to_string(), |secs| format!("{secs:.1}s"));
+            formatted.push_str(&format!(
+                "\nExit code: {exit_str} | Duration: {duration_str}"
+            ));
+        }
+        if !output.is_empty() {
+            formatted.push('\n');
+            formatted.push_str(output);
+        }
+        Some(formatted)
     }
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
