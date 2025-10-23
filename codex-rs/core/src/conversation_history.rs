@@ -1,5 +1,6 @@
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use std::ops::Deref;
 use tracing::error;
 
 /// Transcript of conversation history
@@ -21,7 +22,9 @@ impl ConversationHistory {
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
         for item in items {
-            if !is_api_message(&item) {
+            let item_ref = item.deref();
+            let is_ghost_snapshot = matches!(item_ref, ResponseItem::GhostSnapshot { .. });
+            if !is_api_message(item_ref) && !is_ghost_snapshot {
                 continue;
             }
 
@@ -146,6 +149,7 @@ impl ConversationHistory {
                 | ResponseItem::WebSearchCall { .. }
                 | ResponseItem::FunctionCallOutput { .. }
                 | ResponseItem::CustomToolCallOutput { .. }
+                | ResponseItem::GhostSnapshot { .. }
                 | ResponseItem::Other
                 | ResponseItem::Message { .. } => {
                     // nothing to do for these variants
@@ -212,6 +216,7 @@ impl ConversationHistory {
                 | ResponseItem::LocalShellCall { .. }
                 | ResponseItem::Reasoning { .. }
                 | ResponseItem::WebSearchCall { .. }
+                | ResponseItem::GhostSnapshot { .. }
                 | ResponseItem::Other
                 | ResponseItem::Message { .. } => {
                     // nothing to do for these variants
@@ -324,6 +329,7 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::WebSearchCall { .. } => true,
+        ResponseItem::GhostSnapshot { .. } => false,
         ResponseItem::Other => false,
     }
 }
