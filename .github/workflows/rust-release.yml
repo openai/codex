@@ -10,6 +10,10 @@ on:
   push:
     tags:
       - "rust-v*.*.*"
+  pull_request:
+    paths:
+      - ".github/workflows/rust-release.yml"
+      - "codex-rs/**"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -26,6 +30,11 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Tag validation"
+
+          if [[ "${GITHUB_EVENT_NAME}" != "push" || "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo "ℹ️  Skipping tag validation for ${GITHUB_EVENT_NAME} event"
+            exit 0
+          fi
 
           # 1. Must be a tag and match the regex
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
@@ -49,6 +58,9 @@ jobs:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
     timeout-minutes: 30
     defaults:
       run:
@@ -58,10 +70,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15-xlarge
-            target: aarch64-apple-darwin
-          - runner: macos-15-xlarge
-            target: x86_64-apple-darwin
+          # - runner: macos-15-xlarge
+          #   target: aarch64-apple-darwin
+          # - runner: macos-15-xlarge
+          #   target: x86_64-apple-darwin
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
           - runner: ubuntu-24.04
@@ -70,10 +82,10 @@ jobs:
             target: aarch64-unknown-linux-musl
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-          - runner: windows-latest
-            target: x86_64-pc-windows-msvc
-          - runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
+          # - runner: windows-latest
+          #   target: x86_64-pc-windows-msvc
+          # - runner: windows-11-arm
+          #   target: aarch64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v5
@@ -100,7 +112,7 @@ jobs:
       - name: Cargo build
         run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
 
-      - if: ${{ matrix.runner == 'macos-15-xlarge' }}
+      - if: ${{ matrix.runner == 'macos-15-xlarge' && github.event_name == 'push' }}
         name: Configure Apple code signing
         shell: bash
         env:
@@ -185,7 +197,7 @@ jobs:
           echo "APPLE_CODESIGN_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
           echo "::add-mask::$APPLE_CODESIGN_IDENTITY"
 
-      - if: ${{ matrix.runner == 'macos-15-xlarge' }}
+      - if: ${{ matrix.runner == 'macos-15-xlarge' && github.event_name == 'push' }}
         name: Sign macOS binaries
         shell: bash
         run: |
@@ -206,7 +218,7 @@ jobs:
             codesign --force --options runtime --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$path"
           done
 
-      - if: ${{ matrix.runner == 'macos-15-xlarge' }}
+      - if: ${{ matrix.runner == 'macos-15-xlarge' && github.event_name == 'push' }}
         name: Notarize macOS binaries
         shell: bash
         env:
@@ -269,6 +281,78 @@ jobs:
           notarize_binary "codex"
           notarize_binary "codex-responses-api-proxy"
 
+      - if: ${{ startsWith(matrix.runner, 'windows') && github.event_name == 'push' }}
+        name: Configure Windows code signing
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_CERTIFICATE_PFX: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PFX }}
+          WINDOWS_CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PASSWORD }}
+        run: |
+          Set-StrictMode -Version Latest
+
+          if (-not $env:WINDOWS_CODESIGN_CERTIFICATE_PFX) {
+            Write-Error "WINDOWS_CODESIGN_CERTIFICATE_PFX is required for Windows signing"
+          }
+
+          if (-not $env:WINDOWS_CODESIGN_CERTIFICATE_PASSWORD) {
+            Write-Error "WINDOWS_CODESIGN_CERTIFICATE_PASSWORD is required for Windows signing"
+          }
+
+          $certPath = Join-Path $env:RUNNER_TEMP 'windows_signing_certificate.pfx'
+          [System.IO.File]::WriteAllBytes($certPath, [System.Convert]::FromBase64String($env:WINDOWS_CODESIGN_CERTIFICATE_PFX))
+
+          "WINDOWS_CODESIGN_CERTIFICATE_PATH=$certPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - if: ${{ startsWith(matrix.runner, 'windows') && github.event_name == 'push' }}
+        name: Sign Windows binaries
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PASSWORD }}
+          MATRIX_TARGET: ${{ matrix.target }}
+        run: |
+          Set-StrictMode -Version Latest
+
+          $certPath = $env:WINDOWS_CODESIGN_CERTIFICATE_PATH
+          if (-not $certPath) {
+            Write-Error "WINDOWS_CODESIGN_CERTIFICATE_PATH is required for Windows signing"
+          }
+
+          if (-not (Test-Path $certPath)) {
+            Write-Error "Certificate file not found at $certPath"
+          }
+
+          $arch = if ($env:MATRIX_TARGET -eq 'aarch64-pc-windows-msvc') { 'arm64' } else { 'x64' }
+          $signtoolSearchRoot = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+          $signtool = Get-ChildItem -Path $signtoolSearchRoot -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match "\\$arch\\" } | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) {
+            $signtool = Get-ChildItem -Path $signtoolSearchRoot -Recurse -Filter signtool.exe | Sort-Object FullName -Descending | Select-Object -First 1
+          }
+
+          if (-not $signtool) {
+            Write-Error "signtool.exe not found"
+          }
+
+          $binaries = @(
+            "target/${{ matrix.target }}/release/codex.exe",
+            "target/${{ matrix.target }}/release/codex-responses-api-proxy.exe"
+          )
+
+          foreach ($binary in $binaries) {
+            if (-not (Test-Path $binary)) {
+              Write-Error "Binary $binary not found"
+            }
+          }
+
+          foreach ($binary in $binaries) {
+            & $signtool.FullName sign `
+              /fd SHA256 `
+              /td SHA256 `
+              /tr http://timestamp.digicert.com `
+              /f $certPath `
+              /p $env:WINDOWS_CODESIGN_CERTIFICATE_PASSWORD `
+              $binary
+          }
+
       - name: Stage artifacts
         shell: bash
         run: |
@@ -327,8 +411,40 @@ jobs:
             zstd -T0 -19 --rm "$dest/$base"
           done
 
+      - if: ${{ contains(matrix.target, 'unknown-linux')}}
+        name: Install cosign
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - if: ${{ contains(matrix.target, 'unknown-linux')}}
+        name: Cosign Linux artifacts
+        shell: bash
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+          COSIGN_YES: "true"
+          COSIGN_OIDC_CLIENT_ID: "sigstore"
+          COSIGN_OIDC_ISSUER: "https://oauth2.sigstore.dev/auth"
+        run: |
+          set -euo pipefail
+
+          dest="dist/${{ matrix.target }}"
+          if [[ ! -d "$dest" ]]; then
+            echo "Destination $dest does not exist"
+            exit 1
+          fi
+
+          shopt -s nullglob
+          for artifact in "$dest"/*; do
+            if [[ -f "$artifact" ]]; then
+              cosign sign-blob \
+                --yes \
+                --output-signature "${artifact}.sig" \
+                --output-certificate "${artifact}.pem" \
+                "$artifact"
+            fi
+          done
+
       - name: Remove signing keychain
-        if: ${{ always() && matrix.runner == 'macos-15-xlarge' }}
+        if: ${{ always() && matrix.runner == 'macos-15-xlarge' && github.event_name == 'push' }}
         shell: bash
         env:
           APPLE_CODESIGN_KEYCHAIN: ${{ env.APPLE_CODESIGN_KEYCHAIN }}
@@ -350,6 +466,13 @@ jobs:
             fi
           fi
 
+      - name: Remove Windows signing certificate
+        if: ${{ always() && startsWith(matrix.runner, 'windows') && github.event_name == 'push' }}
+        shell: pwsh
+        run: |
+          if ($env:WINDOWS_CODESIGN_CERTIFICATE_PATH -and (Test-Path $env:WINDOWS_CODESIGN_CERTIFICATE_PATH)) {
+            Remove-Item -Force $env:WINDOWS_CODESIGN_CERTIFICATE_PATH
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -359,6 +482,7 @@ jobs:
             codex-rs/dist/${{ matrix.target }}/*
 
   release:
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rust-v') }}
     needs: build
     name: release
     runs-on: ubuntu-latest
@@ -455,8 +579,8 @@ jobs:
   # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
-    # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
     if: ${{ needs.release.outputs.should_publish_npm == 'true' }}
+    # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
     name: publish-npm
     needs: release
     runs-on: ubuntu-latest
@@ -520,6 +644,7 @@ jobs:
           done
 
   update-branch:
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rust-v') }}
     name: Update latest-alpha-cli branch
     permissions:
       contents: write
