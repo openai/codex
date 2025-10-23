@@ -1,4 +1,3 @@
-#![cfg(not(target_os = "windows"))]
 #![allow(clippy::expect_used)]
 
 use anyhow::Result;
