@@ -785,7 +785,12 @@ impl App {
                 self.chat_widget.add_info_message(message, hint);
             }
             CommitAction::Perform { message, auto } => {
-                if let Err(err) = self.perform_commit(message, auto).await {
+                let agent_summary = if auto {
+                    self.chat_widget.take_last_agent_commit_summary()
+                } else {
+                    None
+                };
+                if let Err(err) = self.perform_commit(message, auto, agent_summary).await {
                     self.chat_widget.add_error_message(err);
                 }
             }
@@ -796,6 +801,7 @@ impl App {
         &mut self,
         provided_message: Option<String>,
         auto: bool,
+        agent_summary: Option<String>,
     ) -> Result<(), String> {
         if get_git_repo_root(&self.config.cwd).is_none() {
             return Err(
@@ -851,6 +857,10 @@ impl App {
             final_message = format!("Auto commit: {final_message}");
         }
 
+        let mut commit_body = agent_summary
+            .map(|msg| msg.trim().to_string())
+            .filter(|msg| !msg.is_empty());
+
         let add_output = Command::new("git")
             .args(["add", "--all"])
             .current_dir(&self.config.cwd)
@@ -868,8 +878,12 @@ impl App {
             });
         }
 
-        let commit_output = Command::new("git")
-            .args(["commit", "-m", &final_message])
+        let mut commit_command = Command::new("git");
+        commit_command.arg("commit").arg("-m").arg(&final_message);
+        if let Some(body) = commit_body.as_ref() {
+            commit_command.arg("-m").arg(body);
+        }
+        let commit_output = commit_command
             .current_dir(&self.config.cwd)
             .output()
             .await
@@ -911,6 +925,17 @@ impl App {
 
         if !summary.is_empty() && summary != final_message {
             hint_parts.push(format!("Summary: {summary}"));
+        }
+
+        if let Some(body) = commit_body.as_ref() {
+            if let Some(first_line) = body
+                .lines()
+                .next()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+            {
+                hint_parts.push(format!("Response: {first_line}"));
+            }
         }
 
         if !preview.is_empty() {

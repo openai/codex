@@ -344,6 +344,7 @@ pub(crate) struct ChatWidget {
     todo_items: Vec<TodoItem>,
     todo_auto_enabled: bool,
     auto_commit_enabled: bool,
+    last_agent_commit_summary: Option<String>,
     aliases: HashMap<String, AliasEntry>,
     presets: HashMap<String, PresetEntry>,
     // Pending notification to show when unfocused on next Draw
@@ -509,7 +510,12 @@ impl ChatWidget {
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
         // Emit a notification when the turn completes (suppressed if focused).
-        let response_for_notification = last_agent_message.unwrap_or_default();
+        let mut last_agent_message = last_agent_message;
+        let response_for_notification = last_agent_message.clone().unwrap_or_default();
+        self.last_agent_commit_summary = last_agent_message
+            .take()
+            .map(|msg| msg.trim().to_string())
+            .filter(|msg| !msg.is_empty());
         self.notify(Notification::AgentTurnComplete {
             response: response_for_notification,
         });
@@ -1065,6 +1071,7 @@ impl ChatWidget {
             todo_items: Vec::new(),
             todo_auto_enabled: false,
             auto_commit_enabled: config.auto_commit,
+            last_agent_commit_summary: None,
             aliases: HashMap::new(),
             presets: HashMap::new(),
             show_welcome_banner: true,
@@ -1152,6 +1159,7 @@ impl ChatWidget {
             todo_items: Vec::new(),
             todo_auto_enabled: false,
             auto_commit_enabled: config.auto_commit,
+            last_agent_commit_summary: None,
             aliases: HashMap::new(),
             presets: HashMap::new(),
             show_welcome_banner: true,
@@ -2612,6 +2620,10 @@ impl ChatWidget {
     pub(crate) fn set_auto_commit_enabled(&mut self, enabled: bool) {
         self.auto_commit_enabled = enabled;
         self.config.auto_commit = enabled;
+    }
+
+    pub(crate) fn take_last_agent_commit_summary(&mut self) -> Option<String> {
+        self.last_agent_commit_summary.take()
     }
 
     fn push_todo_list_history(&mut self) {
