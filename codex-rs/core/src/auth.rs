@@ -338,8 +338,20 @@ pub fn login_with_api_key(codex_home: &Path, api_key: &str) -> std::io::Result<(
         tokens: None,
         last_refresh: None,
     };
+    save_auth(codex_home, &auth_dot_json)
+}
+
+/// Persist the provided auth payload using the specified backend.
+pub fn save_auth(codex_home: &Path, auth: &AuthDotJson) -> std::io::Result<()> {
     let storage = AuthStorage::new(codex_home.to_path_buf(), AuthCredentialsStoreMode::File);
-    storage.save(&auth_dot_json)
+    storage.save(auth)
+}
+
+/// Load CLI auth data using the configured credential store backend.
+/// Returns `None` when no credentials are stored.
+pub fn load_auth_dot_json(codex_home: &Path) -> std::io::Result<Option<AuthDotJson>> {
+    let storage = AuthStorage::new(codex_home.to_path_buf(), AuthCredentialsStoreMode::File);
+    storage.load()
 }
 
 pub async fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
