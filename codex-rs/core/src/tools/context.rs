@@ -24,7 +24,6 @@ pub struct ToolInvocation {
     pub session: Arc<Session>,
     pub turn: Arc<TurnContext>,
     pub tracker: SharedTurnDiffTracker,
-    pub sub_id: String,
     pub call_id: String,
     pub tool_name: String,
     pub payload: ToolPayload,
@@ -232,8 +231,9 @@ mod tests {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct ExecCommandContext {
-    pub(crate) sub_id: String,
+    pub(crate) turn: Arc<TurnContext>,
     pub(crate) call_id: String,
     pub(crate) command_for_display: Vec<String>,
     pub(crate) cwd: PathBuf,
@@ -243,6 +243,7 @@ pub(crate) struct ExecCommandContext {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct ApplyPatchCommandContext {
     pub(crate) user_explicitly_approved_this_action: bool,
     pub(crate) changes: HashMap<PathBuf, FileChange>,

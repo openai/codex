@@ -24,6 +24,7 @@ impl ShellHandler {
             env: create_env(&turn_context.shell_environment_policy),
             with_escalated_permissions: params.with_escalated_permissions,
             justification: params.justification,
+            arg0: None,
         }
     }
 }
@@ -46,7 +47,6 @@ impl ToolHandler for ShellHandler {
             session,
             turn,
             tracker,
-            sub_id,
             call_id,
             tool_name,
             payload,
@@ -67,7 +67,6 @@ impl ToolHandler for ShellHandler {
                     Arc::clone(&session),
                     Arc::clone(&turn),
                     Arc::clone(&tracker),
-                    sub_id.clone(),
                     call_id.clone(),
                 )
                 .await?;
@@ -84,7 +83,6 @@ impl ToolHandler for ShellHandler {
                     Arc::clone(&session),
                     Arc::clone(&turn),
                     Arc::clone(&tracker),
-                    sub_id.clone(),
                     call_id.clone(),
                 )
                 .await?;

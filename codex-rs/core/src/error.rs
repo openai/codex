@@ -2,6 +2,9 @@ use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
 use crate::truncate::truncate_middle;
+use chrono::DateTime;
+use chrono::Utc;
+use codex_async_utils::CancelErr;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::RateLimitSnapshot;
 use reqwest::StatusCode;
@@ -50,6 +53,9 @@ pub enum SandboxErr {
 
 #[derive(Error, Debug)]
 pub enum CodexErr {
+    #[error("turn aborted")]
+    TurnAborted,
+
     /// Returned by ResponsesClient when the SSE stream disconnects or errors out **after** the HTTP
     /// handshake has succeeded but **before** it finished emitting `response.completed`.
     ///
@@ -91,6 +97,12 @@ pub enum CodexErr {
     #[error("{0}")]
     UsageLimitReached(UsageLimitReachedError),
 
+    #[error("{0}")]
+    ResponseStreamFailed(ResponseStreamFailed),
+
+    #[error("{0}")]
+    ConnectionFailed(ConnectionFailedError),
+
     #[error(
         "To use Codex with your ChatGPT plan, upgrade to Plus: https://openai.com/chatgpt/pricing."
     )]
@@ -127,9 +139,6 @@ pub enum CodexErr {
     Io(#[from] io::Error),
 
     #[error(transparent)]
-    Reqwest(#[from] reqwest::Error),
-
-    #[error(transparent)]
     Json(#[from] serde_json::Error),
 
     #[cfg(target_os = "linux")]
@@ -145,6 +154,43 @@ pub enum CodexErr {
 
     #[error("{0}")]
     EnvVar(EnvVarError),
+}
+
+impl From<CancelErr> for CodexErr {
+    fn from(_: CancelErr) -> Self {
+        CodexErr::TurnAborted
+    }
+}
+
+#[derive(Debug)]
+pub struct ConnectionFailedError {
+    pub source: reqwest::Error,
+}
+
+impl std::fmt::Display for ConnectionFailedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Connection failed: {}", self.source)
+    }
+}
+
+#[derive(Debug)]
+pub struct ResponseStreamFailed {
+    pub source: reqwest::Error,
+    pub request_id: Option<String>,
+}
+
+impl std::fmt::Display for ResponseStreamFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Error while reading the server response: {}{}",
+            self.source,
+            self.request_id
+                .as_ref()
+                .map(|id| format!(", request id: {id}"))
+                .unwrap_or_default()
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -193,7 +239,7 @@ impl std::fmt::Display for RetryLimitReachedError {
 #[derive(Debug)]
 pub struct UsageLimitReachedError {
     pub(crate) plan_type: Option<PlanType>,
-    pub(crate) resets_in_seconds: Option<u64>,
+    pub(crate) resets_at: Option<DateTime<Utc>>,
     pub(crate) rate_limits: Option<RateLimitSnapshot>,
 }
 
@@ -202,12 +248,12 @@ impl std::fmt::Display for UsageLimitReachedError {
         let message = match self.plan_type.as_ref() {
             Some(PlanType::Known(KnownPlan::Plus)) => format!(
                 "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing){}",
-                retry_suffix_after_or(self.resets_in_seconds)
+                retry_suffix_after_or(self.resets_at.as_ref())
             ),
             Some(PlanType::Known(KnownPlan::Team)) | Some(PlanType::Known(KnownPlan::Business)) => {
                 format!(
                     "You've hit your usage limit. To get more access now, send a request to your admin{}",
-                    retry_suffix_after_or(self.resets_in_seconds)
+                    retry_suffix_after_or(self.resets_at.as_ref())
                 )
             }
             Some(PlanType::Known(KnownPlan::Free)) => {
@@ -218,11 +264,11 @@ impl std::fmt::Display for UsageLimitReachedError {
             | Some(PlanType::Known(KnownPlan::Enterprise))
             | Some(PlanType::Known(KnownPlan::Edu)) => format!(
                 "You've hit your usage limit.{}",
-                retry_suffix(self.resets_in_seconds)
+                retry_suffix(self.resets_at.as_ref())
             ),
             Some(PlanType::Unknown(_)) | None => format!(
                 "You've hit your usage limit.{}",
-                retry_suffix(self.resets_in_seconds)
+                retry_suffix(self.resets_at.as_ref())
             ),
         };
 
@@ -230,8 +276,8 @@ impl std::fmt::Display for UsageLimitReachedError {
     }
 }
 
-fn retry_suffix(resets_in_seconds: Option<u64>) -> String {
-    if let Some(secs) = resets_in_seconds {
+fn retry_suffix(resets_at: Option<&DateTime<Utc>>) -> String {
+    if let Some(secs) = remaining_seconds(resets_at) {
         let reset_duration = format_reset_duration(secs);
         format!(" Try again in {reset_duration}.")
     } else {
@@ -239,13 +285,36 @@ fn retry_suffix(resets_in_seconds: Option<u64>) -> String {
     }
 }
 
-fn retry_suffix_after_or(resets_in_seconds: Option<u64>) -> String {
-    if let Some(secs) = resets_in_seconds {
+fn retry_suffix_after_or(resets_at: Option<&DateTime<Utc>>) -> String {
+    if let Some(secs) = remaining_seconds(resets_at) {
         let reset_duration = format_reset_duration(secs);
         format!(" or try again in {reset_duration}.")
     } else {
         " or try again later.".to_string()
     }
+}
+
+fn remaining_seconds(resets_at: Option<&DateTime<Utc>>) -> Option<u64> {
+    let resets_at = resets_at.cloned()?;
+    let now = now_for_retry();
+    let secs = resets_at.signed_duration_since(now).num_seconds();
+    Some(if secs <= 0 { 0 } else { secs as u64 })
+}
+
+#[cfg(test)]
+thread_local! {
+    static NOW_OVERRIDE: std::cell::RefCell<Option<DateTime<Utc>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn now_for_retry() -> DateTime<Utc> {
+    #[cfg(test)]
+    {
+        if let Some(now) = NOW_OVERRIDE.with(|cell| *cell.borrow()) {
+            return now;
+        }
+    }
+    Utc::now()
 }
 
 fn format_reset_duration(total_secs: u64) -> String {
@@ -344,29 +413,50 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
 mod tests {
     use super::*;
     use crate::exec::StreamOutput;
+    use chrono::DateTime;
+    use chrono::Duration as ChronoDuration;
+    use chrono::TimeZone;
+    use chrono::Utc;
     use codex_protocol::protocol::RateLimitWindow;
     use pretty_assertions::assert_eq;
 
     fn rate_limit_snapshot() -> RateLimitSnapshot {
+        let primary_reset_at = Utc
+            .with_ymd_and_hms(2024, 1, 1, 1, 0, 0)
+            .unwrap()
+            .timestamp();
+        let secondary_reset_at = Utc
+            .with_ymd_and_hms(2024, 1, 1, 2, 0, 0)
+            .unwrap()
+            .timestamp();
         RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 50.0,
                 window_minutes: Some(60),
-                resets_in_seconds: Some(3600),
+                resets_at: Some(primary_reset_at),
             }),
             secondary: Some(RateLimitWindow {
                 used_percent: 30.0,
                 window_minutes: Some(120),
-                resets_in_seconds: Some(7200),
+                resets_at: Some(secondary_reset_at),
             }),
         }
+    }
+
+    fn with_now_override<T>(now: DateTime<Utc>, f: impl FnOnce() -> T) -> T {
+        NOW_OVERRIDE.with(|cell| {
+            *cell.borrow_mut() = Some(now);
+            let result = f();
+            *cell.borrow_mut() = None;
+            result
+        })
     }
 
     #[test]
     fn usage_limit_reached_error_formats_plus_plan() {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Plus)),
-            resets_in_seconds: None,
+            resets_at: None,
             rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
@@ -446,7 +536,7 @@ mod tests {
     fn usage_limit_reached_error_formats_free_plan() {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Free)),
-            resets_in_seconds: Some(3600),
+            resets_at: None,
             rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
@@ -459,7 +549,7 @@ mod tests {
     fn usage_limit_reached_error_formats_default_when_none() {
         let err = UsageLimitReachedError {
             plan_type: None,
-            resets_in_seconds: None,
+            resets_at: None,
             rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
@@ -470,22 +560,26 @@ mod tests {
 
     #[test]
     fn usage_limit_reached_error_formats_team_plan() {
-        let err = UsageLimitReachedError {
-            plan_type: Some(PlanType::Known(KnownPlan::Team)),
-            resets_in_seconds: Some(3600),
-            rate_limits: Some(rate_limit_snapshot()),
-        };
-        assert_eq!(
-            err.to_string(),
-            "You've hit your usage limit. To get more access now, send a request to your admin or try again in 1 hour."
-        );
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let resets_at = base + ChronoDuration::hours(1);
+        with_now_override(base, move || {
+            let err = UsageLimitReachedError {
+                plan_type: Some(PlanType::Known(KnownPlan::Team)),
+                resets_at: Some(resets_at),
+                rate_limits: Some(rate_limit_snapshot()),
+            };
+            assert_eq!(
+                err.to_string(),
+                "You've hit your usage limit. To get more access now, send a request to your admin or try again in 1 hour."
+            );
+        });
     }
 
     #[test]
     fn usage_limit_reached_error_formats_business_plan_without_reset() {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Business)),
-            resets_in_seconds: None,
+            resets_at: None,
             rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
@@ -498,7 +592,7 @@ mod tests {
     fn usage_limit_reached_error_formats_default_for_other_plans() {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Pro)),
-            resets_in_seconds: None,
+            resets_at: None,
             rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
@@ -509,53 +603,70 @@ mod tests {
 
     #[test]
     fn usage_limit_reached_includes_minutes_when_available() {
-        let err = UsageLimitReachedError {
-            plan_type: None,
-            resets_in_seconds: Some(5 * 60),
-            rate_limits: Some(rate_limit_snapshot()),
-        };
-        assert_eq!(
-            err.to_string(),
-            "You've hit your usage limit. Try again in 5 minutes."
-        );
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let resets_at = base + ChronoDuration::minutes(5);
+        with_now_override(base, move || {
+            let err = UsageLimitReachedError {
+                plan_type: None,
+                resets_at: Some(resets_at),
+                rate_limits: Some(rate_limit_snapshot()),
+            };
+            assert_eq!(
+                err.to_string(),
+                "You've hit your usage limit. Try again in 5 minutes."
+            );
+        });
     }
 
     #[test]
     fn usage_limit_reached_includes_hours_and_minutes() {
-        let err = UsageLimitReachedError {
-            plan_type: Some(PlanType::Known(KnownPlan::Plus)),
-            resets_in_seconds: Some(3 * 3600 + 32 * 60),
-            rate_limits: Some(rate_limit_snapshot()),
-        };
-        assert_eq!(
-            err.to_string(),
-            "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing) or try again in 3 hours 32 minutes."
-        );
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let resets_at = base + ChronoDuration::hours(3) + ChronoDuration::minutes(32);
+        with_now_override(base, move || {
+            let err = UsageLimitReachedError {
+                plan_type: Some(PlanType::Known(KnownPlan::Plus)),
+                resets_at: Some(resets_at),
+                rate_limits: Some(rate_limit_snapshot()),
+            };
+            assert_eq!(
+                err.to_string(),
+                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing) or try again in 3 hours 32 minutes."
+            );
+        });
     }
 
     #[test]
     fn usage_limit_reached_includes_days_hours_minutes() {
-        let err = UsageLimitReachedError {
-            plan_type: None,
-            resets_in_seconds: Some(2 * 86_400 + 3 * 3600 + 5 * 60),
-            rate_limits: Some(rate_limit_snapshot()),
-        };
-        assert_eq!(
-            err.to_string(),
-            "You've hit your usage limit. Try again in 2 days 3 hours 5 minutes."
-        );
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let resets_at =
+            base + ChronoDuration::days(2) + ChronoDuration::hours(3) + ChronoDuration::minutes(5);
+        with_now_override(base, move || {
+            let err = UsageLimitReachedError {
+                plan_type: None,
+                resets_at: Some(resets_at),
+                rate_limits: Some(rate_limit_snapshot()),
+            };
+            assert_eq!(
+                err.to_string(),
+                "You've hit your usage limit. Try again in 2 days 3 hours 5 minutes."
+            );
+        });
     }
 
     #[test]
     fn usage_limit_reached_less_than_minute() {
-        let err = UsageLimitReachedError {
-            plan_type: None,
-            resets_in_seconds: Some(30),
-            rate_limits: Some(rate_limit_snapshot()),
-        };
-        assert_eq!(
-            err.to_string(),
-            "You've hit your usage limit. Try again in less than a minute."
-        );
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let resets_at = base + ChronoDuration::seconds(30);
+        with_now_override(base, move || {
+            let err = UsageLimitReachedError {
+                plan_type: None,
+                resets_at: Some(resets_at),
+                rate_limits: Some(rate_limit_snapshot()),
+            };
+            assert_eq!(
+                err.to_string(),
+                "You've hit your usage limit. Try again in less than a minute."
+            );
+        });
     }
 }

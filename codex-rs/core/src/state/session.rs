@@ -2,14 +2,15 @@
 
 use codex_protocol::models::ResponseItem;
 
+use crate::codex::SessionConfiguration;
 use crate::conversation_history::ConversationHistory;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
-#[derive(Default)]
 pub(crate) struct SessionState {
+    pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ConversationHistory,
     pub(crate) token_info: Option<TokenUsageInfo>,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
@@ -17,10 +18,12 @@ pub(crate) struct SessionState {
 
 impl SessionState {
     /// Create a new session state mirroring previous `State::default()` semantics.
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(session_configuration: SessionConfiguration) -> Self {
         Self {
+            session_configuration,
             history: ConversationHistory::new(),
-            ..Default::default()
+            token_info: None,
+            latest_rate_limits: None,
         }
     }
 
@@ -33,8 +36,12 @@ impl SessionState {
         self.history.record_items(items)
     }
 
-    pub(crate) fn history_snapshot(&self) -> Vec<ResponseItem> {
-        self.history.contents()
+    pub(crate) fn history_snapshot(&mut self) -> Vec<ResponseItem> {
+        self.history.get_history()
+    }
+
+    pub(crate) fn clone_history(&self) -> ConversationHistory {
+        self.history.clone()
     }
 
     pub(crate) fn replace_history(&mut self, items: Vec<ResponseItem>) {
@@ -45,7 +52,7 @@ impl SessionState {
     pub(crate) fn update_token_info_from_usage(
         &mut self,
         usage: &TokenUsage,
-        model_context_window: Option<u64>,
+        model_context_window: Option<i64>,
     ) {
         self.token_info = TokenUsageInfo::new_or_append(
             &self.token_info,
@@ -64,7 +71,7 @@ impl SessionState {
         (self.token_info.clone(), self.latest_rate_limits.clone())
     }
 
-    pub(crate) fn set_token_usage_full(&mut self, context_window: u64) {
+    pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
         match &mut self.token_info {
             Some(info) => info.fill_to_context_window(context_window),
             None => {

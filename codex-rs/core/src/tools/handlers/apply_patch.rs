@@ -8,7 +8,6 @@ use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::exec::ExecParams;
 use crate::function_tool::FunctionCallError;
-use crate::openai_tools::JsonSchema;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -16,6 +15,7 @@ use crate::tools::handle_container_exec_with_params;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::spec::ApplyPatchToolArgs;
+use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde::Serialize;
@@ -42,7 +42,6 @@ impl ToolHandler for ApplyPatchHandler {
             session,
             turn,
             tracker,
-            sub_id,
             call_id,
             tool_name,
             payload,
@@ -72,6 +71,7 @@ impl ToolHandler for ApplyPatchHandler {
             env: HashMap::new(),
             with_escalated_permissions: None,
             justification: None,
+            arg0: None,
         };
 
         let content = handle_container_exec_with_params(
@@ -80,7 +80,6 @@ impl ToolHandler for ApplyPatchHandler {
             Arc::clone(&session),
             Arc::clone(&turn),
             Arc::clone(&tracker),
-            sub_id.clone(),
             call_id.clone(),
         )
         .await?;

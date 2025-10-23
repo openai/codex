@@ -12,11 +12,13 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::resume_picker::ResumeSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
+use crate::updates::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::persist_model_selection;
+use codex_core::config::set_hide_full_access_warning;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
@@ -37,12 +39,15 @@ use std::thread;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
-// use uuid::Uuid;
+
+#[cfg(not(debug_assertions))]
+use crate::history_cell::UpdateAvailableHistoryCell;
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub conversation_id: Option<ConversationId>,
+    pub update_action: Option<UpdateAction>,
 }
 
 pub(crate) struct App {
@@ -71,9 +76,13 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
+    pub(crate) feedback: codex_feedback::CodexFeedback,
+    /// Set when the user confirms an update; propagated on exit.
+    pub(crate) pending_update_action: Option<UpdateAction>,
 }
 
 impl App {
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
         auth_manager: Arc<AuthManager>,
@@ -82,6 +91,7 @@ impl App {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         resume_selection: ResumeSelection,
+        feedback: codex_feedback::CodexFeedback,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -104,6 +114,7 @@ impl App {
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
+                    feedback: feedback.clone(),
                 };
                 ChatWidget::new(init, conversation_manager.clone())
             }
@@ -126,6 +137,7 @@ impl App {
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
+                    feedback: feedback.clone(),
                 };
                 ChatWidget::new_from_existing(
                     init,
@@ -136,6 +148,8 @@ impl App {
         };
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        #[cfg(not(debug_assertions))]
+        let upgrade_version = crate::updates::get_upgrade_version(&config);
 
         let mut app = Self {
             server: conversation_manager,
@@ -152,7 +166,21 @@ impl App {
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            feedback: feedback.clone(),
+            pending_update_action: None,
         };
+
+        #[cfg(not(debug_assertions))]
+        if let Some(latest_version) = upgrade_version {
+            app.handle_event(
+                tui,
+                AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
+                    latest_version,
+                    crate::updates::get_update_action(),
+                ))),
+            )
+            .await?;
+        }
 
         let tui_events = tui.event_stream();
         tokio::pin!(tui_events);
@@ -171,6 +199,7 @@ impl App {
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
             conversation_id: app.chat_widget.conversation_id(),
+            update_action: app.pending_update_action,
         })
     }
 
@@ -228,6 +257,7 @@ impl App {
                     initial_images: Vec::new(),
                     enhanced_keys_supported: self.enhanced_keys_supported,
                     auth_manager: self.auth_manager.clone(),
+                    feedback: self.feedback.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 tui.frame_requester().schedule_frame();
@@ -324,8 +354,11 @@ impl App {
                     self.config.model_family = family;
                 }
             }
-            AppEvent::OpenReasoningPopup { model, presets } => {
-                self.chat_widget.open_reasoning_popup(model, presets);
+            AppEvent::OpenReasoningPopup { model } => {
+                self.chat_widget.open_reasoning_popup(model);
+            }
+            AppEvent::OpenFullAccessConfirmation { preset } => {
+                self.chat_widget.open_full_access_confirmation(preset);
             }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
@@ -371,6 +404,23 @@ impl App {
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
                 self.chat_widget.set_sandbox_policy(policy);
+            }
+            AppEvent::UpdateFullAccessWarningAcknowledged(ack) => {
+                self.chat_widget.set_full_access_warning_acknowledged(ack);
+            }
+            AppEvent::PersistFullAccessWarningAcknowledged => {
+                if let Err(err) = set_hide_full_access_warning(&self.config.codex_home, true) {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist full access warning acknowledgement"
+                    );
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save full access confirmation preference: {err}"
+                    ));
+                }
+            }
+            AppEvent::OpenApprovalsPopup => {
+                self.chat_widget.open_approvals_popup();
             }
             AppEvent::OpenReviewBranchPicker(cwd) => {
                 self.chat_widget.show_review_branch_picker(&cwd).await;
@@ -427,8 +477,9 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             // Esc primes/advances backtracking only in normal (not working) mode
-            // with an empty composer. In any other state, forward Esc so the
-            // active UI (e.g. status indicator, modals, popups) handles it.
+            // with the composer focused and empty. In any other state, forward
+            // Esc so the active UI (e.g. status indicator, modals, popups)
+            // handles it.
             KeyEvent {
                 code: KeyCode::Esc,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
@@ -520,6 +571,8 @@ mod tests {
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            feedback: codex_feedback::CodexFeedback::new(),
+            pending_update_action: None,
         }
     }
 

@@ -1,12 +1,15 @@
 pub mod context;
+pub mod events;
 pub(crate) mod handlers;
+pub mod orchestrator;
 pub mod parallel;
 pub mod registry;
 pub mod router;
+pub mod runtimes;
+pub mod sandboxing;
 pub mod spec;
 
 use crate::apply_patch;
-use crate::apply_patch::ApplyPatchExec;
 use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::codex::Session;
@@ -15,14 +18,19 @@ use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
-use crate::exec::StdoutStream;
-use crate::executor::ExecutionMode;
-use crate::executor::errors::ExecError;
-use crate::executor::linkers::PreparedExec;
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::ApplyPatchCommandContext;
-use crate::tools::context::ExecCommandContext;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::events::ToolEmitter;
+use crate::tools::events::ToolEventCtx;
+use crate::tools::events::ToolEventFailure;
+use crate::tools::events::ToolEventStage;
+use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
+use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
+use crate::tools::runtimes::shell::ShellRequest;
+use crate::tools::runtimes::shell::ShellRuntime;
+use crate::tools::sandboxing::ToolCtx;
+use crate::tools::sandboxing::ToolError;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_protocol::protocol::AskForApproval;
@@ -53,10 +61,9 @@ pub(crate) async fn handle_container_exec_with_params(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
-    sub_id: String,
     call_id: String,
 ) -> Result<String, FunctionCallError> {
-    let otel_event_manager = turn_context.client.get_otel_event_manager();
+    let _otel_event_manager = turn_context.client.get_otel_event_manager();
 
     if params.with_escalated_permissions.unwrap_or(false)
         && !matches!(turn_context.approval_policy, AskForApproval::OnRequest)
@@ -70,14 +77,8 @@ pub(crate) async fn handle_container_exec_with_params(
     // check if this was a patch, and apply it if so
     let apply_patch_exec = match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
         MaybeApplyPatchVerified::Body(changes) => {
-            match apply_patch::apply_patch(
-                sess.as_ref(),
-                turn_context.as_ref(),
-                &sub_id,
-                &call_id,
-                changes,
-            )
-            .await
+            match apply_patch::apply_patch(sess.as_ref(), turn_context.as_ref(), &call_id, changes)
+                .await
             {
                 InternalApplyPatchInvocation::Output(item) => return item,
                 InternalApplyPatchInvocation::DelegateToExec(apply_patch_exec) => {
@@ -100,86 +101,142 @@ pub(crate) async fn handle_container_exec_with_params(
         MaybeApplyPatchVerified::NotApplyPatch => None,
     };
 
-    let command_for_display = if let Some(exec) = apply_patch_exec.as_ref() {
-        vec!["apply_patch".to_string(), exec.action.patch.clone()]
-    } else {
-        params.command.clone()
-    };
-
-    let exec_command_context = ExecCommandContext {
-        sub_id: sub_id.clone(),
-        call_id: call_id.clone(),
-        command_for_display: command_for_display.clone(),
-        cwd: params.cwd.clone(),
-        apply_patch: apply_patch_exec.as_ref().map(
-            |ApplyPatchExec {
-                 action,
-                 user_explicitly_approved_this_action,
-             }| ApplyPatchCommandContext {
-                user_explicitly_approved_this_action: *user_explicitly_approved_this_action,
-                changes: convert_apply_patch_to_protocol(action),
-            },
+    let (event_emitter, diff_opt) = match apply_patch_exec.as_ref() {
+        Some(exec) => (
+            ToolEmitter::apply_patch(
+                convert_apply_patch_to_protocol(&exec.action),
+                !exec.user_explicitly_approved_this_action,
+            ),
+            Some(&turn_diff_tracker),
         ),
-        tool_name: tool_name.to_string(),
-        otel_event_manager,
+        None => (
+            ToolEmitter::shell(params.command.clone(), params.cwd.clone()),
+            None,
+        ),
     };
 
-    let mode = match apply_patch_exec {
-        Some(exec) => ExecutionMode::ApplyPatch(exec),
-        None => ExecutionMode::Shell,
-    };
+    let event_ctx = ToolEventCtx::new(sess.as_ref(), turn_context.as_ref(), &call_id, diff_opt);
+    event_emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
-    sess.services.executor.update_environment(
-        turn_context.sandbox_policy.clone(),
-        turn_context.cwd.clone(),
-    );
+    // Build runtime contexts only when needed (shell/apply_patch below).
 
-    let prepared_exec = PreparedExec::new(
-        exec_command_context,
-        params,
-        command_for_display,
-        mode,
-        Some(StdoutStream {
-            sub_id: sub_id.clone(),
+    if let Some(exec) = apply_patch_exec {
+        // Route apply_patch execution through the new orchestrator/runtime.
+        let req = ApplyPatchRequest {
+            patch: exec.action.patch.clone(),
+            cwd: params.cwd.clone(),
+            timeout_ms: params.timeout_ms,
+            user_explicitly_approved: exec.user_explicitly_approved_this_action,
+            codex_exe: turn_context.codex_linux_sandbox_exe.clone(),
+        };
+
+        let mut orchestrator = ToolOrchestrator::new();
+        let mut runtime = ApplyPatchRuntime::new();
+        let tool_ctx = ToolCtx {
+            session: sess.as_ref(),
+            turn: turn_context.as_ref(),
             call_id: call_id.clone(),
-            tx_event: sess.get_tx_event(),
-        }),
-        turn_context.shell_environment_policy.use_profile,
-    );
+            tool_name: tool_name.to_string(),
+        };
 
-    let output_result = sess
-        .run_exec_with_events(
-            turn_diff_tracker.clone(),
-            prepared_exec,
-            turn_context.approval_policy,
-        )
-        .await;
+        let out = orchestrator
+            .run(
+                &mut runtime,
+                &req,
+                &tool_ctx,
+                &turn_context,
+                turn_context.approval_policy,
+            )
+            .await;
 
-    // always make sure to truncate the output if its length isn't controlled.
-    match output_result {
+        handle_exec_outcome(&event_emitter, event_ctx, out).await
+    } else {
+        // Route shell execution through the new orchestrator/runtime.
+        let req = ShellRequest {
+            command: params.command.clone(),
+            cwd: params.cwd.clone(),
+            timeout_ms: params.timeout_ms,
+            env: params.env.clone(),
+            with_escalated_permissions: params.with_escalated_permissions,
+            justification: params.justification.clone(),
+        };
+
+        let mut orchestrator = ToolOrchestrator::new();
+        let mut runtime = ShellRuntime::new();
+        let tool_ctx = ToolCtx {
+            session: sess.as_ref(),
+            turn: turn_context.as_ref(),
+            call_id: call_id.clone(),
+            tool_name: tool_name.to_string(),
+        };
+
+        let out = orchestrator
+            .run(
+                &mut runtime,
+                &req,
+                &tool_ctx,
+                &turn_context,
+                turn_context.approval_policy,
+            )
+            .await;
+
+        handle_exec_outcome(&event_emitter, event_ctx, out).await
+    }
+}
+
+async fn handle_exec_outcome(
+    event_emitter: &ToolEmitter,
+    event_ctx: ToolEventCtx<'_>,
+    out: Result<ExecToolCallOutput, ToolError>,
+) -> Result<String, FunctionCallError> {
+    let event;
+    let result = match out {
         Ok(output) => {
-            let ExecToolCallOutput { exit_code, .. } = &output;
-            let content = format_exec_output_apply_patch(&output);
-            if *exit_code == 0 {
+            let content = format_exec_output_for_model(&output);
+            let exit_code = output.exit_code;
+            event = ToolEventStage::Success(output);
+            if exit_code == 0 {
                 Ok(content)
             } else {
                 Err(FunctionCallError::RespondToModel(content))
             }
         }
-        Err(ExecError::Function(err)) => Err(truncate_function_error(err)),
-        Err(ExecError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => Err(
-            FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
-        ),
-        Err(ExecError::Codex(err)) => {
+        Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output })))
+        | Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
+            let response = format_exec_output_for_model(&output);
+            event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
+            Err(FunctionCallError::RespondToModel(response))
+        }
+        Err(ToolError::Codex(err)) => {
             let message = format!("execution error: {err:?}");
+            let response = format_exec_output(&message);
+            event = ToolEventStage::Failure(ToolEventFailure::Message(message));
             Err(FunctionCallError::RespondToModel(format_exec_output(
-                &message,
+                &response,
             )))
         }
-    }
+        Err(ToolError::Rejected(msg)) | Err(ToolError::SandboxDenied(msg)) => {
+            // Normalize common rejection messages for exec tools so tests and
+            // users see a clear, consistent phrase.
+            let normalized = if msg == "rejected by user" {
+                "exec command rejected by user".to_string()
+            } else {
+                msg
+            };
+            let response = format_exec_output(&normalized);
+            event = ToolEventStage::Failure(ToolEventFailure::Message(normalized));
+            Err(FunctionCallError::RespondToModel(format_exec_output(
+                &response,
+            )))
+        }
+    };
+    event_emitter.emit(event_ctx, event).await;
+    result
 }
 
-pub fn format_exec_output_apply_patch(exec_output: &ExecToolCallOutput) -> String {
+/// Format the combined exec output for sending back to the model.
+/// Includes exit code and duration metadata; truncates large bodies safely.
+pub fn format_exec_output_for_model(exec_output: &ExecToolCallOutput) -> String {
     let ExecToolCallOutput {
         exit_code,
         duration,
@@ -233,17 +290,7 @@ pub fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
     format_exec_output(content)
 }
 
-fn truncate_function_error(err: FunctionCallError) -> FunctionCallError {
-    match err {
-        FunctionCallError::RespondToModel(msg) => {
-            FunctionCallError::RespondToModel(format_exec_output(&msg))
-        }
-        FunctionCallError::Fatal(msg) => FunctionCallError::Fatal(format_exec_output(&msg)),
-        other => other,
-    }
-}
-
-fn format_exec_output(content: &str) -> String {
+pub(super) fn format_exec_output(content: &str) -> String {
     // Head+tail truncation for the model: show the beginning and end with an elision.
     // Clients still receive full streams; only this formatted summary is capped.
     let total_lines = content.lines().count();
@@ -276,33 +323,37 @@ fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
                 .map(|segment| segment.len())
                 .sum::<usize>()
     };
-    let marker = format!("\n[... omitted {omitted} of {total_lines} lines ...]\n\n");
-
-    // Byte budgets for head/tail around the marker
-    let mut head_budget = MODEL_FORMAT_HEAD_BYTES.min(MODEL_FORMAT_MAX_BYTES);
-    let tail_budget = MODEL_FORMAT_MAX_BYTES.saturating_sub(head_budget + marker.len());
-    if tail_budget == 0 && marker.len() >= MODEL_FORMAT_MAX_BYTES {
-        // Degenerate case: marker alone exceeds budget; return a clipped marker
-        return take_bytes_at_char_boundary(&marker, MODEL_FORMAT_MAX_BYTES).to_string();
-    }
-    if tail_budget == 0 {
-        // Make room for the marker by shrinking head
-        head_budget = MODEL_FORMAT_MAX_BYTES.saturating_sub(marker.len());
-    }
-
     let head_slice = &content[..head_slice_end];
+    let tail_slice = &content[tail_slice_start..];
+    let truncated_by_bytes = content.len() > MODEL_FORMAT_MAX_BYTES;
+    let marker = if omitted > 0 {
+        Some(format!(
+            "\n[... omitted {omitted} of {total_lines} lines ...]\n\n"
+        ))
+    } else if truncated_by_bytes {
+        Some(format!(
+            "\n[... output truncated to fit {MODEL_FORMAT_MAX_BYTES} bytes ...]\n\n"
+        ))
+    } else {
+        None
+    };
+
+    let marker_len = marker.as_ref().map_or(0, String::len);
+    let base_head_budget = MODEL_FORMAT_HEAD_BYTES.min(MODEL_FORMAT_MAX_BYTES);
+    let head_budget = base_head_budget.min(MODEL_FORMAT_MAX_BYTES.saturating_sub(marker_len));
     let head_part = take_bytes_at_char_boundary(head_slice, head_budget);
     let mut result = String::with_capacity(MODEL_FORMAT_MAX_BYTES.min(content.len()));
 
     result.push_str(head_part);
-    result.push_str(&marker);
+    if let Some(marker_text) = marker.as_ref() {
+        result.push_str(marker_text);
+    }
 
     let remaining = MODEL_FORMAT_MAX_BYTES.saturating_sub(result.len());
     if remaining == 0 {
         return result;
     }
 
-    let tail_slice = &content[tail_slice_start..];
     let tail_part = take_last_bytes_at_char_boundary(tail_slice, remaining);
     result.push_str(tail_part);
 
@@ -313,6 +364,17 @@ fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
 mod tests {
     use super::*;
     use regex_lite::Regex;
+
+    fn truncate_function_error(err: FunctionCallError) -> FunctionCallError {
+        match err {
+            FunctionCallError::RespondToModel(msg) => {
+                FunctionCallError::RespondToModel(format_exec_output(&msg))
+            }
+            FunctionCallError::Denied(msg) => FunctionCallError::Denied(format_exec_output(&msg)),
+            FunctionCallError::Fatal(msg) => FunctionCallError::Fatal(format_exec_output(&msg)),
+            other => other,
+        }
+    }
 
     fn assert_truncated_message_matches(message: &str, line: &str, total_lines: usize) {
         let pattern = truncated_message_pattern(line, total_lines);
@@ -338,6 +400,11 @@ mod tests {
         let tail_take = MODEL_FORMAT_TAIL_LINES.min(total_lines.saturating_sub(head_take));
         let omitted = total_lines.saturating_sub(head_take + tail_take);
         let escaped_line = regex_lite::escape(line);
+        if omitted == 0 {
+            return format!(
+                r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} output truncated to fit {MODEL_FORMAT_MAX_BYTES} bytes \.{{3}}]\n\n.*)$",
+            );
+        }
         format!(
             r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} omitted {omitted} of {total_lines} lines \.{{3}}]\n\n.*)$",
         )
@@ -383,5 +450,77 @@ mod tests {
             }
             other => panic!("unexpected error variant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn truncate_formatted_exec_output_marks_byte_truncation_without_omitted_lines() {
+        let long_line = "a".repeat(MODEL_FORMAT_MAX_BYTES + 50);
+        let truncated = format_exec_output(&long_line);
+
+        assert_ne!(truncated, long_line);
+        let marker_line =
+            format!("[... output truncated to fit {MODEL_FORMAT_MAX_BYTES} bytes ...]");
+        assert!(
+            truncated.contains(&marker_line),
+            "missing byte truncation marker: {truncated}"
+        );
+        assert!(
+            !truncated.contains("omitted"),
+            "line omission marker should not appear when no lines were dropped: {truncated}"
+        );
+    }
+
+    #[test]
+    fn truncate_formatted_exec_output_returns_original_when_within_limits() {
+        let content = "example output\n".repeat(10);
+
+        assert_eq!(format_exec_output(&content), content);
+    }
+
+    #[test]
+    fn truncate_formatted_exec_output_reports_omitted_lines_and_keeps_head_and_tail() {
+        let total_lines = MODEL_FORMAT_MAX_LINES + 100;
+        let content: String = (0..total_lines)
+            .map(|idx| format!("line-{idx}\n"))
+            .collect();
+
+        let truncated = format_exec_output(&content);
+        let omitted = total_lines - MODEL_FORMAT_MAX_LINES;
+        let expected_marker = format!("[... omitted {omitted} of {total_lines} lines ...]");
+
+        assert!(
+            truncated.contains(&expected_marker),
+            "missing omitted marker: {truncated}"
+        );
+        assert!(
+            truncated.contains("line-0\n"),
+            "expected head line to remain: {truncated}"
+        );
+
+        let last_line = format!("line-{}\n", total_lines - 1);
+        assert!(
+            truncated.contains(&last_line),
+            "expected tail line to remain: {truncated}"
+        );
+    }
+
+    #[test]
+    fn truncate_formatted_exec_output_prefers_line_marker_when_both_limits_exceeded() {
+        let total_lines = MODEL_FORMAT_MAX_LINES + 42;
+        let long_line = "x".repeat(256);
+        let content: String = (0..total_lines)
+            .map(|idx| format!("line-{idx}-{long_line}\n"))
+            .collect();
+
+        let truncated = format_exec_output(&content);
+
+        assert!(
+            truncated.contains("[... omitted 42 of 298 lines ...]"),
+            "expected omitted marker when line count exceeds limit: {truncated}"
+        );
+        assert!(
+            !truncated.contains("output truncated to fit"),
+            "line omission marker should take precedence over byte marker: {truncated}"
+        );
     }
 }

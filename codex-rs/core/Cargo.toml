@@ -22,11 +22,12 @@ chrono = { workspace = true, features = ["serde"] }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-file-search = { workspace = true }
-codex-mcp-client = { workspace = true }
 codex-otel = { workspace = true, features = ["otel"] }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-async-utils = { workspace = true }
 codex-utils-string = { workspace = true }
+codex-utils-pty = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
 env-flags = { workspace = true }
@@ -36,7 +37,6 @@ indexmap = { workspace = true }
 libc = { workspace = true }
 mcp-types = { workspace = true }
 os_info = { workspace = true }
-portable-pty = { workspace = true }
 rand = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
@@ -47,6 +47,7 @@ shlex = { workspace = true }
 similar = { workspace = true }
 strum_macros = { workspace = true }
 tempfile = { workspace = true }
+test-log = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = [
     "formatting",

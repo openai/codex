@@ -4,6 +4,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
+use codex_common::approval_presets::builtin_approval_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
@@ -22,7 +23,6 @@ use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
-use codex_core::protocol::InputMessageKind;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
@@ -49,6 +49,7 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
+use tempfile::tempdir;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -102,7 +103,6 @@ fn resumed_initial_messages_render_history() {
         initial_messages: Some(vec![
             EventMsg::UserMessage(UserMessageEvent {
                 message: "hello from user".to_string(),
-                kind: Some(InputMessageKind::Plain),
                 images: None,
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
@@ -233,6 +233,7 @@ async fn helpers_are_available_and_do_not_panic() {
         initial_images: Vec::new(),
         enhanced_keys_supported: false,
         auth_manager,
+        feedback: codex_feedback::CodexFeedback::new(),
     };
     let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
@@ -289,6 +290,7 @@ fn make_chatwidget_manual() -> (
         ghost_snapshots_disabled: false,
         needs_final_message_separator: false,
         last_rendered_width: std::cell::Cell::new(None),
+        feedback: codex_feedback::CodexFeedback::new(),
     };
     (widget, rx, op_rx)
 }
@@ -392,6 +394,7 @@ fn exec_approval_emits_proposed_command_and_decision_history() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
         id: "sub-short".into(),
@@ -433,6 +436,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
         id: "sub-multi".into(),
@@ -480,6 +484,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
         command: vec!["bash".into(), "-lc".into(), long],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
+        parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
         id: "sub-long".into(),
@@ -505,10 +510,7 @@ fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
     // Build the full command vec and parse it using core's parser,
     // then convert to protocol variants for the event payload.
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
-    let parsed_cmd: Vec<ParsedCommand> = codex_core::parse_command::parse_command(&command)
-        .into_iter()
-        .map(Into::into)
-        .collect();
+    let parsed_cmd: Vec<ParsedCommand> = codex_core::parse_command::parse_command(&command);
     chat.handle_codex_event(Event {
         id: call_id.to_string(),
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
@@ -689,6 +691,40 @@ fn ctrl_c_shutdown_ignores_caps_lock() {
 }
 
 #[test]
+fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.bottom_pane.insert_str("draft message ");
+    chat.bottom_pane
+        .attach_image(PathBuf::from("/tmp/preview.png"), 24, 42, "png");
+    let placeholder = "[preview.png 24x42]";
+    assert!(
+        chat.bottom_pane.composer_text().ends_with(placeholder),
+        "expected placeholder {placeholder:?} in composer text"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(chat.bottom_pane.composer_text().is_empty());
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert!(chat.bottom_pane.ctrl_c_quit_hint_visible());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    let restored_text = chat.bottom_pane.composer_text();
+    assert!(
+        restored_text.ends_with(placeholder),
+        "expected placeholder {placeholder:?} after history recall"
+    );
+    assert!(restored_text.starts_with("draft message "));
+    assert!(!chat.bottom_pane.ctrl_c_quit_hint_visible());
+
+    let images = chat.bottom_pane.take_recent_submission_images();
+    assert!(
+        images.is_empty(),
+        "attachments are not preserved in history recall"
+    );
+}
+
+#[test]
 fn exec_history_cell_shows_working_then_completed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
@@ -767,6 +803,38 @@ fn review_popup_custom_prompt_action_sends_event() {
         }
     }
     assert!(found, "expected OpenReviewCustomPrompt event to be sent");
+}
+
+#[test]
+fn slash_init_skips_when_project_doc_exists() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+    let tempdir = tempdir().unwrap();
+    let existing_path = tempdir.path().join(DEFAULT_PROJECT_DOC_FILENAME);
+    std::fs::write(&existing_path, "existing instructions").unwrap();
+    chat.config.cwd = tempdir.path().to_path_buf();
+
+    chat.dispatch_command(SlashCommand::Init);
+
+    match op_rx.try_recv() {
+        Err(TryRecvError::Empty) => {}
+        other => panic!("expected no Codex op to be sent, got {other:?}"),
+    }
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one info message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains(DEFAULT_PROJECT_DOC_FILENAME),
+        "info message should mention the existing file: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("Skipping /init"),
+        "info message should explain why /init was skipped: {rendered:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(existing_path).unwrap(),
+        "existing instructions"
+    );
 }
 
 /// The commit picker shows only commit subjects (no timestamps).
@@ -1055,17 +1123,42 @@ fn model_selection_popup_snapshot() {
 }
 
 #[test]
+fn approvals_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.notices.hide_full_access_warning = None;
+    chat.open_approvals_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("approvals_selection_popup", popup);
+}
+
+#[test]
+fn full_access_confirmation_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "full-access")
+        .expect("full access preset");
+    chat.open_full_access_confirmation(preset);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("full_access_confirmation_popup", popup);
+}
+
+#[test]
 fn model_reasoning_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
     chat.config.model = "gpt-5-codex".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
 
-    let presets = builtin_model_presets(None)
+    let preset = builtin_model_presets(None)
         .into_iter()
-        .filter(|preset| preset.model == "gpt-5-codex")
-        .collect::<Vec<_>>();
-    chat.open_reasoning_popup("gpt-5-codex".to_string(), presets);
+        .find(|preset| preset.model == "gpt-5-codex")
+        .expect("gpt-5-codex preset");
+    chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_reasoning_selection_popup", popup);
@@ -1080,9 +1173,9 @@ fn reasoning_popup_escape_returns_to_model_popup() {
 
     let presets = builtin_model_presets(None)
         .into_iter()
-        .filter(|preset| preset.model == "gpt-5-codex")
-        .collect::<Vec<_>>();
-    chat.open_reasoning_popup("gpt-5-codex".to_string(), presets);
+        .find(|preset| preset.model == "gpt-5-codex")
+        .expect("gpt-5-codex preset");
+    chat.open_reasoning_popup(presets);
 
     let before_escape = render_bottom_popup(&chat, 80);
     assert!(before_escape.contains("Select Reasoning Level"));
@@ -1205,10 +1298,7 @@ async fn binary_size_transcript_snapshot() {
                                     call_id: e.call_id.clone(),
                                     command: e.command,
                                     cwd: e.cwd,
-                                    parsed_cmd: parsed_cmd
-                                        .into_iter()
-                                        .map(std::convert::Into::into)
-                                        .collect(),
+                                    parsed_cmd,
                                 }),
                             }
                         }
@@ -1323,6 +1413,7 @@ fn approval_modal_exec_snapshot() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
         id: "sub-approve".into(),
@@ -1366,6 +1457,7 @@ fn approval_modal_exec_without_reason_snapshot() {
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
+        parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
         id: "sub-approve-noreason".into(),
@@ -1571,10 +1663,11 @@ fn status_widget_and_approval_modal_snapshot() {
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-exec".into(),
         command: vec!["echo".into(), "hello world".into()],
-        cwd: std::path::PathBuf::from("/tmp"),
+        cwd: PathBuf::from("/tmp"),
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
         id: "sub-approve-exec".into(),
@@ -2241,17 +2334,16 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
             command: vec!["bash".into(), "-lc".into(), "rg \"Change Approved\"".into()],
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             parsed_cmd: vec![
-                codex_core::parse_command::ParsedCommand::Search {
+                ParsedCommand::Search {
                     query: Some("Change Approved".into()),
                     path: None,
                     cmd: "rg \"Change Approved\"".into(),
-                }
-                .into(),
-                codex_core::parse_command::ParsedCommand::Read {
+                },
+                ParsedCommand::Read {
                     name: "diff_render.rs".into(),
                     cmd: "cat diff_render.rs".into(),
-                }
-                .into(),
+                    path: "diff_render.rs".into(),
+                },
             ],
         }),
     });
