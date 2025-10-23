@@ -24,7 +24,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::InputMessageKind;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
@@ -543,7 +542,6 @@ async fn test_tail_includes_last_response_items() -> Result<()> {
         timestamp: ts.to_string(),
         item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
             message: "hello".into(),
-            kind: Some(InputMessageKind::Plain),
             images: None,
         })),
     };
@@ -627,7 +625,6 @@ async fn test_tail_handles_short_sessions() -> Result<()> {
         timestamp: ts.to_string(),
         item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
             message: "hi".into(),
-            kind: Some(InputMessageKind::Plain),
             images: None,
         })),
     };
@@ -712,7 +709,6 @@ async fn test_tail_skips_trailing_non_responses() -> Result<()> {
         timestamp: ts.to_string(),
         item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
             message: "hello".into(),
-            kind: Some(InputMessageKind::Plain),
             images: None,
         })),
     };

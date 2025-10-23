@@ -11,19 +11,20 @@ use crate::protocol::AgentMessageEvent;
 use crate::protocol::CompactedItem;
 use crate::protocol::ErrorEvent;
 use crate::protocol::EventMsg;
-use crate::protocol::InputMessageKind;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
 use crate::state::TaskKind;
 use crate::truncate::truncate_middle;
 use crate::util::backoff;
 use askama::Template;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
+use tracing::error;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
@@ -64,9 +65,10 @@ async fn run_compact_task_inner(
     input: Vec<UserInput>,
 ) {
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    let mut turn_input = sess
-        .turn_input_with_history(vec![initial_input_for_turn.clone().into()])
-        .await;
+
+    let mut history = sess.clone_history().await;
+    history.record_items(&[initial_input_for_turn.into()]);
+
     let mut truncated_count = 0usize;
 
     let max_retries = turn_context.client.get_provider().stream_max_retries();
@@ -83,6 +85,7 @@ async fn run_compact_task_inner(
     sess.persist_rollout_items(&[rollout_item]).await;
 
     loop {
+        let turn_input = history.get_history();
         let prompt = Prompt {
             input: turn_input.clone(),
             ..Default::default()
@@ -107,7 +110,11 @@ async fn run_compact_task_inner(
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
                 if turn_input.len() > 1 {
-                    turn_input.remove(0);
+                    // Trim from the beginning to preserve cache (prefix-based) and keep recent messages intact.
+                    error!(
+                        "Context window exceeded while compacting; removing oldest history item. Error: {e}"
+                    );
+                    history.remove_first_item();
                     truncated_count += 1;
                     retries = 0;
                     continue;
@@ -181,21 +188,11 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
 pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
     items
         .iter()
-        .filter_map(|item| match item {
-            ResponseItem::Message { role, content, .. } if role == "user" => {
-                content_items_to_text(content)
-            }
+        .filter_map(|item| match crate::event_mapping::parse_turn_item(item) {
+            Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
         })
-        .filter(|text| !is_session_prefix_message(text))
         .collect()
-}
-
-pub fn is_session_prefix_message(text: &str) -> bool {
-    matches!(
-        InputMessageKind::from(("user", text)),
-        InputMessageKind::UserInstructions | InputMessageKind::EnvironmentContext
-    )
 }
 
 pub(crate) fn build_compacted_history(
@@ -319,21 +316,16 @@ mod tests {
             ResponseItem::Message {
                 id: Some("user".to_string()),
                 role: "user".to_string(),
-                content: vec![
-                    ContentItem::InputText {
-                        text: "first".to_string(),
-                    },
-                    ContentItem::OutputText {
-                        text: "second".to_string(),
-                    },
-                ],
+                content: vec![ContentItem::InputText {
+                    text: "first".to_string(),
+                }],
             },
             ResponseItem::Other,
         ];
 
         let collected = collect_user_messages(&items);
 
-        assert_eq!(vec!["first\nsecond".to_string()], collected);
+        assert_eq!(vec!["first".to_string()], collected);
     }
 
     #[test]
