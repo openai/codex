@@ -8,6 +8,7 @@ use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
+use codex_core::features::Feature;
 use codex_core::protocol::SessionConfiguredEvent;
 use tempfile::TempDir;
 
@@ -94,6 +95,12 @@ impl TestCodexBuilder {
         swap(&mut self.config_mutators, &mut mutators);
         for mutator in mutators {
             mutator(&mut config);
+        }
+
+        if config.include_apply_patch_tool {
+            config.features.enable(Feature::ApplyPatchFreeform);
+        } else {
+            config.features.disable(Feature::ApplyPatchFreeform);
         }
 
         Ok((config, cwd))
