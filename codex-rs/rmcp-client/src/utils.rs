@@ -76,7 +76,17 @@ pub(crate) fn create_env_for_mcp_server(
     extra_env: Option<HashMap<String, String>>,
     env_vars: &[String],
 ) -> HashMap<String, String> {
+    #[cfg(windows)]
     let mut map: HashMap<String, String> = DEFAULT_ENV_VARS
+        .iter()
+        .copied()
+        .chain(env_vars.iter().map(String::as_str))
+        .filter_map(|var| env::var(var).ok().map(|value| (var.to_string(), value)))
+        .chain(extra_env.unwrap_or_default())
+        .collect();
+
+    #[cfg(not(windows))]
+    let map: HashMap<String, String> = DEFAULT_ENV_VARS
         .iter()
         .copied()
         .chain(env_vars.iter().map(String::as_str))
