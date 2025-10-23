@@ -96,13 +96,14 @@ pub(crate) fn create_env_for_mcp_server(
 
     #[cfg(windows)]
     {
-        // Some Windows programs look up the canonical-cased key `Path`.
-        // Ensure both `PATH` and `Path` are present with identical values.
-        if let Some(path_val) = map.get("PATH").cloned() {
-            map.entry("Path".to_string()).or_insert(path_val);
-        } else if let Ok(system_path) = env::var("PATH") {
-            map.insert("PATH".to_string(), system_path.clone());
-            map.entry("Path".to_string()).or_insert(system_path);
+        if let Some(v) = map
+            .get("PATH")
+            .cloned()
+            .or_else(|| map.get("Path").cloned())
+            .or_else(|| env::var("PATH").ok())
+        {
+            map.insert("PATH".to_string(), v.clone());
+            map.insert("Path".to_string(), v);
         }
     }
 
