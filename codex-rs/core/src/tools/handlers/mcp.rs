@@ -19,7 +19,7 @@ impl ToolHandler for McpHandler {
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         let ToolInvocation {
             session,
-            sub_id,
+            turn,
             call_id,
             payload,
             ..
@@ -43,7 +43,7 @@ impl ToolHandler for McpHandler {
 
         let response = handle_mcp_tool_call(
             session.as_ref(),
-            &sub_id,
+            turn.as_ref(),
             call_id.clone(),
             server,
             tool,

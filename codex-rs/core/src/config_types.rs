@@ -35,6 +35,14 @@ pub struct McpServerConfig {
     /// Default timeout for MCP tool calls initiated via this server.
     #[serde(default, with = "option_duration_secs")]
     pub tool_timeout_sec: Option<Duration>,
+
+    /// Explicit allow-list of tools exposed from this server. When set, only these tools will be registered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_tools: Option<Vec<String>>,
+
+    /// Explicit deny-list of tools. These tools will be removed after applying `enabled_tools`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_tools: Option<Vec<String>>,
 }
 
 impl<'de> Deserialize<'de> for McpServerConfig {
@@ -42,7 +50,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize)]
+        #[derive(Deserialize, Clone)]
         struct RawMcpServerConfig {
             // stdio
             command: Option<String>,
@@ -72,9 +80,13 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             tool_timeout_sec: Option<Duration>,
             #[serde(default)]
             enabled: Option<bool>,
+            #[serde(default)]
+            enabled_tools: Option<Vec<String>>,
+            #[serde(default)]
+            disabled_tools: Option<Vec<String>>,
         }
 
-        let raw = RawMcpServerConfig::deserialize(deserializer)?;
+        let mut raw = RawMcpServerConfig::deserialize(deserializer)?;
 
         let startup_timeout_sec = match (raw.startup_timeout_sec, raw.startup_timeout_ms) {
             (Some(sec), _) => {
@@ -84,6 +96,10 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             (None, Some(ms)) => Some(Duration::from_millis(ms)),
             (None, None) => None,
         };
+        let tool_timeout_sec = raw.tool_timeout_sec;
+        let enabled = raw.enabled.unwrap_or_else(default_enabled);
+        let enabled_tools = raw.enabled_tools.clone();
+        let disabled_tools = raw.disabled_tools.clone();
 
         fn throw_if_set<E, T>(transport: &str, field: &str, value: Option<&T>) -> Result<(), E>
         where
@@ -97,72 +113,46 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             )))
         }
 
-        let transport = match raw {
-            RawMcpServerConfig {
-                command: Some(command),
-                args,
-                env,
-                env_vars,
-                cwd,
-                url,
-                bearer_token_env_var,
-                http_headers,
-                env_http_headers,
-                ..
-            } => {
-                throw_if_set("stdio", "url", url.as_ref())?;
-                throw_if_set(
-                    "stdio",
-                    "bearer_token_env_var",
-                    bearer_token_env_var.as_ref(),
-                )?;
-                throw_if_set("stdio", "http_headers", http_headers.as_ref())?;
-                throw_if_set("stdio", "env_http_headers", env_http_headers.as_ref())?;
-                McpServerTransportConfig::Stdio {
-                    command,
-                    args: args.unwrap_or_default(),
-                    env,
-                    env_vars: env_vars.unwrap_or_default(),
-                    cwd,
-                }
-            }
-            RawMcpServerConfig {
-                url: Some(url),
-                bearer_token,
-                bearer_token_env_var,
+        let transport = if let Some(command) = raw.command.clone() {
+            throw_if_set("stdio", "url", raw.url.as_ref())?;
+            throw_if_set(
+                "stdio",
+                "bearer_token_env_var",
+                raw.bearer_token_env_var.as_ref(),
+            )?;
+            throw_if_set("stdio", "bearer_token", raw.bearer_token.as_ref())?;
+            throw_if_set("stdio", "http_headers", raw.http_headers.as_ref())?;
+            throw_if_set("stdio", "env_http_headers", raw.env_http_headers.as_ref())?;
+            McpServerTransportConfig::Stdio {
                 command,
-                args,
-                env,
-                env_vars,
-                cwd,
-                http_headers,
-                env_http_headers,
-                startup_timeout_sec: _,
-                tool_timeout_sec: _,
-                startup_timeout_ms: _,
-                enabled: _,
-            } => {
-                throw_if_set("streamable_http", "command", command.as_ref())?;
-                throw_if_set("streamable_http", "args", args.as_ref())?;
-                throw_if_set("streamable_http", "env", env.as_ref())?;
-                throw_if_set("streamable_http", "env_vars", env_vars.as_ref())?;
-                throw_if_set("streamable_http", "cwd", cwd.as_ref())?;
-                throw_if_set("streamable_http", "bearer_token", bearer_token.as_ref())?;
-                McpServerTransportConfig::StreamableHttp {
-                    url,
-                    bearer_token_env_var,
-                    http_headers,
-                    env_http_headers,
-                }
+                args: raw.args.clone().unwrap_or_default(),
+                env: raw.env.clone(),
+                env_vars: raw.env_vars.clone().unwrap_or_default(),
+                cwd: raw.cwd.take(),
             }
-            _ => return Err(SerdeError::custom("invalid transport")),
+        } else if let Some(url) = raw.url.clone() {
+            throw_if_set("streamable_http", "args", raw.args.as_ref())?;
+            throw_if_set("streamable_http", "env", raw.env.as_ref())?;
+            throw_if_set("streamable_http", "env_vars", raw.env_vars.as_ref())?;
+            throw_if_set("streamable_http", "cwd", raw.cwd.as_ref())?;
+            throw_if_set("streamable_http", "bearer_token", raw.bearer_token.as_ref())?;
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                bearer_token_env_var: raw.bearer_token_env_var.clone(),
+                http_headers: raw.http_headers.clone(),
+                env_http_headers: raw.env_http_headers.take(),
+            }
+        } else {
+            return Err(SerdeError::custom("invalid transport"));
         };
 
         Ok(Self {
             transport,
             startup_timeout_sec,
-            tool_timeout_sec: raw.tool_timeout_sec,
-            enabled: raw.enabled.unwrap_or_else(default_enabled),
+            tool_timeout_sec,
+            enabled,
+            enabled_tools,
+            disabled_tools,
         })
     }
 }
@@ -527,6 +517,8 @@ mod tests {
             }
         );
         assert!(cfg.enabled);
+        assert!(cfg.enabled_tools.is_none());
+        assert!(cfg.disabled_tools.is_none());
     }
 
     #[test]
@@ -699,6 +691,21 @@ mod tests {
                 )])),
             }
         );
+    }
+
+    #[test]
+    fn deserialize_server_config_with_tool_filters() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            enabled_tools = ["allowed"]
+            disabled_tools = ["blocked"]
+        "#,
+        )
+        .expect("should deserialize tool filters");
+
+        assert_eq!(cfg.enabled_tools, Some(vec!["allowed".to_string()]));
+        assert_eq!(cfg.disabled_tools, Some(vec!["blocked".to_string()]));
     }
 
     #[test]

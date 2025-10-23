@@ -103,7 +103,8 @@ pub(crate) fn compose_account_display(config: &Config) -> Option<StatusAccountDi
     None
 }
 
-pub(crate) fn format_tokens_compact(value: u64) -> String {
+pub(crate) fn format_tokens_compact(value: i64) -> String {
+    let value = value.max(0);
     if value == 0 {
         return "0".to_string();
     }
@@ -111,14 +112,15 @@ pub(crate) fn format_tokens_compact(value: u64) -> String {
         return value.to_string();
     }
 
+    let value_f64 = value as f64;
     let (scaled, suffix) = if value >= 1_000_000_000_000 {
-        (value as f64 / 1_000_000_000_000.0, "T")
+        (value_f64 / 1_000_000_000_000.0, "T")
     } else if value >= 1_000_000_000 {
-        (value as f64 / 1_000_000_000.0, "B")
+        (value_f64 / 1_000_000_000.0, "B")
     } else if value >= 1_000_000 {
-        (value as f64 / 1_000_000.0, "M")
+        (value_f64 / 1_000_000.0, "M")
     } else {
-        (value as f64 / 1_000.0, "K")
+        (value_f64 / 1_000.0, "K")
     };
 
     let decimals = if scaled < 10.0 {

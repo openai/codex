@@ -445,7 +445,7 @@ fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()
             r#"
 model = "mock-model"
 approval_policy = "untrusted"
-sandbox_policy = "read-only"
+sandbox_policy = "workspace-write"
 
 model_provider = "mock_provider"
 

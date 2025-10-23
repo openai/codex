@@ -6,9 +6,9 @@ use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::InputItem;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::user_input::UserInput;
 use eventsource_stream::Event as StreamEvent;
 use eventsource_stream::EventStreamError as StreamError;
 use reqwest::Error;
@@ -86,8 +86,8 @@ impl OtelEventManager {
         provider_name: &str,
         reasoning_effort: Option<ReasoningEffort>,
         reasoning_summary: ReasoningSummary,
-        context_window: Option<u64>,
-        max_output_tokens: Option<u64>,
+        context_window: Option<i64>,
+        max_output_tokens: Option<i64>,
         auto_compact_token_limit: Option<i64>,
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
@@ -281,11 +281,11 @@ impl OtelEventManager {
 
     pub fn sse_event_completed(
         &self,
-        input_token_count: u64,
-        output_token_count: u64,
-        cached_token_count: Option<u64>,
-        reasoning_token_count: Option<u64>,
-        tool_token_count: u64,
+        input_token_count: i64,
+        output_token_count: i64,
+        cached_token_count: Option<i64>,
+        reasoning_token_count: Option<i64>,
+        tool_token_count: i64,
     ) {
         tracing::event!(
             tracing::Level::INFO,
@@ -308,11 +308,11 @@ impl OtelEventManager {
         );
     }
 
-    pub fn user_prompt(&self, items: &[InputItem]) {
+    pub fn user_prompt(&self, items: &[UserInput]) {
         let prompt = items
             .iter()
             .flat_map(|item| match item {
-                InputItem::Text { text } => Some(text.as_str()),
+                UserInput::Text { text } => Some(text.as_str()),
                 _ => None,
             })
             .collect::<String>();

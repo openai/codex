@@ -8,9 +8,10 @@ use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
-use crate::protocol::InputItem;
+use crate::user_input::UserInput;
+use schemars::JsonSchema;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseInputItem {
     Message {
@@ -31,7 +32,7 @@ pub enum ResponseInputItem {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentItem {
     InputText { text: String },
@@ -39,7 +40,7 @@ pub enum ContentItem {
     OutputText { text: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
     Message {
@@ -159,7 +160,7 @@ impl From<ResponseInputItem> for ResponseItem {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum LocalShellStatus {
     Completed,
@@ -167,13 +168,13 @@ pub enum LocalShellStatus {
     Incomplete,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LocalShellAction {
     Exec(LocalShellExecAction),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 pub struct LocalShellExecAction {
     pub command: Vec<String>,
     pub timeout_ms: Option<u64>,
@@ -182,7 +183,7 @@ pub struct LocalShellExecAction {
     pub user: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WebSearchAction {
     Search {
@@ -192,29 +193,29 @@ pub enum WebSearchAction {
     Other,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReasoningItemReasoningSummary {
     SummaryText { text: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReasoningItemContent {
     ReasoningText { text: String },
     Text { text: String },
 }
 
-impl From<Vec<InputItem>> for ResponseInputItem {
-    fn from(items: Vec<InputItem>) -> Self {
+impl From<Vec<UserInput>> for ResponseInputItem {
+    fn from(items: Vec<UserInput>) -> Self {
         Self::Message {
             role: "user".to_string(),
             content: items
                 .into_iter()
                 .filter_map(|c| match c {
-                    InputItem::Text { text } => Some(ContentItem::InputText { text }),
-                    InputItem::Image { image_url } => Some(ContentItem::InputImage { image_url }),
-                    InputItem::LocalImage { path } => match std::fs::read(&path) {
+                    UserInput::Text { text } => Some(ContentItem::InputText { text }),
+                    UserInput::Image { image_url } => Some(ContentItem::InputImage { image_url }),
+                    UserInput::LocalImage { path } => match std::fs::read(&path) {
                         Ok(bytes) => {
                             let mime = mime_guess::from_path(&path)
                                 .first()
@@ -242,7 +243,7 @@ impl From<Vec<InputItem>> for ResponseInputItem {
 
 /// If the `name` of a `ResponseItem::FunctionCall` is either `container.exec`
 /// or shell`, the `arguments` field should deserialize to this struct.
-#[derive(Deserialize, Debug, Clone, PartialEq, TS)]
+#[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 pub struct ShellToolCallParams {
     pub command: Vec<String>,
     pub workdir: Option<String>,
@@ -256,7 +257,7 @@ pub struct ShellToolCallParams {
     pub justification: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, TS)]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
 pub struct FunctionCallOutputPayload {
     pub content: String,
     // TODO(jif) drop this.

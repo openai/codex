@@ -97,6 +97,10 @@ impl Match for ResponseMock {
             .lock()
             .unwrap()
             .push(ResponsesRequest(request.clone()));
+
+        // Enforce invariant checks on every request body captured by the mock.
+        // Panic on orphan tool outputs or calls to catch regressions early.
+        validate_request_body_invariants(request);
         true
     }
 }
@@ -138,7 +142,7 @@ pub fn ev_response_created(id: &str) -> Value {
     })
 }
 
-pub fn ev_completed_with_tokens(id: &str, total_tokens: u64) -> Value {
+pub fn ev_completed_with_tokens(id: &str, total_tokens: i64) -> Value {
     serde_json::json!({
         "type": "response.completed",
         "response": {
@@ -163,6 +167,56 @@ pub fn ev_assistant_message(id: &str, text: &str) -> Value {
             "role": "assistant",
             "id": id,
             "content": [{"type": "output_text", "text": text}]
+        }
+    })
+}
+
+pub fn ev_reasoning_item(id: &str, summary: &[&str], raw_content: &[&str]) -> Value {
+    let summary_entries: Vec<Value> = summary
+        .iter()
+        .map(|text| serde_json::json!({"type": "summary_text", "text": text}))
+        .collect();
+
+    let mut event = serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "reasoning",
+            "id": id,
+            "summary": summary_entries,
+        }
+    });
+
+    if !raw_content.is_empty() {
+        let content_entries: Vec<Value> = raw_content
+            .iter()
+            .map(|text| serde_json::json!({"type": "reasoning_text", "text": text}))
+            .collect();
+        event["item"]["content"] = Value::Array(content_entries);
+    }
+
+    event
+}
+
+pub fn ev_web_search_call_added(id: &str, status: &str, query: &str) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.added",
+        "item": {
+            "type": "web_search_call",
+            "id": id,
+            "status": status,
+            "action": {"type": "search", "query": query}
+        }
+    })
+}
+
+pub fn ev_web_search_call_done(id: &str, status: &str, query: &str) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "web_search_call",
+            "id": id,
+            "status": status,
+            "action": {"type": "search", "query": query}
         }
     })
 }
@@ -335,4 +389,91 @@ pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> Res
         .await;
 
     response_mock
+}
+
+/// Validate invariants on the request body sent to `/v1/responses`.
+///
+/// - No `function_call_output`/`custom_tool_call_output` with missing/empty `call_id`.
+/// - Every `function_call_output` must match a prior `function_call` or
+///   `local_shell_call` with the same `call_id` in the same `input`.
+/// - Every `custom_tool_call_output` must match a prior `custom_tool_call`.
+/// - Additionally, enforce symmetry: every `function_call`/`custom_tool_call`
+///   in the `input` must have a matching output entry.
+fn validate_request_body_invariants(request: &wiremock::Request) {
+    let Ok(body): Result<Value, _> = request.body_json() else {
+        return;
+    };
+    let Some(items) = body.get("input").and_then(Value::as_array) else {
+        panic!("input array not found in request");
+    };
+
+    use std::collections::HashSet;
+
+    fn get_call_id(item: &Value) -> Option<&str> {
+        item.get("call_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+    }
+
+    fn gather_ids(items: &[Value], kind: &str) -> HashSet<String> {
+        items
+            .iter()
+            .filter(|item| item.get("type").and_then(Value::as_str) == Some(kind))
+            .filter_map(get_call_id)
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn gather_output_ids(items: &[Value], kind: &str, missing_msg: &str) -> HashSet<String> {
+        items
+            .iter()
+            .filter(|item| item.get("type").and_then(Value::as_str) == Some(kind))
+            .map(|item| {
+                let Some(id) = get_call_id(item) else {
+                    panic!("{missing_msg}");
+                };
+                id.to_string()
+            })
+            .collect()
+    }
+
+    let function_calls = gather_ids(items, "function_call");
+    let custom_tool_calls = gather_ids(items, "custom_tool_call");
+    let local_shell_calls = gather_ids(items, "local_shell_call");
+    let function_call_outputs = gather_output_ids(
+        items,
+        "function_call_output",
+        "orphan function_call_output with empty call_id should be dropped",
+    );
+    let custom_tool_call_outputs = gather_output_ids(
+        items,
+        "custom_tool_call_output",
+        "orphan custom_tool_call_output with empty call_id should be dropped",
+    );
+
+    for cid in &function_call_outputs {
+        assert!(
+            function_calls.contains(cid) || local_shell_calls.contains(cid),
+            "function_call_output without matching call in input: {cid}",
+        );
+    }
+    for cid in &custom_tool_call_outputs {
+        assert!(
+            custom_tool_calls.contains(cid),
+            "custom_tool_call_output without matching call in input: {cid}",
+        );
+    }
+
+    for cid in &function_calls {
+        assert!(
+            function_call_outputs.contains(cid),
+            "Function call output is missing for call id: {cid}",
+        );
+    }
+    for cid in &custom_tool_calls {
+        assert!(
+            custom_tool_call_outputs.contains(cid),
+            "Custom tool call output is missing for call id: {cid}",
+        );
+    }
 }

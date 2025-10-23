@@ -14,10 +14,10 @@ use codex_core::features::Feature;
 
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::skip_if_no_network;
@@ -94,6 +94,8 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
                     enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
                 },
             );
         })
@@ -104,7 +106,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
     fixture
         .codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "call the rmcp echo tool".into(),
             }],
             final_output_json_schema: None,
@@ -230,6 +232,8 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
                     enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
                 },
             );
         })
@@ -240,7 +244,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
     fixture
         .codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "call the rmcp echo tool".into(),
             }],
             final_output_json_schema: None,
@@ -381,6 +385,8 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
                     enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
                 },
             );
         })
@@ -391,7 +397,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
     fixture
         .codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "call the rmcp streamable http echo tool".into(),
             }],
             final_output_json_schema: None,
@@ -564,6 +570,8 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
                     enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
                 },
             );
         })
@@ -574,7 +582,7 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
     fixture
         .codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "call the rmcp streamable http oauth echo tool".into(),
             }],
             final_output_json_schema: None,
