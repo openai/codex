@@ -290,6 +290,9 @@ async fn run_ratatui_app(
     terminal.clear()?;
 
     let mut tui = Tui::new(terminal);
+    if let Some(title) = cli.title.as_deref() {
+        tui.set_window_title(title);
+    }
 
     #[cfg(not(debug_assertions))]
     {
@@ -422,7 +425,12 @@ async fn run_ratatui_app(
         resume_picker::ResumeSelection::StartFresh
     };
 
-    let Cli { prompt, images, .. } = cli;
+    let Cli {
+        prompt,
+        images,
+        title,
+        ..
+    } = cli;
 
     let app_result = App::run(
         &mut tui,
@@ -431,6 +439,7 @@ async fn run_ratatui_app(
         active_profile,
         prompt,
         images,
+        title,
         resume_selection,
         feedback,
     )
