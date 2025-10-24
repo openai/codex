@@ -210,7 +210,7 @@ impl CodexMessageProcessor {
                 request_id,
                 params: _,
             } => {
-                self.get_user_saved_config(request_id).await;
+                self.get_user_saved_config(request_id, false).await;
             }
             ClientRequest::UpdateConfig { request_id, params } => {
                 self.update_user_saved_config(request_id, params).await;
@@ -264,7 +264,7 @@ impl CodexMessageProcessor {
                 request_id,
                 params: _,
             } => {
-                self.get_user_saved_config(request_id).await;
+                self.get_user_saved_config(request_id, true).await;
             }
             ClientRequest::SetDefaultModel { request_id, params } => {
                 self.set_default_model(request_id, params).await;
@@ -630,7 +630,7 @@ impl CodexMessageProcessor {
             })
     }
 
-    async fn get_user_saved_config(&self, request_id: RequestId) {
+    async fn get_user_saved_config(&self, request_id: RequestId, wrap: bool) {
         let toml_value = match load_config_as_toml(&self.config.codex_home).await {
             Ok(val) => val,
             Err(err) => {
@@ -659,10 +659,16 @@ impl CodexMessageProcessor {
 
         let user_saved_config: UserSavedConfig = cfg.into();
 
-        let response = GetUserSavedConfigResponse {
-            config: user_saved_config,
-        };
-        self.outgoing.send_response(request_id, response).await;
+        if wrap {
+            let response = GetUserSavedConfigResponse {
+                config: user_saved_config,
+            };
+            self.outgoing.send_response(request_id, response).await;
+        } else {
+            self.outgoing
+                .send_response(request_id, user_saved_config)
+                .await;
+        }
     }
 
     async fn update_user_saved_config(&self, request_id: RequestId, params: UpdateConfigParams) {
