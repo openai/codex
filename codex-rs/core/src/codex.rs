@@ -3146,10 +3146,9 @@ mod tests {
 
         let display = mcp_init_error_display(server_name, None, &err);
 
-        let expected = format!(
-            "MCP client for `slow` timed out after 10 seconds. Add or adjust `startup_timeout_sec` in the `mcp_servers.slow` section of your config.toml"
+        assert_eq!(
+            "MCP client for `slow` timed out after 10 seconds. Add or adjust `startup_timeout_sec` in the `mcp_servers.slow` section of your config.toml",
+            display
         );
-
-        assert_eq!(expected, display);
     }
 }
