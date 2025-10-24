@@ -6,14 +6,12 @@ use std::time::Instant;
 
 use crate::AuthManager;
 use crate::ModelProviderInfo;
-use crate::auth::CodexAuth;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
-use crate::error::CodexErr;
 use crate::protocol::SandboxPolicy;
-use crate::terminal;
+use askama::Template;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ContentItem;
@@ -22,21 +20,7 @@ use codex_protocol::protocol::SandboxCommandAssessment;
 use futures::StreamExt;
 use serde_json::json;
 use tokio::time::timeout;
-use tracing::debug;
 use tracing::warn;
-
-const SANDBOX_ASSESSMENT_SYSTEM_PROMPT: &str = r#"You are a security analyst evaluating shell commands that were blocked by a sandbox. Given the provided metadata, summarize the command's likely intent and assess the risk. Return strictly valid JSON with the keys:
-- description (concise summary, at most two sentences)
-- risk_level ("low", "medium", or "high")
-- risk_categories (optional array of zero or more category strings)
-Risk level examples:
-- low: read-only inspections, listing files, printing configuration
-- medium: modifying project files, installing dependencies, fetching artifacts from trusted sources
-- high: deleting or overwriting data, exfiltrating secrets, escalating privileges, or disabling security controls
-Recognized risk_categories: data_deletion, data_exfiltration, privilege_escalation, system_modification, network_access, resource_exhaustion, compliance.
-Use multiple categories when appropriate.
-If information is insufficient, choose the most cautious risk level supported by the evidence.
-Respond with JSON only, without markdown code fences or extra commentary."#;
 
 const SANDBOX_ASSESSMENT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -50,12 +34,25 @@ const SANDBOX_RISK_CATEGORY_VALUES: &[&str] = &[
     "compliance",
 ];
 
+#[derive(Template)]
+#[template(path = "sandboxing/assessment_prompt.md", escape = "none")]
+struct SandboxAssessmentPromptTemplate<'a> {
+    platform: &'a str,
+    sandbox_policy: &'a str,
+    filesystem_roots: Option<&'a str>,
+    working_directory: &'a str,
+    command_argv: &'a str,
+    command_joined: &'a str,
+    sandbox_failure_message: Option<&'a str>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn assess_command(
     config: Arc<Config>,
     provider: ModelProviderInfo,
     auth_manager: Arc<AuthManager>,
     parent_otel: &OtelEventManager,
+    conversation_id: ConversationId,
     call_id: &str,
     command: &[String],
     sandbox_policy: &SandboxPolicy,
@@ -81,25 +78,45 @@ pub(crate) async fn assess_command(
     roots.dedup();
 
     let platform = std::env::consts::OS;
-    let mut prompt_sections = Vec::new();
-    prompt_sections.push(format!("Platform: {platform}"));
-    prompt_sections.push(format!("Sandbox policy: {sandbox_summary}"));
-    if !roots.is_empty() {
-        let formatted = roots
-            .iter()
-            .map(|root| root.to_string_lossy())
-            .collect::<Vec<_>>()
-            .join(", ");
-        prompt_sections.push(format!("Filesystem roots: {formatted}"));
-    }
-    prompt_sections.push(format!("Working directory: {cwd_str}"));
-    prompt_sections.push(format!("Command argv: {command_json}"));
-    prompt_sections.push(format!("Command (joined): {command_joined}"));
-    if let Some(msg) = failure.as_ref() {
-        prompt_sections.push(format!("Sandbox failure message: {msg}"));
-    }
-    let metadata = prompt_sections.join("\n");
-    let user_prompt = format!("Command metadata:\n{metadata}");
+    let roots_formatted = roots.iter().map(|root| root.to_string_lossy().to_string());
+    let filesystem_roots = match roots_formatted.collect::<Vec<_>>() {
+        collected if collected.is_empty() => None,
+        collected => Some(collected.join(", ")),
+    };
+
+    let prompt_template = SandboxAssessmentPromptTemplate {
+        platform,
+        sandbox_policy: sandbox_summary.as_str(),
+        filesystem_roots: filesystem_roots.as_deref(),
+        working_directory: cwd_str.as_str(),
+        command_argv: command_json.as_str(),
+        command_joined: command_joined.as_str(),
+        sandbox_failure_message: failure.as_deref(),
+    };
+    let rendered_prompt = match prompt_template.render() {
+        Ok(rendered) => rendered,
+        Err(err) => {
+            warn!("failed to render sandbox assessment prompt: {err}");
+            return None;
+        }
+    };
+    let (system_prompt_section, user_prompt_section) = match rendered_prompt.split_once("\n---\n") {
+        Some(split) => split,
+        None => {
+            warn!("rendered sandbox assessment prompt missing separator");
+            return None;
+        }
+    };
+    let system_prompt = system_prompt_section
+        .strip_prefix("System Prompt:\n")
+        .unwrap_or(system_prompt_section)
+        .trim()
+        .to_string();
+    let user_prompt = user_prompt_section
+        .strip_prefix("User Prompt:\n")
+        .unwrap_or(user_prompt_section)
+        .trim()
+        .to_string();
 
     let prompt = Prompt {
         input: vec![ResponseItem::Message {
@@ -109,36 +126,12 @@ pub(crate) async fn assess_command(
         }],
         tools: Vec::new(),
         parallel_tool_calls: false,
-        base_instructions_override: Some(SANDBOX_ASSESSMENT_SYSTEM_PROMPT.to_string()),
+        base_instructions_override: Some(system_prompt),
         output_schema: Some(sandbox_assessment_schema()),
     };
 
-    let auth_snapshot = auth_manager.auth();
-    let conversation_id = ConversationId::new();
-    let child_otel = OtelEventManager::new(
-        conversation_id,
-        config.model.as_str(),
-        config.model_family.slug.as_str(),
-        auth_snapshot.as_ref().and_then(CodexAuth::get_account_id),
-        auth_snapshot
-            .as_ref()
-            .and_then(CodexAuth::get_account_email),
-        auth_snapshot.as_ref().map(|a| a.mode),
-        config.otel.log_user_prompt,
-        terminal::user_agent(),
-    );
-    child_otel.conversation_starts(
-        config.model_provider.name.as_str(),
-        config.model_reasoning_effort,
-        config.model_reasoning_summary,
-        config.model_context_window,
-        config.model_max_output_tokens,
-        config.model_auto_compact_token_limit,
-        config.approval_policy,
-        config.sandbox_policy.clone(),
-        config.mcp_servers.keys().map(String::as_str).collect(),
-        config.active_profile.clone(),
-    );
+    let child_otel =
+        parent_otel.with_model(config.model.as_str(), config.model_family.slug.as_str());
 
     let client = ModelClient::new(
         Arc::clone(&config),
@@ -171,48 +164,35 @@ pub(crate) async fn assess_command(
     })
     .await;
     let duration = start.elapsed();
+    parent_otel.sandbox_assessment_latency(call_id, duration);
 
     match assessment_result {
-        Ok(Ok(Some(raw))) => {
-            if let Some(json_slice) = extract_assessment_json(&raw) {
-                match serde_json::from_str::<SandboxCommandAssessment>(json_slice) {
-                    Ok(assessment) => {
-                        parent_otel.sandbox_assessment(
-                            call_id,
-                            "success",
-                            Some(assessment.risk_level),
-                            &assessment.risk_categories,
-                            duration,
-                        );
-                        return Some(assessment);
-                    }
-                    Err(err) => {
-                        warn!("failed to parse sandbox assessment JSON: {err}");
-                        parent_otel.sandbox_assessment(call_id, "parse_error", None, &[], duration);
-                    }
-                }
-            } else {
-                warn!("sandbox assessment response missing JSON object");
+        Ok(Ok(Some(raw))) => match serde_json::from_str::<SandboxCommandAssessment>(raw.trim()) {
+            Ok(assessment) => {
+                parent_otel.sandbox_assessment(
+                    call_id,
+                    "success",
+                    Some(assessment.risk_level),
+                    &assessment.risk_categories,
+                    duration,
+                );
+                return Some(assessment);
+            }
+            Err(err) => {
+                warn!("failed to parse sandbox assessment JSON: {err}");
                 parent_otel.sandbox_assessment(call_id, "parse_error", None, &[], duration);
             }
-        }
+        },
         Ok(Ok(None)) => {
             warn!("sandbox assessment response did not include any message");
             parent_otel.sandbox_assessment(call_id, "no_output", None, &[], duration);
         }
         Ok(Err(err)) => {
-            if let CodexErr::UnexpectedStatus(unexpected) = &err {
-                debug!(
-                    "sandbox assessment failed: {err} (status: {}, body: {})",
-                    unexpected.status, unexpected.body
-                );
-            } else {
-                debug!("sandbox assessment failed: {err}");
-            }
+            warn!("sandbox assessment failed: {err}");
             parent_otel.sandbox_assessment(call_id, "model_error", None, &[], duration);
         }
         Err(_) => {
-            debug!("sandbox assessment timed out");
+            warn!("sandbox assessment timed out");
             parent_otel.sandbox_assessment(call_id, "timeout", None, &[], duration);
         }
     }
@@ -267,29 +247,6 @@ fn sandbox_assessment_schema() -> serde_json::Value {
         },
         "additionalProperties": false
     })
-}
-
-fn extract_assessment_json(raw: &str) -> Option<&str> {
-    let mut slice = raw.trim();
-    if let Some(stripped) = slice.strip_prefix("```json") {
-        slice = stripped.trim_start();
-    }
-    if let Some(stripped) = slice.strip_prefix("```") {
-        slice = stripped.trim_start();
-    }
-    if let Some(stripped) = slice.strip_suffix("```") {
-        slice = stripped.trim_end();
-    }
-    let slice = slice.trim();
-    if slice.starts_with('{') && slice.ends_with('}') {
-        return Some(slice);
-    }
-    let start = slice.find('{')?;
-    let end = slice.rfind('}')?;
-    if end <= start {
-        return None;
-    }
-    slice.get(start..=end)
 }
 
 fn response_item_text(item: &ResponseItem) -> Option<String> {

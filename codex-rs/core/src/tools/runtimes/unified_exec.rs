@@ -9,6 +9,7 @@ use crate::error::SandboxErr;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxRetryData;
 use crate::tools::sandboxing::Sandboxable;
@@ -30,6 +31,15 @@ pub struct UnifiedExecRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
+}
+
+impl ProvidesSandboxRetryData for UnifiedExecRequest {
+    fn sandbox_retry_data(&self) -> Option<SandboxRetryData> {
+        Some(SandboxRetryData {
+            command: self.command.clone(),
+            cwd: self.cwd.clone(),
+        })
+    }
 }
 
 #[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
@@ -99,13 +109,6 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
 }
 
 impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecSession> for UnifiedExecRuntime<'a> {
-    fn sandbox_retry_data(&self, req: &UnifiedExecRequest) -> Option<SandboxRetryData> {
-        Some(SandboxRetryData {
-            command: req.command.clone(),
-            cwd: req.cwd.clone(),
-        })
-    }
-
     async fn run(
         &mut self,
         req: &UnifiedExecRequest,

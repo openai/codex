@@ -11,6 +11,7 @@ use crate::error::get_error_message_ui;
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::SandboxManager;
 use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
@@ -39,6 +40,7 @@ impl ToolOrchestrator {
     ) -> Result<Out, ToolError>
     where
         T: ToolRuntime<Rq, Out>,
+        Rq: ProvidesSandboxRetryData,
     {
         let otel = turn_ctx.client.get_otel_event_manager();
         let otel_tn = &tool_ctx.tool_name;
@@ -111,7 +113,7 @@ impl ToolOrchestrator {
                 if !tool.should_bypass_approval(approval_policy, already_approved) {
                     let mut risk = None;
 
-                    if let Some(metadata) = tool.sandbox_retry_data(req) {
+                    if let Some(metadata) = req.sandbox_retry_data() {
                         let err = SandboxErr::Denied {
                             output: output.clone(),
                         };

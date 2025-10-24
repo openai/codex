@@ -961,7 +961,6 @@ pub struct ConfigToml {
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
-    pub experimental_sandbox_command_assessment: Option<bool>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -1178,6 +1177,7 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_override,
             include_view_image_tool: include_view_image_tool_override,
             web_search_request: override_tools_web_search_request,
+            sandbox_command_assessment: sandbox_command_assessment_override,
         };
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
@@ -1275,10 +1275,7 @@ impl Config {
         let use_experimental_streamable_shell_tool = features.enabled(Feature::StreamableShell);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
         let use_experimental_use_rmcp_client = features.enabled(Feature::RmcpClient);
-        let sandbox_command_assessment = sandbox_command_assessment_override
-            .or(config_profile.experimental_sandbox_command_assessment)
-            .or(cfg.experimental_sandbox_command_assessment)
-            .unwrap_or(false);
+        let sandbox_command_assessment = features.enabled(Feature::SandboxCommandAssessment);
 
         let forced_chatgpt_workspace_id =
             cfg.forced_chatgpt_workspace_id.as_ref().and_then(|value| {

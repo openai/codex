@@ -39,6 +39,8 @@ pub enum Feature {
     ViewImageTool,
     /// Allow the model to request web searches.
     WebSearchRequest,
+    /// Enable the model-based risk assessments for sandboxed commands.
+    SandboxCommandAssessment,
 }
 
 impl Feature {
@@ -73,6 +75,7 @@ pub struct FeatureOverrides {
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
     pub web_search_request: Option<bool>,
+    pub sandbox_command_assessment: Option<bool>,
 }
 
 impl FeatureOverrides {
@@ -234,6 +237,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::WebSearchRequest,
         key: "web_search_request",
         stage: Stage::Stable,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SandboxCommandAssessment,
+        key: "sandbox_command_assessment",
+        stage: Stage::Experimental,
         default_enabled: false,
     },
 ];

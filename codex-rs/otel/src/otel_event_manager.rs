@@ -407,6 +407,24 @@ impl OtelEventManager {
         );
     }
 
+    pub fn sandbox_assessment_latency(&self, call_id: &str, duration: Duration) {
+        tracing::event!(
+            tracing::Level::INFO,
+            event.name = "codex.sandbox_assessment_latency",
+            event.timestamp = %timestamp(),
+            conversation.id = %self.metadata.conversation_id,
+            app.version = %self.metadata.app_version,
+            auth_mode = self.metadata.auth_mode,
+            user.account_id = self.metadata.account_id,
+            user.email = self.metadata.account_email,
+            terminal.type = %self.metadata.terminal_type,
+            model = %self.metadata.model,
+            slug = %self.metadata.slug,
+            call_id = %call_id,
+            duration_ms = %duration.as_millis(),
+        );
+    }
+
     pub async fn log_tool_result<F, Fut, E>(
         &self,
         tool_name: &str,

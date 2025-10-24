@@ -161,6 +161,10 @@ pub(crate) struct SandboxRetryData {
     pub cwd: PathBuf,
 }
 
+pub(crate) trait ProvidesSandboxRetryData {
+    fn sandbox_retry_data(&self) -> Option<SandboxRetryData>;
+}
+
 #[derive(Debug)]
 pub(crate) enum ToolError {
     Rejected(String),
@@ -175,11 +179,6 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<Out, ToolError>;
-
-    /// Allow a runtime to supply metadata for risk assessment when the orchestrator retries without isolation.
-    fn sandbox_retry_data(&self, _req: &Req) -> Option<SandboxRetryData> {
-        None
-    }
 }
 
 pub(crate) struct SandboxAttempt<'a> {

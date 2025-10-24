@@ -10,7 +10,9 @@ use crate::sandboxing::CommandSpec;
 use crate::sandboxing::execute_env;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
+use crate::tools::sandboxing::SandboxRetryData;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
@@ -29,6 +31,12 @@ pub struct ApplyPatchRequest {
     pub timeout_ms: Option<u64>,
     pub user_explicitly_approved: bool,
     pub codex_exe: Option<PathBuf>,
+}
+
+impl ProvidesSandboxRetryData for ApplyPatchRequest {
+    fn sandbox_retry_data(&self) -> Option<SandboxRetryData> {
+        None
+    }
 }
 
 #[derive(Default)]
