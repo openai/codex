@@ -3,7 +3,6 @@ use crate::key_hint::KeyBinding;
 use crate::render::line_utils::prefix_lines;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
-use crossterm::event::KeyModifiers;
 use codex_protocol::platform::is_running_under_wsl;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
