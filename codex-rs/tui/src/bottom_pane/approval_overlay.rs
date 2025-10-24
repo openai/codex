@@ -291,15 +291,16 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 reason,
                 risk,
             } => {
+                let reason = reason.filter(|item| !item.is_empty());
+                let has_reason = reason.is_some();
                 let mut header: Vec<Line<'static>> = Vec::new();
-                if let Some(reason) = reason
-                    && !reason.is_empty()
-                {
+                if let Some(reason) = reason {
                     header.push(Line::from(vec!["Reason: ".into(), reason.italic()]));
-                    header.push(Line::from(""));
                 }
                 if let Some(risk) = risk.as_ref() {
                     header.extend(render_risk_lines(risk));
+                } else if has_reason {
+                    header.push(Line::from(""));
                 }
                 let full_cmd = strip_bash_lc_and_escape(&command);
                 let mut full_cmd_lines = highlight_bash_to_lines(&full_cmd);
@@ -345,6 +346,16 @@ fn render_risk_lines(risk: &SandboxCommandAssessment) -> Vec<Line<'static>> {
         SandboxRiskLevel::High => "HIGH".red().bold(),
     };
 
+    let mut lines = Vec::new();
+
+    let description = risk.description.trim();
+    if !description.is_empty() {
+        lines.push(Line::from(vec![
+            "Summary: ".into(),
+            description.to_string().into(),
+        ]));
+    }
+
     let mut spans: Vec<Span<'static>> = vec!["Risk: ".into(), level_span];
     if !risk.risk_categories.is_empty() {
         spans.push(" (".into());
@@ -357,14 +368,7 @@ fn render_risk_lines(risk: &SandboxCommandAssessment) -> Vec<Line<'static>> {
         spans.push(")".into());
     }
 
-    let mut lines = vec![Line::from(spans)];
-    let description = risk.description.trim();
-    if !description.is_empty() {
-        lines.push(Line::from(vec![
-            "Summary: ".into(),
-            description.to_string().into(),
-        ]));
-    }
+    lines.push(Line::from(spans));
     lines.push(Line::from(""));
     lines
 }

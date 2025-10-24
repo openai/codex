@@ -59,7 +59,7 @@ pub(crate) async fn assess_command(
     cwd: &Path,
     failure_message: Option<&str>,
 ) -> Option<SandboxCommandAssessment> {
-    if !config.sandbox_command_assessment || command.is_empty() {
+    if !config.experimental_sandbox_command_assessment || command.is_empty() {
         return None;
     }
 

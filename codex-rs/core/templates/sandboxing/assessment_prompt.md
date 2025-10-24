@@ -11,6 +11,8 @@ Use multiple categories when appropriate.
 If information is insufficient, choose the most cautious risk level supported by the evidence.
 Respond with JSON only, without markdown code fences or extra commentary.
 
+---
+
 Command metadata:
 Platform: {{ platform }}
 Sandbox policy: {{ sandbox_policy }}
