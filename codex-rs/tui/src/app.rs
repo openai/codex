@@ -1,409 +1,368 @@
+use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
-use crate::get_git_diff::get_git_diff;
-use crate::git_warning_screen::GitWarningOutcome;
-use crate::git_warning_screen::GitWarningScreen;
-use crate::login_screen::LoginScreen;
-use crate::mouse_capture::MouseCapture;
-use crate::scroll_event_helper::ScrollEventHelper;
-use crate::slash_command::SlashCommand;
+use crate::pager_overlay::Overlay;
+use crate::resume_picker::ResumeSelection;
 use crate::tui;
+use crate::tui::TuiEvent;
+use codex_ansi_escape::ansi_escape_line;
+use codex_core::AuthManager;
+use codex_core::ConversationManager;
 use codex_core::config::Config;
-use codex_core::protocol::Event;
+use codex_core::protocol::TokenUsage;
 use color_eyre::eyre::Result;
+use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
-use crossterm::event::MouseEvent;
-use crossterm::event::MouseEventKind;
+use crossterm::event::KeyEventKind;
+use crossterm::terminal::supports_keyboard_enhancement;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::mpsc::Receiver;
-use std::sync::mpsc::channel;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
+use tokio::select;
+use tokio::sync::mpsc::unbounded_channel;
+// use uuid::Uuid;
 
-/// Time window for debouncing redraw requests.
-const REDRAW_DEBOUNCE: Duration = Duration::from_millis(100);
-
-/// Top-level application state: which full-screen view is currently active.
-#[allow(clippy::large_enum_variant)]
-enum AppState<'a> {
-    /// The main chat UI is visible.
-    Chat {
-        /// Boxed to avoid a large enum variant and reduce the overall size of
-        /// `AppState`.
-        widget: Box<ChatWidget<'a>>,
-    },
-    /// The login screen for the OpenAI provider.
-    Login { screen: LoginScreen },
-    /// The start-up warning that recommends running codex inside a Git repo.
-    GitWarning { screen: GitWarningScreen },
-}
-
-pub(crate) struct App<'a> {
-    app_event_tx: AppEventSender,
-    app_event_rx: Receiver<AppEvent>,
-    app_state: AppState<'a>,
+pub(crate) struct App {
+    pub(crate) server: Arc<ConversationManager>,
+    pub(crate) app_event_tx: AppEventSender,
+    pub(crate) chat_widget: ChatWidget,
 
     /// Config is stored here so we can recreate ChatWidgets as needed.
-    config: Config,
+    pub(crate) config: Config,
 
-    file_search: FileSearchManager,
+    pub(crate) file_search: FileSearchManager,
 
-    /// True when a redraw has been scheduled but not yet executed.
-    pending_redraw: Arc<Mutex<bool>>,
+    pub(crate) transcript_lines: Vec<Line<'static>>,
 
-    /// Stored parameters needed to instantiate the ChatWidget later, e.g.,
-    /// after dismissing the Git-repo warning.
-    chat_args: Option<ChatWidgetArgs>,
+    // Pager overlay state (Transcript or Static like Diff)
+    pub(crate) overlay: Option<Overlay>,
+    pub(crate) deferred_history_lines: Vec<Line<'static>>,
+    has_emitted_history_lines: bool,
+
+    pub(crate) enhanced_keys_supported: bool,
+
+    /// Controls the animation thread that sends CommitTick events.
+    pub(crate) commit_anim_running: Arc<AtomicBool>,
+
+    // Esc-backtracking state grouped
+    pub(crate) backtrack: crate::app_backtrack::BacktrackState,
 }
 
-/// Aggregate parameters needed to create a `ChatWidget`, as creation may be
-/// deferred until after the Git warning screen is dismissed.
-#[derive(Clone)]
-struct ChatWidgetArgs {
-    config: Config,
-    initial_prompt: Option<String>,
-    initial_images: Vec<PathBuf>,
-}
-
-impl App<'_> {
-    pub(crate) fn new(
+impl App {
+    pub async fn run(
+        tui: &mut tui::Tui,
+        auth_manager: Arc<AuthManager>,
         config: Config,
         initial_prompt: Option<String>,
-        show_login_screen: bool,
-        show_git_warning: bool,
-        initial_images: Vec<std::path::PathBuf>,
-    ) -> Self {
-        let (app_event_tx, app_event_rx) = channel();
+        initial_images: Vec<PathBuf>,
+        resume_selection: ResumeSelection,
+    ) -> Result<TokenUsage> {
+        use tokio_stream::StreamExt;
+        let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
-        let pending_redraw = Arc::new(Mutex::new(false));
-        let scroll_event_helper = ScrollEventHelper::new(app_event_tx.clone());
 
-        // Spawn a dedicated thread for reading the crossterm event loop and
-        // re-publishing the events as AppEvents, as appropriate.
-        {
-            let app_event_tx = app_event_tx.clone();
-            std::thread::spawn(move || {
-                while let Ok(event) = crossterm::event::read() {
-                    match event {
-                        crossterm::event::Event::Key(key_event) => {
-                            app_event_tx.send(AppEvent::KeyEvent(key_event));
-                        }
-                        crossterm::event::Event::Resize(_, _) => {
-                            app_event_tx.send(AppEvent::RequestRedraw);
-                        }
-                        crossterm::event::Event::Mouse(MouseEvent {
-                            kind: MouseEventKind::ScrollUp,
-                            ..
-                        }) => {
-                            scroll_event_helper.scroll_up();
-                        }
-                        crossterm::event::Event::Mouse(MouseEvent {
-                            kind: MouseEventKind::ScrollDown,
-                            ..
-                        }) => {
-                            scroll_event_helper.scroll_down();
-                        }
-                        crossterm::event::Event::Paste(pasted) => {
-                            app_event_tx.send(AppEvent::Paste(pasted));
-                        }
-                        _ => {
-                            // Ignore any other events.
-                        }
-                    }
-                }
-            });
-        }
+        let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
 
-        let (app_state, chat_args) = if show_login_screen {
-            (
-                AppState::Login {
-                    screen: LoginScreen::new(app_event_tx.clone(), config.codex_home.clone()),
-                },
-                Some(ChatWidgetArgs {
+        let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
+
+        let chat_widget = match resume_selection {
+            ResumeSelection::StartFresh | ResumeSelection::Exit => {
+                let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
-                    initial_prompt,
-                    initial_images,
-                }),
-            )
-        } else if show_git_warning {
-            (
-                AppState::GitWarning {
-                    screen: GitWarningScreen::new(),
-                },
-                Some(ChatWidgetArgs {
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: app_event_tx.clone(),
+                    initial_prompt: initial_prompt.clone(),
+                    initial_images: initial_images.clone(),
+                    enhanced_keys_supported,
+                };
+                ChatWidget::new(init, conversation_manager.clone())
+            }
+            ResumeSelection::Resume(path) => {
+                let resumed = conversation_manager
+                    .resume_conversation_from_rollout(
+                        config.clone(),
+                        path.clone(),
+                        auth_manager.clone(),
+                    )
+                    .await
+                    .wrap_err_with(|| {
+                        format!("Failed to resume session from {}", path.display())
+                    })?;
+                let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
-                    initial_prompt,
-                    initial_images,
-                }),
-            )
-        } else {
-            let chat_widget = ChatWidget::new(
-                config.clone(),
-                app_event_tx.clone(),
-                initial_prompt,
-                initial_images,
-            );
-            (
-                AppState::Chat {
-                    widget: Box::new(chat_widget),
-                },
-                None,
-            )
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: app_event_tx.clone(),
+                    initial_prompt: initial_prompt.clone(),
+                    initial_images: initial_images.clone(),
+                    enhanced_keys_supported,
+                };
+                ChatWidget::new_from_existing(
+                    init,
+                    resumed.conversation,
+                    resumed.session_configured,
+                )
+            }
         };
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
-        Self {
+
+        let mut app = Self {
+            server: conversation_manager,
             app_event_tx,
-            app_event_rx,
-            app_state,
+            chat_widget,
             config,
             file_search,
-            pending_redraw,
-            chat_args,
-        }
-    }
+            enhanced_keys_supported,
+            transcript_lines: Vec::new(),
+            overlay: None,
+            deferred_history_lines: Vec::new(),
+            has_emitted_history_lines: false,
+            commit_anim_running: Arc::new(AtomicBool::new(false)),
+            backtrack: BacktrackState::default(),
+        };
 
-    /// Clone of the internal event sender so external tasks (e.g. log bridge)
-    /// can inject `AppEvent`s.
-    pub fn event_sender(&self) -> AppEventSender {
-        self.app_event_tx.clone()
-    }
+        let tui_events = tui.event_stream();
+        tokio::pin!(tui_events);
 
-    /// Schedule a redraw if one is not already pending.
-    #[allow(clippy::unwrap_used)]
-    fn schedule_redraw(&self) {
-        {
-            #[allow(clippy::unwrap_used)]
-            let mut flag = self.pending_redraw.lock().unwrap();
-            if *flag {
-                return;
+        tui.frame_requester().schedule_frame();
+
+        while select! {
+            Some(event) = app_event_rx.recv() => {
+                app.handle_event(tui, event).await?
             }
-            *flag = true;
-        }
-
-        let tx = self.app_event_tx.clone();
-        let pending_redraw = self.pending_redraw.clone();
-        thread::spawn(move || {
-            thread::sleep(REDRAW_DEBOUNCE);
-            tx.send(AppEvent::Redraw);
-            #[allow(clippy::unwrap_used)]
-            let mut f = pending_redraw.lock().unwrap();
-            *f = false;
-        });
+            Some(event) = tui_events.next() => {
+                app.handle_tui_event(tui, event).await?
+            }
+        } {}
+        tui.terminal.clear()?;
+        Ok(app.token_usage())
     }
 
-    pub(crate) fn run(
+    pub(crate) async fn handle_tui_event(
         &mut self,
-        terminal: &mut tui::Tui,
-        mouse_capture: &mut MouseCapture,
-    ) -> Result<()> {
-        // Insert an event to trigger the first render.
-        let app_event_tx = self.app_event_tx.clone();
-        app_event_tx.send(AppEvent::RequestRedraw);
-
-        while let Ok(event) = self.app_event_rx.recv() {
+        tui: &mut tui::Tui,
+        event: TuiEvent,
+    ) -> Result<bool> {
+        if self.overlay.is_some() {
+            let _ = self.handle_backtrack_overlay_event(tui, event).await?;
+        } else {
             match event {
-                AppEvent::RequestRedraw => {
-                    self.schedule_redraw();
+                TuiEvent::Key(key_event) => {
+                    self.handle_key_event(tui, key_event).await;
                 }
-                AppEvent::Redraw => {
-                    self.draw_next_frame(terminal)?;
+                TuiEvent::Paste(pasted) => {
+                    // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
+                    // but tui-textarea expects \n. Normalize CR to LF.
+                    // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
+                    // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
+                    let pasted = pasted.replace("\r", "\n");
+                    self.chat_widget.handle_paste(pasted);
                 }
-                AppEvent::KeyEvent(key_event) => {
-                    match key_event {
-                        KeyEvent {
-                            code: KeyCode::Char('c'),
-                            modifiers: crossterm::event::KeyModifiers::CONTROL,
-                            ..
-                        } => {
-                            match &mut self.app_state {
-                                AppState::Chat { widget } => {
-                                    if widget.on_ctrl_c() {
-                                        self.app_event_tx.send(AppEvent::ExitRequest);
-                                    }
-                                }
-                                AppState::Login { .. } | AppState::GitWarning { .. } => {
-                                    // No-op.
-                                }
-                            }
-                        }
-                        KeyEvent {
-                            code: KeyCode::Char('d'),
-                            modifiers: crossterm::event::KeyModifiers::CONTROL,
-                            ..
-                        } => {
-                            match &mut self.app_state {
-                                AppState::Chat { widget } => {
-                                    if widget.composer_is_empty() {
-                                        self.app_event_tx.send(AppEvent::ExitRequest);
-                                    } else {
-                                        // Treat Ctrl+D as a normal key event when the composer
-                                        // is not empty so that it doesn't quit the application
-                                        // prematurely.
-                                        self.dispatch_key_event(key_event);
-                                    }
-                                }
-                                AppState::Login { .. } | AppState::GitWarning { .. } => {
-                                    self.app_event_tx.send(AppEvent::ExitRequest);
-                                }
-                            }
-                        }
-                        _ => {
-                            self.dispatch_key_event(key_event);
-                        }
-                    };
-                }
-                AppEvent::Scroll(scroll_delta) => {
-                    self.dispatch_scroll_event(scroll_delta);
-                }
-                AppEvent::Paste(text) => {
-                    self.dispatch_paste_event(text);
-                }
-                AppEvent::CodexEvent(event) => {
-                    self.dispatch_codex_event(event);
-                }
-                AppEvent::ExitRequest => {
-                    break;
-                }
-                AppEvent::CodexOp(op) => match &mut self.app_state {
-                    AppState::Chat { widget } => widget.submit_op(op),
-                    AppState::Login { .. } | AppState::GitWarning { .. } => {}
-                },
-                AppEvent::LatestLog(line) => match &mut self.app_state {
-                    AppState::Chat { widget } => widget.update_latest_log(line),
-                    AppState::Login { .. } | AppState::GitWarning { .. } => {}
-                },
-                AppEvent::DispatchCommand(command) => match command {
-                    SlashCommand::New => {
-                        let new_widget = Box::new(ChatWidget::new(
-                            self.config.clone(),
-                            self.app_event_tx.clone(),
-                            None,
-                            Vec::new(),
-                        ));
-                        self.app_state = AppState::Chat { widget: new_widget };
-                        self.app_event_tx.send(AppEvent::RequestRedraw);
+                TuiEvent::Draw => {
+                    if self
+                        .chat_widget
+                        .handle_paste_burst_tick(tui.frame_requester())
+                    {
+                        return Ok(true);
                     }
-                    SlashCommand::ToggleMouseMode => {
-                        if let Err(e) = mouse_capture.toggle() {
-                            tracing::error!("Failed to toggle mouse mode: {e}");
-                        }
-                    }
-                    SlashCommand::Quit => {
-                        break;
-                    }
-                    SlashCommand::Diff => {
-                        let (is_git_repo, diff_text) = match get_git_diff() {
-                            Ok(v) => v,
-                            Err(e) => {
-                                let msg = format!("Failed to compute diff: {e}");
-                                if let AppState::Chat { widget } = &mut self.app_state {
-                                    widget.add_diff_output(msg);
-                                }
-                                continue;
+                    tui.draw(
+                        self.chat_widget.desired_height(tui.terminal.size()?.width),
+                        |frame| {
+                            frame.render_widget_ref(&self.chat_widget, frame.area());
+                            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                                frame.set_cursor_position((x, y));
                             }
-                        };
+                        },
+                    )?;
+                }
+            }
+        }
+        Ok(true)
+    }
 
-                        if let AppState::Chat { widget } = &mut self.app_state {
-                            let text = if is_git_repo {
-                                diff_text
-                            } else {
-                                "`/diff` — _not inside a git repository_".to_string()
-                            };
-                            widget.add_diff_output(text);
+    async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
+        match event {
+            AppEvent::NewSession => {
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: self.config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: self.app_event_tx.clone(),
+                    initial_prompt: None,
+                    initial_images: Vec::new(),
+                    enhanced_keys_supported: self.enhanced_keys_supported,
+                };
+                self.chat_widget = ChatWidget::new(init, self.server.clone());
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::InsertHistoryCell(cell) => {
+                let mut cell_transcript = cell.transcript_lines();
+                if !cell.is_stream_continuation() && !self.transcript_lines.is_empty() {
+                    cell_transcript.insert(0, Line::from(""));
+                }
+                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+                    t.insert_lines(cell_transcript.clone());
+                    tui.frame_requester().schedule_frame();
+                }
+                self.transcript_lines.extend(cell_transcript.clone());
+                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+                if !display.is_empty() {
+                    // Only insert a separating blank line for new cells that are not
+                    // part of an ongoing stream. Streaming continuations should not
+                    // accrue extra blank lines between chunks.
+                    if !cell.is_stream_continuation() {
+                        if self.has_emitted_history_lines {
+                            display.insert(0, Line::from(""));
+                        } else {
+                            self.has_emitted_history_lines = true;
                         }
                     }
-                },
-                AppEvent::StartFileSearch(query) => {
+                    if self.overlay.is_some() {
+                        self.deferred_history_lines.extend(display);
+                    } else {
+                        tui.insert_history_lines(display);
+                    }
+                }
+            }
+            AppEvent::StartCommitAnimation => {
+                if self
+                    .commit_anim_running
+                    .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    let tx = self.app_event_tx.clone();
+                    let running = self.commit_anim_running.clone();
+                    thread::spawn(move || {
+                        while running.load(Ordering::Relaxed) {
+                            thread::sleep(Duration::from_millis(50));
+                            tx.send(AppEvent::CommitTick);
+                        }
+                    });
+                }
+            }
+            AppEvent::StopCommitAnimation => {
+                self.commit_anim_running.store(false, Ordering::Release);
+            }
+            AppEvent::CommitTick => {
+                self.chat_widget.on_commit_tick();
+            }
+            AppEvent::CodexEvent(event) => {
+                self.chat_widget.handle_codex_event(event);
+            }
+            AppEvent::ConversationHistory(ev) => {
+                self.on_conversation_history_for_backtrack(tui, ev).await?;
+            }
+            AppEvent::ExitRequest => {
+                return Ok(false);
+            }
+            AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
+            AppEvent::DiffResult(text) => {
+                // Clear the in-progress state in the bottom pane
+                self.chat_widget.on_diff_complete();
+                // Enter alternate screen using TUI helper and build pager lines
+                let _ = tui.enter_alt_screen();
+                let pager_lines: Vec<ratatui::text::Line<'static>> = if text.trim().is_empty() {
+                    vec!["No changes detected.".italic().into()]
+                } else {
+                    text.lines().map(ansi_escape_line).collect()
+                };
+                self.overlay = Some(Overlay::new_static_with_title(
+                    pager_lines,
+                    "D I F F".to_string(),
+                ));
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::StartFileSearch(query) => {
+                if !query.is_empty() {
                     self.file_search.on_user_query(query);
                 }
-                AppEvent::FileSearchResult { query, matches } => {
-                    if let AppState::Chat { widget } = &mut self.app_state {
-                        widget.apply_file_search_result(query, matches);
-                    }
+            }
+            AppEvent::FileSearchResult { query, matches } => {
+                self.chat_widget.apply_file_search_result(query, matches);
+            }
+            AppEvent::UpdateReasoningEffort(effort) => {
+                self.chat_widget.set_reasoning_effort(effort);
+            }
+            AppEvent::UpdateModel(model) => {
+                self.chat_widget.set_model(model);
+            }
+            AppEvent::UpdateAskForApprovalPolicy(policy) => {
+                self.chat_widget.set_approval_policy(policy);
+            }
+            AppEvent::UpdateSandboxPolicy(policy) => {
+                self.chat_widget.set_sandbox_policy(policy);
+            }
+        }
+        Ok(true)
+    }
+
+    pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
+        self.chat_widget.token_usage().clone()
+    }
+
+    async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Char('t'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                // Enter alternate screen and set viewport to full size.
+                let _ = tui.enter_alt_screen();
+                self.overlay = Some(Overlay::new_transcript(self.transcript_lines.clone()));
+                tui.frame_requester().schedule_frame();
+            }
+            // Esc primes/advances backtracking only in normal (not working) mode
+            // with an empty composer. In any other state, forward Esc so the
+            // active UI (e.g. status indicator, modals, popups) handles it.
+            KeyEvent {
+                code: KeyCode::Esc,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                if self.chat_widget.is_normal_backtrack_mode()
+                    && self.chat_widget.composer_is_empty()
+                {
+                    self.handle_backtrack_esc_key(tui);
+                } else {
+                    self.chat_widget.handle_key_event(key_event);
                 }
             }
-        }
-        terminal.clear()?;
-
-        Ok(())
-    }
-
-    fn draw_next_frame(&mut self, terminal: &mut tui::Tui) -> Result<()> {
-        // TODO: add a throttle to avoid redrawing too often
-
-        match &mut self.app_state {
-            AppState::Chat { widget } => {
-                terminal.draw(|frame| frame.render_widget_ref(&**widget, frame.area()))?;
+            // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
+            KeyEvent {
+                code: KeyCode::Enter,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.backtrack.primed
+                && self.backtrack.count > 0
+                && self.chat_widget.composer_is_empty() =>
+            {
+                // Delegate to helper for clarity; preserves behavior.
+                self.confirm_backtrack_from_main();
             }
-            AppState::Login { screen } => {
-                terminal.draw(|frame| frame.render_widget_ref(&*screen, frame.area()))?;
-            }
-            AppState::GitWarning { screen } => {
-                terminal.draw(|frame| frame.render_widget_ref(&*screen, frame.area()))?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Dispatch a KeyEvent to the current view and let it decide what to do
-    /// with it.
-    fn dispatch_key_event(&mut self, key_event: KeyEvent) {
-        match &mut self.app_state {
-            AppState::Chat { widget } => {
-                widget.handle_key_event(key_event);
-            }
-            AppState::Login { screen } => screen.handle_key_event(key_event),
-            AppState::GitWarning { screen } => match screen.handle_key_event(key_event) {
-                GitWarningOutcome::Continue => {
-                    // User accepted – switch to chat view.
-                    let args = match self.chat_args.take() {
-                        Some(args) => args,
-                        None => panic!("ChatWidgetArgs already consumed"),
-                    };
-
-                    let widget = Box::new(ChatWidget::new(
-                        args.config,
-                        self.app_event_tx.clone(),
-                        args.initial_prompt,
-                        args.initial_images,
-                    ));
-                    self.app_state = AppState::Chat { widget };
-                    self.app_event_tx.send(AppEvent::RequestRedraw);
+            KeyEvent {
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                // Any non-Esc key press should cancel a primed backtrack.
+                // This avoids stale "Esc-primed" state after the user starts typing
+                // (even if they later backspace to empty).
+                if key_event.code != KeyCode::Esc && self.backtrack.primed {
+                    self.reset_backtrack_state();
                 }
-                GitWarningOutcome::Quit => {
-                    self.app_event_tx.send(AppEvent::ExitRequest);
-                }
-                GitWarningOutcome::None => {
-                    // do nothing
-                }
-            },
-        }
-    }
-
-    fn dispatch_paste_event(&mut self, pasted: String) {
-        match &mut self.app_state {
-            AppState::Chat { widget } => widget.handle_paste(pasted),
-            AppState::Login { .. } | AppState::GitWarning { .. } => {}
-        }
-    }
-
-    fn dispatch_scroll_event(&mut self, scroll_delta: i32) {
-        match &mut self.app_state {
-            AppState::Chat { widget } => widget.handle_scroll_delta(scroll_delta),
-            AppState::Login { .. } | AppState::GitWarning { .. } => {}
-        }
-    }
-
-    fn dispatch_codex_event(&mut self, event: Event) {
-        match &mut self.app_state {
-            AppState::Chat { widget } => widget.handle_codex_event(event),
-            AppState::Login { .. } | AppState::GitWarning { .. } => {}
-        }
+                self.chat_widget.handle_key_event(key_event);
+            }
+            _ => {
+                // Ignore Release key events.
+            }
+        };
     }
 }

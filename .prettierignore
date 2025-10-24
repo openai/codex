@@ -1,3 +1,7 @@
 /codex-cli/dist
 /codex-cli/node_modules
 pnpm-lock.yaml
+
+prompt.md
+*_prompt.md
+*_instructions.md

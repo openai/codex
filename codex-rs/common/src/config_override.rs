@@ -64,7 +64,11 @@ impl CliConfigOverrides {
                 // `-c model=o3` without the quotes.
                 let value: Value = match parse_toml_value(value_str) {
                     Ok(v) => v,
-                    Err(_) => Value::String(value_str.to_string()),
+                    Err(_) => {
+                        // Strip leading/trailing quotes if present
+                        let trimmed = value_str.trim().trim_matches(|c| c == '"' || c == '\'');
+                        Value::String(trimmed.to_string())
+                    }
                 };
 
                 Ok((key.to_string(), value))
@@ -138,7 +142,6 @@ fn parse_toml_value(raw: &str) -> Result<Value, toml::de::Error> {
 }
 
 #[cfg(all(test, feature = "cli"))]
-#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 

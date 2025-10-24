@@ -5,17 +5,22 @@
 //!   2. User-defined entries inside `~/.codex/config.toml` under the `model_providers`
 //!      key. These override or extend the defaults at runtime.
 
+use crate::CodexAuth;
+use codex_protocol::mcp_protocol::AuthMode;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::env::VarError;
+use std::time::Duration;
 
 use crate::error::EnvVarError;
-use crate::openai_api_key::get_openai_api_key;
-
-/// Value for the `OpenAI-Originator` header that is sent with requests to
-/// OpenAI.
-const OPENAI_ORIGINATOR_HEADER: &str = "codex_cli_rs";
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
+const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
+const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
+/// Hard cap for user-configured `stream_max_retries`.
+const MAX_STREAM_MAX_RETRIES: u64 = 100;
+/// Hard cap for user-configured `request_max_retries`.
+const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 
 /// Wire protocol that the provider speaks. Most third-party services only
 /// implement the classic OpenAI Chat Completions JSON schema, whereas OpenAI
@@ -26,7 +31,7 @@ const OPENAI_ORIGINATOR_HEADER: &str = "codex_cli_rs";
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WireApi {
-    /// The experimental “Responses” API exposed by OpenAI at `/v1/responses`.
+    /// The Responses API exposed by OpenAI at `/v1/responses`.
     Responses,
 
     /// Regular Chat Completions compatible with `/v1/chat/completions`.
@@ -40,7 +45,7 @@ pub struct ModelProviderInfo {
     /// Friendly display name.
     pub name: String,
     /// Base URL for the provider's OpenAI-compatible API.
-    pub base_url: String,
+    pub base_url: Option<String>,
     /// Environment variable that stores the user's API key for this provider.
     pub env_key: Option<String>,
 
@@ -64,6 +69,20 @@ pub struct ModelProviderInfo {
     /// value should be used. If the environment variable is not set, or the
     /// value is empty, the header will not be included in the request.
     pub env_http_headers: Option<HashMap<String, String>>,
+
+    /// Maximum number of times to retry a failed HTTP request to this provider.
+    pub request_max_retries: Option<u64>,
+
+    /// Number of times to retry reconnecting a dropped streaming response before failing.
+    pub stream_max_retries: Option<u64>,
+
+    /// Idle timeout (in milliseconds) to wait for activity on a streaming response before treating
+    /// the connection as lost.
+    pub stream_idle_timeout_ms: Option<u64>,
+
+    /// Whether this provider requires some form of standard authentication (API key, ChatGPT token).
+    #[serde(default)]
+    pub requires_openai_auth: bool,
 }
 
 impl ModelProviderInfo {
@@ -71,29 +90,40 @@ impl ModelProviderInfo {
     /// reqwest Client applying:
     ///   • provider-specific headers (static + env based)
     ///   • Bearer auth header when an API key is available.
+    ///   • Auth token for OAuth.
     ///
-    /// When `require_api_key` is true and the provider declares an `env_key`
-    /// but the variable is missing/empty, returns an [`Err`] identical to the
+    /// If the provider declares an `env_key` but the variable is missing/empty, returns an [`Err`] identical to the
     /// one produced by [`ModelProviderInfo::api_key`].
-    pub fn create_request_builder<'a>(
+    pub async fn create_request_builder<'a>(
         &'a self,
         client: &'a reqwest::Client,
+        auth: &Option<CodexAuth>,
     ) -> crate::error::Result<reqwest::RequestBuilder> {
-        let api_key = self.api_key()?;
+        let effective_auth = match self.api_key() {
+            Ok(Some(key)) => Some(CodexAuth::from_api_key(&key)),
+            Ok(None) => auth.clone(),
+            Err(err) => {
+                if auth.is_some() {
+                    auth.clone()
+                } else {
+                    return Err(err);
+                }
+            }
+        };
 
-        let url = self.get_full_url();
+        let url = self.get_full_url(&effective_auth);
 
         let mut builder = client.post(url);
-        if let Some(key) = api_key {
-            builder = builder.bearer_auth(key);
+
+        if let Some(auth) = effective_auth.as_ref() {
+            builder = builder.bearer_auth(auth.get_token().await?);
         }
 
         Ok(self.apply_http_headers(builder))
     }
 
-    pub(crate) fn get_full_url(&self) -> String {
-        let query_string = self
-            .query_params
+    fn get_query_string(&self) -> String {
+        self.query_params
             .as_ref()
             .map_or_else(String::new, |params| {
                 let full_params = params
@@ -102,8 +132,27 @@ impl ModelProviderInfo {
                     .collect::<Vec<_>>()
                     .join("&");
                 format!("?{full_params}")
-            });
-        let base_url = &self.base_url;
+            })
+    }
+
+    pub(crate) fn get_full_url(&self, auth: &Option<CodexAuth>) -> String {
+        let default_base_url = if matches!(
+            auth,
+            Some(CodexAuth {
+                mode: AuthMode::ChatGPT,
+                ..
+            })
+        ) {
+            "https://chatgpt.com/backend-api/codex"
+        } else {
+            "https://api.openai.com/v1"
+        };
+        let query_string = self.get_query_string();
+        let base_url = self
+            .base_url
+            .clone()
+            .unwrap_or(default_base_url.to_string());
+
         match self.wire_api {
             WireApi::Responses => format!("{base_url}/responses{query_string}"),
             WireApi::Chat => format!("{base_url}/chat/completions{query_string}"),
@@ -122,10 +171,10 @@ impl ModelProviderInfo {
 
         if let Some(env_headers) = &self.env_http_headers {
             for (header, env_var) in env_headers {
-                if let Ok(val) = std::env::var(env_var) {
-                    if !val.trim().is_empty() {
-                        builder = builder.header(header, val);
-                    }
+                if let Ok(val) = std::env::var(env_var)
+                    && !val.trim().is_empty()
+                {
+                    builder = builder.header(header, val);
                 }
             }
         }
@@ -135,14 +184,10 @@ impl ModelProviderInfo {
     /// If `env_key` is Some, returns the API key for this provider if present
     /// (and non-empty) in the environment. If `env_key` is required but
     /// cannot be found, returns an error.
-    fn api_key(&self) -> crate::error::Result<Option<String>> {
+    pub fn api_key(&self) -> crate::error::Result<Option<String>> {
         match &self.env_key {
             Some(env_key) => {
-                let env_value = if env_key == crate::openai_api_key::OPENAI_API_KEY_ENV_VAR {
-                    get_openai_api_key().map_or_else(|| Err(VarError::NotPresent), Ok)
-                } else {
-                    std::env::var(env_key)
-                };
+                let env_value = std::env::var(env_key);
                 env_value
                     .and_then(|v| {
                         if v.trim().is_empty() {
@@ -161,16 +206,41 @@ impl ModelProviderInfo {
             None => Ok(None),
         }
     }
+
+    /// Effective maximum number of request retries for this provider.
+    pub fn request_max_retries(&self) -> u64 {
+        self.request_max_retries
+            .unwrap_or(DEFAULT_REQUEST_MAX_RETRIES)
+            .min(MAX_REQUEST_MAX_RETRIES)
+    }
+
+    /// Effective maximum number of stream reconnection attempts for this provider.
+    pub fn stream_max_retries(&self) -> u64 {
+        self.stream_max_retries
+            .unwrap_or(DEFAULT_STREAM_MAX_RETRIES)
+            .min(MAX_STREAM_MAX_RETRIES)
+    }
+
+    /// Effective idle timeout for streaming responses.
+    pub fn stream_idle_timeout(&self) -> Duration {
+        self.stream_idle_timeout_ms
+            .map(Duration::from_millis)
+            .unwrap_or(Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS))
+    }
 }
+
+const DEFAULT_OLLAMA_PORT: u32 = 11434;
+
+pub const BUILT_IN_OSS_MODEL_PROVIDER_ID: &str = "oss";
 
 /// Built-in default provider list.
 pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
     use ModelProviderInfo as P;
 
     // We do not want to be in the business of adjucating which third-party
-    // providers are bundled with Codex CLI, so we only include the OpenAI
-    // provider by default. Users are encouraged to add to `model_providers`
-    // in config.toml to add their own providers.
+    // providers are bundled with Codex CLI, so we only include the OpenAI and
+    // open source ("oss") providers by default. Users are encouraged to add to
+    // `model_providers` in config.toml to add their own providers.
     [
         (
             "openai",
@@ -183,39 +253,81 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 // OpenAI provider.
                 base_url: std::env::var("OPENAI_BASE_URL")
                     .ok()
-                    .filter(|v| !v.trim().is_empty())
-                    .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
-                env_key: Some("OPENAI_API_KEY".into()),
-                env_key_instructions: Some("Create an API key (https://platform.openai.com) and export it as an environment variable.".into()),
+                    .filter(|v| !v.trim().is_empty()),
+                env_key: None,
+                env_key_instructions: None,
                 wire_api: WireApi::Responses,
                 query_params: None,
                 http_headers: Some(
-                    [
-                        ("originator".to_string(), OPENAI_ORIGINATOR_HEADER.to_string()),
-                        ("version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
-                    ]
+                    [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
                         .into_iter()
                         .collect(),
                 ),
                 env_http_headers: Some(
                     [
-                        ("OpenAI-Organization".to_string(), "OPENAI_ORGANIZATION".to_string()),
+                        (
+                            "OpenAI-Organization".to_string(),
+                            "OPENAI_ORGANIZATION".to_string(),
+                        ),
                         ("OpenAI-Project".to_string(), "OPENAI_PROJECT".to_string()),
                     ]
-                        .into_iter()
-                        .collect(),
+                    .into_iter()
+                    .collect(),
                 ),
+                // Use global defaults for retry/timeout unless overridden in config.toml.
+                request_max_retries: None,
+                stream_max_retries: None,
+                stream_idle_timeout_ms: None,
+                requires_openai_auth: true,
             },
         ),
+        (BUILT_IN_OSS_MODEL_PROVIDER_ID, create_oss_provider()),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect()
 }
 
+pub fn create_oss_provider() -> ModelProviderInfo {
+    // These CODEX_OSS_ environment variables are experimental: we may
+    // switch to reading values from config.toml instead.
+    let codex_oss_base_url = match std::env::var("CODEX_OSS_BASE_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    {
+        Some(url) => url,
+        None => format!(
+            "http://localhost:{port}/v1",
+            port = std::env::var("CODEX_OSS_PORT")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(DEFAULT_OLLAMA_PORT)
+        ),
+    };
+
+    create_oss_provider_with_base_url(&codex_oss_base_url)
+}
+
+pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
+    ModelProviderInfo {
+        name: "gpt-oss".into(),
+        base_url: Some(base_url.into()),
+        env_key: None,
+        env_key_instructions: None,
+        wire_api: WireApi::Chat,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        requires_openai_auth: false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
     use pretty_assertions::assert_eq;
 
@@ -227,13 +339,17 @@ base_url = "http://localhost:11434/v1"
         "#;
         let expected_provider = ModelProviderInfo {
             name: "Ollama".into(),
-            base_url: "http://localhost:11434/v1".into(),
+            base_url: Some("http://localhost:11434/v1".into()),
             env_key: None,
             env_key_instructions: None,
             wire_api: WireApi::Chat,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -250,7 +366,7 @@ query_params = { api-version = "2025-04-01-preview" }
         "#;
         let expected_provider = ModelProviderInfo {
             name: "Azure".into(),
-            base_url: "https://xxxxx.openai.azure.com/openai".into(),
+            base_url: Some("https://xxxxx.openai.azure.com/openai".into()),
             env_key: Some("AZURE_OPENAI_API_KEY".into()),
             env_key_instructions: None,
             wire_api: WireApi::Chat,
@@ -259,6 +375,10 @@ query_params = { api-version = "2025-04-01-preview" }
             }),
             http_headers: None,
             env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -276,7 +396,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         "#;
         let expected_provider = ModelProviderInfo {
             name: "Example".into(),
-            base_url: "https://example.com".into(),
+            base_url: Some("https://example.com".into()),
             env_key: Some("API_KEY".into()),
             env_key_instructions: None,
             wire_api: WireApi::Chat,
@@ -287,6 +407,10 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             env_http_headers: Some(maplit::hashmap! {
                 "X-Example-Env-Header".to_string() => "EXAMPLE_ENV_VAR".to_string(),
             }),
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();

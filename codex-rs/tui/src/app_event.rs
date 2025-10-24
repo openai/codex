@@ -1,27 +1,20 @@
+use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
-use crossterm::event::KeyEvent;
 
-use crate::slash_command::SlashCommand;
+use crate::history_cell::HistoryCell;
+
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::SandboxPolicy;
+use codex_core::protocol_config_types::ReasoningEffort;
 
 #[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
 
-    /// Request a redraw which will be debounced by the [`App`].
-    RequestRedraw,
-
-    /// Actually draw the next frame.
-    Redraw,
-
-    KeyEvent(KeyEvent),
-
-    /// Text pasted from the terminal clipboard.
-    Paste(String),
-
-    /// Scroll event with a value representing the "scroll delta" as the net
-    /// scroll up/down events within a short time window.
-    Scroll(i32),
+    /// Start a new session.
+    NewSession,
 
     /// Request to exit the application gracefully.
     ExitRequest,
@@ -29,13 +22,6 @@ pub(crate) enum AppEvent {
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(codex_core::protocol::Op),
-
-    /// Latest formatted log line emitted by `tracing`.
-    LatestLog(String),
-
-    /// Dispatch a recognized slash command from the UI (composer) to the app
-    /// layer so it can be handled centrally.
-    DispatchCommand(SlashCommand),
 
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there
@@ -49,4 +35,28 @@ pub(crate) enum AppEvent {
         query: String,
         matches: Vec<FileMatch>,
     },
+
+    /// Result of computing a `/diff` command.
+    DiffResult(String),
+
+    InsertHistoryCell(Box<dyn HistoryCell>),
+
+    StartCommitAnimation,
+    StopCommitAnimation,
+    CommitTick,
+
+    /// Update the current reasoning effort in the running app and widget.
+    UpdateReasoningEffort(ReasoningEffort),
+
+    /// Update the current model slug in the running app and widget.
+    UpdateModel(String),
+
+    /// Update the current approval policy in the running app and widget.
+    UpdateAskForApprovalPolicy(AskForApproval),
+
+    /// Update the current sandbox policy in the running app and widget.
+    UpdateSandboxPolicy(SandboxPolicy),
+
+    /// Forwarded conversation history snapshot from the current conversation.
+    ConversationHistory(ConversationPathResponseEvent),
 }
