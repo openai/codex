@@ -12,6 +12,7 @@ use std::time::Instant;
 use async_channel::Sender;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
 
@@ -54,6 +55,7 @@ pub struct ExecParams {
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
     pub disable_timeout: bool,
+    pub passthrough_stdio: bool,
 }
 
 impl ExecParams {
@@ -97,10 +99,19 @@ pub async fn process_exec_tool_call(
     let start = Instant::now();
 
     let timeout_duration = params.timeout_duration();
+    let passthrough_stdio = params.passthrough_stdio;
 
     let raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr> = match sandbox_type
     {
-        SandboxType::None => exec(params, sandbox_policy, stdout_stream.clone()).await,
+        SandboxType::None => {
+            exec(
+                params,
+                sandbox_policy,
+                passthrough_stdio,
+                stdout_stream.clone(),
+            )
+            .await
+        }
         SandboxType::MacosSeatbelt => {
             let ExecParams {
                 command,
@@ -117,7 +128,13 @@ pub async fn process_exec_tool_call(
                 env,
             )
             .await?;
-            consume_truncated_output(child, timeout_duration, stdout_stream.clone()).await
+            consume_truncated_output(
+                child,
+                timeout_duration,
+                stdout_stream.clone(),
+                passthrough_stdio,
+            )
+            .await
         }
         SandboxType::LinuxSeccomp => {
             let ExecParams {
@@ -141,7 +158,8 @@ pub async fn process_exec_tool_call(
             )
             .await?;
 
-            consume_truncated_output(child, timeout_duration, stdout_stream).await
+            consume_truncated_output(child, timeout_duration, stdout_stream, passthrough_stdio)
+                .await
         }
     };
     let duration = start.elapsed();
@@ -305,6 +323,7 @@ pub struct ExecToolCallOutput {
 async fn exec(
     params: ExecParams,
     sandbox_policy: &SandboxPolicy,
+    passthrough_stdio: bool,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<RawExecToolCallOutput> {
     let timeout = params.timeout_duration();
@@ -325,11 +344,19 @@ async fn exec(
         arg0,
         cwd,
         sandbox_policy,
-        StdioPolicy::RedirectForShellTool,
+        if passthrough_stdio {
+            StdioPolicy::Inherit
+        } else {
+            StdioPolicy::RedirectForShellTool
+        },
         env,
     )
     .await?;
-    consume_truncated_output(child, timeout, stdout_stream).await
+    if passthrough_stdio {
+        consume_passthrough_output(child, timeout).await
+    } else {
+        consume_truncated_output(child, timeout, stdout_stream, false).await
+    }
 }
 
 /// Consumes the output of a child process, truncating it so it is suitable for
@@ -338,6 +365,7 @@ async fn consume_truncated_output(
     mut child: Child,
     timeout: Option<Duration>,
     stdout_stream: Option<StdoutStream>,
+    passthrough_stdio: bool,
 ) -> Result<RawExecToolCallOutput> {
     // Both stdout and stderr were configured with `Stdio::piped()`
     // above, therefore `take()` should normally return `Some`.  If it doesn't
@@ -360,12 +388,14 @@ async fn consume_truncated_output(
         BufReader::new(stdout_reader),
         stdout_stream.clone(),
         false,
+        passthrough_stdio,
         Some(agg_tx.clone()),
     ));
     let stderr_handle = tokio::spawn(read_capped(
         BufReader::new(stderr_reader),
         stdout_stream.clone(),
         true,
+        passthrough_stdio,
         Some(agg_tx.clone()),
     ));
 
@@ -430,10 +460,71 @@ async fn consume_truncated_output(
     })
 }
 
+async fn consume_passthrough_output(
+    mut child: Child,
+    timeout: Option<Duration>,
+) -> Result<RawExecToolCallOutput> {
+    let ctrl_c = tokio::signal::ctrl_c();
+    tokio::pin!(ctrl_c);
+
+    let (exit_status, timed_out) = match timeout {
+        Some(timeout) => {
+            tokio::select! {
+                result = tokio::time::timeout(timeout, child.wait()) => {
+                    match result {
+                        Ok(status_result) => {
+                            let exit_status = status_result?;
+                            (exit_status, false)
+                        }
+                        Err(_) => {
+                            child.start_kill()?;
+                            (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true)
+                        }
+                    }
+                }
+                _ = &mut ctrl_c => {
+                    child.start_kill()?;
+                    (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
+                }
+            }
+        }
+        None => {
+            tokio::select! {
+                result = child.wait() => {
+                    let exit_status = result?;
+                    (exit_status, false)
+                }
+                _ = &mut ctrl_c => {
+                    child.start_kill()?;
+                    (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
+                }
+            }
+        }
+    };
+
+    Ok(RawExecToolCallOutput {
+        exit_status,
+        stdout: StreamOutput {
+            text: Vec::new(),
+            truncated_after_lines: None,
+        },
+        stderr: StreamOutput {
+            text: Vec::new(),
+            truncated_after_lines: None,
+        },
+        aggregated_output: StreamOutput {
+            text: Vec::new(),
+            truncated_after_lines: None,
+        },
+        timed_out,
+    })
+}
+
 async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
     mut reader: R,
     stream: Option<StdoutStream>,
     is_stderr: bool,
+    passthrough_stdio: bool,
     aggregate_tx: Option<Sender<Vec<u8>>>,
 ) -> io::Result<StreamOutput<Vec<u8>>> {
     let mut buf = Vec::with_capacity(AGGREGATE_BUFFER_INITIAL_CAPACITY);
@@ -449,7 +540,7 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
         }
 
         if let Some(stream) = &stream
-            && emitted_deltas < MAX_EXEC_OUTPUT_DELTAS_PER_CALL
+            && (passthrough_stdio || emitted_deltas < MAX_EXEC_OUTPUT_DELTAS_PER_CALL)
         {
             let chunk = tmp[..n].to_vec();
             let msg = EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
@@ -467,7 +558,9 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
             };
             #[allow(clippy::let_unit_value)]
             let _ = stream.tx_event.send(event).await;
-            emitted_deltas += 1;
+            if !passthrough_stdio {
+                emitted_deltas += 1;
+            }
         }
 
         if let Some(tx) = &aggregate_tx {
@@ -475,6 +568,18 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
         }
 
         append_all(&mut buf, &tmp[..n]);
+
+        if passthrough_stdio {
+            if is_stderr {
+                let mut stderr = tokio::io::stderr();
+                stderr.write_all(&tmp[..n]).await?;
+                stderr.flush().await?;
+            } else {
+                let mut stdout = tokio::io::stdout();
+                stdout.write_all(&tmp[..n]).await?;
+                stdout.flush().await?;
+            }
+        }
         // Continue reading to EOF to avoid back-pressure
     }
 

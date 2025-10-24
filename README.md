@@ -1,15 +1,10 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install codex</code></p>
+Codex but with a --yolo3 command to avoid timeouts and sandboxing 
 
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
-</br>
-</br>If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE</a>
-</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a></p>
-
-<p align="center">
-  <img src="./.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
-  </p>
-
----
+```
+cargo build --release -p codex-cli
+./codex-rs/target/release/codex --yolo3
+also the --auto-next-steps and --auto-next-idea args together make it fully autonomous
+```
 
 ## Quickstart
 

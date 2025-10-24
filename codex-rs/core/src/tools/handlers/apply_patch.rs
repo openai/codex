@@ -73,6 +73,7 @@ impl ToolHandler for ApplyPatchHandler {
             with_escalated_permissions: None,
             justification: None,
             disable_timeout: turn.disable_command_timeouts,
+            passthrough_stdio: turn.passthrough_shell_stdio,
         };
 
         let content = handle_container_exec_with_params(

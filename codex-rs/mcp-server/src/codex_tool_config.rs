@@ -166,6 +166,9 @@ impl CodexToolCallParam {
             tools_web_search_request: None,
             disable_command_timeouts: None,
             passthrough_shell_environment: None,
+            passthrough_shell_stdio: None,
+            auto_next_steps: None,
+            auto_next_idea: None,
         };
 
         let cli_overrides = cli_overrides

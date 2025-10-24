@@ -127,9 +127,13 @@ pub async fn run_main(
 ) -> std::io::Result<AppExitInfo> {
     let dangerously_disable_timeouts = cli.dangerously_disable_timeouts;
     let dangerously_disable_environment_wrapping = cli.dangerously_disable_environment_wrapping;
+    let dangerously_passthrough_stdio = cli.dangerously_passthrough_stdio;
+    let auto_next_steps = cli.auto_next_steps;
+    let auto_next_idea = cli.auto_next_idea;
     let dangerously_bypass = cli.dangerously_bypass_approvals_and_sandbox
         || dangerously_disable_timeouts
-        || dangerously_disable_environment_wrapping;
+        || dangerously_disable_environment_wrapping
+        || dangerously_passthrough_stdio;
 
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
@@ -184,9 +188,15 @@ pub async fn run_main(
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: cli.web_search.then_some(true),
         disable_command_timeouts: (dangerously_disable_timeouts
-            || dangerously_disable_environment_wrapping)
+            || dangerously_disable_environment_wrapping
+            || dangerously_passthrough_stdio)
             .then_some(true),
-        passthrough_shell_environment: dangerously_disable_environment_wrapping.then_some(true),
+        passthrough_shell_environment: (dangerously_disable_environment_wrapping
+            || dangerously_passthrough_stdio)
+            .then_some(true),
+        passthrough_shell_stdio: dangerously_passthrough_stdio.then_some(true),
+        auto_next_steps: auto_next_steps.then_some(true),
+        auto_next_idea: auto_next_idea.then_some(true),
     };
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
     let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };

@@ -32,6 +32,7 @@ pub(crate) struct ExecutorConfig {
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) sandbox_cwd: PathBuf,
     pub(crate) codex_exe: Option<PathBuf>,
+    pub(crate) prefer_platform_sandbox: bool,
 }
 
 impl ExecutorConfig {
@@ -39,11 +40,13 @@ impl ExecutorConfig {
         sandbox_policy: SandboxPolicy,
         sandbox_cwd: PathBuf,
         codex_exe: Option<PathBuf>,
+        prefer_platform_sandbox: bool,
     ) -> Self {
         Self {
             sandbox_policy,
             sandbox_cwd,
             codex_exe,
+            prefer_platform_sandbox,
         }
     }
 }
@@ -154,7 +157,8 @@ impl Executor {
                     )
                     .await
                 } else {
-                    let message = sandbox_failure_message(error);
+                    let message =
+                        sandbox_failure_message(error, sandbox_decision.initial_sandbox);
                     Err(ExecError::rejection(message))
                 }
             }
@@ -259,10 +263,13 @@ fn maybe_translate_shell_command(
     params
 }
 
-fn sandbox_failure_message(error: SandboxErr) -> String {
+fn sandbox_failure_message(error: SandboxErr, sandbox: SandboxType) -> String {
     let codex_error = CodexErr::Sandbox(error);
     let friendly = get_error_message_ui(&codex_error);
-    format!("failed in sandbox: {friendly}")
+    match sandbox {
+        SandboxType::None => friendly,
+        _ => format!("failed in sandbox: {friendly}"),
+    }
 }
 
 pub(crate) struct ExecutionRequest {
@@ -334,6 +341,7 @@ mod tests {
     use crate::error::CodexErr;
     use crate::error::EnvVarError;
     use crate::error::SandboxErr;
+    use crate::exec::SandboxType;
     use crate::exec::StreamOutput;
     use pretty_assertions::assert_eq;
 
@@ -383,7 +391,7 @@ mod tests {
         let err = SandboxErr::Denied {
             output: Box::new(output),
         };
-        let message = sandbox_failure_message(err);
+        let message = sandbox_failure_message(err, SandboxType::LinuxSeccomp);
         assert_eq!(message, "failed in sandbox: sandbox stderr");
     }
 
@@ -400,8 +408,25 @@ mod tests {
         let err = SandboxErr::Denied {
             output: Box::new(output),
         };
-        let message = sandbox_failure_message(err);
+        let message = sandbox_failure_message(err, SandboxType::LinuxSeccomp);
         assert_eq!(message, "failed in sandbox: aggregate text");
+    }
+
+    #[test]
+    fn sandbox_failure_message_without_sandbox_uses_plain_message() {
+        let output = ExecToolCallOutput {
+            exit_code: 101,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new("aggregate text".to_string()),
+            duration: Duration::from_millis(10),
+            timed_out: false,
+        };
+        let err = SandboxErr::Denied {
+            output: Box::new(output),
+        };
+        let message = sandbox_failure_message(err, SandboxType::None);
+        assert_eq!(message, "aggregate text");
     }
 
     #[test]

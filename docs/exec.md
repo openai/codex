@@ -9,6 +9,7 @@ codex exec "count the total number of lines of code in this project"
 In non-interactive mode, Codex does not ask for command or edit approvals. By default it runs in `read-only` mode, so it cannot edit files or run commands that require network access.
 
 Use `codex exec --full-auto` to allow file edits. Use `codex exec --sandbox danger-full-access` to allow edits and networked commands.
+Enable `--auto-next-steps` when you want Codex to keep working autonomously: after each response it will immediately draft the next prompt based on its latest summary and continue executing until you interrupt it. Add `--auto-next-idea` to have Codex brainstorm new high-impact initiatives whenever the current plan is exhausted, pick the best one, and begin executing it. With both flags enabled simultaneously, Codex cycles through next steps and fresh ideas indefinitely until you step in.
 
 ### Default output mode
 

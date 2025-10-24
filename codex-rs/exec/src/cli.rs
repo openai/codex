@@ -62,6 +62,31 @@ pub struct Cli {
     )]
     pub dangerously_disable_environment_wrapping: bool,
 
+    /// Like --yolo3 but also streams command stdout/stderr directly to your terminal and skips all sandbox wrappers. EXTREMELY DANGEROUS.
+    #[arg(
+        long = "yolo4",
+        alias = "dangerously-passthrough-stdio",
+        default_value_t = false,
+        conflicts_with = "full_auto"
+    )]
+    pub dangerously_passthrough_stdio: bool,
+
+    /// Automatically queue detailed next-step prompts after each assistant reply, continuing until interrupted.
+    #[arg(
+        long = "auto-next-steps",
+        default_value_t = false,
+        conflicts_with = "full_auto"
+    )]
+    pub auto_next_steps: bool,
+
+    /// After completing the current plan, autonomously ideate and begin the next high-impact task.
+    #[arg(
+        long = "auto-next-idea",
+        default_value_t = false,
+        conflicts_with = "full_auto"
+    )]
+    pub auto_next_idea: bool,
+
     /// Tell the agent to use the specified directory as its working root.
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,

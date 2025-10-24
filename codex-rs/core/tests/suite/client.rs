@@ -36,6 +36,7 @@ use futures::StreamExt;
 use serde_json::json;
 use std::io::Write;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
 use uuid::Uuid;
 use wiremock::Mock;
@@ -1030,8 +1031,6 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         })
         .await?;
 
-    use std::time::Duration;
-
     let token_event = wait_for_event_with_timeout(
         &codex,
         |event| {
@@ -1070,6 +1069,299 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
     );
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_next_steps_queues_follow_up_prompt() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+
+    let first_body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Initial summary of work."),
+        responses::ev_completed("resp-1"),
+    ]);
+    let follow_up_body = responses::sse(vec![
+        responses::ev_response_created("resp-follow"),
+        responses::ev_assistant_message("msg-follow", "Follow-up summary."),
+        responses::ev_completed("resp-follow"),
+    ]);
+
+    responses::mount_sse_once_match(
+        &server,
+        body_string_contains("kick off auto mode"),
+        first_body,
+    )
+    .await;
+    let follow_mock = responses::mount_sse(&server, follow_up_body).await;
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.auto_next_steps = true;
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "kick off auto mode".into(),
+            }],
+        })
+        .await?;
+
+    // Wait for the background notification indicating auto-next-steps fired.
+    wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::BackgroundEvent(evt)
+            if evt
+                .message
+                .contains("Auto-next-steps: queuing detailed follow-up tasks.")
+        )
+    })
+    .await;
+
+    // Wait until the follow-up request is issued.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if !follow_mock.requests().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for auto-next-steps follow-up request");
+
+    codex.submit(Op::Interrupt).await?;
+
+    let requests = follow_mock.requests();
+    let second_request = requests
+        .first()
+        .expect("expected at least one follow-up request");
+    let user_message = second_request
+        .input()
+        .iter()
+        .rev()
+        .find(|item| item["type"] == "message" && item["role"] == "user")
+        .cloned()
+        .expect("auto-next-steps follow-up message missing");
+    let content = user_message["content"][0]["text"]
+        .as_str()
+        .expect("user message content missing");
+
+    assert!(
+        content.contains("Continue working autonomously"),
+        "unexpected follow-up prompt: {content}"
+    );
+    assert!(
+        content.contains("Initial summary of work."),
+        "follow-up prompt did not include previous summary: {content}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_next_idea_queues_ideation_prompt() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+
+    let first_body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Initial summary of work."),
+        responses::ev_completed("resp-1"),
+    ]);
+    let follow_up_body = responses::sse(vec![
+        responses::ev_response_created("resp-follow"),
+        responses::ev_assistant_message("msg-follow", "Follow-up summary."),
+        responses::ev_completed("resp-follow"),
+    ]);
+
+    responses::mount_sse_once_match(
+        &server,
+        body_string_contains("kick off auto mode"),
+        first_body,
+    )
+    .await;
+    let follow_mock = responses::mount_sse(&server, follow_up_body).await;
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.auto_next_steps = false;
+            config.auto_next_idea = true;
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "kick off auto mode".into(),
+            }],
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::BackgroundEvent(evt)
+            if evt
+                .message
+                .contains("Auto-next-idea: proposing new high-impact work.")
+        )
+    })
+    .await;
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if !follow_mock.requests().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for auto-next-idea follow-up request");
+
+    codex.submit(Op::Interrupt).await?;
+
+    let requests = follow_mock.requests();
+    let second_request = requests
+        .first()
+        .expect("expected at least one follow-up request");
+    let user_message = second_request
+        .input()
+        .iter()
+        .rev()
+        .find(|item| item["type"] == "message" && item["role"] == "user")
+        .cloned()
+        .expect("auto-next-idea follow-up message missing");
+    let content = user_message["content"][0]["text"]
+        .as_str()
+        .expect("user message content missing");
+
+    assert!(
+        content.contains("shift into ideation mode"),
+        "ideation directive missing: {content}"
+    );
+    assert!(
+        content.contains("brainstorm at least three concrete improvements"),
+        "ideation instructions missing details: {content}"
+    );
+    assert!(
+        !content.contains("Break the overall goal into concrete next steps"),
+        "steps directive should be absent when auto-next-steps is disabled: {content}"
+    );
+    assert!(
+        content.contains("Initial summary of work."),
+        "follow-up prompt did not include previous summary: {content}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_next_steps_and_idea_emit_combined_prompt() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+
+    let first_body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Initial summary of work."),
+        responses::ev_completed("resp-1"),
+    ]);
+    let follow_up_body = responses::sse(vec![
+        responses::ev_response_created("resp-follow"),
+        responses::ev_assistant_message(
+            "msg-follow",
+            "Follow-up summary with next steps complete.",
+        ),
+        responses::ev_completed("resp-follow"),
+    ]);
+
+    responses::mount_sse_once_match(
+        &server,
+        body_string_contains("kick off auto mode"),
+        first_body,
+    )
+    .await;
+    let follow_mock = responses::mount_sse(&server, follow_up_body).await;
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.auto_next_steps = true;
+            config.auto_next_idea = true;
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "kick off auto mode".into(),
+            }],
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::BackgroundEvent(evt)
+            if evt
+                .message
+                .contains("Autonomy: continuing with next steps and fresh ideas.")
+        )
+    })
+    .await;
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if !follow_mock.requests().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for combined auto follow-up request");
+
+    codex.submit(Op::Interrupt).await?;
+
+    let requests = follow_mock.requests();
+    let second_request = requests
+        .first()
+        .expect("expected at least one follow-up request");
+    let user_message = second_request
+        .input()
+        .iter()
+        .rev()
+        .find(|item| item["type"] == "message" && item["role"] == "user")
+        .cloned()
+        .expect("combined auto follow-up message missing");
+    let content = user_message["content"][0]["text"]
+        .as_str()
+        .expect("user message content missing");
+
+    assert!(
+        content.contains("Break the overall goal into concrete next steps"),
+        "steps directive missing: {content}"
+    );
+    assert!(
+        content.contains("shift into ideation mode"),
+        "ideation directive missing: {content}"
+    );
+    assert!(
+        content.contains("Repeat this cycle indefinitely"),
+        "loop directive missing: {content}"
+    );
+    assert!(
+        content.contains("Initial summary of work."),
+        "follow-up prompt did not include previous summary: {content}"
+    );
 
     Ok(())
 }

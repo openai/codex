@@ -37,6 +37,7 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
         with_escalated_permissions: None,
         justification: None,
         disable_timeout: false,
+        passthrough_stdio: false,
     };
 
     let policy = SandboxPolicy::new_read_only_policy();
