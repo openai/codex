@@ -419,7 +419,7 @@ fn exec_approval_emits_proposed_command_and_decision_history() {
     // The approval modal should display the command snippet for user confirmation.
     let area = Rect::new(0, 0, 80, chat.desired_height(80));
     let mut buf = ratatui::buffer::Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
     assert_snapshot!("exec_approval_modal_exec", format!("{buf:?}"));
 
     // Approve via keyboard and verify a concise decision history line is added
@@ -459,7 +459,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
 
     let area = Rect::new(0, 0, 80, chat.desired_height(80));
     let mut buf = ratatui::buffer::Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
     let mut saw_first_line = false;
     for y in 0..area.height {
         let mut row = String::new();
@@ -874,7 +874,7 @@ fn review_commit_picker_shows_subjects_without_timestamps() {
     let height = chat.desired_height(width);
     let area = ratatui::layout::Rect::new(0, 0, width, height);
     let mut buf = ratatui::buffer::Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
 
     let mut blob = String::new();
     for y in 0..area.height {
@@ -1071,7 +1071,7 @@ fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
     let height = chat.desired_height(width);
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
-    (chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
     for y in 0..area.height {
         let mut row = String::new();
         for x in 0..area.width {
@@ -1093,7 +1093,7 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     let height = chat.desired_height(width);
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
-    (chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
 
     let mut lines: Vec<String> = (0..area.height)
         .map(|row| {
@@ -1438,7 +1438,7 @@ fn approval_modal_exec_snapshot() {
     terminal.set_viewport_area(viewport);
 
     terminal
-        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw approval modal");
     assert!(
         terminal
@@ -1478,7 +1478,7 @@ fn approval_modal_exec_without_reason_snapshot() {
         ratatui::Terminal::new(VT100Backend::new(80, height)).expect("create terminal");
     terminal.set_viewport_area(Rect::new(0, 0, 80, height));
     terminal
-        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw approval modal (no reason)");
     assert_snapshot!(
         "approval_modal_exec_no_reason",
@@ -1517,7 +1517,7 @@ fn approval_modal_patch_snapshot() {
         ratatui::Terminal::new(VT100Backend::new(80, height)).expect("create terminal");
     terminal.set_viewport_area(Rect::new(0, 0, 80, height));
     terminal
-        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw patch approval modal");
     assert_snapshot!(
         "approval_modal_patch",
@@ -1609,7 +1609,7 @@ fn ui_snapshots_small_heights_idle() {
         let name = format!("chat_small_idle_h{h}");
         let mut terminal = Terminal::new(TestBackend::new(40, h)).expect("create terminal");
         terminal
-            .draw(|f| f.render_widget_ref(&chat, f.area()))
+            .draw(|f| chat.render(f.area(), f.buffer_mut()))
             .expect("draw chat idle");
         assert_snapshot!(name, terminal.backend());
     }
@@ -1639,7 +1639,7 @@ fn ui_snapshots_small_heights_task_running() {
         let name = format!("chat_small_running_h{h}");
         let mut terminal = Terminal::new(TestBackend::new(40, h)).expect("create terminal");
         terminal
-            .draw(|f| f.render_widget_ref(&chat, f.area()))
+            .draw(|f| chat.render(f.area(), f.buffer_mut()))
             .expect("draw chat running");
         assert_snapshot!(name, terminal.backend());
     }
@@ -1688,7 +1688,7 @@ fn status_widget_and_approval_modal_snapshot() {
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
         .expect("create terminal");
     terminal
-        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw status + approval modal");
     assert_snapshot!("status_widget_and_approval_modal", terminal.backend());
 }
@@ -1717,7 +1717,7 @@ fn status_widget_active_snapshot() {
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
         .expect("create terminal");
     terminal
-        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw status widget");
     assert_snapshot!("status_widget_active", terminal.backend());
 }
@@ -1752,7 +1752,7 @@ fn apply_patch_events_emit_history_cells() {
 
     let area = Rect::new(0, 0, 80, chat.desired_height(80));
     let mut buf = ratatui::buffer::Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
     let mut saw_summary = false;
     for y in 0..area.height {
         let mut row = String::new();
@@ -2039,7 +2039,7 @@ fn apply_patch_untrusted_shows_approval_modal() {
     // Render and ensure the approval modal title is present
     let area = Rect::new(0, 0, 80, 12);
     let mut buf = Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
 
     let mut contains_title = false;
     for y in 0..area.height {
@@ -2093,7 +2093,7 @@ fn apply_patch_request_shows_diff_summary() {
 
     let area = Rect::new(0, 0, 80, chat.desired_height(80));
     let mut buf = ratatui::buffer::Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
 
     let mut saw_header = false;
     let mut saw_line1 = false;
@@ -2397,7 +2397,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     }
 
     term.draw(|f| {
-        (&chat).render_ref(f.area(), f.buffer_mut());
+        chat.render(f.area(), f.buffer_mut());
     })
     .unwrap();
 
@@ -2491,5 +2491,30 @@ printf 'fenced within fenced\n'
         crate::insert_history::insert_history_lines(&mut term, lines);
     }
 
+    assert_snapshot!(term.backend().vt100().screen().contents());
+}
+
+#[test]
+fn chatwidget_tall() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }),
+    });
+    for i in 0..30 {
+        chat.queue_user_message(format!("Hello, world! {i}").into());
+    }
+    let width: u16 = 80;
+    let height: u16 = 24;
+    let backend = VT100Backend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    let desired_height = chat.desired_height(width).min(height);
+    term.set_viewport_area(Rect::new(0, height - desired_height, width, desired_height));
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .unwrap();
     assert_snapshot!(term.backend().vt100().screen().contents());
 }
