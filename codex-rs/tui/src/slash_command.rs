@@ -85,7 +85,5 @@ impl SlashCommand {
 
 /// Return all built-in commands in a Vec paired with their command string.
 pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
-    SlashCommand::iter()
-        .map(|c| (c.command(), c))
-        .collect()
+    SlashCommand::iter().map(|c| (c.command(), c)).collect()
 }

@@ -161,6 +161,22 @@ where
         })
 }
 
+pub(crate) fn run_git_for_stdout_all<I, S>(
+    dir: &Path,
+    args: I,
+    env: Option<&[(OsString, OsString)]>,
+) -> Result<String, GitToolingError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let run = run_git(dir, args, env)?;
+    String::from_utf8(run.output.stdout).map_err(|source| GitToolingError::GitOutputUtf8 {
+        command: run.command,
+        source,
+    })
+}
+
 fn run_git<I, S>(
     dir: &Path,
     args: I,

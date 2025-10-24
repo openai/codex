@@ -8,7 +8,6 @@ use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use async_trait::async_trait;
-use codex_git_tooling::GhostCommit;
 use codex_git_tooling::restore_ghost_commit;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
@@ -66,14 +65,14 @@ impl SessionTask for UndoTask {
             message: None,
         };
 
-        let Some((idx, commit_id, parent)) =
+        let Some((idx, ghost_commit)) =
             items
                 .iter()
                 .enumerate()
                 .rev()
                 .find_map(|(idx, item)| match item {
-                    ResponseItem::GhostSnapshot { commit_id, parent } => {
-                        Some((idx, commit_id.clone(), parent.clone()))
+                    ResponseItem::GhostSnapshot { ghost_commit } => {
+                        Some((idx, ghost_commit.clone()))
                     }
                     _ => None,
                 })
@@ -84,8 +83,8 @@ impl SessionTask for UndoTask {
             return None;
         };
 
+        let commit_id = ghost_commit.id().to_string();
         let repo_path = ctx.cwd.clone();
-        let ghost_commit = GhostCommit::new(commit_id.clone(), parent);
         let restore_result =
             tokio::task::spawn_blocking(move || restore_ghost_commit(&repo_path, &ghost_commit))
                 .await;
@@ -96,7 +95,7 @@ impl SessionTask for UndoTask {
                 sess.replace_history(items).await;
                 let short_id: String = commit_id.chars().take(7).collect();
                 info!(
-                    commit_id = commit_id.as_str(),
+                    commit_id = commit_id,
                     "Undo restored ghost snapshot"
                 );
                 completed.success = true;
