@@ -2046,9 +2046,6 @@ async fn try_run_turn(
                     sess.send_event(&turn_context, msg).await;
                 }
 
-                sess.update_token_usage_info(turn_context.as_ref(), token_usage.as_ref())
-                    .await;
-
                 let result = TurnRunResult {
                     processed_items,
                     total_token_usage: token_usage.clone(),
