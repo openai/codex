@@ -13,6 +13,20 @@ use anyhow::Context;
 use assert_cmd::prelude::*;
 use codex_mcp_server::CodexToolCallParam;
 
+// GitHub-hosted runners on every OS set the HTTP(S)_PROXY variables to a loopback MITM.
+// When reqwest honours those settings it forwards requests using absolute-form URIs, which
+// Wiremock does not match against simple path filters. We first saw the resulting flaky
+// "expected request" assertions on Windows, but clearing the proxy variables keeps the
+// local mock servers reachable across all runners.
+const DISABLED_PROXY_ENV_VARS: &[&str] = &[
+    "ALL_PROXY",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "all_proxy",
+    "http_proxy",
+    "https_proxy",
+];
+
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
@@ -68,6 +82,10 @@ impl McpProcess {
         cmd.stderr(Stdio::piped());
         cmd.env("CODEX_HOME", codex_home);
         cmd.env("RUST_LOG", "debug");
+
+        for proxy_env in DISABLED_PROXY_ENV_VARS {
+            cmd.env_remove(proxy_env);
+        }
 
         for (k, v) in env_overrides {
             match v {
