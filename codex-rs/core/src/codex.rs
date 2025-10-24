@@ -104,8 +104,11 @@ use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state::TaskKind;
 use crate::tasks::CompactTask;
+use crate::tasks::GhostSnapshotTask;
 use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
+use crate::tasks::SessionTask;
+use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
@@ -128,6 +131,8 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
+use codex_utils_readiness::Readiness;
+use codex_utils_readiness::ReadinessFlag;
 
 pub mod compact;
 use self::compact::build_compacted_history;
@@ -178,6 +183,7 @@ impl Codex {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
+            features: config.features.clone(),
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -271,6 +277,7 @@ pub(crate) struct TurnContext {
     pub(crate) is_review_mode: bool,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
+    pub(crate) tool_call_gate: Arc<ReadinessFlag>,
 }
 
 impl TurnContext {
@@ -311,6 +318,9 @@ pub(crate) struct SessionConfiguration {
     /// `ConfigureSession` operation so that the business-logic layer can
     /// operate deterministically.
     cwd: PathBuf,
+
+    /// Set of feature flags for this session
+    features: Features,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -406,6 +416,7 @@ impl Session {
             is_review_mode: false,
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+            tool_call_gate: Arc::new(ReadinessFlag::new()),
         }
     }
 
@@ -1037,6 +1048,43 @@ impl Session {
         self.send_event(turn_context, event).await;
     }
 
+    async fn maybe_start_ghost_snapshot(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
+    ) {
+        if turn_context.is_review_mode
+            || !self
+                .state
+                .lock()
+                .await
+                .session_configuration
+                .features
+                .enabled(Feature::GhostCommit)
+        {
+            return;
+        }
+
+        let token = match turn_context.tool_call_gate.subscribe().await {
+            Ok(token) => token,
+            Err(err) => {
+                warn!("failed to subscribe to ghost snapshot readiness: {err}");
+                return;
+            }
+        };
+
+        info!("spawning ghost snapshot task");
+        let task = GhostSnapshotTask::new(token);
+        Arc::new(task)
+            .run(
+                Arc::new(SessionTaskContext::new(self.clone())),
+                turn_context.clone(),
+                Vec::new(),
+                cancellation_token,
+            )
+            .await;
+    }
+
     /// Returns the input if there was no task running to inject into
     pub async fn inject_input(&self, input: Vec<UserInput>) -> Result<(), Vec<UserInput>> {
         let mut active = self.active_turn.lock().await;
@@ -1472,6 +1520,7 @@ async fn spawn_review_thread(
         is_review_mode: true,
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
+        tool_call_gate: Arc::new(ReadinessFlag::new()),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -1535,6 +1584,8 @@ pub(crate) async fn run_task(
             .await;
     }
 
+    sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
+        .await;
     let mut last_agent_message: Option<String> = None;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
@@ -1724,6 +1775,13 @@ fn parse_review_output_event(text: &str) -> ReviewOutputEvent {
     }
 }
 
+fn filter_model_visible_history(input: Vec<ResponseItem>) -> Vec<ResponseItem> {
+    input
+        .into_iter()
+        .filter(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }))
+        .collect()
+}
+
 async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -1744,7 +1802,7 @@ async fn run_turn(
         .supports_parallel_tool_calls;
     let parallel_tool_calls = model_supports_parallel;
     let prompt = Prompt {
-        input,
+        input: filter_model_visible_history(input),
         tools: router.specs(),
         parallel_tool_calls,
         base_instructions_override: turn_context.base_instructions.clone(),
@@ -2234,6 +2292,8 @@ fn is_mcp_client_startup_timeout_error(error: &anyhow::Error) -> bool {
         || error_message.contains("timed out handshaking with MCP server")
 }
 
+use crate::features::Feature;
+use crate::features::Features;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
@@ -2550,6 +2610,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
+            features: Features::default(),
         };
 
         let state = SessionState::new(session_configuration.clone());
@@ -2618,6 +2679,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
+            features: Features::default(),
         };
 
         let state = SessionState::new(session_configuration.clone());

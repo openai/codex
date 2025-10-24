@@ -76,6 +76,7 @@ pub(crate) async fn stream_chat_completions(
             ResponseItem::CustomToolCall { .. } => {}
             ResponseItem::CustomToolCallOutput { .. } => {}
             ResponseItem::WebSearchCall { .. } => {}
+            ResponseItem::GhostSnapshot { .. } => {}
         }
     }
 
@@ -269,6 +270,10 @@ pub(crate) async fn stream_chat_completions(
                     "tool_call_id": call_id,
                     "content": output,
                 }));
+            }
+            ResponseItem::GhostSnapshot { .. } => {
+                // Ghost snapshots annotate history but are not sent to the model.
+                continue;
             }
             ResponseItem::Reasoning { .. }
             | ResponseItem::WebSearchCall { .. }

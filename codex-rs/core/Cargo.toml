@@ -24,10 +24,12 @@ codex-apply-patch = { workspace = true }
 codex-file-search = { workspace = true }
 codex-otel = { workspace = true, features = ["otel"] }
 codex-protocol = { workspace = true }
+codex-git-tooling = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-utils-pty = { workspace = true }
+codex-utils-readiness = { workspace = true }
 codex-utils-tokenizer = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }

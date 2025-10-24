@@ -39,6 +39,8 @@ pub enum Feature {
     ViewImageTool,
     /// Allow the model to request web searches.
     WebSearchRequest,
+    /// Create a ghost commit at each turn.
+    GhostCommit,
 }
 
 impl Feature {
@@ -234,6 +236,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::WebSearchRequest,
         key: "web_search_request",
         stage: Stage::Stable,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::GhostCommit,
+        key: "ghost_commit",
+        stage: Stage::Experimental,
         default_enabled: false,
     },
 ];
