@@ -1,0 +1,29 @@
+name: Review Watch (upstream PR #4522)
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '*/15 * * * *'
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (repo for scripts)
+        uses: actions/checkout@v4
+
+      - name: Install gh
+        uses: cli/gh-action@v2
+
+      - name: Run review watcher
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_GH_TOKEN }}
+          UPSTREAM_REPO: openai/codex
+          PR_NUMBER: '4522'
+        run: |
+          bash scripts/review_watch.sh

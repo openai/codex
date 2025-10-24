@@ -1,0 +1,37 @@
+name: Review Watch (on events)
+
+on:
+  workflow_dispatch: {}
+  issue_comment:
+    types: [created]
+  check_suite:
+    types: [completed]
+  workflow_run:
+    workflows: ["CI", "Build", "Tests", "Format / etc", "build-test"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  respond:
+    if: |
+      github.event_name != 'workflow_run' && (github.ref_name == 'main' || github.ref_name == 'feat/agent-bus') ||
+      (github.event_name == 'workflow_run' && (github.event.workflow_run.head_branch == 'main' || github.event.workflow_run.head_branch == 'feat/agent-bus'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install gh
+        uses: cli/gh-action@v2
+      - name: Run event watcher
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_GH_TOKEN }}
+        run: |
+          python3 scripts/review_watch.py

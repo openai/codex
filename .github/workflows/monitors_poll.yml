@@ -1,0 +1,30 @@
+name: Monitors (poll APIs)
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  poll:
+    concurrency:
+      group: monitors-poll-${{ github.ref_name }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run monitors poller
+        env:
+          DD_API_KEY: ${{ secrets.DD_API_KEY }}
+          DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
+          JENKINS_BASIC_AUTH: ${{ secrets.JENKINS_BASIC_AUTH }}
+        run: |
+          python3 scripts/monitors_poll.py
