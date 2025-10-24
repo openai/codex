@@ -1283,6 +1283,9 @@ fn approvals_selection_popup_snapshot() {
 fn approvals_popup_includes_wsl_note_for_auto_mode() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
+    if cfg!(target_os = "windows") {
+        chat.config.forced_auto_mode_downgraded_on_windows = true;
+    }
     chat.open_approvals_popup();
 
     let popup = render_bottom_popup(&chat, 80);
@@ -1290,6 +1293,11 @@ fn approvals_popup_includes_wsl_note_for_auto_mode() {
         popup.contains("Requires Windows Subsystem for Linux (WSL)"),
         cfg!(target_os = "windows"),
         "expected auto preset description to mention WSL requirement only on Windows, popup: {popup}"
+    );
+    assert_eq!(
+        popup.contains("Codex forced your settings back to Read Only on this Windows machine."),
+        cfg!(target_os = "windows") && chat.config.forced_auto_mode_downgraded_on_windows,
+        "expected downgrade notice only when auto mode is forced off on Windows, popup: {popup}"
     );
 }
 
