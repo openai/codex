@@ -523,11 +523,8 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                     .map(|entry| entry.auth_status)
                     .unwrap_or(McpAuthStatus::Unsupported)
                     .to_string();
-                let bearer_token_display = if bearer_token_env_var.is_some() {
-                    "*****".to_string()
-                } else {
-                    "-".to_string()
-                };
+                let bearer_token_display =
+                    bearer_token_env_var.as_deref().unwrap_or("-").to_string();
                 http_rows.push([
                     name.clone(),
                     url.clone(),
