@@ -3,6 +3,8 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::with_border_with_inner_width;
 use crate::version::CODEX_CLI_VERSION;
+use chrono::DateTime;
+use chrono::Local;
 use codex_common::create_config_summary_entries;
 use codex_core::config::Config;
 use codex_core::protocol::SandboxPolicy;
@@ -25,6 +27,7 @@ use super::helpers::format_directory_display;
 use super::helpers::format_tokens_compact;
 use super::rate_limits::RateLimitSnapshotDisplay;
 use super::rate_limits::StatusRateLimitData;
+use super::rate_limits::StatusRateLimitRow;
 use super::rate_limits::compose_rate_limit_data;
 use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
@@ -64,9 +67,17 @@ pub(crate) fn new_status_output(
     context_usage: Option<&TokenUsage>,
     session_id: &Option<ConversationId>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
+    now: DateTime<Local>,
 ) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
-    let card = StatusHistoryCell::new(config, total_usage, context_usage, session_id, rate_limits);
+    let card = StatusHistoryCell::new(
+        config,
+        total_usage,
+        context_usage,
+        session_id,
+        rate_limits,
+        now,
+    );
 
     CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)])
 }
@@ -78,6 +89,7 @@ impl StatusHistoryCell {
         context_usage: Option<&TokenUsage>,
         session_id: &Option<ConversationId>,
         rate_limits: Option<&RateLimitSnapshotDisplay>,
+        now: DateTime<Local>,
     ) -> Self {
         let config_entries = create_config_summary_entries(config);
         let (model_name, model_details) = compose_model_display(config, &config_entries);
@@ -108,7 +120,7 @@ impl StatusHistoryCell {
             output: total_usage.output_tokens,
             context_window,
         };
-        let rate_limits = compose_rate_limit_data(rate_limits);
+        let rate_limits = compose_rate_limit_data(rate_limits, now);
 
         Self {
             model_name,
@@ -171,45 +183,64 @@ impl StatusHistoryCell {
                     ];
                 }
 
-                let mut lines = Vec::with_capacity(rows_data.len() * 2);
-
-                for row in rows_data {
-                    let value_spans = vec![
-                        Span::from(render_status_limit_progress_bar(row.percent_used)),
-                        Span::from(" "),
-                        Span::from(format_status_limit_summary(row.percent_used)),
-                    ];
-                    let base_spans = formatter.full_spans(row.label.as_str(), value_spans);
-                    let base_line = Line::from(base_spans.clone());
-
-                    if let Some(resets_at) = row.resets_at.as_ref() {
-                        let resets_span = Span::from(format!("(resets {resets_at})")).dim();
-                        let mut inline_spans = base_spans.clone();
-                        inline_spans.push(Span::from(" ").dim());
-                        inline_spans.push(resets_span.clone());
-
-                        if line_display_width(&Line::from(inline_spans.clone()))
-                            <= available_inner_width
-                        {
-                            lines.push(Line::from(inline_spans));
-                        } else {
-                            lines.push(base_line);
-                            lines.push(formatter.continuation(vec![resets_span]));
-                        }
-                    } else {
-                        lines.push(base_line);
-                    }
-                }
-
+                self.rate_limit_row_lines(rows_data, available_inner_width, formatter)
+            }
+            StatusRateLimitData::Stale(rows_data) => {
+                let mut lines =
+                    self.rate_limit_row_lines(rows_data, available_inner_width, formatter);
+                lines.push(formatter.line(
+                    "Warning",
+                    vec![Span::from("limits may be stale - start new turn to refresh.").dim()],
+                ));
                 lines
             }
             StatusRateLimitData::Missing => {
                 vec![formatter.line(
                     "Limits",
-                    vec![Span::from("send a message to load usage data").dim()],
+                    vec![
+                        Span::from("visit ").dim(),
+                        "chatgpt.com/codex/settings/usage".cyan().underlined(),
+                    ],
                 )]
             }
         }
+    }
+
+    fn rate_limit_row_lines(
+        &self,
+        rows: &[StatusRateLimitRow],
+        available_inner_width: usize,
+        formatter: &FieldFormatter,
+    ) -> Vec<Line<'static>> {
+        let mut lines = Vec::with_capacity(rows.len().saturating_mul(2));
+
+        for row in rows {
+            let value_spans = vec![
+                Span::from(render_status_limit_progress_bar(row.percent_used)),
+                Span::from(" "),
+                Span::from(format_status_limit_summary(row.percent_used)),
+            ];
+            let base_spans = formatter.full_spans(row.label.as_str(), value_spans);
+            let base_line = Line::from(base_spans.clone());
+
+            if let Some(resets_at) = row.resets_at.as_ref() {
+                let resets_span = Span::from(format!("(resets {resets_at})")).dim();
+                let mut inline_spans = base_spans.clone();
+                inline_spans.push(Span::from(" ").dim());
+                inline_spans.push(resets_span.clone());
+
+                if line_display_width(&Line::from(inline_spans.clone())) <= available_inner_width {
+                    lines.push(Line::from(inline_spans));
+                } else {
+                    lines.push(base_line);
+                    lines.push(formatter.continuation(vec![resets_span]));
+                }
+            } else {
+                lines.push(base_line);
+            }
+        }
+
+        lines
     }
 
     fn collect_rate_limit_labels(&self, seen: &mut BTreeSet<String>, labels: &mut Vec<String>) {
@@ -222,6 +253,12 @@ impl StatusHistoryCell {
                         push_label(labels, seen, row.label.as_str());
                     }
                 }
+            }
+            StatusRateLimitData::Stale(rows) => {
+                for row in rows {
+                    push_label(labels, seen, row.label.as_str());
+                }
+                push_label(labels, seen, "Warning");
             }
             StatusRateLimitData::Missing => push_label(labels, seen, "Limits"),
         }

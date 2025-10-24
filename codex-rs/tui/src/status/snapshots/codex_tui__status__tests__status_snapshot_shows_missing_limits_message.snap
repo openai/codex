@@ -15,5 +15,5 @@ expression: sanitized
 │                                                                 │
 │  Token usage:      750 total  (500 input + 250 output)          │
 │  Context window:   100% left (750 used / 272K)                  │
-│  Limits:           send a message to load usage data            │
+│  Limits:           visit chatgpt.com/codex/settings/usage       │
 ╰─────────────────────────────────────────────────────────────────╯
