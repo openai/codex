@@ -79,6 +79,7 @@ fn status_snapshot_includes_reasoning_details() {
     config.sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: Vec::new(),
         network_access: false,
+        local_network: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };

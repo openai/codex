@@ -257,6 +257,12 @@ pub enum SandboxPolicy {
         #[serde(default)]
         network_access: bool,
 
+        /// When set to `true`, outbound network access is permitted to
+        /// loopback/local addresses even when [`network_access`] is `false`.
+        /// Defaults to `false`.
+        #[serde(default)]
+        local_network: bool,
+
         /// When set to `true`, will NOT include the per-user `TMPDIR`
         /// environment variable among the default writable roots. Defaults to
         /// `false`.
@@ -322,6 +328,7 @@ impl SandboxPolicy {
         SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: false,
+            local_network: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         }
@@ -348,6 +355,20 @@ impl SandboxPolicy {
         }
     }
 
+    /// Returns `true` when the sandbox permits connections to local loopback
+    /// addresses.
+    pub fn allows_local_network_access(&self) -> bool {
+        match self {
+            SandboxPolicy::DangerFullAccess => true,
+            SandboxPolicy::ReadOnly => false,
+            SandboxPolicy::WorkspaceWrite {
+                network_access,
+                local_network,
+                ..
+            } => *network_access || *local_network,
+        }
+    }
+
     /// Returns the list of writable roots (tailored to the current working
     /// directory) together with subpaths that should remain read‑only under
     /// each writable root.
@@ -360,6 +381,7 @@ impl SandboxPolicy {
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
                 network_access: _,
+                local_network: _,
             } => {
                 // Start from explicitly configured writable roots.
                 let mut roots: Vec<PathBuf> = writable_roots.clone();

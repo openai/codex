@@ -372,6 +372,8 @@ pub struct SandboxWorkspaceWrite {
     #[serde(default)]
     pub network_access: bool,
     #[serde(default)]
+    pub local_network: bool,
+    #[serde(default)]
     pub exclude_tmpdir_env_var: bool,
     #[serde(default)]
     pub exclude_slash_tmp: bool,
@@ -382,6 +384,7 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
         Self {
             writable_roots: sandbox_workspace_write.writable_roots,
             network_access: Some(sandbox_workspace_write.network_access),
+            local_network: Some(sandbox_workspace_write.local_network),
             exclude_tmpdir_env_var: Some(sandbox_workspace_write.exclude_tmpdir_env_var),
             exclude_slash_tmp: Some(sandbox_workspace_write.exclude_slash_tmp),
         }

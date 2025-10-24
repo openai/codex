@@ -454,6 +454,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
             sandbox_policy: Some(SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![writable.path().to_path_buf()],
                 network_access: true,
+                local_network: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             }),
@@ -587,6 +588,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() {
             sandbox_policy: SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![writable.path().to_path_buf()],
                 network_access: true,
+                local_network: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             },

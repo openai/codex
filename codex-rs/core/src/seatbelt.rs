@@ -106,6 +106,8 @@ pub(crate) fn create_seatbelt_command_args(
     // TODO(mbolin): apply_patch calls must also honor the SandboxPolicy.
     let network_policy = if sandbox_policy.has_full_network_access() {
         "(allow network-outbound)\n(allow network-inbound)\n(allow system-socket)"
+    } else if sandbox_policy.allows_local_network_access() {
+        "(allow network* (local ip))"
     } else {
         ""
     };
@@ -156,6 +158,7 @@ mod tests {
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![root_with_git, root_without_git],
             network_access: false,
+            local_network: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };
@@ -231,6 +234,7 @@ mod tests {
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: false,
+            local_network: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         };
@@ -299,6 +303,42 @@ mod tests {
         ]);
 
         assert_eq!(expected_args, args);
+    }
+
+    #[test]
+    fn create_seatbelt_args_include_local_network_rule() {
+        if cfg!(target_os = "windows") {
+            return;
+        }
+
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = tmp.path().join("cwd");
+        fs::create_dir_all(&cwd).expect("create cwd");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            local_network: true,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+
+        let args = create_seatbelt_command_args(
+            vec!["/bin/echo".to_string(), "hello".to_string()],
+            &policy,
+            &cwd,
+        );
+
+        assert_eq!(args.first().map(String::as_str), Some("-p"));
+        let policy_text = &args[1];
+        assert!(
+            policy_text.contains("(allow network* (local ip))"),
+            "expected local network rule in policy:\n{policy_text}"
+        );
+        assert!(
+            !policy_text.contains("(allow network-outbound)\n(allow network-inbound)"),
+            "unexpected full network allowance in policy:\n{policy_text}"
+        );
     }
 
     struct PopulatedTmp {

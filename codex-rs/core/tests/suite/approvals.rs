@@ -495,6 +495,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
     let workspace_write = |network_access| SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access,
+        local_network: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };

@@ -667,6 +667,8 @@ pub struct SandboxSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network_access: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_network: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exclude_tmpdir_env_var: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exclude_slash_tmp: Option<bool>,

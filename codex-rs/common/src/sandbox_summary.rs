@@ -7,6 +7,7 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
         SandboxPolicy::WorkspaceWrite {
             writable_roots,
             network_access,
+            local_network,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
         } => {
@@ -29,6 +30,8 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             summary.push_str(&format!(" [{}]", writable_entries.join(", ")));
             if *network_access {
                 summary.push_str(" (network access enabled)");
+            } else if *local_network {
+                summary.push_str(" (local network enabled)");
             }
             summary
         }

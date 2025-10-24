@@ -85,6 +85,8 @@ codex --sandbox danger-full-access
 
 The same setting can be persisted in `~/.codex/config.toml` via the top-level `sandbox_mode = "MODE"` key, e.g. `sandbox_mode = "workspace-write"`.
 
+Loopback-only access (for example to talk to `127.0.0.1` dev servers) can be enabled via `local_network = true` under the `[sandbox_workspace_write]` table.
+
 ## Code Organization
 
 This folder is the root of a Cargo workspace. It contains quite a bit of experimental code, but here are the key crates:

@@ -297,7 +297,14 @@ writable_roots = ["/Users/YOU/.pyenv/shims"]
 # Allow the command being run inside the sandbox to make outbound network
 # requests. Disabled by default.
 network_access = false
+
+# Allow the command being run inside the sandbox to access loopback services
+# (e.g., 127.0.0.1) without granting full outbound network access.
+local_network = false
 ```
+
+> [!NOTE]
+> On Linux the Landlock-based sandbox currently cannot distinguish loopback traffic from other outbound connections. Setting `local_network = true` therefore allows full network access on Linux.
 
 To disable sandboxing altogether, specify `danger-full-access` like so:
 
@@ -864,6 +871,7 @@ If `forced_chatgpt_workspace_id` is set but `forced_login_method` is not set, AP
 | `sandbox_mode`                                   | `read-only` \| `workspace-write` \| `danger-full-access`          | OS sandbox policy.                                                                                                         |
 | `sandbox_workspace_write.writable_roots`         | array<string>                                                     | Extra writable roots in workspace‑write.                                                                                   |
 | `sandbox_workspace_write.network_access`         | boolean                                                           | Allow network in workspace‑write (default: false).                                                                         |
+| `sandbox_workspace_write.local_network`          | boolean                                                           | Allow loopback-only network access in workspace-write (default: false).                                                    |
 | `sandbox_workspace_write.exclude_tmpdir_env_var` | boolean                                                           | Exclude `$TMPDIR` from writable roots (default: false).                                                                    |
 | `sandbox_workspace_write.exclude_slash_tmp`      | boolean                                                           | Exclude `/tmp` from writable roots (default: false).                                                                       |
 | `notify`                                         | array<string>                                                     | External program for notifications.                                                                                        |

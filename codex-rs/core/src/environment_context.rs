@@ -18,6 +18,7 @@ use std::path::PathBuf;
 #[strum(serialize_all = "kebab-case")]
 pub enum NetworkAccess {
     Restricted,
+    LocalOnly,
     Enabled,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -50,13 +51,17 @@ impl EnvironmentContext {
             network_access: match sandbox_policy {
                 Some(SandboxPolicy::DangerFullAccess) => Some(NetworkAccess::Enabled),
                 Some(SandboxPolicy::ReadOnly) => Some(NetworkAccess::Restricted),
-                Some(SandboxPolicy::WorkspaceWrite { network_access, .. }) => {
-                    if network_access {
-                        Some(NetworkAccess::Enabled)
-                    } else {
-                        Some(NetworkAccess::Restricted)
-                    }
-                }
+                Some(SandboxPolicy::WorkspaceWrite {
+                    network_access,
+                    local_network,
+                    ..
+                }) => Some(if network_access {
+                    NetworkAccess::Enabled
+                } else if local_network {
+                    NetworkAccess::LocalOnly
+                } else {
+                    NetworkAccess::Restricted
+                }),
                 None => None,
             },
             writable_roots: match sandbox_policy {
@@ -203,6 +208,7 @@ mod tests {
         SandboxPolicy::WorkspaceWrite {
             writable_roots: writable_roots.into_iter().map(PathBuf::from).collect(),
             network_access,
+            local_network: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         }
@@ -225,6 +231,34 @@ mod tests {
   <writable_roots>
     <root>/repo</root>
     <root>/tmp</root>
+  </writable_roots>
+</environment_context>"#;
+
+        assert_eq!(context.serialize_to_xml(), expected);
+    }
+
+    #[test]
+    fn serialize_workspace_write_environment_context_with_local_network() {
+        let context = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            Some(AskForApproval::OnRequest),
+            Some(SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![PathBuf::from("/repo")],
+                network_access: false,
+                local_network: true,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            }),
+            None,
+        );
+
+        let expected = r#"<environment_context>
+  <cwd>/repo</cwd>
+  <approval_policy>on-request</approval_policy>
+  <sandbox_mode>workspace-write</sandbox_mode>
+  <network_access>local-only</network_access>
+  <writable_roots>
+    <root>/repo</root>
   </writable_roots>
 </environment_context>"#;
 

@@ -34,7 +34,7 @@ fn create_env_from_core_vars() -> HashMap<String, String> {
 }
 
 #[expect(clippy::print_stdout, clippy::expect_used, clippy::unwrap_used)]
-async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
+async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64, local_network: bool) {
     let cwd = std::env::current_dir().expect("cwd should exist");
     let sandbox_cwd = cwd.clone();
     let params = ExecParams {
@@ -50,6 +50,7 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: writable_roots.to_vec(),
         network_access: false,
+        local_network,
         // Exclude tmp-related folders from writable roots because we need a
         // folder that is writable by tests but that we intentionally disallow
         // writing to in the sandbox.
@@ -78,7 +79,7 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
 
 #[tokio::test]
 async fn test_root_read() {
-    run_cmd(&["ls", "-l", "/bin"], &[], SHORT_TIMEOUT_MS).await;
+    run_cmd(&["ls", "-l", "/bin"], &[], SHORT_TIMEOUT_MS, false).await;
 }
 
 #[tokio::test]
@@ -90,6 +91,7 @@ async fn test_root_write() {
         &["bash", "-lc", &format!("echo blah > {tmpfile_path}")],
         &[],
         SHORT_TIMEOUT_MS,
+        false,
     )
     .await;
 }
@@ -102,6 +104,7 @@ async fn test_dev_null_write() {
         // We have seen timeouts when running this test in CI on GitHub,
         // so we are using a generous timeout until we can diagnose further.
         LONG_TIMEOUT_MS,
+        false,
     )
     .await;
 }
@@ -120,6 +123,7 @@ async fn test_writable_root() {
         // We have seen timeouts when running this test in CI on GitHub,
         // so we are using a generous timeout until we can diagnose further.
         LONG_TIMEOUT_MS,
+        false,
     )
     .await;
 }
@@ -127,7 +131,43 @@ async fn test_writable_root() {
 #[tokio::test]
 #[should_panic(expected = "Sandbox(Timeout")]
 async fn test_timeout() {
-    run_cmd(&["sleep", "2"], &[], 50).await;
+    run_cmd(&["sleep", "2"], &[], 50, false).await;
+}
+
+#[tokio::test]
+async fn test_local_network_allowed() {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind listener");
+    let port = listener.local_addr().expect("listener addr").port();
+
+    let server = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let (mut socket, _) = listener.accept().await?;
+        let mut buf = [0u8; 4];
+        socket.read_exact(&mut buf).await?;
+        Ok::<(), std::io::Error>(())
+    });
+
+    run_cmd(
+        &[
+            "python3",
+            "-c",
+            &format!(
+                "import socket; s=socket.create_connection((\"127.0.0.1\", {}), timeout=1); s.send(b\"ping\")",
+                port
+            ),
+        ],
+        &[],
+        NETWORK_TIMEOUT_MS,
+        true,
+    )
+    .await;
+
+    server
+        .await
+        .expect("server task join")
+        .expect("server read should succeed");
 }
 
 /// Helper that runs `cmd` under the Linux sandbox and asserts that the command

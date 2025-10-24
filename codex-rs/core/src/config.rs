@@ -1048,11 +1048,13 @@ impl ConfigToml {
                 Some(SandboxWorkspaceWrite {
                     writable_roots,
                     network_access,
+                    local_network,
                     exclude_tmpdir_env_var,
                     exclude_slash_tmp,
                 }) => SandboxPolicy::WorkspaceWrite {
                     writable_roots: writable_roots.clone(),
                     network_access: *network_access,
+                    local_network: *local_network,
                     exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                     exclude_slash_tmp: *exclude_slash_tmp,
                 },
@@ -1641,6 +1643,7 @@ exclude_slash_tmp = true
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![PathBuf::from("/my/workspace")],
                 network_access: false,
+                local_network: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             },
@@ -1669,6 +1672,7 @@ trust_level = "trusted"
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![PathBuf::from("/my/workspace")],
                 network_access: false,
+                local_network: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             },
