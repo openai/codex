@@ -1075,6 +1075,7 @@ dependencies = [
  "escargot",
  "eventsource-stream",
  "futures",
+ "image",
  "indexmap 2.10.0",
  "landlock",
  "libc",
@@ -1326,6 +1327,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "base64",
+ "codex-utils-image",
  "icu_decimal",
  "icu_locale_core",
  "mcp-types",
@@ -1469,6 +1471,27 @@ dependencies = [
  "unicode-width 0.2.1",
  "url",
  "vt100",
+]
+
+[[package]]
+name = "codex-utils-cache"
+version = "0.0.0"
+dependencies = [
+ "lru",
+ "sha1",
+ "tokio",
+]
+
+[[package]]
+name = "codex-utils-image"
+version = "0.0.0"
+dependencies = [
+ "base64",
+ "codex-utils-cache",
+ "image",
+ "tempfile",
+ "thiserror 2.0.16",
+ "tokio",
 ]
 
 [[package]]

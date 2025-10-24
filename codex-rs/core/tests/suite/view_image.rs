@@ -19,6 +19,10 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use image::GenericImageView;
+use image::ImageBuffer;
+use image::Rgba;
+use image::load_from_memory;
 use serde_json::Value;
 use wiremock::matchers::any;
 
@@ -50,6 +54,88 @@ fn extract_output_text(item: &Value) -> Option<&str> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = test_codex().build(&server).await?;
+
+    let rel_path = "user-turn/example.png";
+    let abs_path = cwd.path().join(rel_path);
+    if let Some(parent) = abs_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let image = ImageBuffer::from_pixel(4096, 1024, Rgba([20u8, 40, 60, 255]));
+    image.save(&abs_path)?;
+
+    let response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_assistant_message("msg-1", "done"),
+        ev_completed("resp-1"),
+    ]);
+    let mock = responses::mount_sse_once_match(&server, any(), response).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::LocalImage {
+                path: abs_path.clone(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    let body = mock.single_request().body_json();
+    let image_message =
+        find_image_message(&body).expect("pending input image message not included in request");
+    let image_url = image_message
+        .get("content")
+        .and_then(Value::as_array)
+        .and_then(|content| {
+            content.iter().find_map(|span| {
+                if span.get("type").and_then(Value::as_str) == Some("input_image") {
+                    span.get("image_url").and_then(Value::as_str)
+                } else {
+                    None
+                }
+            })
+        })
+        .expect("image_url present");
+
+    let (prefix, encoded) = image_url
+        .split_once(',')
+        .expect("image url contains data prefix");
+    assert_eq!(prefix, "data:image/png;base64");
+
+    let decoded = BASE64_STANDARD
+        .decode(encoded)
+        .expect("image data decodes from base64 for request");
+    let resized = load_from_memory(&decoded).expect("load resized image");
+    let (width, height) = resized.dimensions();
+    assert!(width <= 2048);
+    assert!(height <= 768);
+    assert!(width < 4096);
+    assert!(height < 1024);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -67,8 +153,8 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
     if let Some(parent) = abs_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let image_bytes = b"fake_png_bytes".to_vec();
-    std::fs::write(&abs_path, &image_bytes)?;
+    let image = ImageBuffer::from_pixel(4096, 1024, Rgba([255u8, 0, 0, 255]));
+    image.save(&abs_path)?;
 
     let call_id = "view-image-call";
     let arguments = serde_json::json!({ "path": rel_path }).to_string();
@@ -143,11 +229,20 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         })
         .expect("image_url present");
 
-    let expected_image_url = format!(
-        "data:image/png;base64,{}",
-        BASE64_STANDARD.encode(&image_bytes)
-    );
-    assert_eq!(image_url, expected_image_url);
+    let (prefix, encoded) = image_url
+        .split_once(',')
+        .expect("image url contains data prefix");
+    assert_eq!(prefix, "data:image/png;base64");
+
+    let decoded = BASE64_STANDARD
+        .decode(encoded)
+        .expect("image data decodes from base64 for request");
+    let resized = load_from_memory(&decoded).expect("load resized image");
+    let (resized_width, resized_height) = resized.dimensions();
+    assert!(resized_width <= 2048);
+    assert!(resized_height <= 768);
+    assert!(resized_width < 4096);
+    assert!(resized_height < 1024);
 
     Ok(())
 }

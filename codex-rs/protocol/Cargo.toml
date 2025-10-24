@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 base64 = { workspace = true }
+codex-utils-image = { workspace = true }
 icu_decimal = { workspace = true }
 icu_locale_core = { workspace = true }
 mcp-types = { workspace = true }
