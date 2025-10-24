@@ -115,3 +115,27 @@ const thread = codex.startThread({
   skipGitRepoCheck: true,
 });
 ```
+
+### Managing MCP servers
+
+The bundled CLI already supports [Model Context Protocol](https://github.com/modelcontextprotocol) integrations. The SDK now surfaces those controls through `codex.mcp` so you can inspect and tweak servers without leaving Node:
+
+```typescript
+// List configured servers
+const servers = await codex.mcp.list();
+
+// Temporarily enable a server (for the lifetime of this Codex instance)
+codex.mcp.enableOnce("some-mcp", { enabledTools: ["search", "summarize"] });
+
+// Persistently enable a server and restrict it to a subset of tools
+await codex.mcp.enable("some-mcp", { enabledTools: ["search"] });
+
+// Add, remove, or authenticate servers
+await codex.mcp.add("some-mcp", { type: "stdio", command: "some-mcp" });
+await codex.mcp.login("some-mcp", ["figma:read"]);
+await codex.mcp.remove("some-mcp");
+```
+
+All MCP helpers wrap the existing `codex mcp …` commands, so behaviour and validation match the CLI.
+
+`samples/mcp_management.ts` demonstrates a typical workflow: list your configured servers, pick one to enable or disable for the current Node session, optionally persist the change (and any tool filters), and inspect the updated configuration without leaving JavaScript.
