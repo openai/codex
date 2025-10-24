@@ -260,6 +260,16 @@ async fn get_default_branch(cwd: &Path) -> Option<String> {
     get_default_branch_local(cwd).await
 }
 
+/// Determine the repository's default branch name, if available.
+///
+/// This inspects remote configuration first (including the symbolic `HEAD`
+/// reference) and falls back to common local defaults such as `main` or
+/// `master`. Returns `None` when the information cannot be determined, for
+/// example when the current directory is not inside a Git repository.
+pub async fn default_branch_name(cwd: &Path) -> Option<String> {
+    get_default_branch(cwd).await
+}
+
 /// Attempt to determine the repository's default branch name from local branches.
 async fn get_default_branch_local(cwd: &Path) -> Option<String> {
     for candidate in ["main", "master"] {
