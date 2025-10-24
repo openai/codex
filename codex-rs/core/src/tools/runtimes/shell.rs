@@ -18,7 +18,6 @@ use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
-use crate::tools::sandboxing::with_cached_approval;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
@@ -58,6 +57,57 @@ impl ShellRuntime {
     }
 }
 
+// Peel common Windows shell launchers and return the inner argv slice.
+fn strip_wrapper(argv: &[String]) -> &[String] {
+    let mut i = 0;
+    let eq = |s: &str, n: &str| { let sl = s.to_ascii_lowercase(); sl == n || sl == format!("{n}.exe") };
+    if argv.first().map(|s| eq(s, "wsl")).unwrap_or(false) {
+        i += 1;
+        if argv.get(i).map(|t| { let t=t.to_ascii_lowercase(); t=="--"||t=="-e"||t=="--exec" }).unwrap_or(false) { i += 1; }
+        if argv.get(i).map(|s| eq(s, "bash")).unwrap_or(false) && argv.get(i+1).map(|s| s.eq_ignore_ascii_case("-lc")).unwrap_or(false) { i += 2; }
+        return &argv[i.min(argv.len())..];
+    }
+    if argv.first().map(|s| eq(s, "bash")).unwrap_or(false) && argv.get(1).map(|s| s.eq_ignore_ascii_case("-lc")).unwrap_or(false) { return &argv[2.min(argv.len())..]; }
+    if argv.first().map(|s| eq(s, "cmd")).unwrap_or(false) && argv.get(1).map(|s| s.eq_ignore_ascii_case("/c")||s.eq_ignore_ascii_case("-c")).unwrap_or(false) { return &argv[2.min(argv.len())..]; }
+    if argv.first().map(|s| eq(s, "powershell")||eq(s, "pwsh")).unwrap_or(false) {
+        i = 1; while argv.get(i).map(|s| s.eq_ignore_ascii_case("-noprofile")).unwrap_or(false) { i += 1; }
+        if argv.get(i).map(|s| s.eq_ignore_ascii_case("-command")||s.eq_ignore_ascii_case("-c")).unwrap_or(false) { i += 1; }
+        return &argv[i.min(argv.len())..];
+    }
+    argv
+}
+
+// Build a tiny canonical key: program + first non-flag arg (with sed ranges de-noised).
+fn canonicalize(argv: &[String]) -> Vec<String> {
+    let args = strip_wrapper(argv);
+    if args.is_empty() {
+        return vec![];
+    }
+    let prog = std::path::Path::new(&args[0])
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&args[0])
+        .to_ascii_lowercase();
+    // Be conservative: only canonicalize specific tools; otherwise fall back to stripped.
+    match prog.as_str() {
+        "sed" => {
+            let mut key = vec![prog];
+            if let Some(first) = args.iter().skip(1).find(|s| !s.starts_with('-')) {
+                key.push(first.chars().map(|c| if c.is_ascii_digit() { 'N' } else { c }).collect());
+            }
+            key
+        }
+        "rg" => {
+            let mut key = vec![prog];
+            if let Some(first) = args.iter().skip(1).find(|s| !s.starts_with('-')) {
+                key.push(first.clone());
+            }
+            key
+        }
+        _ => args.to_vec(),
+    }
+}
+
 impl Sandboxable for ShellRuntime {
     fn sandbox_preference(&self) -> SandboxablePreference {
         SandboxablePreference::Auto
@@ -83,7 +133,10 @@ impl Approvable<ShellRequest> for ShellRuntime {
         req: &'a ShellRequest,
         ctx: ApprovalCtx<'a>,
     ) -> BoxFuture<'a, ReviewDecision> {
-        let key = self.approval_key(req);
+        let raw = self.approval_key(req);
+        let stripped = ApprovalKey { command: strip_wrapper(&req.command).to_vec(), cwd: req.cwd.clone(), escalated: req.with_escalated_permissions.unwrap_or(false) };
+        let canon = ApprovalKey { command: canonicalize(&req.command), cwd: req.cwd.clone(), escalated: req.with_escalated_permissions.unwrap_or(false) };
+        let keys = vec![raw, stripped, canon];
         let command = req.command.clone();
         let cwd = req.cwd.clone();
         let reason = ctx
@@ -94,12 +147,15 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
-            with_cached_approval(&session.services, key, || async move {
-                session
-                    .request_command_approval(turn, call_id, command, cwd, reason)
-                    .await
-            })
-            .await
+            // Lookup in order: RAW → STRIPPED → CANONICAL. Persist all on approval.
+            if let Some(decision) = session.services.tool_approvals.lock().await.get_any(&keys) {
+                return decision;
+            }
+            let decision = session
+                .request_command_approval(turn, call_id, command, cwd, reason)
+                .await;
+            if matches!(decision, ReviewDecision::ApprovedForSession) { session.services.tool_approvals.lock().await.put_all(&keys, ReviewDecision::ApprovedForSession); }
+            decision
         })
     }
 
@@ -160,5 +216,119 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             .await
             .map_err(ToolError::Codex)?;
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::sandboxing::ApprovalStore;
+    use codex_protocol::protocol::ReviewDecision;
+    use std::path::PathBuf;
+
+    fn keys_for(cmd: &[&str]) -> Vec<ApprovalKey> {
+        let v: Vec<String> = cmd.iter().map(std::string::ToString::to_string).collect();
+        let cwd = PathBuf::from("C");
+        let escalated = false;
+        vec![
+            ApprovalKey {
+                command: v.clone(),
+                cwd: cwd.clone(),
+                escalated,
+            },
+            ApprovalKey {
+                command: strip_wrapper(&v).to_vec(),
+                cwd: cwd.clone(),
+                escalated,
+            },
+            ApprovalKey {
+                command: canonicalize(&v),
+                cwd,
+                escalated,
+            },
+        ]
+    }
+
+    #[test]
+    fn approvals_match_across_windows_wrappers_and_sed_ranges() {
+        let mut store = ApprovalStore::default();
+        store.put_all(
+            &keys_for(&["bash", "-lc", "sed", "-n", "10,20p", "file"]),
+            ReviewDecision::ApprovedForSession,
+        );
+
+        for cmd in [&["wsl", "-e", "bash", "-lc", "sed", "-n", "15,25p", "file"][..],
+            &["pwsh", "-NoProfile", "-Command", "sed", "-n", "15,25p", "file"][..],
+            &["cmd", "/c", "sed", "-n", "15,25p", "file"][..]] {
+            assert_eq!(
+                store.get_any(&keys_for(cmd)),
+                Some(ReviewDecision::ApprovedForSession)
+            );
+        }
+
+        // Different program should not match.
+        assert!(store.get_any(&keys_for(&["rm", "-rf", "file"])).is_none());
+    }
+
+    #[test]
+    fn approvals_match_rg_across_pwsh_bash_and_preserve_pattern() {
+        let mut store = ApprovalStore::default();
+        store.put_all(
+            &keys_for(&["powershell", "-NoProfile", "-Command", "rg", "-n", "foo"]),
+            ReviewDecision::ApprovedForSession,
+        );
+
+        for cmd in [&["pwsh", "-NoProfile", "-Command", "rg", "-n", "foo"][..],
+            &["bash", "-lc", "rg", "-n", "foo"][..]] {
+            assert_eq!(
+                store.get_any(&keys_for(cmd)),
+                Some(ReviewDecision::ApprovedForSession)
+            );
+        }
+
+        // Different pattern should not match canonical key.
+        assert!(store.get_any(&keys_for(&["rg", "-n", "bar"])).is_none());
+    }
+
+    #[test]
+    fn shell_requires_initial_approval_for_dangerous_command() {
+        let rt = ShellRuntime::new();
+        let req = ShellRequest {
+            command: vec!["git".into(), "reset".into(), "--hard".into()],
+            cwd: PathBuf::from("C"),
+            timeout_ms: None,
+            env: std::collections::HashMap::new(),
+            with_escalated_permissions: None,
+            justification: None,
+        };
+        // OnRequest + ReadOnly should request approval for dangerous commands
+        assert!(rt.wants_initial_approval(
+            &req,
+            codex_protocol::protocol::AskForApproval::OnRequest,
+            &crate::protocol::SandboxPolicy::ReadOnly
+        ));
+
+        // Known safe commands should not require approval under ReadOnly
+        let safe = ShellRequest { command: vec!["echo".into(), "ok".into()], ..req.clone() };
+        assert!(!rt.wants_initial_approval(
+            &safe,
+            codex_protocol::protocol::AskForApproval::OnRequest,
+            &crate::protocol::SandboxPolicy::ReadOnly
+        ));
+    }
+
+    #[test]
+    fn approvals_cache_allows_dangerous_command_across_wrappers() {
+        // Approve for session under pwsh wrapper
+        let mut store = ApprovalStore::default();
+        store.put_all(
+            &keys_for(&["pwsh", "-NoProfile", "-Command", "git", "reset", "--hard"]),
+            ReviewDecision::ApprovedForSession,
+        );
+        // Should match under bash -lc wrapper
+        assert_eq!(
+            store.get_any(&keys_for(&["bash", "-lc", "git", "reset", "--hard"])),
+            Some(ReviewDecision::ApprovedForSession)
+        );
     }
 }
