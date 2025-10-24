@@ -84,3 +84,4 @@ The following phases outline the order specs will be written. Within each phase,
 2. Create skeleton `docs/code-specs/README.md` and per-crate subdirectories before authoring individual specs.
 3. Kick off Phase 0 by documenting `common/src/lib.rs` and `protocol/src/lib.rs`, updating the index accordingly.
 4. Establish lightweight automation (e.g., `just docs-check`) later to ensure new source files ship with companion specs.
+5. Begin Phase 1 with `core/src/lib.rs`, `core/src/codex.rs`, and `core/src/codex_conversation.rs`, pausing for a user compaction checkpoint before proceeding deeper into the `core` module tree.
