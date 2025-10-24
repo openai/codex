@@ -1047,7 +1047,10 @@ pub(crate) fn new_mcp_tools_output(
         return PlainHistoryCell { lines };
     }
 
-    for (server, cfg) in config.mcp_servers.iter() {
+    let mut servers: Vec<_> = config.mcp_servers.iter().collect();
+    servers.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    for (server, cfg) in servers {
         let prefix = format!("mcp__{server}__");
         let mut names: Vec<String> = tools
             .keys()
