@@ -1774,19 +1774,30 @@ trust_level = "trusted"
         )?;
 
         let expected_backend = canonicalize(&backend).expect("canonicalize backend directory");
-        match config.sandbox_policy {
-            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
-                assert_eq!(
-                    writable_roots
-                        .iter()
-                        .filter(|root| **root == expected_backend)
-                        .count(),
-                    1,
-                    "expected single writable root entry for {}",
-                    expected_backend.display()
-                );
+        if cfg!(target_os = "windows") {
+            assert!(
+                config.forced_auto_mode_downgraded_on_windows,
+                "expected workspace-write request to be downgraded on Windows"
+            );
+            match config.sandbox_policy {
+                SandboxPolicy::ReadOnly => {}
+                other => panic!("expected read-only policy on Windows, got {other:?}"),
             }
-            other => panic!("expected workspace-write policy, got {other:?}"),
+        } else {
+            match config.sandbox_policy {
+                SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                    assert_eq!(
+                        writable_roots
+                            .iter()
+                            .filter(|root| **root == expected_backend)
+                            .count(),
+                        1,
+                        "expected single writable root entry for {}",
+                        expected_backend.display()
+                    );
+                }
+                other => panic!("expected workspace-write policy, got {other:?}"),
+            }
         }
 
         Ok(())

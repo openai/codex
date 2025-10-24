@@ -1272,6 +1272,9 @@ fn model_selection_popup_snapshot() {
 fn approvals_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
+    if cfg!(target_os = "windows") {
+        chat.config.forced_auto_mode_downgraded_on_windows = false;
+    }
     chat.config.notices.hide_full_access_warning = None;
     chat.open_approvals_popup();
 
