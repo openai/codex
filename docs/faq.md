@@ -42,3 +42,14 @@ Running Codex directly on Windows may work, but is not officially supported. We 
 ### Where should I start after installation?
 
 Follow the quick setup in [Install & build](./install.md) and then jump into [Getting started](./getting-started.md) for interactive usage tips, prompt examples, and AGENTS.md guidance.
+
+### `brew upgrade codex` isn't upgrading me
+
+If you're running Codex v0.46.0 or older, `brew upgrade codex` will not move you to the latest version because we migrated from a Homebrew formula to a cask. To upgrade, uninstall the existing oudated formula and then install the new cask:
+
+```bash
+brew uninstall --formula codex
+brew install --cask codex
+```
+
+After reinstalling, `brew upgrade --cask codex` will keep future releases up to date.
