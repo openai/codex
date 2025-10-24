@@ -771,6 +771,7 @@ impl Session {
             provider,
             auth_manager,
             &otel,
+            self.conversation_id,
             call_id,
             command,
             &turn_context.sandbox_policy,
