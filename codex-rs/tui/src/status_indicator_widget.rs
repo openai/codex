@@ -284,6 +284,11 @@ mod tests {
         terminal
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
+        #[cfg(target_os = "macos")]
+        insta::with_settings!({ snapshot_suffix => "macos" }, {
+            insta::assert_snapshot!(terminal.backend());
+        });
+        #[cfg(not(target_os = "macos"))]
         insta::assert_snapshot!(terminal.backend());
     }
 
