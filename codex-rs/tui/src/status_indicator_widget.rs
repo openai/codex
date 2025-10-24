@@ -25,6 +25,8 @@ pub(crate) struct StatusIndicatorWidget {
     header: String,
     /// Queued user messages to display under the status line.
     queued_messages: Vec<String>,
+    /// Whether to show the interrupt hint (Esc).
+    show_interrupt_hint: bool,
 
     elapsed_running: Duration,
     last_resume_at: Instant,
@@ -55,6 +57,7 @@ impl StatusIndicatorWidget {
         Self {
             header: String::from("Working"),
             queued_messages: Vec::new(),
+            show_interrupt_hint: true,
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
             is_paused: false,
@@ -97,17 +100,22 @@ impl StatusIndicatorWidget {
     }
 
     /// Update the animated header label (left of the brackets).
-    pub(crate) fn update_header(&mut self, header: String) -> bool {
-        if self.header == header {
-            return false;
-        }
+    pub(crate) fn update_header(&mut self, header: String) {
         self.header = header;
-        true
+    }
+
+    pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
+        self.show_interrupt_hint = visible;
     }
 
     #[cfg(test)]
     pub(crate) fn header(&self) -> &str {
         &self.header
+    }
+
+    #[cfg(test)]
+    pub(crate) fn interrupt_hint_visible(&self) -> bool {
+        self.show_interrupt_hint
     }
 
     /// Replace the queued messages displayed beneath the header.
@@ -177,12 +185,16 @@ impl WidgetRef for StatusIndicatorWidget {
         spans.push(spinner(Some(self.last_resume_at)));
         spans.push(" ".into());
         spans.extend(shimmer_spans(&self.header));
-        spans.extend(vec![
-            " ".into(),
-            format!("({pretty_elapsed} • ").dim(),
-            key_hint::plain(KeyCode::Esc).into(),
-            " to interrupt)".dim(),
-        ]);
+        spans.push(" ".into());
+        if self.show_interrupt_hint {
+            spans.extend(vec![
+                format!("({pretty_elapsed} • ").dim(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " to interrupt)".dim(),
+            ]);
+        } else {
+            spans.push(format!("({pretty_elapsed})").dim());
+        }
 
         // Build lines: status, then queued messages, then spacer.
         let mut lines: Vec<Line<'static>> = Vec::new();

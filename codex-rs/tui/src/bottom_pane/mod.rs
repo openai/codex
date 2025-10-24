@@ -287,9 +287,8 @@ impl BottomPane {
     /// indicator is not active.
     pub(crate) fn update_status_header(&mut self, header: String) {
         if let Some(status) = self.status.as_mut() {
-            if status.update_header(header) {
-                self.request_redraw();
-            }
+            status.update_header(header);
+            self.request_redraw();
         }
     }
 
@@ -347,6 +346,7 @@ impl BottomPane {
                 ));
             }
             if let Some(status) = self.status.as_mut() {
+                status.set_interrupt_hint_visible(true);
                 status.set_queued_messages(self.queued_user_messages.clone());
             }
             self.request_redraw();
@@ -369,6 +369,13 @@ impl BottomPane {
                 self.app_event_tx.clone(),
                 self.frame_requester.clone(),
             ));
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
+        if let Some(status) = self.status.as_mut() {
+            status.set_interrupt_hint_visible(visible);
             self.request_redraw();
         }
     }
