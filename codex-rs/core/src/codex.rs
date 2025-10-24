@@ -60,6 +60,7 @@ use crate::config::Config;
 use crate::config_types::McpServerTransportConfig;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
+use crate::conversation_history::prefetch_tokenizer_in_background;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -161,6 +162,8 @@ impl Codex {
         conversation_history: InitialHistory,
         session_source: SessionSource,
     ) -> CodexResult<CodexSpawnOk> {
+        // Start loading the tokenizer in the background so we don't block later.
+        prefetch_tokenizer_in_background();
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
@@ -570,7 +573,9 @@ impl Session {
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = initial_history.get_event_msgs();
-        sess.record_initial_history(initial_history).await;
+        sess.record_initial_history(initial_history)
+            .await
+            .map_err(anyhow::Error::new)?;
 
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
@@ -603,13 +608,16 @@ impl Session {
         format!("auto-compact-{id}")
     }
 
-    async fn record_initial_history(&self, conversation_history: InitialHistory) {
+    async fn record_initial_history(
+        &self,
+        conversation_history: InitialHistory,
+    ) -> CodexResult<()> {
         let turn_context = self.new_turn(SessionSettingsUpdate::default()).await;
         match conversation_history {
             InitialHistory::New => {
                 // Build and record initial items (user instructions + environment context)
                 let items = self.build_initial_context(&turn_context);
-                self.record_conversation_items(&items).await;
+                self.record_conversation_items(&items).await?;
             }
             InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
                 let rollout_items = conversation_history.get_rollout_items();
@@ -617,9 +625,9 @@ impl Session {
 
                 // Always add response items to conversation history
                 let reconstructed_history =
-                    self.reconstruct_history_from_rollout(&turn_context, &rollout_items);
+                    self.reconstruct_history_from_rollout(&turn_context, &rollout_items)?;
                 if !reconstructed_history.is_empty() {
-                    self.record_into_history(&reconstructed_history).await;
+                    self.record_into_history(&reconstructed_history).await?;
                 }
 
                 // If persisting, persist all rollout items as-is (recorder filters)
@@ -628,6 +636,7 @@ impl Session {
                 }
             }
         }
+        Ok(())
     }
 
     pub(crate) async fn update_settings(&self, updates: SessionSettingsUpdate) {
@@ -886,21 +895,25 @@ impl Session {
 
     /// Records input items: always append to conversation history and
     /// persist these response items to rollout.
-    pub(crate) async fn record_conversation_items(&self, items: &[ResponseItem]) {
-        self.record_into_history(items).await;
+    pub(crate) async fn record_conversation_items(
+        &self,
+        items: &[ResponseItem],
+    ) -> CodexResult<()> {
+        self.record_into_history(items).await?;
         self.persist_rollout_response_items(items).await;
+        Ok(())
     }
 
     fn reconstruct_history_from_rollout(
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
-    ) -> Vec<ResponseItem> {
+    ) -> CodexResult<Vec<ResponseItem>> {
         let mut history = ConversationHistory::new();
         for item in rollout_items {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
-                    history.record_items(std::iter::once(response_item));
+                    history.record_items(std::iter::once(response_item))?;
                 }
                 RolloutItem::Compacted(compacted) => {
                     let snapshot = history.get_history();
@@ -915,13 +928,14 @@ impl Session {
                 _ => {}
             }
         }
-        history.get_history()
+        Ok(history.get_history())
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
-    async fn record_into_history(&self, items: &[ResponseItem]) {
+    async fn record_into_history(&self, items: &[ResponseItem]) -> CodexResult<()> {
         let mut state = self.state.lock().await;
-        state.record_items(items.iter());
+        state.record_items(items.iter())?;
+        Ok(())
     }
 
     async fn replace_history(&self, items: Vec<ResponseItem>) {
@@ -1030,11 +1044,11 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         response_input: &ResponseInputItem,
-    ) {
+    ) -> CodexResult<()> {
         let response_item: ResponseItem = response_input.clone().into();
         // Add to conversation history and persist response item to rollout
         self.record_conversation_items(std::slice::from_ref(&response_item))
-            .await;
+            .await?;
 
         // Derive user message events and persist only UserMessage to rollout
         let turn_item = parse_turn_item(&response_item);
@@ -1043,6 +1057,7 @@ impl Session {
             self.emit_turn_item_started_completed(turn_context, item, false)
                 .await;
         }
+        Ok(())
     }
 
     /// Helper that emits a BackgroundEvent with the given message. This keeps
@@ -1223,9 +1238,17 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 if let Err(items) = sess.inject_input(items).await {
                     if let Some(env_item) = sess
                         .build_environment_update_item(previous_context.as_ref(), &current_context)
+                        && let Err(err) = sess
+                            .record_conversation_items(std::slice::from_ref(&env_item))
+                            .await
                     {
-                        sess.record_conversation_items(std::slice::from_ref(&env_item))
-                            .await;
+                        sess.send_event(
+                            current_context.as_ref(),
+                            EventMsg::Error(ErrorEvent {
+                                message: err.to_string(),
+                            }),
+                        )
+                        .await;
                     }
 
                     sess.spawn_task(Arc::clone(&current_context), items, RegularTask)
@@ -1538,9 +1561,9 @@ pub(crate) async fn run_task(
     input: Vec<UserInput>,
     task_kind: TaskKind,
     cancellation_token: CancellationToken,
-) -> Option<String> {
+) -> CodexResult<Option<String>> {
     if input.is_empty() {
-        return None;
+        return Ok(None);
     }
     let event = EventMsg::TaskStarted(TaskStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
@@ -1557,11 +1580,11 @@ pub(crate) async fn run_task(
     if is_review_mode {
         // Seed review threads with environment context so the model knows the working directory.
         review_thread_history
-            .record_items(sess.build_initial_context(turn_context.as_ref()).iter());
-        review_thread_history.record_items(std::iter::once(&initial_input_for_turn.into()));
+            .record_items(sess.build_initial_context(turn_context.as_ref()).iter())?;
+        review_thread_history.record_items(std::iter::once(&initial_input_for_turn.into()))?;
     } else {
         sess.record_input_and_rollout_usermsg(turn_context.as_ref(), &initial_input_for_turn)
-            .await;
+            .await?;
     }
 
     let mut last_agent_message: Option<String> = None;
@@ -1593,11 +1616,11 @@ pub(crate) async fn run_task(
         //   represents an append-only log without duplicates.
         let turn_input: Vec<ResponseItem> = if is_review_mode {
             if !pending_input.is_empty() {
-                review_thread_history.record_items(&pending_input);
+                review_thread_history.record_items(&pending_input)?;
             }
             review_thread_history.get_history()
         } else {
-            sess.record_conversation_items(&pending_input).await;
+            sess.record_conversation_items(&pending_input).await?;
             sess.history_snapshot().await
         };
 
@@ -1645,7 +1668,7 @@ pub(crate) async fn run_task(
                     &mut review_thread_history,
                     &sess,
                 )
-                .await;
+                .await?;
 
                 if token_limit_reached {
                     if auto_compact_recently_attempted {
@@ -1662,7 +1685,8 @@ pub(crate) async fn run_task(
                         break;
                     }
                     auto_compact_recently_attempted = true;
-                    compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
+                    compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone())
+                        .await?;
                     continue;
                 }
 
@@ -1687,13 +1711,13 @@ pub(crate) async fn run_task(
             Err(CodexErr::TurnAborted {
                 dangling_artifacts: processed_items,
             }) => {
-                let _ = process_items(
+                process_items(
                     processed_items,
                     is_review_mode,
                     &mut review_thread_history,
                     &sess,
                 )
-                .await;
+                .await?;
                 // Aborted turn is reported via a different event.
                 break;
             }
@@ -1722,10 +1746,10 @@ pub(crate) async fn run_task(
             Arc::clone(&turn_context),
             last_agent_message.as_deref().map(parse_review_output_event),
         )
-        .await;
+        .await?;
     }
 
-    last_agent_message
+    Ok(last_agent_message)
 }
 
 /// Parse the review output; when not valid JSON, build a structured
@@ -2164,7 +2188,7 @@ pub(crate) async fn exit_review_mode(
     session: Arc<Session>,
     turn_context: Arc<TurnContext>,
     review_output: Option<ReviewOutputEvent>,
-) {
+) -> CodexResult<()> {
     let event = EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
         review_output: review_output.clone(),
     });
@@ -2207,7 +2231,8 @@ pub(crate) async fn exit_review_mode(
             role: "user".to_string(),
             content: vec![ContentItem::InputText { text: user_message }],
         }])
-        .await;
+        .await?;
+    Ok(())
 }
 
 fn mcp_init_error_display(
@@ -2273,6 +2298,7 @@ mod tests {
     use crate::config::ConfigToml;
     use crate::config_types::McpServerConfig;
     use crate::config_types::McpServerTransportConfig;
+    use crate::error::Result as CodexResult;
     use crate::exec::ExecToolCallOutput;
     use crate::mcp::auth::McpAuthStatusEntry;
     use crate::tools::format_exec_output_str;
@@ -2313,9 +2339,12 @@ mod tests {
     #[test]
     fn reconstruct_history_matches_live_compactions() {
         let (session, turn_context) = make_session_and_context();
-        let (rollout_items, expected) = sample_rollout(&session, &turn_context);
+        let (rollout_items, expected) =
+            sample_rollout(&session, &turn_context).expect("sample rollout");
 
-        let reconstructed = session.reconstruct_history_from_rollout(&turn_context, &rollout_items);
+        let reconstructed = session
+            .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+            .expect("reconstruct history");
 
         assert_eq!(expected, reconstructed);
     }
@@ -2323,15 +2352,19 @@ mod tests {
     #[test]
     fn record_initial_history_reconstructs_resumed_transcript() {
         let (session, turn_context) = make_session_and_context();
-        let (rollout_items, expected) = sample_rollout(&session, &turn_context);
+        let (rollout_items, expected) =
+            sample_rollout(&session, &turn_context).expect("sample rollout");
 
-        tokio_test::block_on(session.record_initial_history(InitialHistory::Resumed(
-            ResumedHistory {
-                conversation_id: ConversationId::default(),
-                history: rollout_items,
-                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
-            },
-        )));
+        tokio_test::block_on(async {
+            session
+                .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                    conversation_id: ConversationId::default(),
+                    history: rollout_items,
+                    rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+                }))
+                .await
+                .expect("record resumed history");
+        });
 
         let actual = tokio_test::block_on(async { session.state.lock().await.history_snapshot() });
         assert_eq!(expected, actual);
@@ -2340,9 +2373,15 @@ mod tests {
     #[test]
     fn record_initial_history_reconstructs_forked_transcript() {
         let (session, turn_context) = make_session_and_context();
-        let (rollout_items, expected) = sample_rollout(&session, &turn_context);
+        let (rollout_items, expected) =
+            sample_rollout(&session, &turn_context).expect("sample rollout");
 
-        tokio_test::block_on(session.record_initial_history(InitialHistory::Forked(rollout_items)));
+        tokio_test::block_on(async {
+            session
+                .record_initial_history(InitialHistory::Forked(rollout_items))
+                .await
+                .expect("record forked history");
+        });
 
         let actual = tokio_test::block_on(async { session.state.lock().await.history_snapshot() });
         assert_eq!(expected, actual);
@@ -2702,10 +2741,10 @@ mod tests {
             _ctx: Arc<TurnContext>,
             _input: Vec<UserInput>,
             cancellation_token: CancellationToken,
-        ) -> Option<String> {
+        ) -> CodexResult<Option<String>> {
             if self.listen_to_cancellation_token {
                 cancellation_token.cancelled().await;
-                return None;
+                return Ok(None);
             }
             loop {
                 sleep(Duration::from_secs(60)).await;
@@ -2714,7 +2753,7 @@ mod tests {
 
         async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
             if let TaskKind::Review = self.kind {
-                exit_review_mode(session.clone_session(), ctx, None).await;
+                let _ = exit_review_mode(session.clone_session(), ctx, None).await;
             }
         }
     }
@@ -2870,7 +2909,7 @@ mod tests {
     fn sample_rollout(
         session: &Session,
         turn_context: &TurnContext,
-    ) -> (Vec<RolloutItem>, Vec<ResponseItem>) {
+    ) -> CodexResult<(Vec<RolloutItem>, Vec<ResponseItem>)> {
         let mut rollout_items = Vec::new();
         let mut live_history = ConversationHistory::new();
 
@@ -2878,7 +2917,7 @@ mod tests {
         for item in &initial_context {
             rollout_items.push(RolloutItem::ResponseItem(item.clone()));
         }
-        live_history.record_items(initial_context.iter());
+        live_history.record_items(initial_context.iter())?;
 
         let user1 = ResponseItem::Message {
             id: None,
@@ -2887,7 +2926,7 @@ mod tests {
                 text: "first user".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&user1));
+        live_history.record_items(std::iter::once(&user1))?;
         rollout_items.push(RolloutItem::ResponseItem(user1.clone()));
 
         let assistant1 = ResponseItem::Message {
@@ -2897,7 +2936,7 @@ mod tests {
                 text: "assistant reply one".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&assistant1));
+        live_history.record_items(std::iter::once(&assistant1))?;
         rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
 
         let summary1 = "summary one";
@@ -2920,7 +2959,7 @@ mod tests {
                 text: "second user".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&user2));
+        live_history.record_items(std::iter::once(&user2))?;
         rollout_items.push(RolloutItem::ResponseItem(user2.clone()));
 
         let assistant2 = ResponseItem::Message {
@@ -2930,7 +2969,7 @@ mod tests {
                 text: "assistant reply two".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&assistant2));
+        live_history.record_items(std::iter::once(&assistant2))?;
         rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
 
         let summary2 = "summary two";
@@ -2953,7 +2992,7 @@ mod tests {
                 text: "third user".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&user3));
+        live_history.record_items(std::iter::once(&user3))?;
         rollout_items.push(RolloutItem::ResponseItem(user3.clone()));
 
         let assistant3 = ResponseItem::Message {
@@ -2963,10 +3002,10 @@ mod tests {
                 text: "assistant reply three".to_string(),
             }],
         };
-        live_history.record_items(std::iter::once(&assistant3));
+        live_history.record_items(std::iter::once(&assistant3))?;
         rollout_items.push(RolloutItem::ResponseItem(assistant3.clone()));
 
-        (rollout_items, live_history.get_history())
+        Ok((rollout_items, live_history.get_history()))
     }
 
     #[tokio::test]

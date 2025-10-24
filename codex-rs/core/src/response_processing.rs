@@ -1,5 +1,6 @@
 use crate::codex::Session;
 use crate::conversation_history::ConversationHistory;
+use crate::error::Result as CodexResult;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -13,7 +14,7 @@ pub(crate) async fn process_items(
     is_review_mode: bool,
     review_thread_history: &mut ConversationHistory,
     sess: &Session,
-) -> (Vec<ResponseInputItem>, Vec<ResponseItem>) {
+) -> CodexResult<(Vec<ResponseInputItem>, Vec<ResponseItem>)> {
     let mut items_to_record_in_conversation_history = Vec::<ResponseItem>::new();
     let mut responses = Vec::<ResponseInputItem>::new();
     for processed_response_item in processed_items {
@@ -102,11 +103,11 @@ pub(crate) async fn process_items(
     // Only attempt to take the lock if there is something to record.
     if !items_to_record_in_conversation_history.is_empty() {
         if is_review_mode {
-            review_thread_history.record_items(items_to_record_in_conversation_history.iter());
+            review_thread_history.record_items(items_to_record_in_conversation_history.iter())?;
         } else {
             sess.record_conversation_items(&items_to_record_in_conversation_history)
-                .await;
+                .await?;
         }
     }
-    (responses, items_to_record_in_conversation_history)
+    Ok((responses, items_to_record_in_conversation_history))
 }

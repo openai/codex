@@ -107,6 +107,12 @@ impl Tokenizer {
     }
 }
 
+impl fmt::Debug for Tokenizer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Tokenizer").finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

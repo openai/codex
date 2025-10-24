@@ -39,35 +39,35 @@ struct HistoryBridgeTemplate<'a> {
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-) {
+) -> CodexResult<()> {
     let input = vec![UserInput::Text {
         text: SUMMARIZATION_PROMPT.to_string(),
     }];
-    run_compact_task_inner(sess, turn_context, input).await;
+    run_compact_task_inner(sess, turn_context, input).await
 }
 
 pub(crate) async fn run_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
-) -> Option<String> {
+) -> CodexResult<Option<String>> {
     let start_event = EventMsg::TaskStarted(TaskStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
     sess.send_event(&turn_context, start_event).await;
-    run_compact_task_inner(sess.clone(), turn_context, input).await;
-    None
+    run_compact_task_inner(sess.clone(), turn_context, input).await?;
+    Ok(None)
 }
 
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
-) {
+) -> CodexResult<()> {
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
-    history.record_items(&[initial_input_for_turn.into()]);
+    history.record_items(&[initial_input_for_turn.into()])?;
 
     let mut truncated_count = 0usize;
 
@@ -106,7 +106,7 @@ async fn run_compact_task_inner(
                 break;
             }
             Err(CodexErr::Interrupted) => {
-                return;
+                return Ok(());
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
                 if turn_input.len() > 1 {
@@ -124,7 +124,7 @@ async fn run_compact_task_inner(
                     message: e.to_string(),
                 });
                 sess.send_event(&turn_context, event).await;
-                return;
+                return Ok(());
             }
             Err(e) => {
                 if retries < max_retries {
@@ -142,7 +142,7 @@ async fn run_compact_task_inner(
                         message: e.to_string(),
                     });
                     sess.send_event(&turn_context, event).await;
-                    return;
+                    return Ok(());
                 }
             }
         }
@@ -164,6 +164,7 @@ async fn run_compact_task_inner(
         message: "Compact task completed".to_string(),
     });
     sess.send_event(&turn_context, event).await;
+    Ok(())
 }
 
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
@@ -252,7 +253,8 @@ async fn drain_to_completed(
         };
         match event {
             Ok(ResponseEvent::OutputItemDone(item)) => {
-                sess.record_into_history(std::slice::from_ref(&item)).await;
+                sess.record_into_history(std::slice::from_ref(&item))
+                    .await?;
             }
             Ok(ResponseEvent::RateLimits(snapshot)) => {
                 sess.update_rate_limits(turn_context, snapshot).await;

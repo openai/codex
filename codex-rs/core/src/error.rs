@@ -158,6 +158,9 @@ pub enum CodexErr {
 
     #[error("{0}")]
     EnvVar(EnvVarError),
+
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
 }
 
 impl From<CancelErr> for CodexErr {

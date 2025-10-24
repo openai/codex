@@ -1,11 +1,20 @@
+use std::sync::Arc;
+use std::sync::OnceLock;
+
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_utils_tokenizer::Tokenizer;
+use tokio::task;
 use tracing::error;
 
+static TOKENIZER: OnceLock<Option<Arc<Tokenizer>>> = OnceLock::new();
+
+use crate::error::CodexErr;
+
 /// Transcript of conversation history
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct ConversationHistory {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
@@ -16,7 +25,7 @@ impl ConversationHistory {
     pub(crate) fn new() -> Self {
         Self {
             items: Vec::new(),
-            token_info: TokenUsageInfo::new_or_append(&None, &None, None),
+            token_info: None,
         }
     }
 
@@ -34,7 +43,7 @@ impl ConversationHistory {
     }
 
     /// `items` is ordered from oldest to newest.
-    pub(crate) fn record_items<I>(&mut self, items: I)
+    pub(crate) fn record_items<I>(&mut self, items: I) -> Result<(), CodexErr>
     where
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
@@ -43,9 +52,10 @@ impl ConversationHistory {
             if !is_api_message(&item) {
                 continue;
             }
-
+            self.validate_input(&item)?;
             self.items.push(item.clone());
         }
+        Ok(())
     }
 
     pub(crate) fn get_history(&mut self) -> Vec<ResponseItem> {
@@ -79,6 +89,65 @@ impl ConversationHistory {
     /// Returns a clone of the contents in the transcript.
     fn contents(&self) -> Vec<ResponseItem> {
         self.items.clone()
+    }
+
+    fn validate_input(&self, item: &ResponseItem) -> Result<(), CodexErr> {
+        match item {
+            ResponseItem::Message { content, .. } => {
+                self.validate_input_content_item(content)?;
+                Ok(())
+            }
+            ResponseItem::FunctionCall { .. }
+            | ResponseItem::FunctionCallOutput { .. }
+            | ResponseItem::CustomToolCall { .. }
+            | ResponseItem::CustomToolCallOutput { .. }
+            | ResponseItem::LocalShellCall { .. }
+            | ResponseItem::Reasoning { .. }
+            | ResponseItem::WebSearchCall { .. } => Ok(()),
+            ResponseItem::Other => Err(CodexErr::InvalidInput(format!("invalid input: {item:?}"))),
+        }
+    }
+
+    fn validate_input_content_item(
+        &self,
+        content: &[codex_protocol::models::ContentItem],
+    ) -> Result<(), CodexErr> {
+        let Some(info) = &self.token_info else {
+            return Ok(());
+        };
+        // this will intentionally not check the context for the first turn before getting this information.
+        // it's acceptable tradeoff.
+        let Some(context_window) = info.model_context_window else {
+            return Ok(());
+        };
+        let tokenizer = match shared_tokenizer() {
+            Some(t) => t,
+            None => return Ok(()),
+        };
+
+        let mut input_tokens: i64 = 0;
+        for item in content {
+            match item {
+                codex_protocol::models::ContentItem::InputText { text } => {
+                    input_tokens += tokenizer.count(text);
+                }
+                codex_protocol::models::ContentItem::InputImage { .. } => {
+                    // no validation currently
+                }
+                codex_protocol::models::ContentItem::OutputText { .. } => {
+                    // no validation currently
+                }
+            }
+        }
+
+        let prior_total = info.last_token_usage.total_tokens;
+        let combined_tokens = prior_total.saturating_add(input_tokens);
+        let threshold = context_window * 95 / 100;
+        if combined_tokens > threshold {
+            return Err(CodexErr::InvalidInput("input too large".to_string()));
+        }
+
+        Ok(())
     }
 
     fn ensure_call_outputs_present(&mut self) {
@@ -343,6 +412,36 @@ fn error_or_panic(message: String) {
     }
 }
 
+fn shared_tokenizer() -> Option<Arc<Tokenizer>> {
+    TOKENIZER.get().and_then(|opt| opt.as_ref().map(Arc::clone))
+}
+
+/// Kick off background initialization of the shared tokenizer without blocking the caller.
+pub(crate) fn prefetch_tokenizer_in_background() {
+    if TOKENIZER.get().is_some() {
+        return;
+    }
+
+    // Spawn a background task to initialize the tokenizer. Use spawn_blocking in case
+    // initialization performs CPU-heavy work or file I/O.
+    tokio::spawn(async {
+        let result = task::spawn_blocking(Tokenizer::try_default).await;
+        match result {
+            Ok(Ok(tokenizer)) => {
+                let _ = TOKENIZER.set(Some(Arc::new(tokenizer)));
+            }
+            Ok(Err(error)) => {
+                error!("failed to create tokenizer: {error}");
+                let _ = TOKENIZER.set(None);
+            }
+            Err(join_error) => {
+                error!("failed to join tokenizer init task: {join_error}");
+                let _ = TOKENIZER.set(None);
+            }
+        }
+    });
+}
+
 /// Anything that is not a system message or "reasoning" message is considered
 /// an API message.
 fn is_api_message(message: &ResponseItem) -> bool {
@@ -381,7 +480,7 @@ mod tests {
 
     fn create_history_with_items(items: Vec<ResponseItem>) -> ConversationHistory {
         let mut h = ConversationHistory::new();
-        h.record_items(items.iter());
+        h.record_items(items.iter()).unwrap();
         h
     }
 
@@ -397,7 +496,7 @@ mod tests {
 
     #[test]
     fn filters_non_api_messages() {
-        let mut h = ConversationHistory::default();
+        let mut h = ConversationHistory::new();
         // System message is not an API message; Other is ignored.
         let system = ResponseItem::Message {
             id: None,
@@ -406,12 +505,12 @@ mod tests {
                 text: "ignored".to_string(),
             }],
         };
-        h.record_items([&system, &ResponseItem::Other]);
+        h.record_items([&system, &ResponseItem::Other]).unwrap();
 
         // User and assistant should be retained.
         let u = user_msg("hi");
         let a = assistant_msg("hello");
-        h.record_items([&u, &a]);
+        h.record_items([&u, &a]).unwrap();
 
         let items = h.contents();
         assert_eq!(

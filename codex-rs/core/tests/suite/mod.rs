@@ -13,6 +13,7 @@ mod compact_resume_fork;
 mod exec;
 mod fork_conversation;
 mod grep_files;
+mod input_validation;
 mod items;
 mod json_result;
 mod list_dir;

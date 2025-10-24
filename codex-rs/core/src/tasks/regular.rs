@@ -5,6 +5,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex::TurnContext;
 use crate::codex::run_task;
+use crate::error::Result as CodexResult;
 use crate::state::TaskKind;
 use codex_protocol::user_input::UserInput;
 
@@ -26,7 +27,7 @@ impl SessionTask for RegularTask {
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> CodexResult<Option<String>> {
         let sess = session.clone_session();
         run_task(sess, ctx, input, TaskKind::Regular, cancellation_token).await
     }

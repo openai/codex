@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 use crate::codex::TurnContext;
 use crate::codex::exit_review_mode;
 use crate::codex::run_task;
+use crate::error::Result as CodexResult;
 use crate::state::TaskKind;
 use codex_protocol::user_input::UserInput;
 
@@ -27,12 +28,12 @@ impl SessionTask for ReviewTask {
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> CodexResult<Option<String>> {
         let sess = session.clone_session();
         run_task(sess, ctx, input, TaskKind::Review, cancellation_token).await
     }
 
     async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
-        exit_review_mode(session.clone_session(), ctx, None).await;
+        let _ = exit_review_mode(session.clone_session(), ctx, None).await;
     }
 }

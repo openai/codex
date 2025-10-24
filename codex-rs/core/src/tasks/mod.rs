@@ -15,6 +15,8 @@ use tracing::warn;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::error::Result as CodexResult;
+use crate::protocol::ErrorEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnAbortReason;
@@ -56,7 +58,7 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String>;
+    ) -> CodexResult<Option<String>>;
 
     async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
         let _ = (session, ctx);
@@ -86,7 +88,7 @@ impl Session {
             let task_cancellation_token = cancellation_token.child_token();
             tokio::spawn(async move {
                 let ctx_for_finish = Arc::clone(&ctx);
-                let last_agent_message = task_for_run
+                let run_result = task_for_run
                     .run(
                         Arc::clone(&session_ctx),
                         ctx,
@@ -98,8 +100,21 @@ impl Session {
                 if !task_cancellation_token.is_cancelled() {
                     // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
                     let sess = session_ctx.clone_session();
-                    sess.on_task_finished(ctx_for_finish, last_agent_message)
-                        .await;
+                    match run_result {
+                        Ok(last_agent_message) => {
+                            sess.on_task_finished(ctx_for_finish, last_agent_message)
+                                .await;
+                        }
+                        Err(err) => {
+                            let message = err.to_string();
+                            sess.send_event(
+                                ctx_for_finish.as_ref(),
+                                EventMsg::Error(ErrorEvent { message }),
+                            )
+                            .await;
+                            sess.on_task_finished(ctx_for_finish, None).await;
+                        }
+                    }
                 }
                 done_clone.notify_waiters();
             })
