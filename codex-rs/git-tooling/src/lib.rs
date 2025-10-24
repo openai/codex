@@ -12,8 +12,9 @@ pub use ghost_commits::create_ghost_commit;
 pub use ghost_commits::restore_ghost_commit;
 pub use ghost_commits::restore_to_commit;
 pub use platform::create_symlink;
-use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
 use ts_rs::TS;
 
 type CommitID = String;
