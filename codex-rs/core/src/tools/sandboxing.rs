@@ -49,13 +49,26 @@ impl ApprovalStore {
 
     // Try keys in order and return the first match.
     pub fn get_any<K>(&self, keys: &[K]) -> Option<ReviewDecision>
-    where K: Serialize,
-    { for k in keys { if let Some(v) = self.get(k) { return Some(v); } } None }
+    where
+        K: Serialize,
+    {
+        for k in keys {
+            if let Some(v) = self.get(k) {
+                return Some(v);
+            }
+        }
+        None
+    }
 
     // Persist the same decision under all provided keys.
     pub fn put_all<K>(&mut self, keys: &[K], value: ReviewDecision)
-    where K: Serialize + Clone,
-    { for k in keys { self.put(k.clone(), value); } }
+    where
+        K: Serialize + Clone,
+    {
+        for k in keys {
+            self.put(k.clone(), value);
+        }
+    }
 }
 
 pub(crate) async fn with_cached_approval<K, F, Fut>(

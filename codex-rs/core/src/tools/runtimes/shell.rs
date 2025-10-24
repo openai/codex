@@ -60,18 +60,68 @@ impl ShellRuntime {
 // Peel common Windows shell launchers and return the inner argv slice.
 fn strip_wrapper(argv: &[String]) -> &[String] {
     let mut i = 0;
-    let eq = |s: &str, n: &str| { let sl = s.to_ascii_lowercase(); sl == n || sl == format!("{n}.exe") };
+    let eq = |s: &str, n: &str| {
+        let sl = s.to_ascii_lowercase();
+        sl == n || sl == format!("{n}.exe")
+    };
     if argv.first().map(|s| eq(s, "wsl")).unwrap_or(false) {
         i += 1;
-        if argv.get(i).map(|t| { let t=t.to_ascii_lowercase(); t=="--"||t=="-e"||t=="--exec" }).unwrap_or(false) { i += 1; }
-        if argv.get(i).map(|s| eq(s, "bash")).unwrap_or(false) && argv.get(i+1).map(|s| s.eq_ignore_ascii_case("-lc")).unwrap_or(false) { i += 2; }
+        if argv
+            .get(i)
+            .map(|t| {
+                let t = t.to_ascii_lowercase();
+                t == "--" || t == "-e" || t == "--exec"
+            })
+            .unwrap_or(false)
+        {
+            i += 1;
+        }
+        if argv.get(i).map(|s| eq(s, "bash")).unwrap_or(false)
+            && argv
+                .get(i + 1)
+                .map(|s| s.eq_ignore_ascii_case("-lc"))
+                .unwrap_or(false)
+        {
+            i += 2;
+        }
         return &argv[i.min(argv.len())..];
     }
-    if argv.first().map(|s| eq(s, "bash")).unwrap_or(false) && argv.get(1).map(|s| s.eq_ignore_ascii_case("-lc")).unwrap_or(false) { return &argv[2.min(argv.len())..]; }
-    if argv.first().map(|s| eq(s, "cmd")).unwrap_or(false) && argv.get(1).map(|s| s.eq_ignore_ascii_case("/c")||s.eq_ignore_ascii_case("-c")).unwrap_or(false) { return &argv[2.min(argv.len())..]; }
-    if argv.first().map(|s| eq(s, "powershell")||eq(s, "pwsh")).unwrap_or(false) {
-        i = 1; while argv.get(i).map(|s| s.eq_ignore_ascii_case("-noprofile")).unwrap_or(false) { i += 1; }
-        if argv.get(i).map(|s| s.eq_ignore_ascii_case("-command")||s.eq_ignore_ascii_case("-c")).unwrap_or(false) { i += 1; }
+    if argv.first().map(|s| eq(s, "bash")).unwrap_or(false)
+        && argv
+            .get(1)
+            .map(|s| s.eq_ignore_ascii_case("-lc"))
+            .unwrap_or(false)
+    {
+        return &argv[2.min(argv.len())..];
+    }
+    if argv.first().map(|s| eq(s, "cmd")).unwrap_or(false)
+        && argv
+            .get(1)
+            .map(|s| s.eq_ignore_ascii_case("/c") || s.eq_ignore_ascii_case("-c"))
+            .unwrap_or(false)
+    {
+        return &argv[2.min(argv.len())..];
+    }
+    if argv
+        .first()
+        .map(|s| eq(s, "powershell") || eq(s, "pwsh"))
+        .unwrap_or(false)
+    {
+        i = 1;
+        while argv
+            .get(i)
+            .map(|s| s.eq_ignore_ascii_case("-noprofile"))
+            .unwrap_or(false)
+        {
+            i += 1;
+        }
+        if argv
+            .get(i)
+            .map(|s| s.eq_ignore_ascii_case("-command") || s.eq_ignore_ascii_case("-c"))
+            .unwrap_or(false)
+        {
+            i += 1;
+        }
         return &argv[i.min(argv.len())..];
     }
     argv
@@ -88,22 +138,35 @@ fn canonicalize(argv: &[String]) -> Vec<String> {
         .and_then(|s| s.to_str())
         .unwrap_or(&args[0])
         .to_ascii_lowercase();
-    // Be conservative: only canonicalize specific tools; otherwise fall back to stripped.
+    // Be conservative: preserve full argv; only de-noise clearly-volatile pieces.
     match prog.as_str() {
+        // For sed, normalize digits in the first non-flag token (e.g., "10,20p" -> "NN,NNp").
         "sed" => {
-            let mut key = vec![prog];
-            if let Some(first) = args.iter().skip(1).find(|s| !s.starts_with('-')) {
-                key.push(first.chars().map(|c| if c.is_ascii_digit() { 'N' } else { c }).collect());
+            let mut out = Vec::with_capacity(args.len());
+            out.push(prog);
+            let mut normalized = false;
+            for a in args.iter().skip(1) {
+                if !normalized && !a.starts_with('-') {
+                    out.push(
+                        a.chars()
+                            .map(|c| if c.is_ascii_digit() { 'N' } else { c })
+                            .collect(),
+                    );
+                    normalized = true;
+                } else {
+                    out.push(a.clone());
+                }
             }
-            key
+            out
         }
+        // For rg, keep the entire argv unchanged (wrapper-stripping handles cross-shell).
         "rg" => {
-            let mut key = vec![prog];
-            if let Some(first) = args.iter().skip(1).find(|s| !s.starts_with('-')) {
-                key.push(first.clone());
-            }
-            key
+            let mut out = Vec::with_capacity(args.len());
+            out.push(prog);
+            out.extend(args.iter().skip(1).cloned());
+            out
         }
+        // Default: pass-through after stripping wrappers.
         _ => args.to_vec(),
     }
 }
@@ -134,8 +197,16 @@ impl Approvable<ShellRequest> for ShellRuntime {
         ctx: ApprovalCtx<'a>,
     ) -> BoxFuture<'a, ReviewDecision> {
         let raw = self.approval_key(req);
-        let stripped = ApprovalKey { command: strip_wrapper(&req.command).to_vec(), cwd: req.cwd.clone(), escalated: req.with_escalated_permissions.unwrap_or(false) };
-        let canon = ApprovalKey { command: canonicalize(&req.command), cwd: req.cwd.clone(), escalated: req.with_escalated_permissions.unwrap_or(false) };
+        let stripped = ApprovalKey {
+            command: strip_wrapper(&req.command).to_vec(),
+            cwd: req.cwd.clone(),
+            escalated: req.with_escalated_permissions.unwrap_or(false),
+        };
+        let canon = ApprovalKey {
+            command: canonicalize(&req.command),
+            cwd: req.cwd.clone(),
+            escalated: req.with_escalated_permissions.unwrap_or(false),
+        };
         let keys = vec![raw, stripped, canon];
         let command = req.command.clone();
         let cwd = req.cwd.clone();
@@ -154,7 +225,14 @@ impl Approvable<ShellRequest> for ShellRuntime {
             let decision = session
                 .request_command_approval(turn, call_id, command, cwd, reason)
                 .await;
-            if matches!(decision, ReviewDecision::ApprovedForSession) { session.services.tool_approvals.lock().await.put_all(&keys, ReviewDecision::ApprovedForSession); }
+            if matches!(decision, ReviewDecision::ApprovedForSession) {
+                session
+                    .services
+                    .tool_approvals
+                    .lock()
+                    .await
+                    .put_all(&keys, ReviewDecision::ApprovedForSession);
+            }
             decision
         })
     }
@@ -257,9 +335,19 @@ mod tests {
             ReviewDecision::ApprovedForSession,
         );
 
-        for cmd in [&["wsl", "-e", "bash", "-lc", "sed", "-n", "15,25p", "file"][..],
-            &["pwsh", "-NoProfile", "-Command", "sed", "-n", "15,25p", "file"][..],
-            &["cmd", "/c", "sed", "-n", "15,25p", "file"][..]] {
+        for cmd in [
+            &["wsl", "-e", "bash", "-lc", "sed", "-n", "15,25p", "file"][..],
+            &[
+                "pwsh",
+                "-NoProfile",
+                "-Command",
+                "sed",
+                "-n",
+                "15,25p",
+                "file",
+            ][..],
+            &["cmd", "/c", "sed", "-n", "15,25p", "file"][..],
+        ] {
             assert_eq!(
                 store.get_any(&keys_for(cmd)),
                 Some(ReviewDecision::ApprovedForSession)
@@ -278,8 +366,10 @@ mod tests {
             ReviewDecision::ApprovedForSession,
         );
 
-        for cmd in [&["pwsh", "-NoProfile", "-Command", "rg", "-n", "foo"][..],
-            &["bash", "-lc", "rg", "-n", "foo"][..]] {
+        for cmd in [
+            &["pwsh", "-NoProfile", "-Command", "rg", "-n", "foo"][..],
+            &["bash", "-lc", "rg", "-n", "foo"][..],
+        ] {
             assert_eq!(
                 store.get_any(&keys_for(cmd)),
                 Some(ReviewDecision::ApprovedForSession)
@@ -288,6 +378,31 @@ mod tests {
 
         // Different pattern should not match canonical key.
         assert!(store.get_any(&keys_for(&["rg", "-n", "bar"])).is_none());
+    }
+
+    #[test]
+    fn sed_canonicalization_does_not_cross_files() {
+        let mut store = ApprovalStore::default();
+        // Approve for session on one filename
+        store.put_all(
+            &keys_for(&["bash", "-lc", "sed", "-n", "10,20p", "safe.txt"]),
+            ReviewDecision::ApprovedForSession,
+        );
+        // Same script/range but different filename must not match
+        assert!(
+            store
+                .get_any(&keys_for(&[
+                    "wsl",
+                    "-e",
+                    "bash",
+                    "-lc",
+                    "sed",
+                    "-n",
+                    "10,20p",
+                    "secrets.txt",
+                ]))
+                .is_none()
+        );
     }
 
     #[test]
@@ -309,7 +424,10 @@ mod tests {
         ));
 
         // Known safe commands should not require approval under ReadOnly
-        let safe = ShellRequest { command: vec!["echo".into(), "ok".into()], ..req.clone() };
+        let safe = ShellRequest {
+            command: vec!["echo".into(), "ok".into()],
+            ..req.clone()
+        };
         assert!(!rt.wants_initial_approval(
             &safe,
             codex_protocol::protocol::AskForApproval::OnRequest,
