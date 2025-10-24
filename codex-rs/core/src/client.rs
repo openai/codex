@@ -134,6 +134,10 @@ impl ModelClient {
         self.stream_with_task_kind(prompt, TaskKind::Regular).await
     }
 
+    pub async fn get_config(&self) -> Arc<Config> {
+        self.config.clone()
+    }
+
     pub(crate) async fn stream_with_task_kind(
         &self,
         prompt: &Prompt,
