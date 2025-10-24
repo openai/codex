@@ -1397,6 +1397,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-sdk-rs"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "async-stream",
+ "codex-cli",
+ "codex-exec",
+ "codex-protocol",
+ "futures",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.16",
+ "tokio",
+]
+
+[[package]]
 name = "codex-stdio-to-uds"
 version = "0.0.0"
 dependencies = [

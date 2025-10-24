@@ -16,6 +16,7 @@ use crate::config_types::ReasoningSummaryFormat;
 use crate::config_types::SandboxWorkspaceWrite;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
+use crate::config_types::ThemeMode;
 use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
 use crate::features::Feature;
@@ -150,6 +151,9 @@ pub struct Config {
     /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
+
+    /// TUI-specific settings (theme, etc.)
+    pub tui: Tui,
 
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
@@ -715,6 +719,22 @@ fn ensure_profile_table<'a>(
     Ok(profile_table)
 }
 
+fn ensure_subtable<'a>(table: &'a mut TomlTable, key: &str) -> &'a mut TomlTable {
+    let needs_table = table.get(key).and_then(|item| item.as_table()).is_none();
+    if needs_table {
+        let mut new_table = TomlTable::new();
+        new_table.set_implicit(false);
+        table.insert(key, TomlItem::Table(new_table));
+    }
+
+    let subtable = table
+        .get_mut(key)
+        .and_then(|item| item.as_table_mut())
+        .expect("subtable should exist after insertion");
+    subtable.set_implicit(false);
+    subtable
+}
+
 // TODO(jif) refactor config persistence.
 pub async fn persist_model_selection(
     codex_home: &Path,
@@ -760,6 +780,59 @@ pub async fn persist_model_selection(
     }
 
     // TODO(jif) refactor the home creation
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+
+    Ok(())
+}
+
+pub async fn persist_tui_theme(
+    codex_home: &Path,
+    active_profile: Option<&str>,
+    theme: &ThemeMode,
+) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    let mut theme_wrapper = BTreeMap::new();
+    theme_wrapper.insert("theme", theme.clone());
+    let theme_fragment =
+        toml::to_string(&theme_wrapper).with_context(|| "failed to serialize theme mode")?;
+    let theme_doc: DocumentMut = theme_fragment
+        .parse()
+        .with_context(|| "failed to parse serialized theme mode")?;
+    let theme_item = theme_doc["theme"].clone();
+
+    if let Some(profile_name) = active_profile {
+        let profile_table = ensure_profile_table(&mut doc, profile_name)?;
+        let tui_table = ensure_subtable(profile_table, "tui");
+        tui_table["theme"] = theme_item.clone();
+    } else {
+        let root_table = doc.as_table_mut();
+        let tui_table = ensure_subtable(root_table, "tui");
+        tui_table["theme"] = theme_item;
+    }
+
     tokio::fs::create_dir_all(codex_home)
         .await
         .with_context(|| {
@@ -1405,6 +1478,7 @@ impl Config {
                 .as_ref()
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
+            tui: cfg.tui.unwrap_or_default(),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -2697,6 +2771,57 @@ model = "gpt-5-codex"
         Ok(())
     }
 
+    #[tokio::test]
+    async fn persist_tui_theme_updates_defaults() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_tui_theme(
+            codex_home.path(),
+            None,
+            &crate::config_types::ThemeMode::SolarizedLight,
+        )
+        .await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(
+            parsed.tui.as_ref().map(|tui| tui.theme.clone()),
+            Some(crate::config_types::ThemeMode::SolarizedLight)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_tui_theme_updates_profile() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_tui_theme(
+            codex_home.path(),
+            Some("dev"),
+            &crate::config_types::ThemeMode::Nord,
+        )
+        .await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        let profile = parsed
+            .profiles
+            .get("dev")
+            .expect("profile should be created");
+
+        assert_eq!(
+            profile.tui.as_ref().map(|tui| tui.theme.clone()),
+            Some(crate::config_types::ThemeMode::Nord)
+        );
+
+        Ok(())
+    }
+
     struct PrecedenceTestFixture {
         cwd: TempDir,
         codex_home: TempDir,
@@ -2884,6 +3009,7 @@ model_verbosity = "high"
                 notices: Default::default(),
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
+                tui: Default::default(),
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -2952,6 +3078,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui: Default::default(),
             otel: OtelConfig::default(),
         };
 
@@ -3035,6 +3162,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui: Default::default(),
             otel: OtelConfig::default(),
         };
 
@@ -3104,6 +3232,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui: Default::default(),
             otel: OtelConfig::default(),
         };
 

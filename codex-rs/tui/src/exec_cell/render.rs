@@ -9,6 +9,7 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::shimmer::shimmer_spans;
+use crate::style::current_theme;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
@@ -18,6 +19,7 @@ use codex_protocol::parse_command::ParsedCommand;
 use itertools::Itertools;
 use ratatui::prelude::*;
 use ratatui::style::Modifier;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
@@ -233,18 +235,30 @@ impl WidgetRef for &ExecCell {
 impl ExecCell {
     fn exploring_display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
+        let theme = current_theme();
+        let header_style = Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD);
+        let bullet_style = Style::default().fg(theme.accent);
+        let detail_style = Style::default().fg(theme.secondary);
+        let prefix_style = Style::default().fg(theme.dim).add_modifier(Modifier::DIM);
+
+        let bullet = if self.is_active() {
+            spinner(self.active_start_time())
+        } else {
+            Span::styled("•", bullet_style)
+        };
         out.push(Line::from(vec![
-            if self.is_active() {
-                spinner(self.active_start_time())
-            } else {
-                "•".dim()
-            },
+            bullet,
             " ".into(),
-            if self.is_active() {
-                "Exploring".bold()
-            } else {
-                "Explored".bold()
-            },
+            Span::styled(
+                if self.is_active() {
+                    "Exploring"
+                } else {
+                    "Explored"
+                },
+                header_style,
+            ),
         ]));
 
         let mut calls = self.calls.clone();
@@ -317,8 +331,9 @@ impl ExecCell {
             };
 
             for (title, line) in call_lines {
-                let line = Line::from(line);
-                let initial_indent = Line::from(vec![title.cyan(), " ".into()]);
+                let line = Line::from(line).style(detail_style);
+                let initial_indent =
+                    Line::from(vec![Span::styled(title, detail_style), " ".into()]);
                 let subsequent_indent = " ".repeat(initial_indent.width()).into();
                 let wrapped = word_wrap_line(
                     &line,
@@ -330,7 +345,11 @@ impl ExecCell {
             }
         }
 
-        out.extend(prefix_lines(out_indented, "  └ ".dim(), "    ".into()));
+        out.extend(prefix_lines(
+            out_indented,
+            Span::styled("  └ ", prefix_style),
+            Span::styled("    ", prefix_style),
+        ));
         out
     }
 

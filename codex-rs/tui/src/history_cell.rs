@@ -11,6 +11,7 @@ use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
+use crate::style::assistant_message_style;
 use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
@@ -107,6 +108,19 @@ impl dyn HistoryCell {
     pub(crate) fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+}
+
+fn patch_line_style(mut line: Line<'static>, style: Style) -> Line<'static> {
+    line.style = line.style.patch(style);
+    line.spans = line
+        .spans
+        .into_iter()
+        .map(|mut span| {
+            span.style = span.style.patch(style);
+            span
+        })
+        .collect();
+    line
 }
 
 #[derive(Debug)]
@@ -232,7 +246,7 @@ impl AgentMessageCell {
 
 impl HistoryCell for AgentMessageCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        word_wrap_lines(
+        let wrapped = word_wrap_lines(
             &self.lines,
             RtOptions::new(width as usize)
                 .initial_indent(if self.is_first_line {
@@ -241,7 +255,17 @@ impl HistoryCell for AgentMessageCell {
                     "  ".into()
                 })
                 .subsequent_indent("  ".into()),
-        )
+        );
+
+        let style = assistant_message_style();
+        if style == Style::default() {
+            return wrapped;
+        }
+
+        wrapped
+            .into_iter()
+            .map(|line| patch_line_style(line, style))
+            .collect()
     }
 
     fn is_stream_continuation(&self) -> bool {
@@ -1454,7 +1478,8 @@ mod tests {
     #[test]
     fn empty_agent_message_cell_transcript() {
         let cell = AgentMessageCell::new(vec![Line::default()], false);
-        assert_eq!(cell.transcript_lines(80), vec![Line::from("  ")]);
+        let transcript = cell.transcript_lines(80);
+        assert_eq!(render_lines(&transcript), vec!["  ".to_string()]);
         assert_eq!(cell.desired_transcript_height(80), 1);
     }
 

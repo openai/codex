@@ -68,6 +68,7 @@ mod streaming;
 mod style;
 mod terminal_palette;
 mod text_formatting;
+mod theme;
 mod tui;
 mod ui_consts;
 mod update_prompt;
@@ -290,6 +291,15 @@ async fn run_ratatui_app(
     terminal.clear()?;
 
     let mut tui = Tui::new(terminal);
+
+    // Initialize theme based on config
+    {
+        use crate::style::set_current_theme;
+        use crate::theme::Theme;
+
+        let theme = Theme::from_mode(&initial_config.tui.theme);
+        set_current_theme(theme);
+    }
 
     #[cfg(not(debug_assertions))]
     {

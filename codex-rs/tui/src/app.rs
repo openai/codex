@@ -18,7 +18,9 @@ use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::persist_model_selection;
+use codex_core::config::persist_tui_theme;
 use codex_core::config::set_hide_full_access_warning;
+use codex_core::config_types::ThemeMode;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
@@ -79,6 +81,21 @@ pub(crate) struct App {
     pub(crate) feedback: codex_feedback::CodexFeedback,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
+}
+
+fn theme_display_name(theme: &ThemeMode) -> &'static str {
+    match theme {
+        ThemeMode::Auto => "Auto",
+        ThemeMode::Light => "Light",
+        ThemeMode::Dark => "Dark",
+        ThemeMode::CatppuccinMocha => "Catppuccin Mocha",
+        ThemeMode::GruvboxDark => "Gruvbox Dark",
+        ThemeMode::Nord => "Nord",
+        ThemeMode::SolarizedDark => "Solarized Dark",
+        ThemeMode::SolarizedLight => "Solarized Light",
+        ThemeMode::Dracula => "Dracula",
+        ThemeMode::Custom(_) => "Custom",
+    }
 }
 
 impl App {
@@ -417,6 +434,39 @@ impl App {
                     self.chat_widget.add_error_message(format!(
                         "Failed to save full access confirmation preference: {err}"
                     ));
+                }
+            }
+            AppEvent::UpdateTheme(theme_mode) => {
+                let theme_clone = theme_mode.clone();
+                self.chat_widget.apply_theme(theme_clone);
+                self.config.tui.theme = theme_mode;
+            }
+            AppEvent::PersistTheme(theme_mode) => {
+                let profile = self.active_profile.as_deref();
+                match persist_tui_theme(&self.config.codex_home, profile, &theme_mode).await {
+                    Ok(()) => {
+                        let theme_name = theme_display_name(&theme_mode);
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_info_message(
+                                format!("Theme changed to {theme_name} for {profile} profile"),
+                                None,
+                            );
+                        } else {
+                            self.chat_widget
+                                .add_info_message(format!("Theme changed to {theme_name}"), None);
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist theme selection");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save theme for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to save default theme: {err}"));
+                        }
+                    }
                 }
             }
             AppEvent::OpenApprovalsPopup => {

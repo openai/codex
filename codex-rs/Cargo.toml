@@ -26,6 +26,7 @@ members = [
     "process-hardening",
     "protocol",
     "protocol-ts",
+    "sdk-rs",
     "rmcp-client",
     "responses-api-proxy",
     "stdio-to-uds",

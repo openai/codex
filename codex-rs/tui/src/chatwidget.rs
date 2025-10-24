@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use codex_core::config::Config;
 use codex_core::config_types::Notifications;
+use codex_core::config_types::ThemeMode;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
@@ -1213,6 +1214,9 @@ impl ChatWidget {
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
+            SlashCommand::Theme => {
+                self.open_theme_popup();
+            }
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => {
                 use codex_core::protocol::EventMsg;
@@ -1923,6 +1927,57 @@ impl ChatWidget {
         });
     }
 
+    pub(crate) fn open_theme_popup(&mut self) {
+        use codex_core::config_types::ThemeMode;
+
+        let current_theme = &self.config.tui.theme;
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        // Helper macro to create theme items
+        macro_rules! add_theme {
+            ($variant:ident, $name:expr, $desc:expr) => {
+                items.push(SelectionItem {
+                    name: $name.to_string(),
+                    description: Some($desc.to_string()),
+                    is_current: matches!(current_theme, ThemeMode::$variant),
+                    actions: vec![Box::new(|tx| {
+                        let theme_mode = ThemeMode::$variant;
+                        tx.send(AppEvent::UpdateTheme(theme_mode.clone()));
+                        tx.send(AppEvent::PersistTheme(theme_mode));
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                });
+            };
+        }
+
+        // Add all preset themes
+        add_theme!(
+            Auto,
+            "Auto",
+            "Automatically detect based on terminal background"
+        );
+        add_theme!(Dark, "Dark", "Deep blue-gray background (dark terminals)");
+        add_theme!(Light, "Light", "Light blue background (light terminals)");
+        add_theme!(
+            CatppuccinMocha,
+            "Catppuccin Mocha",
+            "Soft purple-blue dark theme"
+        );
+        add_theme!(GruvboxDark, "Gruvbox Dark", "Warm dark gray theme");
+        add_theme!(Nord, "Nord", "Comfortable deep blue-gray theme");
+        add_theme!(SolarizedDark, "Solarized Dark", "Classic deep cyan theme");
+        add_theme!(SolarizedLight, "Solarized Light", "Warm beige light theme");
+        add_theme!(Dracula, "Dracula", "Classic purple theme");
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Select Theme".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
         self.config.approval_policy = policy;
@@ -1946,6 +2001,15 @@ impl ChatWidget {
     pub(crate) fn set_model(&mut self, model: &str) {
         self.session_header.set_model(model);
         self.config.model = model.to_string();
+    }
+
+    pub(crate) fn apply_theme(&mut self, theme_mode: ThemeMode) {
+        use crate::style::set_current_theme;
+        use crate::theme::Theme;
+
+        set_current_theme(Theme::from_mode(&theme_mode));
+        self.config.tui.theme = theme_mode;
+        self.request_redraw();
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
