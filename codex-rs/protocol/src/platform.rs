@@ -22,7 +22,7 @@ pub fn try_map_windows_drive_to_wsl_path(win_path: &str) -> Option<PathBuf> {
     if !drive.is_ascii_alphabetic() || colon != ':' {
         return None;
     }
-    let rest = chars.as_str().trim_start_matches(|c| c == '\\' || c == '/');
+    let rest = chars.as_str().trim_start_matches(['\\', '/']);
     let drive_lower = drive.to_ascii_lowercase();
     let mapped = format!("/mnt/{}/{}", drive_lower, rest.replace('\\', "/"));
     Some(PathBuf::from(mapped))

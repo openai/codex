@@ -237,17 +237,19 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             // read the mapped file.
                             if platform::is_running_under_wsl() {
                                 let win_path_str = path.to_string_lossy();
-                                if let Some(mapped) = platform::try_map_windows_drive_to_wsl_path(&win_path_str) {
-                                    if let Ok(bytes2) = std::fs::read(&mapped) {
-                                        let mime = mime_guess::from_path(&mapped)
-                                            .first()
-                                            .map(|m| m.essence_str().to_owned())
-                                            .unwrap_or_else(|| "image".to_string());
-                                        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes2);
-                                        return Some(ContentItem::InputImage {
-                                            image_url: format!("data:{mime};base64,{encoded}"),
-                                        });
-                                    }
+                                if let Some(mapped) =
+                                    platform::try_map_windows_drive_to_wsl_path(&win_path_str)
+                                    && let Ok(bytes2) = std::fs::read(&mapped)
+                                {
+                                    let mime = mime_guess::from_path(&mapped)
+                                        .first()
+                                        .map(|m| m.essence_str().to_owned())
+                                        .unwrap_or_else(|| "image".to_string());
+                                    let encoded =
+                                        base64::engine::general_purpose::STANDARD.encode(bytes2);
+                                    return Some(ContentItem::InputImage {
+                                        image_url: format!("data:{mime};base64,{encoded}"),
+                                    });
                                 }
                             }
 

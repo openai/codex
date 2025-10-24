@@ -38,21 +38,21 @@ use crate::bottom_pane::prompt_args::prompt_has_numeric_placeholders;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
+use base64::Engine;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
-use base64::Engine;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
-use crate::clipboard_paste::pasted_image_format;
 use crate::clipboard_paste::paste_image_to_temp_png;
-use codex_protocol::platform::try_map_windows_drive_to_wsl_path;
+use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_file_search::FileMatch;
+use codex_protocol::platform::try_map_windows_drive_to_wsl_path;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
@@ -250,7 +250,7 @@ impl ChatComposer {
     }
 
     pub fn handle_paste(&mut self, pasted: String) -> bool {
-    tracing::debug!("handle_paste called; pasted_len={}", pasted.len());
+        tracing::debug!("handle_paste called; pasted_len={}", pasted.len());
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
             let placeholder = format!("[Pasted Content {char_count} chars]");
@@ -314,7 +314,10 @@ impl ChatComposer {
                             }
                         }
                         // Fallthrough: if project-local write failed, try a system tempfile
-                        if let Ok(tmp) = tempfile::Builder::new().suffix(&format!(".{}", ext)).tempfile() {
+                        if let Ok(tmp) = tempfile::Builder::new()
+                            .suffix(&format!(".{}", ext))
+                            .tempfile()
+                        {
                             if std::fs::write(tmp.path(), &decoded).is_ok() {
                                 if let Ok((w, h)) = image::image_dimensions(tmp.path()) {
                                     if let Ok((_f, pathbuf)) = tmp.keep() {
@@ -348,7 +351,8 @@ impl ChatComposer {
             }
             Err(err) => {
                 // Attempt simple Windows drive → /mnt mapping (only if it looks like a Windows path).
-                if let Some(mapped) = try_map_windows_drive_to_wsl_path(&path_buf.to_string_lossy()) {
+                if let Some(mapped) = try_map_windows_drive_to_wsl_path(&path_buf.to_string_lossy())
+                {
                     if let Ok((w, h)) = image::image_dimensions(&mapped) {
                         tracing::info!("OK (WSL mapped): {}", mapped.display());
                         let format_label = pasted_image_format(&mapped).label();
@@ -939,9 +943,15 @@ impl ChatComposer {
         // using the native clipboard reader (arboard) or Windows PowerShell
         // fallback when running under WSL. This avoids relying on the terminal
         // to forward Ctrl+V as text. Shortcut: Ctrl+Shift+V or Ctrl+Alt+V.
-        if let KeyEvent { code: KeyCode::Char('v'), modifiers, .. } = key_event {
+        if let KeyEvent {
+            code: KeyCode::Char('v'),
+            modifiers,
+            ..
+        } = key_event
+        {
             if modifiers.contains(KeyModifiers::CONTROL)
-                && (modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT))
+                && (modifiers.contains(KeyModifiers::SHIFT)
+                    || modifiers.contains(KeyModifiers::ALT))
             {
                 tracing::debug!("explicit paste-image shortcut pressed");
                 match paste_image_to_temp_png() {

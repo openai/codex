@@ -2,8 +2,8 @@ use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::render::line_utils::prefix_lines;
 use crate::ui_consts::FOOTER_INDENT_COLS;
-use crossterm::event::KeyCode;
 use codex_protocol::platform::is_running_under_wsl;
+use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -84,7 +84,10 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
         FooterMode::ShortcutSummary => {
             let mut line = context_window_line(props.context_window_percent);
             line.push_span(" · ".dim());
-            line.extend(vec![key_hint::plain(KeyCode::Char('?')).into(), " for shortcuts".dim()]);
+            line.extend(vec![
+                key_hint::plain(KeyCode::Char('?')).into(),
+                " for shortcuts".dim(),
+            ]);
             vec![line]
         }
         FooterMode::ShortcutOverlay => {
@@ -228,8 +231,6 @@ fn context_window_line(percent: Option<i64>) -> Line<'static> {
     let percent = percent.unwrap_or(100).clamp(0, 100);
     Line::from(vec![Span::from(format!("{percent}% context left")).dim()])
 }
-
-
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShortcutId {
