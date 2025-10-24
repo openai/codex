@@ -35,7 +35,7 @@ use crate::config_types::McpServerConfig;
 /// OpenAI requires tool names to conform to `^[a-zA-Z0-9_-]+$`, so we must
 /// choose a delimiter from this character set.
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
-const MAX_TOOL_NAME_LENGTH: usize = 64;
+const MAX_TOOL_NAME_LENGTH: usize = 25;
 
 /// Default timeout for initializing MCP server & initially listing tools.
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -58,10 +58,14 @@ fn qualify_tools(tools: Vec<ToolInfo>) -> HashMap<String, ToolInfo> {
             let sha1 = hasher.finalize();
             let sha1_str = format!("{sha1:x}");
 
-            // Truncate to make room for the hash suffix
-            let prefix_len = MAX_TOOL_NAME_LENGTH - sha1_str.len();
-
-            qualified_name = format!("{}{}", &qualified_name[..prefix_len], sha1_str);
+            if MAX_TOOL_NAME_LENGTH > sha1_str.len() {
+                // Truncate to make room for the hash suffix
+                let prefix_len = MAX_TOOL_NAME_LENGTH - sha1_str.len();
+                qualified_name = format!("{}{}", &qualified_name[..prefix_len], sha1_str);
+            } else {
+                // Not enough space for the full hash; fall back to a truncated hash only
+                qualified_name = sha1_str[..MAX_TOOL_NAME_LENGTH].to_string();
+            }
         }
 
         if used_names.contains(&qualified_name) {
@@ -396,16 +400,10 @@ mod tests {
         let mut keys: Vec<_> = qualified_tools.keys().cloned().collect();
         keys.sort();
 
-        assert_eq!(keys[0].len(), 64);
-        assert_eq!(
-            keys[0],
-            "my_server__extremely_lena02e507efc5a9de88637e436690364fd4219e4ef"
-        );
+        assert_eq!(keys[0].len(), 25);
+        assert_eq!(keys[0], "1c3987bd9c50b826cbe168796");
 
-        assert_eq!(keys[1].len(), 64);
-        assert_eq!(
-            keys[1],
-            "my_server__yet_another_e1c3987bd9c50b826cbe1687966f79f0c602d19ca"
-        );
+        assert_eq!(keys[1].len(), 25);
+        assert_eq!(keys[1], "a02e507efc5a9de88637e4366");
     }
 }
