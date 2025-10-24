@@ -1,3 +1,5 @@
+use anyhow::Context;
+use anyhow::bail;
 use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
@@ -29,6 +31,8 @@ mod mcp_cmd;
 use crate::mcp_cmd::McpCli;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::find_codex_home;
+use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::features::is_known_feature_key;
 
 /// Codex CLI
@@ -112,6 +116,9 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
+
+    /// Inspect configuration profiles.
+    Profiles(ProfilesCli),
 }
 
 #[derive(Debug, Parser)]
@@ -321,6 +328,18 @@ enum FeaturesSubcommand {
     List,
 }
 
+#[derive(Debug, Parser)]
+struct ProfilesCli {
+    #[command(subcommand)]
+    sub: ProfilesSubcommand,
+}
+
+#[derive(Debug, Parser)]
+enum ProfilesSubcommand {
+    /// List configuration profiles defined in config.toml.
+    List,
+}
+
 fn stage_str(stage: codex_core::features::Stage) -> &'static str {
     use codex_core::features::Stage;
     match stage {
@@ -492,6 +511,31 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::GenerateTs(gen_cli)) => {
             codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
         }
+        Some(Subcommand::Profiles(ProfilesCli { sub })) => match sub {
+            ProfilesSubcommand::List => {
+                let cli_kv_overrides = root_config_overrides
+                    .parse_overrides()
+                    .map_err(|e| anyhow::anyhow!(e))?;
+
+                let codex_home =
+                    find_codex_home().context("failed to resolve CODEX_HOME directory")?;
+                let cfg =
+                    load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides).await?;
+
+                if let Some(selected) = interactive.config_profile.as_deref() {
+                    if !cfg.profiles.contains_key(selected) {
+                        bail!("config profile `{selected}` not found");
+                    }
+                }
+
+                let mut profiles: Vec<_> = cfg.profiles.keys().cloned().collect();
+                profiles.sort();
+
+                for name in profiles {
+                    println!("{name}");
+                }
+            }
+        },
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
                 // Respect root-level `-c` overrides plus top-level flags like `--profile`.
@@ -606,7 +650,106 @@ fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
 fn print_completion(cmd: CompletionCommand) {
     let mut app = MultitoolCli::command();
     let name = "codex";
-    generate(cmd.shell, &mut app, name, &mut std::io::stdout());
+    match cmd.shell {
+        Shell::Fish => {
+            let mut buffer = Vec::new();
+            generate(cmd.shell, &mut app, name, &mut buffer);
+            let mut script = String::from_utf8(buffer)
+                .expect("clap should only emit UTF-8 output for completion scripts");
+
+            script = script.replace(" p/profile=", " 'p/profile=?'");
+            script = script.replace(
+                " -s p -l profile -d 'Configuration profile from config.toml to specify default options' -r",
+                " -s p -l profile -d 'Configuration profile from config.toml to specify default options' -r -f -a \"(__fish_codex_profile_list)\"",
+            );
+            script.push_str(
+                "\nfunction __fish_codex_profile_list\n\tcommand codex profiles list 2>/dev/null\nend\n",
+            );
+
+            print!("{script}");
+        }
+        Shell::Bash => {
+            let mut buffer = Vec::new();
+            generate(cmd.shell, &mut app, name, &mut buffer);
+            let mut script = String::from_utf8(buffer)
+                .expect("clap should only emit UTF-8 output for completion scripts");
+
+            let helper = r#"__codex_bash_complete_profiles() {
+    local cur_word="$1"
+    local IFS=$'\n'
+    COMPREPLY=($(compgen -W "$(codex profiles list 2>/dev/null)" -- "${cur_word}"))
+}
+
+"#;
+            script = format!("{helper}{script}");
+
+            // clap emits a combined handler for `--profile`/`-p` when they share semantics.
+            // Rewrite only that exact block so other short `-p` flags keep their original behavior.
+            let profile_pair_block = r#"                --profile)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                -p)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+"#;
+            let profile_pair_replacement = r#"                --profile)
+                    __codex_bash_complete_profiles "${cur}"
+                    return 0
+                    ;;
+                -p)
+                    __codex_bash_complete_profiles "${cur}"
+                    return 0
+                    ;;
+"#;
+            let updated = script.replace(profile_pair_block, profile_pair_replacement);
+            if updated == script {
+                // If the paired block is absent (future clap change), fall back to replacing
+                // only the long-form clause so we still upgrade `--profile` completions.
+                script = script.replace(
+                    "                --profile)\n                    COMPREPLY=($(compgen -f \"${cur}\"))\n                    return 0\n                    ;;\n",
+                    "                --profile)\n                    __codex_bash_complete_profiles \"${cur}\"\n                    return 0\n                    ;;\n",
+                );
+            } else {
+                script = updated;
+            }
+
+            print!("{script}");
+        }
+        Shell::Zsh => {
+            let mut buffer = Vec::new();
+            generate(cmd.shell, &mut app, name, &mut buffer);
+            let mut script = String::from_utf8(buffer)
+                .expect("clap should only emit UTF-8 output for completion scripts");
+
+            script = script.replace(
+                ":CONFIG_PROFILE:_default",
+                ":CONFIG_PROFILE:__codex_zsh_complete_profiles",
+            );
+
+            let helper = r#"(( $+functions[__codex_zsh_complete_profiles] )) ||
+__codex_zsh_complete_profiles() {
+    local -a profiles
+    profiles=(${(f)"$(codex profiles list 2>/dev/null)"})
+    compadd -a profiles
+}
+
+"#;
+
+            if let Some(stripped) = script.strip_prefix("#compdef codex\n\n") {
+                script = format!("#compdef codex\n\n{helper}{stripped}");
+            } else {
+                script = format!("{helper}{script}");
+            }
+
+            print!("{script}");
+        }
+        _ => {
+            let mut stdout = std::io::stdout();
+            generate(cmd.shell, &mut app, name, &mut stdout);
+        }
+    }
 }
 
 #[cfg(test)]

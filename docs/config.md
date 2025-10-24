@@ -773,6 +773,12 @@ Users can specify config values at multiple levels. Order of precedence is as fo
 3. as an entry in `config.toml`, e.g., `model = "o3"`
 4. the default value that comes with Codex CLI (i.e., Codex CLI defaults to `gpt-5-codex`)
 
+To see which profiles are available in your current configuration, run:
+
+```shell
+codex profiles list
+```
+
 ### history
 
 By default, Codex CLI records messages sent to the model in `$CODEX_HOME/history.jsonl`. Note that on UNIX, the file permissions are set to `o600`, so it should only be readable and writable by the owner.
