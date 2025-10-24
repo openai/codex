@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use app_test_support::McpProcess;
@@ -14,19 +13,9 @@ use codex_app_server_protocol::LoginChatGptResponse;
 use codex_app_server_protocol::LogoutChatGptResponse;
 use codex_app_server_protocol::RequestId;
 use codex_login::login_with_api_key;
+use serial_test::serial;
 use tempfile::TempDir;
-use tokio::sync::Mutex;
-use tokio::sync::MutexGuard;
 use tokio::time::timeout;
-
-static LOGIN_TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-
-// Ensures that login tests that cause the oauth server to start do not
-// run concurrently. The server binds to a fixed port, so concurrent tests
-// would conflict.
-async fn login_test_guard() -> MutexGuard<'static, ()> {
-    LOGIN_TEST_MUTEX.get_or_init(|| Mutex::new(())).lock().await
-}
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -106,8 +95,9 @@ async fn logout_chatgpt_removes_auth() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch the login server since it binds to a fixed port.
+#[serial(login)]
 async fn login_and_cancel_chatgpt() {
-    let _guard = login_test_guard().await;
     let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
     create_config_toml(codex_home.path()).unwrap_or_else(|err| panic!("write config.toml: {err}"));
 
@@ -221,8 +211,9 @@ async fn login_chatgpt_rejected_when_forced_api() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch the login server since it binds to a fixed port.
+#[serial(login)]
 async fn login_chatgpt_includes_forced_workspace_query_param() {
-    let _guard = login_test_guard().await;
     let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
     create_config_toml_forced_workspace(codex_home.path(), "ws-forced")
         .unwrap_or_else(|err| panic!("write config.toml: {err}"));
