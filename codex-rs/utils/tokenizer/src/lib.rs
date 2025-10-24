@@ -55,8 +55,13 @@ impl Tokenizer {
         Ok(Self { inner })
     }
 
+    /// Default to `O200kBase`
+    pub fn try_default() -> Result<Self, TokenizerError> {
+        Self::new(EncodingKind::O200kBase)
+    }
+
     /// Build a tokenizer using an `OpenAI` model name (maps to an encoding).
-    /// Falls back to the `o200k_base` encoding when the model is unknown.
+    /// Falls back to the `O200kBase` encoding when the model is unknown.
     pub fn for_model(model: &str) -> Result<Self, TokenizerError> {
         match tiktoken_rs::get_bpe_from_model(model) {
             Ok(inner) => Ok(Self { inner }),
