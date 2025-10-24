@@ -101,10 +101,12 @@ use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state::TaskKind;
-use crate::tasks::{CompactTask, SessionTask, SessionTaskContext};
+use crate::tasks::CompactTask;
 use crate::tasks::GhostSnapshotTask;
 use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
+use crate::tasks::SessionTask;
+use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
@@ -408,7 +410,7 @@ impl Session {
             is_review_mode: false,
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
-            tool_call_gate: Arc::new(ReadinessFlag::new())
+            tool_call_gate: Arc::new(ReadinessFlag::new()),
         }
     }
 
@@ -1058,15 +1060,15 @@ impl Session {
         };
 
         info!("spawning ghost snapshot task");
-        let task = GhostSnapshotTask::new(
-            token,
-        );
-        Arc::new(task).run(
-            Arc::new(SessionTaskContext::new(self.clone())),
-            turn_context.clone(),
-            Vec::new(),
-            cancellation_token
-        ).await;
+        let task = GhostSnapshotTask::new(token);
+        Arc::new(task)
+            .run(
+                Arc::new(SessionTaskContext::new(self.clone())),
+                turn_context.clone(),
+                Vec::new(),
+                cancellation_token,
+            )
+            .await;
     }
 
     /// Returns the input if there was no task running to inject into
@@ -1504,7 +1506,7 @@ async fn spawn_review_thread(
         is_review_mode: true,
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
-        tool_call_gate: Arc::new(ReadinessFlag::new())
+        tool_call_gate: Arc::new(ReadinessFlag::new()),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -1568,7 +1570,8 @@ pub(crate) async fn run_task(
             .await;
     }
 
-    sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token()).await;
+    sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
+        .await;
     let mut last_agent_message: Option<String> = None;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
