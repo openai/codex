@@ -183,6 +183,7 @@ impl Codex {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
+            features: config.features.clone(),
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -317,6 +318,9 @@ pub(crate) struct SessionConfiguration {
     /// `ConfigureSession` operation so that the business-logic layer can
     /// operate deterministically.
     cwd: PathBuf,
+
+    /// Set of feature flags for this session
+    features: Features,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -1049,7 +1053,15 @@ impl Session {
         turn_context: Arc<TurnContext>,
         cancellation_token: CancellationToken,
     ) {
-        if turn_context.is_review_mode {
+        if turn_context.is_review_mode
+            || !self
+                .state
+                .lock()
+                .await
+                .session_configuration
+                .features
+                .enabled(Feature::GhostCommit)
+        {
             return;
         }
 
@@ -2280,6 +2292,8 @@ fn is_mcp_client_startup_timeout_error(error: &anyhow::Error) -> bool {
         || error_message.contains("timed out handshaking with MCP server")
 }
 
+use crate::features::Feature;
+use crate::features::Features;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
@@ -2596,6 +2610,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
+            features: Features::default(),
         };
 
         let state = SessionState::new(session_configuration.clone());
@@ -2664,6 +2679,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
+            features: Features::default(),
         };
 
         let state = SessionState::new(session_configuration.clone());

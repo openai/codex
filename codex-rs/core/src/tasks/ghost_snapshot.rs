@@ -40,11 +40,15 @@ impl SessionTask for GhostSnapshotTask {
                 _ = cancellation_token.cancelled() => true,
                 _ = async {
                     let repo_path = ctx_for_task.cwd.clone();
-                    let options = CreateGhostCommitOptions::new(&repo_path);
-                    let ghost_commit = create_ghost_commit(&options);
-                    info!("ghost snapshot blocking task finished");
-                    match ghost_commit {
-                        Ok(ghost_commit) => {
+                    // Required to run in a dedicated blocking pool.
+                    match tokio::task::spawn_blocking(move || {
+                        let options = CreateGhostCommitOptions::new(&repo_path);
+                        create_ghost_commit(&options)
+                    })
+                    .await
+                    {
+                        Ok(Ok(ghost_commit)) => {
+                            info!("ghost snapshot blocking task finished");
                             session
                                 .session
                                 .record_conversation_items(&[ResponseItem::GhostSnapshot {
@@ -54,7 +58,7 @@ impl SessionTask for GhostSnapshotTask {
                                 .await;
                             info!("ghost commit captured: {}", ghost_commit.id());
                         }
-                        Err(err) => {
+                        Ok(Err(err)) => {
                             warn!(
                                 sub_id = ctx_for_task.sub_id.as_str(),
                                 "failed to capture ghost snapshot: {err}"
@@ -66,6 +70,18 @@ impl SessionTask for GhostSnapshotTask {
                                 }
                                 _ => format!("Snapshots disabled after ghost snapshot error: {err}."),
                             };
+                            session
+                                .session
+                                .notify_background_event(&ctx_for_task, message)
+                                .await;
+                        }
+                        Err(err) => {
+                            warn!(
+                                sub_id = ctx_for_task.sub_id.as_str(),
+                                "ghost snapshot task panicked: {err}"
+                            );
+                            let message =
+                                format!("Snapshots disabled after ghost snapshot panic: {err}.");
                             session
                                 .session
                                 .notify_background_event(&ctx_for_task, message)
