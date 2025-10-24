@@ -301,6 +301,7 @@ impl ModelClient {
             "POST to {}: {:?}",
             self.provider.get_full_url(&auth),
             serde_json::to_string(payload_json)
+                .unwrap_or("<unable to serialize payload>".to_string())
         );
 
         let mut req_builder = self
