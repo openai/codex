@@ -8,6 +8,7 @@ use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
 use crate::function_tool::FunctionCallError;
 use crate::mcp::auth::McpAuthStatusEntry;
+use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::response_processing::process_items;
@@ -2199,11 +2200,23 @@ fn mcp_init_error_display(
         // That means that the user has to specify a personal access token either via bearer_token_env_var or http_headers.
         // https://github.com/github/github-mcp-server/issues/921#issuecomment-3221026448
         format!(
-            "GitHub MCP does not support OAuth. Log in by adding `bearer_token_env_var = CODEX_GITHUB_PAT` in the `mcp_servers.{server_name}` section of your config.toml"
+            "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
         )
     } else if is_mcp_client_auth_required_error(err) {
         format!(
             "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
+        )
+    } else if is_mcp_client_startup_timeout_error(err) {
+        let startup_timeout_secs = match entry {
+            Some(entry) => match entry.config.startup_timeout_sec {
+                Some(timeout) => timeout,
+                None => DEFAULT_STARTUP_TIMEOUT,
+            },
+            None => DEFAULT_STARTUP_TIMEOUT,
+        }
+        .as_secs();
+        format!(
+            "MCP client for `{server_name}` timed out after {startup_timeout_secs} seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.{server_name}]\nstartup_timeout_sec = XX"
         )
     } else {
         format!("MCP client for `{server_name}` failed to start: {err:#}")
@@ -2213,6 +2226,12 @@ fn mcp_init_error_display(
 fn is_mcp_client_auth_required_error(error: &anyhow::Error) -> bool {
     // StreamableHttpError::AuthRequired from the MCP SDK.
     error.to_string().contains("Auth required")
+}
+
+fn is_mcp_client_startup_timeout_error(error: &anyhow::Error) -> bool {
+    let error_message = error.to_string();
+    error_message.contains("request timed out")
+        || error_message.contains("timed out handshaking with MCP server")
 }
 
 #[cfg(test)]
@@ -3072,7 +3091,7 @@ mod tests {
         let display = mcp_init_error_display(server_name, Some(&entry), &err);
 
         let expected = format!(
-            "GitHub MCP does not support OAuth. Log in by adding `bearer_token_env_var = CODEX_GITHUB_PAT` in the `mcp_servers.{server_name}` section of your config.toml"
+            "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
         );
 
         assert_eq!(expected, display);
@@ -3118,5 +3137,18 @@ mod tests {
         let expected = format!("MCP client for `{server_name}` failed to start: {err:#}");
 
         assert_eq!(expected, display);
+    }
+
+    #[test]
+    fn mcp_init_error_display_includes_startup_timeout_hint() {
+        let server_name = "slow";
+        let err = anyhow::anyhow!("request timed out");
+
+        let display = mcp_init_error_display(server_name, None, &err);
+
+        assert_eq!(
+            "MCP client for `slow` timed out after 10 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",
+            display
+        );
     }
 }
