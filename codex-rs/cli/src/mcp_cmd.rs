@@ -523,10 +523,15 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                     .map(|entry| entry.auth_status)
                     .unwrap_or(McpAuthStatus::Unsupported)
                     .to_string();
+                let bearer_token_display = if bearer_token_env_var.is_some() {
+                    "*****".to_string()
+                } else {
+                    "-".to_string()
+                };
                 http_rows.push([
                     name.clone(),
                     url.clone(),
-                    bearer_token_env_var.clone().unwrap_or("-".to_string()),
+                    bearer_token_display,
                     status,
                     auth_status,
                 ]);
@@ -752,15 +757,19 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
         } => {
             println!("  transport: streamable_http");
             println!("  url: {url}");
-            let env_var = bearer_token_env_var.as_deref().unwrap_or("-");
-            println!("  bearer_token_env_var: {env_var}");
+            let bearer_token_display = if bearer_token_env_var.is_some() {
+                "*****"
+            } else {
+                "-"
+            };
+            println!("  bearer_token_env_var: {bearer_token_display}");
             let headers_display = match http_headers {
                 Some(map) if !map.is_empty() => {
                     let mut pairs: Vec<_> = map.iter().collect();
                     pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
                     pairs
                         .into_iter()
-                        .map(|(k, v)| format!("{k}={v}"))
+                        .map(|(k, _)| format!("{k}=*****"))
                         .collect::<Vec<_>>()
                         .join(", ")
                 }
@@ -773,7 +782,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
                     pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
                     pairs
                         .into_iter()
-                        .map(|(k, v)| format!("{k}={v}"))
+                        .map(|(k, _)| format!("{k}=*****"))
                         .collect::<Vec<_>>()
                         .join(", ")
                 }
