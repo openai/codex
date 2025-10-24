@@ -19,6 +19,7 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -136,6 +137,10 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
             })
             .await
         })
+    }
+
+    fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
+        !matches!(policy, AskForApproval::Never)
     }
 }
 

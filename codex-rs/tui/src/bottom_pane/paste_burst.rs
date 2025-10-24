@@ -198,12 +198,15 @@ impl PasteBurst {
 
     /// Before applying modified/non-char input: flush buffered burst immediately.
     pub fn flush_before_modified_input(&mut self) -> Option<String> {
-        if self.is_active() {
-            self.active = false;
-            Some(std::mem::take(&mut self.buffer))
-        } else {
-            None
+        if !self.is_active() {
+            return None;
         }
+        self.active = false;
+        let mut out = std::mem::take(&mut self.buffer);
+        if let Some((ch, _at)) = self.pending_first_char.take() {
+            out.push(ch);
+        }
+        Some(out)
     }
 
     /// Clear only the timing window and any pending first-char.

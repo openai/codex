@@ -9,37 +9,11 @@ pub mod runtimes;
 pub mod sandboxing;
 pub mod spec;
 
-use crate::apply_patch;
-use crate::apply_patch::InternalApplyPatchInvocation;
-use crate::apply_patch::convert_apply_patch_to_protocol;
-use crate::codex::Session;
-use crate::codex::TurnContext;
-use crate::error::CodexErr;
-use crate::error::SandboxErr;
-use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
-use crate::function_tool::FunctionCallError;
-use crate::tools::context::SharedTurnDiffTracker;
-use crate::tools::events::ToolEmitter;
-use crate::tools::events::ToolEventCtx;
-use crate::tools::events::ToolEventFailure;
-use crate::tools::events::ToolEventStage;
-use crate::tools::orchestrator::ToolOrchestrator;
-use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
-use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
-use crate::tools::runtimes::shell::ShellRequest;
-use crate::tools::runtimes::shell::ShellRuntime;
-use crate::tools::sandboxing::ToolCtx;
-use crate::tools::sandboxing::ToolError;
-use codex_apply_patch::MaybeApplyPatchVerified;
-use codex_apply_patch::maybe_parse_apply_patch_verified;
-use codex_protocol::protocol::AskForApproval;
 use codex_utils_string::take_bytes_at_char_boundary;
 use codex_utils_string::take_last_bytes_at_char_boundary;
 pub use router::ToolRouter;
 use serde::Serialize;
-use std::sync::Arc;
-use tracing::trace;
 
 // Model-formatting limits: clients get full streams; only content sent to the model is truncated.
 pub(crate) const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
@@ -53,186 +27,6 @@ pub(crate) const TELEMETRY_PREVIEW_MAX_BYTES: usize = 2 * 1024; // 2 KiB
 pub(crate) const TELEMETRY_PREVIEW_MAX_LINES: usize = 64; // lines
 pub(crate) const TELEMETRY_PREVIEW_TRUNCATION_NOTICE: &str =
     "[... telemetry preview truncated ...]";
-
-// TODO(jif) break this down
-pub(crate) async fn handle_container_exec_with_params(
-    tool_name: &str,
-    params: ExecParams,
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-    turn_diff_tracker: SharedTurnDiffTracker,
-    call_id: String,
-) -> Result<String, FunctionCallError> {
-    let _otel_event_manager = turn_context.client.get_otel_event_manager();
-
-    if params.with_escalated_permissions.unwrap_or(false)
-        && !matches!(turn_context.approval_policy, AskForApproval::OnRequest)
-    {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
-            policy = turn_context.approval_policy
-        )));
-    }
-
-    // check if this was a patch, and apply it if so
-    let apply_patch_exec = match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
-        MaybeApplyPatchVerified::Body(changes) => {
-            match apply_patch::apply_patch(sess.as_ref(), turn_context.as_ref(), &call_id, changes)
-                .await
-            {
-                InternalApplyPatchInvocation::Output(item) => return item,
-                InternalApplyPatchInvocation::DelegateToExec(apply_patch_exec) => {
-                    Some(apply_patch_exec)
-                }
-            }
-        }
-        MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
-            // It looks like an invocation of `apply_patch`, but we
-            // could not resolve it into a patch that would apply
-            // cleanly. Return to model for resample.
-            return Err(FunctionCallError::RespondToModel(format!(
-                "apply_patch verification failed: {parse_error}"
-            )));
-        }
-        MaybeApplyPatchVerified::ShellParseError(error) => {
-            trace!("Failed to parse shell command, {error:?}");
-            None
-        }
-        MaybeApplyPatchVerified::NotApplyPatch => None,
-    };
-
-    let (event_emitter, diff_opt) = match apply_patch_exec.as_ref() {
-        Some(exec) => (
-            ToolEmitter::apply_patch(
-                convert_apply_patch_to_protocol(&exec.action),
-                !exec.user_explicitly_approved_this_action,
-            ),
-            Some(&turn_diff_tracker),
-        ),
-        None => (
-            ToolEmitter::shell(params.command.clone(), params.cwd.clone()),
-            None,
-        ),
-    };
-
-    let event_ctx = ToolEventCtx::new(sess.as_ref(), turn_context.as_ref(), &call_id, diff_opt);
-    event_emitter.emit(event_ctx, ToolEventStage::Begin).await;
-
-    // Build runtime contexts only when needed (shell/apply_patch below).
-
-    if let Some(exec) = apply_patch_exec {
-        // Route apply_patch execution through the new orchestrator/runtime.
-        let req = ApplyPatchRequest {
-            patch: exec.action.patch.clone(),
-            cwd: params.cwd.clone(),
-            timeout_ms: params.timeout_ms,
-            user_explicitly_approved: exec.user_explicitly_approved_this_action,
-            codex_exe: turn_context.codex_linux_sandbox_exe.clone(),
-        };
-
-        let mut orchestrator = ToolOrchestrator::new();
-        let mut runtime = ApplyPatchRuntime::new();
-        let tool_ctx = ToolCtx {
-            session: sess.as_ref(),
-            turn: turn_context.as_ref(),
-            call_id: call_id.clone(),
-            tool_name: tool_name.to_string(),
-        };
-
-        let out = orchestrator
-            .run(
-                &mut runtime,
-                &req,
-                &tool_ctx,
-                &turn_context,
-                turn_context.approval_policy,
-            )
-            .await;
-
-        handle_exec_outcome(&event_emitter, event_ctx, out).await
-    } else {
-        // Route shell execution through the new orchestrator/runtime.
-        let req = ShellRequest {
-            command: params.command.clone(),
-            cwd: params.cwd.clone(),
-            timeout_ms: params.timeout_ms,
-            env: params.env.clone(),
-            with_escalated_permissions: params.with_escalated_permissions,
-            justification: params.justification.clone(),
-        };
-
-        let mut orchestrator = ToolOrchestrator::new();
-        let mut runtime = ShellRuntime::new();
-        let tool_ctx = ToolCtx {
-            session: sess.as_ref(),
-            turn: turn_context.as_ref(),
-            call_id: call_id.clone(),
-            tool_name: tool_name.to_string(),
-        };
-
-        let out = orchestrator
-            .run(
-                &mut runtime,
-                &req,
-                &tool_ctx,
-                &turn_context,
-                turn_context.approval_policy,
-            )
-            .await;
-
-        handle_exec_outcome(&event_emitter, event_ctx, out).await
-    }
-}
-
-async fn handle_exec_outcome(
-    event_emitter: &ToolEmitter,
-    event_ctx: ToolEventCtx<'_>,
-    out: Result<ExecToolCallOutput, ToolError>,
-) -> Result<String, FunctionCallError> {
-    let event;
-    let result = match out {
-        Ok(output) => {
-            let content = format_exec_output_for_model(&output);
-            let exit_code = output.exit_code;
-            event = ToolEventStage::Success(output);
-            if exit_code == 0 {
-                Ok(content)
-            } else {
-                Err(FunctionCallError::RespondToModel(content))
-            }
-        }
-        Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output })))
-        | Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
-            let response = format_exec_output_for_model(&output);
-            event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
-            Err(FunctionCallError::RespondToModel(response))
-        }
-        Err(ToolError::Codex(err)) => {
-            let message = format!("execution error: {err:?}");
-            let response = format_exec_output(&message);
-            event = ToolEventStage::Failure(ToolEventFailure::Message(message));
-            Err(FunctionCallError::RespondToModel(format_exec_output(
-                &response,
-            )))
-        }
-        Err(ToolError::Rejected(msg)) | Err(ToolError::SandboxDenied(msg)) => {
-            // Normalize common rejection messages for exec tools so tests and
-            // users see a clear, consistent phrase.
-            let normalized = if msg == "rejected by user" {
-                "exec command rejected by user".to_string()
-            } else {
-                msg
-            };
-            let response = format_exec_output(&normalized);
-            event = ToolEventStage::Failure(ToolEventFailure::Message(normalized));
-            Err(FunctionCallError::RespondToModel(format_exec_output(
-                &response,
-            )))
-        }
-    };
-    event_emitter.emit(event_ctx, event).await;
-    result
-}
 
 /// Format the combined exec output for sending back to the model.
 /// Includes exit code and duration metadata; truncates large bodies safely.
@@ -363,6 +157,7 @@ fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::function_tool::FunctionCallError;
     use regex_lite::Regex;
 
     fn truncate_function_error(err: FunctionCallError) -> FunctionCallError {

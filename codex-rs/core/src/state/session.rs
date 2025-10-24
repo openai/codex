@@ -12,7 +12,6 @@ use crate::protocol::TokenUsageInfo;
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ConversationHistory,
-    pub(crate) token_info: Option<TokenUsageInfo>,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
 }
 
@@ -22,7 +21,6 @@ impl SessionState {
         Self {
             session_configuration,
             history: ConversationHistory::new(),
-            token_info: None,
             latest_rate_limits: None,
         }
     }
@@ -36,8 +34,12 @@ impl SessionState {
         self.history.record_items(items)
     }
 
-    pub(crate) fn history_snapshot(&self) -> Vec<ResponseItem> {
-        self.history.contents()
+    pub(crate) fn history_snapshot(&mut self) -> Vec<ResponseItem> {
+        self.history.get_history()
+    }
+
+    pub(crate) fn clone_history(&self) -> ConversationHistory {
+        self.history.clone()
     }
 
     pub(crate) fn replace_history(&mut self, items: Vec<ResponseItem>) {
@@ -50,11 +52,11 @@ impl SessionState {
         usage: &TokenUsage,
         model_context_window: Option<i64>,
     ) {
-        self.token_info = TokenUsageInfo::new_or_append(
-            &self.token_info,
-            &Some(usage.clone()),
-            model_context_window,
-        );
+        self.history.update_token_info(usage, model_context_window);
+    }
+
+    pub(crate) fn token_info(&self) -> Option<TokenUsageInfo> {
+        self.history.token_info()
     }
 
     pub(crate) fn set_rate_limits(&mut self, snapshot: RateLimitSnapshot) {
@@ -64,17 +66,10 @@ impl SessionState {
     pub(crate) fn token_info_and_rate_limits(
         &self,
     ) -> (Option<TokenUsageInfo>, Option<RateLimitSnapshot>) {
-        (self.token_info.clone(), self.latest_rate_limits.clone())
+        (self.token_info(), self.latest_rate_limits.clone())
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
-        match &mut self.token_info {
-            Some(info) => info.fill_to_context_window(context_window),
-            None => {
-                self.token_info = Some(TokenUsageInfo::full_context_window(context_window));
-            }
-        }
+        self.history.set_token_usage_full(context_window);
     }
-
-    // Pending input/approval moved to TurnState.
 }
