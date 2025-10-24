@@ -1,0 +1,14 @@
+---
+source: tui/src/pager_overlay.rs
+expression: term.backend()
+---
+"/ T R A N S C R I P T / / / / / / / / / "
+"alpha                                   "
+"beta                                    "
+"gamma                                   "
+"~                                       "
+"~                                       "
+"───────────────────────────────── 100% ─"
+" ↑/↓ scroll   PgUp/PgDn page   Home/End "
+" q quit   Esc edit prev                 "
+"                                        "

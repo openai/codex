@@ -24,9 +24,13 @@ file-search *args:
 fmt:
     cargo fmt -- --config imports_granularity=Item
 
-fix:
-    cargo clippy --fix --all-features --tests --allow-dirty
+fix *args:
+    cargo clippy --fix --all-features --tests --allow-dirty "$@"
 
 install:
     rustup show active-toolchain
     cargo fetch
+
+# Run the MCP server
+mcp-server-run *args:
+    cargo run -p codex-mcp-server -- "$@"

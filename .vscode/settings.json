@@ -6,5 +6,13 @@
     "[rust]": {
         "editor.defaultFormatter": "rust-lang.rust-analyzer",
         "editor.formatOnSave": true,
-    }
+    },
+    "[toml]": {
+        "editor.defaultFormatter": "tamasfe.even-better-toml",
+        "editor.formatOnSave": true,
+    },
+    // Array order for options in ~/.codex/config.toml such as `notify` and the
+    // `args` for an MCP server is significant, so we disable reordering.
+    "evenBetterToml.formatter.reorderArrays": false,
+    "evenBetterToml.formatter.reorderKeys": true,
 }

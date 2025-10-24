@@ -1,17 +1,23 @@
-To edit files, ALWAYS use the `shell` tool with `apply_patch` CLI.  `apply_patch` effectively allows you to execute a diff/patch against a file, but the format of the diff specification is unique to this task, so pay careful attention to these instructions. To use the `apply_patch` CLI, you should call the shell tool with the following structure:
+## `apply_patch`
 
-```bash
-{"cmd": ["apply_patch", "<<'EOF'\\n*** Begin Patch\\n[YOUR_PATCH]\\n*** End Patch\\nEOF\\n"], "workdir": "..."}
-```
+Use the `apply_patch` shell command to edit files.
+Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
 
-Where [YOUR_PATCH] is the actual content of your patch, specified in the following V4A diff format.
+*** Begin Patch
+[ one or more file sections ]
+*** End Patch
 
-*** [ACTION] File: [path/to/file] -> ACTION can be one of Add, Update, or Delete.
-For each snippet of code that needs to be changed, repeat the following:
-[context_before] -> See below for further instructions on context.
-- [old_code] -> Precede the old code with a minus sign.
-+ [new_code] -> Precede the new, replacement code with a plus sign.
-[context_after] -> See below for further instructions on context.
+Within that envelope, you get a sequence of file operations.
+You MUST include a header to specify the action you are taking.
+Each operation starts with one of three headers:
+
+*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).
+*** Delete File: <path> - remove an existing file. Nothing follows.
+*** Update File: <path> - patch an existing file in place (optionally with a rename).
+
+May be immediately followed by *** Move to: <new path> if you want to rename the file.
+Then one or more “hunks”, each introduced by @@ (optionally followed by a hunk header).
+Within a hunk each line starts with:
 
 For instructions on [context_before] and [context_after]:
 - By default, show 3 lines of code immediately above and 3 lines immediately below each change. If a change is within 3 lines of a previous change, do NOT duplicate the first change’s [context_after] lines in the second change’s [context_before] lines.
@@ -25,16 +31,45 @@ For instructions on [context_before] and [context_after]:
 - If a code block is repeated so many times in a class or function such that even a single `@@` statement and 3 lines of context cannot uniquely identify the snippet of code, you can use multiple `@@` statements to jump to the right context. For instance:
 
 @@ class BaseClass
-@@ 	def method():
+@@ 	 def method():
 [3 lines of pre-context]
 - [old_code]
 + [new_code]
 [3 lines of post-context]
 
-Note, then, that we do not use line numbers in this diff format, as the context is enough to uniquely identify code. An example of a message that you might pass as "input" to this function, in order to apply a patch, is shown below.
+The full grammar definition is below:
+Patch := Begin { FileOp } End
+Begin := "*** Begin Patch" NEWLINE
+End := "*** End Patch" NEWLINE
+FileOp := AddFile | DeleteFile | UpdateFile
+AddFile := "*** Add File: " path NEWLINE { "+" line NEWLINE }
+DeleteFile := "*** Delete File: " path NEWLINE
+UpdateFile := "*** Update File: " path NEWLINE [ MoveTo ] { Hunk }
+MoveTo := "*** Move to: " newPath NEWLINE
+Hunk := "@@" [ header ] NEWLINE { HunkLine } [ "*** End of File" NEWLINE ]
+HunkLine := (" " | "-" | "+") text NEWLINE
 
-```bash
-{"cmd": ["apply_patch", "<<'EOF'\\n*** Begin Patch\\n*** Update File: pygorithm/searching/binary_search.py\\n@@ class BaseClass\\n@@     def search():\\n-        pass\\n+        raise NotImplementedError()\\n@@ class Subclass\\n@@     def search():\\n-        pass\\n+        raise NotImplementedError()\\n*** End Patch\\nEOF\\n"], "workdir": "..."}
+A full patch can combine several operations:
+
+*** Begin Patch
+*** Add File: hello.txt
++Hello world
+*** Update File: src/app.py
+*** Move to: src/main.py
+@@ def greet():
+-print("Hi")
++print("Hello, world!")
+*** Delete File: obsolete.txt
+*** End Patch
+
+It is important to remember:
+
+- You must include a header with your intended action (Add/Delete/Update)
+- You must prefix new lines with `+` even when creating a new file
+- File references can only be relative, NEVER ABSOLUTE.
+
+You can invoke apply_patch like:
+
 ```
-
-File references can only be relative, NEVER ABSOLUTE. After the apply_patch command is run, it will always say "Done!", regardless of whether the patch was successfully applied or not. However, you can determine if there are issue and errors by looking at any warnings or logging lines printed BEFORE the "Done!" is output.
+shell {"command":["apply_patch","*** Begin Patch\n*** Add File: hello.txt\n+Hello, world!\n*** End Patch\n"]}
+```

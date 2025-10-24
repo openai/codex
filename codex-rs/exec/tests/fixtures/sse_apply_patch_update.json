@@ -1,0 +1,25 @@
+[
+  {
+    "type": "response.output_item.done",
+    "item": {
+      "type": "function_call",
+      "name": "apply_patch",
+      "arguments": "{\n  \"input\": \"*** Begin Patch\\n*** Update File: test.md\\n@@\\n-Hello world\\n+Final text\\n*** End Patch\"\n}",
+      "call_id": "__ID__"
+    }
+  },
+  {
+    "type": "response.completed",
+    "response": {
+      "id": "__ID__",
+      "usage": {
+        "input_tokens": 0,
+        "input_tokens_details": null,
+        "output_tokens": 0,
+        "output_tokens_details": null,
+        "total_tokens": 0
+      },
+      "output": []
+    }
+  }
+]

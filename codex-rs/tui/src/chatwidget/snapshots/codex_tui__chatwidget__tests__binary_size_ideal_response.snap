@@ -1,0 +1,58 @@
+---
+source: tui/src/chatwidget/tests.rs
+assertion_line: 648
+expression: visible_after
+---
+> I’m going to scan the workspace and Cargo manifests to see build profiles and
+  dependencies that impact binary size. Then I’ll summarize the main causes.
+
+• Explored
+  └ List ls -la
+    Read Cargo.toml
+
+• Ran
+  └ for d in ansi-escape apply-patch arg0 cli common core exec execpolicy
+        file-search linux-sandbox login mcp-client mcp-server mcp-types ollama
+        tui; do echo "--- $d/Cargo.toml"; sed -n '1,200p' $d/Cargo.toml; echo;
+        done
+
+• Explored
+  └ Read Cargo.toml
+
+> Here’s what’s driving size in this workspace’s binaries.
+
+  Main Causes
+
+  - Static linking style: Each bin (codex, codex-tui, codex-exec, codex-mcp-
+  server, etc.) statically links its full dependency graph, so common code isn’t
+  shared at runtime across executables.
+  - Heavy deps (HTTP/TLS): reqwest brings in Hyper, HTTP/2, compressors,
+  and a TLS stack (rustls by default; OpenSSL on musl). In core, login, tui,
+  and ollama you enable reqwest with json/stream, which still pulls a large
+  transitive set.
+  - Image/terminal stack: codex-tui includes image (with jpeg), ratatui,
+  crossterm, and ratatui-image, which together contribute significant code size
+  (decoders, pixel ops, terminal backends).
+  - Parsers/VMs: tree-sitter + tree-sitter-bash (in core and apply-patch) and
+  starlark (in execpolicy) include sizeable parser/VM tables and runtimes.
+  - Tokio runtime: Broad tokio features (rt-multi-thread, macros, process,
+  signal) across many crates inflate code size even if only subsets are used
+  per bin.
+  - Panic + backtraces: Default panic = unwind and backtrace support keep
+  unwinding tables and symbols that add weight.
+  - Per-target OpenSSL (musl): For *-unknown-linux-musl, core enables openssl-
+  sys with vendored, compiling OpenSSL into the binary—this adds multiple
+  megabytes per executable.
+
+  Build-Mode Notes
+
+  - Release settings: You use lto = "fat" and codegen-units = 1 (good for size),
+  but strip = "symbols" keeps debuginfo. Debuginfo is often the largest single
+  contributor; if you build in release with that setting, binaries can still
+  be large.
+  - Debug builds: cargo build (dev profile) includes full debuginfo, no LTO, and
+  assertions—outputs are much larger than cargo build --release.
+
+  If you want, I can outline targeted trims (e.g., strip = "debuginfo", opt-
+  level = "z", panic abort, tighter tokio/reqwest features) and estimate impact
+  per binary.

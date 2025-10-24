@@ -10,6 +10,7 @@
 //! This allows us to ship a completely separate set of functionality as part
 //! of the `codex-exec` binary.
 use clap::Parser;
+use codex_arg0::arg0_dispatch_or_else;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli;
 use codex_exec::run_main;
@@ -24,7 +25,7 @@ struct TopCli {
 }
 
 fn main() -> anyhow::Result<()> {
-    codex_linux_sandbox::run_with_sandbox(|codex_linux_sandbox_exe| async move {
+    arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         let top_cli = TopCli::parse();
         // Merge root-level overrides into inner CLI struct so downstream logic remains unchanged.
         let mut inner = top_cli.inner;

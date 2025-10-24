@@ -1,8 +1,10 @@
+use codex_core::CodexAuth;
+use codex_protocol::mcp_protocol::AuthMode;
 use std::path::Path;
 use std::sync::LazyLock;
 use std::sync::RwLock;
 
-use codex_login::TokenData;
+use codex_core::token_data::TokenData;
 
 static CHATGPT_TOKEN: LazyLock<RwLock<Option<TokenData>>> = LazyLock::new(|| RwLock::new(None));
 
@@ -17,8 +19,14 @@ pub fn set_chatgpt_token_data(value: TokenData) {
 }
 
 /// Initialize the ChatGPT token from auth.json file
-pub async fn init_chatgpt_token_from_auth(codex_home: &Path) -> std::io::Result<()> {
-    let auth_json = codex_login::try_read_auth_json(codex_home).await?;
-    set_chatgpt_token_data(auth_json.tokens.clone());
+pub async fn init_chatgpt_token_from_auth(
+    codex_home: &Path,
+    originator: &str,
+) -> std::io::Result<()> {
+    let auth = CodexAuth::from_codex_home(codex_home, AuthMode::ChatGPT, originator)?;
+    if let Some(auth) = auth {
+        let token_data = auth.get_token_data().await?;
+        set_chatgpt_token_data(token_data);
+    }
     Ok(())
 }

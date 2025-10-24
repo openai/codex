@@ -10,6 +10,7 @@
 //! program. The utility connects, issues a `tools/list` request and prints the
 //! server's response as pretty JSON.
 
+use std::ffi::OsString;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -37,7 +38,7 @@ async fn main() -> Result<()> {
         .try_init();
 
     // Collect command-line arguments excluding the program name itself.
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
     if args.is_empty() || args[0] == "--help" || args[0] == "-h" {
         eprintln!("Usage: mcp-client <program> [args..]\n\nExample: mcp-client codex-mcp-server");
@@ -57,10 +58,12 @@ async fn main() -> Result<()> {
             experimental: None,
             roots: None,
             sampling: None,
+            elicitation: None,
         },
         client_info: Implementation {
             name: "codex-mcp-client".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
+            title: Some("Codex".to_string()),
         },
         protocol_version: MCP_SCHEMA_VERSION.to_owned(),
     };

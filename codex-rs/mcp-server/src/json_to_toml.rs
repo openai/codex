@@ -28,7 +28,6 @@ pub(crate) fn json_to_toml(v: JsonValue) -> TomlValue {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;

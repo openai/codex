@@ -2,9 +2,18 @@
 
 This crate implements the business logic for Codex. It is designed to be used by the various Codex UIs written in Rust.
 
-Though for non-Rust UIs, we are also working to define a _protocol_ for talking to Codex. See:
+## Dependencies
 
-- [Specification](../docs/protocol_v1.md)
-- [Rust types](./src/protocol.rs)
+Note that `codex-core` makes some assumptions about certain helper utilities being available in the environment. Currently, this
 
-You can use the `proto` subcommand using the executable in the [`cli` crate](../cli) to speak the protocol using newline-delimited-JSON over stdin/stdout.
+### macOS
+
+Expects `/usr/bin/sandbox-exec` to be present.
+
+### Linux
+
+Expects the binary containing `codex-core` to run the equivalent of `codex debug landlock` when `arg0` is `codex-linux-sandbox`. See the `codex-arg0` crate for details.
+
+### All Platforms
+
+Expects the binary containing `codex-core` to simulate the virtual `apply_patch` CLI when `arg1` is `--codex-run-as-apply-patch`. See the `codex-arg0` crate for details.

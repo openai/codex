@@ -1,5 +1,6 @@
 mod parser;
 mod seek_sequence;
+mod standalone_executable;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -8,6 +9,7 @@ use std::str::Utf8Error;
 
 use anyhow::Context;
 use anyhow::Result;
+use once_cell::sync::Lazy;
 pub use parser::Hunk;
 pub use parser::ParseError;
 use parser::ParseError::*;
@@ -17,10 +19,17 @@ use similar::TextDiff;
 use thiserror::Error;
 use tree_sitter::LanguageError;
 use tree_sitter::Parser;
+use tree_sitter::Query;
+use tree_sitter::QueryCursor;
+use tree_sitter::StreamingIterator;
 use tree_sitter_bash::LANGUAGE as BASH;
+
+pub use standalone_executable::main;
 
 /// Detailed instructions for gpt-4.1 on how to use the `apply_patch` tool.
 pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_tool_instructions.md");
+
+const APPLY_PATCH_COMMANDS: [&str; 2] = ["apply_patch", "applypatch"];
 
 #[derive(Debug, Error, PartialEq)]
 pub enum ApplyPatchError {
@@ -42,6 +51,15 @@ impl From<std::io::Error> for ApplyPatchError {
     }
 }
 
+impl From<&std::io::Error> for ApplyPatchError {
+    fn from(err: &std::io::Error) -> Self {
+        ApplyPatchError::IoError(IoError {
+            context: "I/O error".to_string(),
+            source: std::io::Error::new(err.kind(), err.to_string()),
+        })
+    }
+}
+
 #[derive(Debug, Error)]
 #[error("{context}: {source}")]
 pub struct IoError {
@@ -58,28 +76,39 @@ impl PartialEq for IoError {
 
 #[derive(Debug, PartialEq)]
 pub enum MaybeApplyPatch {
-    Body(Vec<Hunk>),
+    Body(ApplyPatchArgs),
     ShellParseError(ExtractHeredocError),
     PatchParseError(ParseError),
     NotApplyPatch,
 }
 
+/// Both the raw PATCH argument to `apply_patch` as well as the PATCH argument
+/// parsed into hunks.
+#[derive(Debug, PartialEq)]
+pub struct ApplyPatchArgs {
+    pub patch: String,
+    pub hunks: Vec<Hunk>,
+    pub workdir: Option<String>,
+}
+
 pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
     match argv {
-        [cmd, body] if cmd == "apply_patch" => match parse_patch(body) {
-            Ok(hunks) => MaybeApplyPatch::Body(hunks),
+        [cmd, body] if APPLY_PATCH_COMMANDS.contains(&cmd.as_str()) => match parse_patch(body) {
+            Ok(source) => MaybeApplyPatch::Body(source),
             Err(e) => MaybeApplyPatch::PatchParseError(e),
         },
-        [bash, flag, script]
-            if bash == "bash"
-                && flag == "-lc"
-                && script.trim_start().starts_with("apply_patch") =>
-        {
-            match extract_heredoc_body_from_apply_patch_command(script) {
-                Ok(body) => match parse_patch(&body) {
-                    Ok(hunks) => MaybeApplyPatch::Body(hunks),
+        [bash, flag, script] if bash == "bash" && flag == "-lc" => {
+            match extract_apply_patch_from_bash(script) {
+                Ok((body, workdir)) => match parse_patch(&body) {
+                    Ok(mut source) => {
+                        source.workdir = workdir;
+                        MaybeApplyPatch::Body(source)
+                    }
                     Err(e) => MaybeApplyPatch::PatchParseError(e),
                 },
+                Err(ExtractHeredocError::CommandDidNotStartWithApplyPatch) => {
+                    MaybeApplyPatch::NotApplyPatch
+                }
                 Err(e) => MaybeApplyPatch::ShellParseError(e),
             }
         }
@@ -92,7 +121,9 @@ pub enum ApplyPatchFileChange {
     Add {
         content: String,
     },
-    Delete,
+    Delete {
+        content: String,
+    },
     Update {
         unified_diff: String,
         move_path: Option<PathBuf>,
@@ -116,11 +147,19 @@ pub enum MaybeApplyPatchVerified {
     NotApplyPatch,
 }
 
-#[derive(Debug, PartialEq)]
 /// ApplyPatchAction is the result of parsing an `apply_patch` command. By
 /// construction, all paths should be absolute paths.
+#[derive(Debug, PartialEq)]
 pub struct ApplyPatchAction {
     changes: HashMap<PathBuf, ApplyPatchFileChange>,
+
+    /// The raw patch argument that can be used with `apply_patch` as an exec
+    /// call. i.e., if the original arg was parsed in "lenient" mode with a
+    /// heredoc, this should be the value without the heredoc wrapper.
+    pub patch: String,
+
+    /// The working directory that was used to resolve relative paths in the patch.
+    pub cwd: PathBuf,
 }
 
 impl ApplyPatchAction {
@@ -140,8 +179,28 @@ impl ApplyPatchAction {
             panic!("path must be absolute");
         }
 
+        #[expect(clippy::expect_used)]
+        let filename = path
+            .file_name()
+            .expect("path should not be empty")
+            .to_string_lossy();
+        let patch = format!(
+            r#"*** Begin Patch
+*** Update File: {filename}
+@@
++ {content}
+*** End Patch"#,
+        );
         let changes = HashMap::from([(path.to_path_buf(), ApplyPatchFileChange::Add { content })]);
-        Self { changes }
+        #[expect(clippy::expect_used)]
+        Self {
+            changes,
+            cwd: path
+                .parent()
+                .expect("path should have parent")
+                .to_path_buf(),
+            patch,
+        }
     }
 }
 
@@ -149,16 +208,42 @@ impl ApplyPatchAction {
 /// patch.
 pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApplyPatchVerified {
     match maybe_parse_apply_patch(argv) {
-        MaybeApplyPatch::Body(hunks) => {
+        MaybeApplyPatch::Body(ApplyPatchArgs {
+            patch,
+            hunks,
+            workdir,
+        }) => {
+            let effective_cwd = workdir
+                .as_ref()
+                .map(|dir| {
+                    let path = Path::new(dir);
+                    if path.is_absolute() {
+                        path.to_path_buf()
+                    } else {
+                        cwd.join(path)
+                    }
+                })
+                .unwrap_or_else(|| cwd.to_path_buf());
             let mut changes = HashMap::new();
             for hunk in hunks {
-                let path = hunk.resolve_path(cwd);
+                let path = hunk.resolve_path(&effective_cwd);
                 match hunk {
                     Hunk::AddFile { contents, .. } => {
                         changes.insert(path, ApplyPatchFileChange::Add { content: contents });
                     }
                     Hunk::DeleteFile { .. } => {
-                        changes.insert(path, ApplyPatchFileChange::Delete);
+                        let content = match std::fs::read_to_string(&path) {
+                            Ok(content) => content,
+                            Err(e) => {
+                                return MaybeApplyPatchVerified::CorrectnessError(
+                                    ApplyPatchError::IoError(IoError {
+                                        context: format!("Failed to read {}", path.display()),
+                                        source: e,
+                                    }),
+                                );
+                            }
+                        };
+                        changes.insert(path, ApplyPatchFileChange::Delete { content });
                     }
                     Hunk::UpdateFile {
                         move_path, chunks, ..
@@ -183,7 +268,11 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
                     }
                 }
             }
-            MaybeApplyPatchVerified::Body(ApplyPatchAction { changes })
+            MaybeApplyPatchVerified::Body(ApplyPatchAction {
+                changes,
+                patch,
+                cwd: effective_cwd,
+            })
         }
         MaybeApplyPatch::ShellParseError(e) => MaybeApplyPatchVerified::ShellParseError(e),
         MaybeApplyPatch::PatchParseError(e) => MaybeApplyPatchVerified::CorrectnessError(e.into()),
@@ -191,30 +280,96 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
     }
 }
 
-/// Attempts to extract a heredoc_body object from a string bash command like:
-/// Optimistically
+/// Extract the heredoc body (and optional `cd` workdir) from a `bash -lc` script
+/// that invokes the apply_patch tool using a heredoc.
 ///
-/// ```bash
-/// bash -lc 'apply_patch <<EOF\n***Begin Patch\n...EOF'
-/// ```
+/// Supported top‑level forms (must be the only top‑level statement):
+/// - `apply_patch <<'EOF'\n...\nEOF`
+/// - `cd <path> && apply_patch <<'EOF'\n...\nEOF`
 ///
-/// # Arguments
+/// Notes about matching:
+/// - Parsed with Tree‑sitter Bash and a strict query that uses anchors so the
+///   heredoc‑redirected statement is the only top‑level statement.
+/// - The connector between `cd` and `apply_patch` must be `&&` (not `|` or `||`).
+/// - Exactly one positional `word` argument is allowed for `cd` (no flags, no quoted
+///   strings, no second argument).
+/// - The apply command is validated in‑query via `#any-of?` to allow `apply_patch`
+///   or `applypatch`.
+/// - Preceding or trailing commands (e.g., `echo ...;` or `... && echo done`) do not match.
 ///
-/// * `src` - A string slice that holds the full command
-///
-/// # Returns
-///
-/// This function returns a `Result` which is:
-///
-/// * `Ok(String)` - The heredoc body if the extraction is successful.
-/// * `Err(anyhow::Error)` - An error if the extraction fails.
-///
-fn extract_heredoc_body_from_apply_patch_command(
+/// Returns `(heredoc_body, Some(path))` when the `cd` variant matches, or
+/// `(heredoc_body, None)` for the direct form. Errors are returned if the script
+/// cannot be parsed or does not match the allowed patterns.
+fn extract_apply_patch_from_bash(
     src: &str,
-) -> std::result::Result<String, ExtractHeredocError> {
-    if !src.trim_start().starts_with("apply_patch") {
-        return Err(ExtractHeredocError::CommandDidNotStartWithApplyPatch);
-    }
+) -> std::result::Result<(String, Option<String>), ExtractHeredocError> {
+    // This function uses a Tree-sitter query to recognize one of two
+    // whole-script forms, each expressed as a single top-level statement:
+    //
+    // 1. apply_patch <<'EOF'\n...\nEOF
+    // 2. cd <path> && apply_patch <<'EOF'\n...\nEOF
+    //
+    // Key ideas when reading the query:
+    // - dots (`.`) between named nodes enforces adjacency among named children and
+    //   anchor to the start/end of the expression.
+    // - we match a single redirected_statement directly under program with leading
+    //   and trailing anchors (`.`). This ensures it is the only top-level statement
+    //   (so prefixes like `echo ...;` or suffixes like `... && echo done` do not match).
+    //
+    // Overall, we want to be conservative and only match the intended forms, as other
+    // forms are likely to be model errors, or incorrectly interpreted by later code.
+    //
+    // If you're editing this query, it's helpful to start by creating a debugging binary
+    // which will let you see the AST of an arbitrary bash script passed in, and optionally
+    // also run an arbitrary query against the AST. This is useful for understanding
+    // how tree-sitter parses the script and whether the query syntax is correct. Be sure
+    // to test both positive and negative cases.
+    static APPLY_PATCH_QUERY: Lazy<Query> = Lazy::new(|| {
+        let language = BASH.into();
+        #[expect(clippy::expect_used)]
+        Query::new(
+            &language,
+            r#"
+            (
+              program
+                . (redirected_statement
+                    body: (command
+                            name: (command_name (word) @apply_name) .)
+                    (#any-of? @apply_name "apply_patch" "applypatch")
+                    redirect: (heredoc_redirect
+                                . (heredoc_start)
+                                . (heredoc_body) @heredoc
+                                . (heredoc_end)
+                                .))
+                .)
+
+            (
+              program
+                . (redirected_statement
+                    body: (list
+                            . (command
+                                name: (command_name (word) @cd_name) .
+                                argument: [
+                                  (word) @cd_path
+                                  (string (string_content) @cd_path)
+                                  (raw_string) @cd_raw_string
+                                ] .)
+                            "&&"
+                            . (command
+                                name: (command_name (word) @apply_name))
+                            .)
+                    (#eq? @cd_name "cd")
+                    (#any-of? @apply_name "apply_patch" "applypatch")
+                    redirect: (heredoc_redirect
+                                . (heredoc_start)
+                                . (heredoc_body) @heredoc
+                                . (heredoc_end)
+                                .))
+                .)
+            "#,
+        )
+        .expect("valid bash query")
+    });
 
     let lang = BASH.into();
     let mut parser = Parser::new();
@@ -226,26 +381,55 @@ fn extract_heredoc_body_from_apply_patch_command(
         .ok_or(ExtractHeredocError::FailedToParsePatchIntoAst)?;
 
     let bytes = src.as_bytes();
-    let mut c = tree.root_node().walk();
+    let root = tree.root_node();
 
-    loop {
-        let node = c.node();
-        if node.kind() == "heredoc_body" {
-            let text = node
-                .utf8_text(bytes)
-                .map_err(ExtractHeredocError::HeredocNotUtf8)?;
-            return Ok(text.trim_end_matches('\n').to_owned());
-        }
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&APPLY_PATCH_QUERY, root, bytes);
+    while let Some(m) = matches.next() {
+        let mut heredoc_text: Option<String> = None;
+        let mut cd_path: Option<String> = None;
 
-        if c.goto_first_child() {
-            continue;
-        }
-        while !c.goto_next_sibling() {
-            if !c.goto_parent() {
-                return Err(ExtractHeredocError::FailedToFindHeredocBody);
+        for capture in m.captures.iter() {
+            let name = APPLY_PATCH_QUERY.capture_names()[capture.index as usize];
+            match name {
+                "heredoc" => {
+                    let text = capture
+                        .node
+                        .utf8_text(bytes)
+                        .map_err(ExtractHeredocError::HeredocNotUtf8)?
+                        .trim_end_matches('\n')
+                        .to_string();
+                    heredoc_text = Some(text);
+                }
+                "cd_path" => {
+                    let text = capture
+                        .node
+                        .utf8_text(bytes)
+                        .map_err(ExtractHeredocError::HeredocNotUtf8)?
+                        .to_string();
+                    cd_path = Some(text);
+                }
+                "cd_raw_string" => {
+                    let raw = capture
+                        .node
+                        .utf8_text(bytes)
+                        .map_err(ExtractHeredocError::HeredocNotUtf8)?;
+                    let trimmed = raw
+                        .strip_prefix('\'')
+                        .and_then(|s| s.strip_suffix('\''))
+                        .unwrap_or(raw);
+                    cd_path = Some(trimmed.to_string());
+                }
+                _ => {}
             }
         }
+
+        if let Some(heredoc) = heredoc_text {
+            return Ok((heredoc, cd_path));
+        }
     }
+
+    Err(ExtractHeredocError::CommandDidNotStartWithApplyPatch)
 }
 
 #[derive(Debug, PartialEq)]
@@ -264,7 +448,7 @@ pub fn apply_patch(
     stderr: &mut impl std::io::Write,
 ) -> Result<(), ApplyPatchError> {
     let hunks = match parse_patch(patch) {
-        Ok(hunks) => hunks,
+        Ok(source) => source.hunks,
         Err(e) => {
             match &e {
                 InvalidPatchError(message) => {
@@ -326,13 +510,21 @@ pub fn apply_hunks(
     match apply_hunks_to_files(hunks) {
         Ok(affected) => {
             print_summary(&affected, stdout).map_err(ApplyPatchError::from)?;
+            Ok(())
         }
         Err(err) => {
-            writeln!(stderr, "{err:?}").map_err(ApplyPatchError::from)?;
+            let msg = err.to_string();
+            writeln!(stderr, "{msg}").map_err(ApplyPatchError::from)?;
+            if let Some(io) = err.downcast_ref::<std::io::Error>() {
+                Err(ApplyPatchError::from(io))
+            } else {
+                Err(ApplyPatchError::IoError(IoError {
+                    context: msg,
+                    source: std::io::Error::other(err),
+                }))
+            }
         }
     }
-
-    Ok(())
 }
 
 /// Applies each parsed patch hunk to the filesystem.
@@ -357,12 +549,12 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
     for hunk in hunks {
         match hunk {
             Hunk::AddFile { path, contents } => {
-                if let Some(parent) = path.parent() {
-                    if !parent.as_os_str().is_empty() {
-                        std::fs::create_dir_all(parent).with_context(|| {
-                            format!("Failed to create parent directories for {}", path.display())
-                        })?;
-                    }
+                if let Some(parent) = path.parent()
+                    && !parent.as_os_str().is_empty()
+                {
+                    std::fs::create_dir_all(parent).with_context(|| {
+                        format!("Failed to create parent directories for {}", path.display())
+                    })?;
                 }
                 std::fs::write(path, contents)
                     .with_context(|| format!("Failed to write file {}", path.display()))?;
@@ -381,15 +573,12 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
                 let AppliedPatch { new_contents, .. } =
                     derive_new_contents_from_chunks(path, chunks)?;
                 if let Some(dest) = move_path {
-                    if let Some(parent) = dest.parent() {
-                        if !parent.as_os_str().is_empty() {
-                            std::fs::create_dir_all(parent).with_context(|| {
-                                format!(
-                                    "Failed to create parent directories for {}",
-                                    dest.display()
-                                )
-                            })?;
-                        }
+                    if let Some(parent) = dest.parent()
+                        && !parent.as_os_str().is_empty()
+                    {
+                        std::fs::create_dir_all(parent).with_context(|| {
+                            format!("Failed to create parent directories for {}", dest.display())
+                        })?;
                     }
                     std::fs::write(dest, new_contents)
                         .with_context(|| format!("Failed to write file {}", dest.display()))?;
@@ -471,9 +660,12 @@ fn compute_replacements(
         // If a chunk has a `change_context`, we use seek_sequence to find it, then
         // adjust our `line_index` to continue from there.
         if let Some(ctx_line) = &chunk.change_context {
-            if let Some(idx) =
-                seek_sequence::seek_sequence(original_lines, &[ctx_line.clone()], line_index, false)
-            {
+            if let Some(idx) = seek_sequence::seek_sequence(
+                original_lines,
+                std::slice::from_ref(ctx_line),
+                line_index,
+                false,
+            ) {
                 line_index = idx + 1;
             } else {
                 return Err(ApplyPatchError::ComputeReplacements(format!(
@@ -624,8 +816,6 @@ pub fn print_summary(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
-
     use super::*;
     use pretty_assertions::assert_eq;
     use std::fs;
@@ -640,6 +830,49 @@ mod tests {
         strs.iter().map(|s| s.to_string()).collect()
     }
 
+    // Test helpers to reduce repetition when building bash -lc heredoc scripts
+    fn args_bash(script: &str) -> Vec<String> {
+        strs_to_strings(&["bash", "-lc", script])
+    }
+
+    fn heredoc_script(prefix: &str) -> String {
+        format!(
+            "{prefix}apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch\nPATCH"
+        )
+    }
+
+    fn heredoc_script_ps(prefix: &str, suffix: &str) -> String {
+        format!(
+            "{prefix}apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch\nPATCH{suffix}"
+        )
+    }
+
+    fn expected_single_add() -> Vec<Hunk> {
+        vec![Hunk::AddFile {
+            path: PathBuf::from("foo"),
+            contents: "hi\n".to_string(),
+        }]
+    }
+
+    fn assert_match(script: &str, expected_workdir: Option<&str>) {
+        let args = args_bash(script);
+        match maybe_parse_apply_patch(&args) {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
+                assert_eq!(workdir.as_deref(), expected_workdir);
+                assert_eq!(hunks, expected_single_add());
+            }
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        }
+    }
+
+    fn assert_not_match(script: &str) {
+        let args = args_bash(script);
+        assert!(matches!(
+            maybe_parse_apply_patch(&args),
+            MaybeApplyPatch::NotApplyPatch
+        ));
+    }
+
     #[test]
     fn test_literal() {
         let args = strs_to_strings(&[
@@ -652,7 +885,32 @@ mod tests {
         ]);
 
         match maybe_parse_apply_patch(&args) {
-            MaybeApplyPatch::Body(hunks) => {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, .. }) => {
+                assert_eq!(
+                    hunks,
+                    vec![Hunk::AddFile {
+                        path: PathBuf::from("foo"),
+                        contents: "hi\n".to_string()
+                    }]
+                );
+            }
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        }
+    }
+
+    #[test]
+    fn test_literal_applypatch() {
+        let args = strs_to_strings(&[
+            "applypatch",
+            r#"*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+"#,
+        ]);
+
+        match maybe_parse_apply_patch(&args) {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, .. }) => {
                 assert_eq!(
                     hunks,
                     vec![Hunk::AddFile {
@@ -667,10 +925,15 @@ mod tests {
 
     #[test]
     fn test_heredoc() {
+        assert_match(&heredoc_script(""), None);
+    }
+
+    #[test]
+    fn test_heredoc_applypatch() {
         let args = strs_to_strings(&[
             "bash",
             "-lc",
-            r#"apply_patch <<'PATCH'
+            r#"applypatch <<'PATCH'
 *** Begin Patch
 *** Add File: foo
 +hi
@@ -679,7 +942,8 @@ PATCH"#,
         ]);
 
         match maybe_parse_apply_patch(&args) {
-            MaybeApplyPatch::Body(hunks) => {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
+                assert_eq!(workdir, None);
                 assert_eq!(
                     hunks,
                     vec![Hunk::AddFile {
@@ -690,6 +954,69 @@ PATCH"#,
             }
             result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
         }
+    }
+
+    #[test]
+    fn test_heredoc_with_leading_cd() {
+        assert_match(&heredoc_script("cd foo && "), Some("foo"));
+    }
+
+    #[test]
+    fn test_cd_with_semicolon_is_ignored() {
+        assert_not_match(&heredoc_script("cd foo; "));
+    }
+
+    #[test]
+    fn test_cd_or_apply_patch_is_ignored() {
+        assert_not_match(&heredoc_script("cd bar || "));
+    }
+
+    #[test]
+    fn test_cd_pipe_apply_patch_is_ignored() {
+        assert_not_match(&heredoc_script("cd bar | "));
+    }
+
+    #[test]
+    fn test_cd_single_quoted_path_with_spaces() {
+        assert_match(&heredoc_script("cd 'foo bar' && "), Some("foo bar"));
+    }
+
+    #[test]
+    fn test_cd_double_quoted_path_with_spaces() {
+        assert_match(&heredoc_script("cd \"foo bar\" && "), Some("foo bar"));
+    }
+
+    #[test]
+    fn test_echo_and_apply_patch_is_ignored() {
+        assert_not_match(&heredoc_script("echo foo && "));
+    }
+
+    #[test]
+    fn test_apply_patch_with_arg_is_ignored() {
+        let script = "apply_patch foo <<'PATCH'\n*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch\nPATCH";
+        assert_not_match(script);
+    }
+
+    #[test]
+    fn test_double_cd_then_apply_patch_is_ignored() {
+        assert_not_match(&heredoc_script("cd foo && cd bar && "));
+    }
+
+    #[test]
+    fn test_cd_two_args_is_ignored() {
+        assert_not_match(&heredoc_script("cd foo bar && "));
+    }
+
+    #[test]
+    fn test_cd_then_apply_patch_then_extra_is_ignored() {
+        let script = heredoc_script_ps("cd bar && ", " && echo done");
+        assert_not_match(&script);
+    }
+
+    #[test]
+    fn test_echo_then_cd_and_apply_patch_is_ignored() {
+        // Ensure preceding commands before the `cd && apply_patch <<...` sequence do not match.
+        assert_not_match(&heredoc_script("echo foo; cd bar && "));
     }
 
     #[test]
@@ -954,7 +1281,7 @@ PATCH"#,
         ));
         let patch = parse_patch(&patch).unwrap();
 
-        let update_file_chunks = match patch.as_slice() {
+        let update_file_chunks = match patch.hunks.as_slice() {
             [Hunk::UpdateFile { chunks, .. }] => chunks,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
@@ -992,7 +1319,7 @@ PATCH"#,
         ));
 
         let patch = parse_patch(&patch).unwrap();
-        let chunks = match patch.as_slice() {
+        let chunks = match patch.hunks.as_slice() {
             [Hunk::UpdateFile { chunks, .. }] => chunks,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
@@ -1029,7 +1356,7 @@ PATCH"#,
         ));
 
         let patch = parse_patch(&patch).unwrap();
-        let chunks = match patch.as_slice() {
+        let chunks = match patch.hunks.as_slice() {
             [Hunk::UpdateFile { chunks, .. }] => chunks,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
@@ -1064,7 +1391,7 @@ PATCH"#,
         ));
 
         let patch = parse_patch(&patch).unwrap();
-        let chunks = match patch.as_slice() {
+        let chunks = match patch.hunks.as_slice() {
             [Hunk::UpdateFile { chunks, .. }] => chunks,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
@@ -1110,7 +1437,7 @@ PATCH"#,
 
         // Extract chunks then build the unified diff.
         let parsed = parse_patch(&patch).unwrap();
-        let chunks = match parsed.as_slice() {
+        let chunks = match parsed.hunks.as_slice() {
             [Hunk::UpdateFile { chunks, .. }] => chunks,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
@@ -1193,7 +1520,29 @@ g
                         new_content: "updated session directory content\n".to_string(),
                     },
                 )]),
+                patch: argv[1].clone(),
+                cwd: session_dir.path().to_path_buf(),
             })
         );
+    }
+
+    #[test]
+    fn test_apply_patch_fails_on_write_error() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("readonly.txt");
+        fs::write(&path, "before\n").unwrap();
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&path, perms).unwrap();
+
+        let patch = wrap_patch(&format!(
+            "*** Update File: {}\n@@\n-before\n+after\n*** End Patch",
+            path.display()
+        ));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let result = apply_patch(&patch, &mut stdout, &mut stderr);
+        assert!(result.is_err());
     }
 }

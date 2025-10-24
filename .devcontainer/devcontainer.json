@@ -21,7 +21,7 @@
       "settings": {
         "terminal.integrated.defaultProfile.linux": "bash"
       },
-      "extensions": ["rust-lang.rust-analyzer"]
+      "extensions": ["rust-lang.rust-analyzer", "tamasfe.even-better-toml"]
     }
   }
 }
