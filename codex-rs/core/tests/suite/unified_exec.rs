@@ -156,6 +156,12 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
         "cmd": "/bin/echo END-EVENT".to_string(),
         "yield_time_ms": 250,
     });
+    let poll_call_id = "uexec-end-event-poll";
+    let poll_args = json!({
+        "chars": "",
+        "session_id": 0,
+        "yield_time_ms": 250,
+    });
 
     let responses = vec![
         sse(vec![
@@ -165,8 +171,17 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
         ]),
         sse(vec![
             ev_response_created("resp-2"),
-            ev_assistant_message("msg-1", "finished"),
+            ev_function_call(
+                poll_call_id,
+                "write_stdin",
+                &serde_json::to_string(&poll_args)?,
+            ),
             ev_completed("resp-2"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_assistant_message("msg-1", "finished"),
+            ev_completed("resp-3"),
         ]),
     ];
     mount_sse_sequence(&server, responses).await;
