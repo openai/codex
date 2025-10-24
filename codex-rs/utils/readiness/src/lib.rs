@@ -1,6 +1,7 @@
 //! Readiness flag with token-based authorization and async waiting (Tokio).
 
 use std::collections::HashSet;
+use std::fmt;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
@@ -76,6 +77,14 @@ impl ReadinessFlag {
 impl Default for ReadinessFlag {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl fmt::Debug for ReadinessFlag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReadinessFlag")
+            .field("ready", &self.is_ready())
+            .finish()
     }
 }
 

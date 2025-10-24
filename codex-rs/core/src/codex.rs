@@ -16,7 +16,6 @@ use crate::user_notification::UserNotifier;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
-use codex_git_tooling::GhostCommit;
 use codex_protocol::ConversationId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::ConversationPathResponseEvent;
@@ -102,10 +101,10 @@ use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state::TaskKind;
-use crate::tasks::CompactTask;
+use crate::tasks::{CompactTask, SessionTask, SessionTaskContext};
+use crate::tasks::GhostSnapshotTask;
 use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
-use crate::tasks::spawn_ghost_snapshot_task;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
@@ -273,6 +272,7 @@ pub(crate) struct TurnContext {
     pub(crate) is_review_mode: bool,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
+    pub(crate) tool_call_gate: Arc<ReadinessFlag>,
 }
 
 impl TurnContext {
@@ -408,6 +408,7 @@ impl Session {
             is_review_mode: false,
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+            tool_call_gate: Arc::new(ReadinessFlag::new())
         }
     }
 
@@ -1042,28 +1043,30 @@ impl Session {
     async fn maybe_start_ghost_snapshot(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
-    ) -> Option<Arc<ReadinessFlag>> {
+        cancellation_token: CancellationToken,
+    ) {
         if turn_context.is_review_mode {
-            return None;
+            return;
         }
 
-        let readiness = Arc::new(ReadinessFlag::new());
-        let token = match readiness.subscribe().await {
+        let token = match turn_context.tool_call_gate.subscribe().await {
             Ok(token) => token,
             Err(err) => {
                 warn!("failed to subscribe to ghost snapshot readiness: {err}");
-                return None;
+                return;
             }
         };
 
-        spawn_ghost_snapshot_task(
-            Arc::clone(self),
-            turn_context,
-            Arc::clone(&readiness),
+        info!("spawning ghost snapshot task");
+        let task = GhostSnapshotTask::new(
             token,
         );
-
-        Some(readiness)
+        Arc::new(task).run(
+            Arc::new(SessionTaskContext::new(self.clone())),
+            turn_context.clone(),
+            Vec::new(),
+            cancellation_token
+        ).await;
     }
 
     /// Returns the input if there was no task running to inject into
@@ -1501,6 +1504,7 @@ async fn spawn_review_thread(
         is_review_mode: true,
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
+        tool_call_gate: Arc::new(ReadinessFlag::new())
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -1564,9 +1568,7 @@ pub(crate) async fn run_task(
             .await;
     }
 
-    let ghost_snapshot_gate = sess
-        .maybe_start_ghost_snapshot(Arc::clone(&turn_context))
-        .await;
+    sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token()).await;
     let mut last_agent_message: Option<String> = None;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
@@ -1622,7 +1624,6 @@ pub(crate) async fn run_task(
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
             turn_input,
-            ghost_snapshot_gate.clone(),
             task_kind,
             cancellation_token.child_token(),
         )
@@ -1856,7 +1857,6 @@ async fn run_turn(
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
     input: Vec<ResponseItem>,
-    ghost_snapshot_gate: Option<Arc<ReadinessFlag>>,
     task_kind: TaskKind,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
@@ -1887,7 +1887,6 @@ async fn run_turn(
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
             &prompt,
-            ghost_snapshot_gate.clone(),
             task_kind,
             cancellation_token.child_token(),
         )
@@ -1965,7 +1964,6 @@ async fn try_run_turn(
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
-    ghost_snapshot_gate: Option<Arc<ReadinessFlag>>,
     task_kind: TaskKind,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
@@ -1991,7 +1989,6 @@ async fn try_run_turn(
         Arc::clone(&sess),
         Arc::clone(&turn_context),
         Arc::clone(&turn_diff_tracker),
-        ghost_snapshot_gate.clone(),
     );
     let mut output: FuturesOrdered<BoxFuture<CodexResult<ProcessedResponseItem>>> =
         FuturesOrdered::new();
@@ -2104,9 +2101,6 @@ async fn try_run_turn(
                 response_id: _,
                 token_usage,
             } => {
-                sess.update_token_usage_info(turn_context.as_ref(), token_usage.as_ref())
-                    .await;
-
                 let processed_items = output
                     .try_collect()
                     .or_cancel(&cancellation_token)
@@ -2120,6 +2114,9 @@ async fn try_run_turn(
                     let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
                     sess.send_event(&turn_context, msg).await;
                 }
+
+                sess.update_token_usage_info(turn_context.as_ref(), token_usage.as_ref())
+                    .await;
 
                 let result = TurnRunResult {
                     processed_items,

@@ -13,7 +13,6 @@ use crate::tools::router::ToolCall;
 use crate::tools::router::ToolRouter;
 use codex_protocol::models::ResponseInputItem;
 use codex_utils_readiness::Readiness;
-use codex_utils_readiness::ReadinessFlag;
 
 pub(crate) struct ToolCallRuntime {
     router: Arc<ToolRouter>,
@@ -21,8 +20,6 @@ pub(crate) struct ToolCallRuntime {
     turn_context: Arc<TurnContext>,
     tracker: SharedTurnDiffTracker,
     parallel_execution: Arc<RwLock<()>>,
-    // Gate to wait before running the first tool call.
-    tool_gate: Option<Arc<ReadinessFlag>>,
 }
 
 impl ToolCallRuntime {
@@ -31,7 +28,6 @@ impl ToolCallRuntime {
         session: Arc<Session>,
         turn_context: Arc<TurnContext>,
         tracker: SharedTurnDiffTracker,
-        tool_gate: Option<Arc<ReadinessFlag>>,
     ) -> Self {
         Self {
             router,
@@ -39,7 +35,6 @@ impl ToolCallRuntime {
             turn_context,
             tracker,
             parallel_execution: Arc::new(RwLock::new(())),
-            tool_gate,
         }
     }
 
@@ -54,13 +49,13 @@ impl ToolCallRuntime {
         let turn = Arc::clone(&self.turn_context);
         let tracker = Arc::clone(&self.tracker);
         let lock = Arc::clone(&self.parallel_execution);
-        let readiness = self.tool_gate.clone();
+        let readiness = self.turn_context.tool_call_gate.clone();
 
         let handle: AbortOnDropHandle<Result<ResponseInputItem, FunctionCallError>> =
             AbortOnDropHandle::new(tokio::spawn(async move {
-                if let Some(flag) = readiness {
-                    flag.wait_ready().await;
-                }
+                tracing::info!("waiting for tool gate");
+                readiness.wait_ready().await;
+                tracing::info!("tool gate released");
                 let _guard = if supports_parallel {
                     Either::Left(lock.read().await)
                 } else {
