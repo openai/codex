@@ -332,6 +332,12 @@ impl ConversationHistory {
             model_context_window,
         );
     }
+
+    pub(crate) fn reset_last_token_usage(&mut self) {
+        if let Some(info) = self.token_info.as_mut() {
+            info.last_token_usage = TokenUsage::default();
+        }
+    }
 }
 
 #[inline]
@@ -393,6 +399,24 @@ mod tests {
                 text: text.to_string(),
             }],
         }
+    }
+
+    #[test]
+    fn replace_preserves_totals_and_reset_clears_last_usage() {
+        let mut history = ConversationHistory::new();
+        let mut usage = TokenUsage::default();
+        usage.total_tokens = 1280;
+        usage.input_tokens = 640;
+        history.update_token_info(&usage, Some(13_000));
+
+        history.replace(Vec::new());
+        history.reset_last_token_usage();
+
+        let info = history
+            .token_info()
+            .expect("token info should persist after replace");
+        assert_eq!(info.total_token_usage.total_tokens, 1280);
+        assert_eq!(info.last_token_usage.total_tokens, 0);
     }
 
     #[test]

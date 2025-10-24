@@ -72,4 +72,8 @@ impl SessionState {
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
         self.history.set_token_usage_full(context_window);
     }
+
+    pub(crate) fn reset_last_token_usage(&mut self) {
+        self.history.reset_last_token_usage();
+    }
 }

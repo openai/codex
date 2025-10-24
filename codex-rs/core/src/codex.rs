@@ -995,6 +995,11 @@ impl Session {
         }
     }
 
+    async fn reset_last_token_usage(&self) {
+        let mut state = self.state.lock().await;
+        state.reset_last_token_usage();
+    }
+
     /// Record a user input item to conversation history and also persist a
     /// corresponding UserMessage EventMsg to rollout.
     async fn record_input_and_rollout_usermsg(
