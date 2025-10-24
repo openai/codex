@@ -200,9 +200,50 @@ impl ToolEmitter {
             ) => {
                 emit_patch_end(ctx, String::new(), (*message).to_string(), false).await;
             }
-            (Self::UnifiedExec { command, cwd, .. }, _) => {
-                // TODO(jif) add end and failures.
+            (Self::UnifiedExec { command, cwd, .. }, ToolEventStage::Begin) => {
                 emit_exec_command_begin(ctx, &[command.to_string()], cwd.as_path()).await;
+            }
+            (Self::UnifiedExec { .. }, ToolEventStage::Success(output)) => {
+                emit_exec_end(
+                    ctx,
+                    output.stdout.text.clone(),
+                    output.stderr.text.clone(),
+                    output.aggregated_output.text.clone(),
+                    output.exit_code,
+                    output.duration,
+                    format_exec_output_str(&output),
+                )
+                .await;
+            }
+            (
+                Self::UnifiedExec { .. },
+                ToolEventStage::Failure(ToolEventFailure::Output(output)),
+            ) => {
+                emit_exec_end(
+                    ctx,
+                    output.stdout.text.clone(),
+                    output.stderr.text.clone(),
+                    output.aggregated_output.text.clone(),
+                    output.exit_code,
+                    output.duration,
+                    format_exec_output_str(&output),
+                )
+                .await;
+            }
+            (
+                Self::UnifiedExec { .. },
+                ToolEventStage::Failure(ToolEventFailure::Message(message)),
+            ) => {
+                emit_exec_end(
+                    ctx,
+                    String::new(),
+                    (*message).to_string(),
+                    (*message).to_string(),
+                    -1,
+                    Duration::ZERO,
+                    format_exec_output(&message),
+                )
+                .await;
             }
         }
     }

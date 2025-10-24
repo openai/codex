@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 use tokio_util::either::Either;
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use crate::codex::Session;
@@ -9,8 +10,10 @@ use crate::codex::TurnContext;
 use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolPayload;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolRouter;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_utils_readiness::Readiness;
 
@@ -41,6 +44,7 @@ impl ToolCallRuntime {
     pub(crate) fn handle_tool_call(
         &self,
         call: ToolCall,
+        cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
         let supports_parallel = self.router.tool_supports_parallel(&call.tool_name);
 
@@ -49,22 +53,28 @@ impl ToolCallRuntime {
         let turn = Arc::clone(&self.turn_context);
         let tracker = Arc::clone(&self.tracker);
         let lock = Arc::clone(&self.parallel_execution);
+        let aborted_response = Self::aborted_response(&call);
         let readiness = self.turn_context.tool_call_gate.clone();
 
         let handle: AbortOnDropHandle<Result<ResponseInputItem, FunctionCallError>> =
             AbortOnDropHandle::new(tokio::spawn(async move {
-                tracing::info!("waiting for tool gate");
-                readiness.wait_ready().await;
-                tracing::info!("tool gate released");
-                let _guard = if supports_parallel {
-                    Either::Left(lock.read().await)
-                } else {
-                    Either::Right(lock.write().await)
-                };
+                tokio::select! {
+                    _ = cancellation_token.cancelled() => Ok(aborted_response),
+                    res = async {
+                        tracing::info!("waiting for tool gate");
+                        readiness.wait_ready().await;
+                        tracing::info!("tool gate released");
+                        let _guard = if supports_parallel {
+                            Either::Left(lock.read().await)
+                        } else {
+                            Either::Right(lock.write().await)
+                        };
 
-                router
-                    .dispatch_tool_call(session, turn, tracker, call)
-                    .await
+                        router
+                            .dispatch_tool_call(session, turn, tracker, call)
+                            .await
+                    } => res,
+                }
             }));
 
         async move {
@@ -76,6 +86,28 @@ impl ToolCallRuntime {
                     "tool task failed to receive: {err:?}"
                 ))),
             }
+        }
+    }
+}
+
+impl ToolCallRuntime {
+    fn aborted_response(call: &ToolCall) -> ResponseInputItem {
+        match &call.payload {
+            ToolPayload::Custom { .. } => ResponseInputItem::CustomToolCallOutput {
+                call_id: call.call_id.clone(),
+                output: "aborted".to_string(),
+            },
+            ToolPayload::Mcp { .. } => ResponseInputItem::McpToolCallOutput {
+                call_id: call.call_id.clone(),
+                result: Err("aborted".to_string()),
+            },
+            _ => ResponseInputItem::FunctionCallOutput {
+                call_id: call.call_id.clone(),
+                output: FunctionCallOutputPayload {
+                    content: "aborted".to_string(),
+                    success: None,
+                },
+            },
         }
     }
 }

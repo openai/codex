@@ -154,7 +154,7 @@ impl ShellHandler {
 
                         let req = ApplyPatchRequest {
                             patch: apply.action.patch.clone(),
-                            cwd: exec_params.cwd.clone(),
+                            cwd: apply.action.cwd.clone(),
                             timeout_ms: exec_params.timeout_ms,
                             user_explicitly_approved: apply.user_explicitly_approved_this_action,
                             codex_exe: turn.codex_linux_sandbox_exe.clone(),

@@ -8,8 +8,10 @@ use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
 use crate::function_tool::FunctionCallError;
 use crate::mcp::auth::McpAuthStatusEntry;
+use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
+use crate::response_processing::process_items;
 use crate::review_format::format_review_findings_block;
 use crate::terminal;
 use crate::user_notification::UserNotifier;
@@ -1647,109 +1649,13 @@ pub(crate) async fn run_task(
                 let token_limit_reached = total_usage_tokens
                     .map(|tokens| tokens >= limit)
                     .unwrap_or(false);
-                let mut items_to_record_in_conversation_history = Vec::<ResponseItem>::new();
-                let mut responses = Vec::<ResponseInputItem>::new();
-                for processed_response_item in processed_items {
-                    let ProcessedResponseItem { item, response } = processed_response_item;
-                    match (&item, &response) {
-                        (ResponseItem::Message { role, .. }, None) if role == "assistant" => {
-                            // If the model returned a message, we need to record it.
-                            items_to_record_in_conversation_history.push(item);
-                        }
-                        (
-                            ResponseItem::LocalShellCall { .. },
-                            Some(ResponseInputItem::FunctionCallOutput { call_id, output }),
-                        ) => {
-                            items_to_record_in_conversation_history.push(item);
-                            items_to_record_in_conversation_history.push(
-                                ResponseItem::FunctionCallOutput {
-                                    call_id: call_id.clone(),
-                                    output: output.clone(),
-                                },
-                            );
-                        }
-                        (
-                            ResponseItem::FunctionCall { .. },
-                            Some(ResponseInputItem::FunctionCallOutput { call_id, output }),
-                        ) => {
-                            items_to_record_in_conversation_history.push(item);
-                            items_to_record_in_conversation_history.push(
-                                ResponseItem::FunctionCallOutput {
-                                    call_id: call_id.clone(),
-                                    output: output.clone(),
-                                },
-                            );
-                        }
-                        (
-                            ResponseItem::CustomToolCall { .. },
-                            Some(ResponseInputItem::CustomToolCallOutput { call_id, output }),
-                        ) => {
-                            items_to_record_in_conversation_history.push(item);
-                            items_to_record_in_conversation_history.push(
-                                ResponseItem::CustomToolCallOutput {
-                                    call_id: call_id.clone(),
-                                    output: output.clone(),
-                                },
-                            );
-                        }
-                        (
-                            ResponseItem::FunctionCall { .. },
-                            Some(ResponseInputItem::McpToolCallOutput { call_id, result }),
-                        ) => {
-                            items_to_record_in_conversation_history.push(item);
-                            let output = match result {
-                                Ok(call_tool_result) => {
-                                    convert_call_tool_result_to_function_call_output_payload(
-                                        call_tool_result,
-                                    )
-                                }
-                                Err(err) => FunctionCallOutputPayload {
-                                    content: err.clone(),
-                                    success: Some(false),
-                                },
-                            };
-                            items_to_record_in_conversation_history.push(
-                                ResponseItem::FunctionCallOutput {
-                                    call_id: call_id.clone(),
-                                    output,
-                                },
-                            );
-                        }
-                        (
-                            ResponseItem::Reasoning {
-                                id,
-                                summary,
-                                content,
-                                encrypted_content,
-                            },
-                            None,
-                        ) => {
-                            items_to_record_in_conversation_history.push(ResponseItem::Reasoning {
-                                id: id.clone(),
-                                summary: summary.clone(),
-                                content: content.clone(),
-                                encrypted_content: encrypted_content.clone(),
-                            });
-                        }
-                        _ => {
-                            warn!("Unexpected response item: {item:?} with response: {response:?}");
-                        }
-                    };
-                    if let Some(response) = response {
-                        responses.push(response);
-                    }
-                }
-
-                // Only attempt to take the lock if there is something to record.
-                if !items_to_record_in_conversation_history.is_empty() {
-                    if is_review_mode {
-                        review_thread_history
-                            .record_items(items_to_record_in_conversation_history.iter());
-                    } else {
-                        sess.record_conversation_items(&items_to_record_in_conversation_history)
-                            .await;
-                    }
-                }
+                let (responses, items_to_record_in_conversation_history) = process_items(
+                    processed_items,
+                    is_review_mode,
+                    &mut review_thread_history,
+                    &sess,
+                )
+                .await;
 
                 if token_limit_reached {
                     if auto_compact_recently_attempted {
@@ -1788,7 +1694,16 @@ pub(crate) async fn run_task(
                 }
                 continue;
             }
-            Err(CodexErr::TurnAborted) => {
+            Err(CodexErr::TurnAborted {
+                dangling_artifacts: processed_items,
+            }) => {
+                let _ = process_items(
+                    processed_items,
+                    is_review_mode,
+                    &mut review_thread_history,
+                    &sess,
+                )
+                .await;
                 // Aborted turn is reported via a different event.
                 break;
             }
@@ -1896,7 +1811,13 @@ async fn run_turn(
         .await
         {
             Ok(output) => return Ok(output),
-            Err(CodexErr::TurnAborted) => return Err(CodexErr::TurnAborted),
+            Err(CodexErr::TurnAborted {
+                dangling_artifacts: processed_items,
+            }) => {
+                return Err(CodexErr::TurnAborted {
+                    dangling_artifacts: processed_items,
+                });
+            }
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
             Err(e @ CodexErr::Fatal(_)) => return Err(e),
@@ -1949,9 +1870,9 @@ async fn run_turn(
 /// "handled" such that it produces a `ResponseInputItem` that needs to be
 /// sent back to the model on the next turn.
 #[derive(Debug)]
-pub(crate) struct ProcessedResponseItem {
-    pub(crate) item: ResponseItem,
-    pub(crate) response: Option<ResponseInputItem>,
+pub struct ProcessedResponseItem {
+    pub item: ResponseItem,
+    pub response: Option<ResponseInputItem>,
 }
 
 #[derive(Debug)]
@@ -2000,7 +1921,15 @@ async fn try_run_turn(
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
         // cases so that transient stream failures (e.g., dropped SSE connection before
         // `response.completed`) bubble up and trigger the caller's retry logic.
-        let event = stream.next().or_cancel(&cancellation_token).await?;
+        let event = match stream.next().or_cancel(&cancellation_token).await {
+            Ok(event) => event,
+            Err(codex_async_utils::CancelErr::Cancelled) => {
+                let processed_items = output.try_collect().await?;
+                return Err(CodexErr::TurnAborted {
+                    dangling_artifacts: processed_items,
+                });
+            }
+        };
 
         let event = match event {
             Some(res) => res?,
@@ -2024,7 +1953,8 @@ async fn try_run_turn(
                         let payload_preview = call.payload.log_payload().into_owned();
                         tracing::info!("ToolCall: {} {}", call.tool_name, payload_preview);
 
-                        let response = tool_runtime.handle_tool_call(call);
+                        let response =
+                            tool_runtime.handle_tool_call(call, cancellation_token.child_token());
 
                         output.push_back(
                             async move {
@@ -2104,11 +2034,9 @@ async fn try_run_turn(
                 response_id: _,
                 token_usage,
             } => {
-                let processed_items = output
-                    .try_collect()
-                    .or_cancel(&cancellation_token)
-                    .await??;
-
+                sess.update_token_usage_info(turn_context.as_ref(), token_usage.as_ref())
+                    .await;
+                let processed_items = output.try_collect().await?;
                 let unified_diff = {
                     let mut tracker = turn_diff_tracker.lock().await;
                     tracker.get_unified_diff()
@@ -2215,7 +2143,7 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
         }
     })
 }
-fn convert_call_tool_result_to_function_call_output_payload(
+pub(crate) fn convert_call_tool_result_to_function_call_output_payload(
     call_tool_result: &CallToolResult,
 ) -> FunctionCallOutputPayload {
     let CallToolResult {
@@ -2321,11 +2249,23 @@ fn mcp_init_error_display(
         // That means that the user has to specify a personal access token either via bearer_token_env_var or http_headers.
         // https://github.com/github/github-mcp-server/issues/921#issuecomment-3221026448
         format!(
-            "GitHub MCP does not support OAuth. Log in by adding `bearer_token_env_var = CODEX_GITHUB_PAT` in the `mcp_servers.{server_name}` section of your config.toml"
+            "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
         )
     } else if is_mcp_client_auth_required_error(err) {
         format!(
             "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
+        )
+    } else if is_mcp_client_startup_timeout_error(err) {
+        let startup_timeout_secs = match entry {
+            Some(entry) => match entry.config.startup_timeout_sec {
+                Some(timeout) => timeout,
+                None => DEFAULT_STARTUP_TIMEOUT,
+            },
+            None => DEFAULT_STARTUP_TIMEOUT,
+        }
+        .as_secs();
+        format!(
+            "MCP client for `{server_name}` timed out after {startup_timeout_secs} seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.{server_name}]\nstartup_timeout_sec = XX"
         )
     } else {
         format!("MCP client for `{server_name}` failed to start: {err:#}")
@@ -2335,6 +2275,12 @@ fn mcp_init_error_display(
 fn is_mcp_client_auth_required_error(error: &anyhow::Error) -> bool {
     // StreamableHttpError::AuthRequired from the MCP SDK.
     error.to_string().contains("Auth required")
+}
+
+fn is_mcp_client_startup_timeout_error(error: &anyhow::Error) -> bool {
+    let error_message = error.to_string();
+    error_message.contains("request timed out")
+        || error_message.contains("timed out handshaking with MCP server")
 }
 
 #[cfg(test)]
@@ -3194,7 +3140,7 @@ mod tests {
         let display = mcp_init_error_display(server_name, Some(&entry), &err);
 
         let expected = format!(
-            "GitHub MCP does not support OAuth. Log in by adding `bearer_token_env_var = CODEX_GITHUB_PAT` in the `mcp_servers.{server_name}` section of your config.toml"
+            "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
         );
 
         assert_eq!(expected, display);
@@ -3240,5 +3186,18 @@ mod tests {
         let expected = format!("MCP client for `{server_name}` failed to start: {err:#}");
 
         assert_eq!(expected, display);
+    }
+
+    #[test]
+    fn mcp_init_error_display_includes_startup_timeout_hint() {
+        let server_name = "slow";
+        let err = anyhow::anyhow!("request timed out");
+
+        let display = mcp_init_error_display(server_name, None, &err);
+
+        assert_eq!(
+            "MCP client for `slow` timed out after 10 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",
+            display
+        );
     }
 }

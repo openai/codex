@@ -1293,12 +1293,10 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
         let output = output_lines(
             Some(&CommandOutput {
                 exit_code: 1,
-                stdout: String::new(),
-                stderr,
                 formatted_output: String::new(),
+                aggregated_output: stderr,
             }),
             OutputLinesParams {
-                only_err: true,
                 include_angle_pipe: true,
                 include_prefix: true,
             },
@@ -1739,16 +1737,7 @@ mod tests {
             duration: None,
         });
         // Mark call complete so markers are ✓
-        cell.complete_call(
-            &call_id,
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
 
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
@@ -1770,16 +1759,7 @@ mod tests {
             duration: None,
         });
         // Call 1: Search only
-        cell.complete_call(
-            "c1",
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
         // Call 2: Read A
         cell = cell
             .with_added_call(
@@ -1792,16 +1772,7 @@ mod tests {
                 }],
             )
             .unwrap();
-        cell.complete_call(
-            "c2",
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call("c2", CommandOutput::default(), Duration::from_millis(1));
         // Call 3: Read B
         cell = cell
             .with_added_call(
@@ -1814,16 +1785,7 @@ mod tests {
                 }],
             )
             .unwrap();
-        cell.complete_call(
-            "c3",
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call("c3", CommandOutput::default(), Duration::from_millis(1));
 
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
@@ -1856,16 +1818,7 @@ mod tests {
             start_time: Some(Instant::now()),
             duration: None,
         });
-        cell.complete_call(
-            "c1",
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
@@ -1885,16 +1838,7 @@ mod tests {
             duration: None,
         });
         // Mark call complete so it renders as "Ran"
-        cell.complete_call(
-            &call_id,
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
 
         // Small width to force wrapping on both lines
         let width: u16 = 28;
@@ -1914,16 +1858,7 @@ mod tests {
             start_time: Some(Instant::now()),
             duration: None,
         });
-        cell.complete_call(
-            &call_id,
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         // Wide enough that it fits inline
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
@@ -1942,16 +1877,7 @@ mod tests {
             start_time: Some(Instant::now()),
             duration: None,
         });
-        cell.complete_call(
-            &call_id,
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(24);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
@@ -1969,16 +1895,7 @@ mod tests {
             start_time: Some(Instant::now()),
             duration: None,
         });
-        cell.complete_call(
-            &call_id,
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
@@ -1997,16 +1914,7 @@ mod tests {
             start_time: Some(Instant::now()),
             duration: None,
         });
-        cell.complete_call(
-            &call_id,
-            CommandOutput {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                formatted_output: String::new(),
-            },
-            Duration::from_millis(1),
-        );
+        cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(28);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
@@ -2033,9 +1941,8 @@ mod tests {
             &call_id,
             CommandOutput {
                 exit_code: 1,
-                stdout: String::new(),
-                stderr,
                 formatted_output: String::new(),
+                aggregated_output: stderr,
             },
             Duration::from_millis(1),
         );
@@ -2077,9 +1984,8 @@ mod tests {
             &call_id,
             CommandOutput {
                 exit_code: 1,
-                stdout: String::new(),
-                stderr,
                 formatted_output: String::new(),
+                aggregated_output: stderr,
             },
             Duration::from_millis(5),
         );
