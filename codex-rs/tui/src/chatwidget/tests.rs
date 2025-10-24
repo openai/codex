@@ -867,6 +867,10 @@ fn undo_success_events_render_info_messages() {
             message: Some("Undo requested for the last turn...".to_string()),
         }),
     });
+    assert!(
+        chat.bottom_pane.status_indicator_visible(),
+        "status indicator should be visible during undo"
+    );
 
     chat.handle_codex_event(Event {
         id: "turn-1".to_string(),
@@ -877,15 +881,13 @@ fn undo_success_events_render_info_messages() {
     });
 
     let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 2, "expected two history entries");
-
-    let started = lines_to_single_string(&cells[0]);
+    assert_eq!(cells.len(), 1, "expected final status only");
     assert!(
-        started.contains("Undo requested for the last turn..."),
-        "expected custom started message, got {started:?}"
+        !chat.bottom_pane.status_indicator_visible(),
+        "status indicator should be hidden after successful undo"
     );
 
-    let completed = lines_to_single_string(&cells[1]);
+    let completed = lines_to_single_string(&cells[0]);
     assert!(
         completed.contains("Undo completed successfully."),
         "expected default success message, got {completed:?}"
@@ -900,6 +902,10 @@ fn undo_failure_events_render_error_message() {
         id: "turn-2".to_string(),
         msg: EventMsg::UndoStarted(UndoStartedEvent { message: None }),
     });
+    assert!(
+        chat.bottom_pane.status_indicator_visible(),
+        "status indicator should be visible during undo"
+    );
 
     chat.handle_codex_event(Event {
         id: "turn-2".to_string(),
@@ -910,15 +916,13 @@ fn undo_failure_events_render_error_message() {
     });
 
     let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 2, "expected two history entries");
-
-    let started = lines_to_single_string(&cells[0]);
+    assert_eq!(cells.len(), 1, "expected final status only");
     assert!(
-        started.contains("Undo in progress..."),
-        "expected default started message, got {started:?}"
+        !chat.bottom_pane.status_indicator_visible(),
+        "status indicator should be hidden after failed undo"
     );
 
-    let completed = lines_to_single_string(&cells[1]);
+    let completed = lines_to_single_string(&cells[0]);
     assert!(
         completed.contains("Failed to restore workspace state."),
         "expected failure message, got {completed:?}"

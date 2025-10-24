@@ -629,14 +629,16 @@ impl ChatWidget {
     }
 
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
+        self.bottom_pane.ensure_status_indicator();
         let message = event
             .message
             .unwrap_or_else(|| "Undo in progress...".to_string());
-        self.add_info_message(message, None);
+        self.set_status_header(message.clone());
     }
 
     fn on_undo_completed(&mut self, event: UndoCompletedEvent) {
         let UndoCompletedEvent { success, message } = event;
+        self.bottom_pane.hide_status_indicator();
         let message = message.unwrap_or_else(|| {
             if success {
                 "Undo completed successfully.".to_string()
