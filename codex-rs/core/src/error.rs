@@ -1,3 +1,4 @@
+use crate::codex::ProcessedResponseItem;
 use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
@@ -53,8 +54,11 @@ pub enum SandboxErr {
 
 #[derive(Error, Debug)]
 pub enum CodexErr {
+    // todo(aibrahim): git rid of this error carrying the dangling artifacts
     #[error("turn aborted")]
-    TurnAborted,
+    TurnAborted {
+        dangling_artifacts: Vec<ProcessedResponseItem>,
+    },
 
     /// Returned by ResponsesClient when the SSE stream disconnects or errors out **after** the HTTP
     /// handshake has succeeded but **before** it finished emitting `response.completed`.
@@ -158,7 +162,9 @@ pub enum CodexErr {
 
 impl From<CancelErr> for CodexErr {
     fn from(_: CancelErr) -> Self {
-        CodexErr::TurnAborted
+        CodexErr::TurnAborted {
+            dangling_artifacts: Vec::new(),
+        }
     }
 }
 
@@ -421,16 +427,24 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     fn rate_limit_snapshot() -> RateLimitSnapshot {
+        let primary_reset_at = Utc
+            .with_ymd_and_hms(2024, 1, 1, 1, 0, 0)
+            .unwrap()
+            .timestamp();
+        let secondary_reset_at = Utc
+            .with_ymd_and_hms(2024, 1, 1, 2, 0, 0)
+            .unwrap()
+            .timestamp();
         RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 50.0,
                 window_minutes: Some(60),
-                resets_at: Some("2024-01-01T01:00:00Z".to_string()),
+                resets_at: Some(primary_reset_at),
             }),
             secondary: Some(RateLimitWindow {
                 used_percent: 30.0,
                 window_minutes: Some(120),
-                resets_at: Some("2024-01-01T02:00:00Z".to_string()),
+                resets_at: Some(secondary_reset_at),
             }),
         }
     }

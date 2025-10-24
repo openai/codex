@@ -13,6 +13,7 @@ use codex_core::WireApi;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
+use codex_protocol::models::ReasoningItemContent;
 use core_test_support::load_default_config_for_test;
 use futures::StreamExt;
 use tempfile::TempDir;
@@ -49,6 +50,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         base_url: Some(format!("{}/v1", server.uri())),
         env_key: None,
         env_key_instructions: None,
+        experimental_bearer_token: None,
         wire_api: WireApi::Chat,
         query_params: None,
         http_headers: None,
@@ -142,8 +144,8 @@ fn assert_reasoning(item: &ResponseItem, expected: &str) {
         let mut combined = String::new();
         for part in parts {
             match part {
-                codex_core::ReasoningItemContent::ReasoningText { text }
-                | codex_core::ReasoningItemContent::Text { text } => combined.push_str(text),
+                ReasoningItemContent::ReasoningText { text }
+                | ReasoningItemContent::Text { text } => combined.push_str(text),
             }
         }
         assert_eq!(combined, expected);

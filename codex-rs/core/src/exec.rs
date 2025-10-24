@@ -18,13 +18,14 @@ use tokio::process::Child;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::SandboxErr;
-use crate::landlock::spawn_command_under_linux_sandbox;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::SandboxPolicy;
-use crate::seatbelt::spawn_command_under_seatbelt;
+use crate::sandboxing::CommandSpec;
+use crate::sandboxing::ExecEnv;
+use crate::sandboxing::SandboxManager;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 
@@ -53,6 +54,7 @@ pub struct ExecParams {
     pub env: HashMap<String, String>,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
+    pub arg0: Option<String>,
 }
 
 impl ExecParams {
@@ -87,57 +89,85 @@ pub async fn process_exec_tool_call(
     codex_linux_sandbox_exe: &Option<PathBuf>,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
-    let start = Instant::now();
+    let ExecParams {
+        command,
+        cwd,
+        timeout_ms,
+        env,
+        with_escalated_permissions,
+        justification,
+        arg0: _,
+    } = params;
 
-    let timeout_duration = params.timeout_duration();
+    let (program, args) = command.split_first().ok_or_else(|| {
+        CodexErr::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "command args are empty",
+        ))
+    })?;
 
-    let raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr> = match sandbox_type
-    {
-        SandboxType::None => exec(params, sandbox_policy, stdout_stream.clone()).await,
-        SandboxType::MacosSeatbelt => {
-            let ExecParams {
-                command,
-                cwd: command_cwd,
-                env,
-                ..
-            } = params;
-            let child = spawn_command_under_seatbelt(
-                command,
-                command_cwd,
-                sandbox_policy,
-                sandbox_cwd,
-                StdioPolicy::RedirectForShellTool,
-                env,
-            )
-            .await?;
-            consume_truncated_output(child, timeout_duration, stdout_stream.clone()).await
-        }
-        SandboxType::LinuxSeccomp => {
-            let ExecParams {
-                command,
-                cwd: command_cwd,
-                env,
-                ..
-            } = params;
-
-            let codex_linux_sandbox_exe = codex_linux_sandbox_exe
-                .as_ref()
-                .ok_or(CodexErr::LandlockSandboxExecutableNotProvided)?;
-            let child = spawn_command_under_linux_sandbox(
-                codex_linux_sandbox_exe,
-                command,
-                command_cwd,
-                sandbox_policy,
-                sandbox_cwd,
-                StdioPolicy::RedirectForShellTool,
-                env,
-            )
-            .await?;
-
-            consume_truncated_output(child, timeout_duration, stdout_stream).await
-        }
+    let spec = CommandSpec {
+        program: program.clone(),
+        args: args.to_vec(),
+        cwd,
+        env,
+        timeout_ms,
+        with_escalated_permissions,
+        justification,
     };
+
+    let manager = SandboxManager::new();
+    let exec_env = manager
+        .transform(
+            &spec,
+            sandbox_policy,
+            sandbox_type,
+            sandbox_cwd,
+            codex_linux_sandbox_exe.as_ref(),
+        )
+        .map_err(CodexErr::from)?;
+
+    // Route through the sandboxing module for a single, unified execution path.
+    crate::sandboxing::execute_env(&exec_env, sandbox_policy, stdout_stream).await
+}
+
+pub(crate) async fn execute_exec_env(
+    env: ExecEnv,
+    sandbox_policy: &SandboxPolicy,
+    stdout_stream: Option<StdoutStream>,
+) -> Result<ExecToolCallOutput> {
+    let ExecEnv {
+        command,
+        cwd,
+        env,
+        timeout_ms,
+        sandbox,
+        with_escalated_permissions,
+        justification,
+        arg0,
+    } = env;
+
+    let params = ExecParams {
+        command,
+        cwd,
+        timeout_ms,
+        env,
+        with_escalated_permissions,
+        justification,
+        arg0,
+    };
+
+    let start = Instant::now();
+    let raw_output_result = exec(params, sandbox_policy, stdout_stream).await;
     let duration = start.elapsed();
+    finalize_exec_result(raw_output_result, sandbox, duration)
+}
+
+fn finalize_exec_result(
+    raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr>,
+    sandbox_type: SandboxType,
+    duration: Duration,
+) -> Result<ExecToolCallOutput> {
     match raw_output_result {
         Ok(raw_output) => {
             #[allow(unused_mut)]
@@ -192,12 +222,30 @@ pub async fn process_exec_tool_call(
     }
 }
 
+pub(crate) mod errors {
+    use super::CodexErr;
+    use crate::sandboxing::SandboxTransformError;
+
+    impl From<SandboxTransformError> for CodexErr {
+        fn from(err: SandboxTransformError) -> Self {
+            match err {
+                SandboxTransformError::MissingLinuxSandboxExecutable => {
+                    CodexErr::LandlockSandboxExecutableNotProvided
+                }
+            }
+        }
+    }
+}
+
 /// We don't have a fully deterministic way to tell if our command failed
 /// because of the sandbox - a command in the user's zshrc file might hit an
 /// error, but the command itself might fail or succeed for other reasons.
 /// For now, we conservatively check for well known command failure exit codes and
 /// also look for common sandbox denial keywords in the command output.
-fn is_likely_sandbox_denied(sandbox_type: SandboxType, exec_output: &ExecToolCallOutput) -> bool {
+pub(crate) fn is_likely_sandbox_denied(
+    sandbox_type: SandboxType,
+    exec_output: &ExecToolCallOutput,
+) -> bool {
     if sandbox_type == SandboxType::None || exec_output.exit_code == 0 {
         return false;
     }
@@ -206,21 +254,17 @@ fn is_likely_sandbox_denied(sandbox_type: SandboxType, exec_output: &ExecToolCal
     // 2: misuse of shell builtins
     // 126: permission denied
     // 127: command not found
-    const QUICK_REJECT_EXIT_CODES: [i32; 3] = [2, 126, 127];
-    if QUICK_REJECT_EXIT_CODES.contains(&exec_output.exit_code) {
-        return false;
-    }
-
-    const SANDBOX_DENIED_KEYWORDS: [&str; 6] = [
+    const SANDBOX_DENIED_KEYWORDS: [&str; 7] = [
         "operation not permitted",
         "permission denied",
         "read-only file system",
         "seccomp",
         "sandbox",
         "landlock",
+        "failed to write file",
     ];
 
-    if [
+    let has_sandbox_keyword = [
         &exec_output.stderr.text,
         &exec_output.stdout.text,
         &exec_output.aggregated_output.text,
@@ -231,8 +275,15 @@ fn is_likely_sandbox_denied(sandbox_type: SandboxType, exec_output: &ExecToolCal
         SANDBOX_DENIED_KEYWORDS
             .iter()
             .any(|needle| lower.contains(needle))
-    }) {
+    });
+
+    if has_sandbox_keyword {
         return true;
+    }
+
+    const QUICK_REJECT_EXIT_CODES: [i32; 3] = [2, 126, 127];
+    if QUICK_REJECT_EXIT_CODES.contains(&exec_output.exit_code) {
+        return false;
     }
 
     #[cfg(unix)]
@@ -248,11 +299,12 @@ fn is_likely_sandbox_denied(sandbox_type: SandboxType, exec_output: &ExecToolCal
     false
 }
 
-#[derive(Debug)]
-pub struct StreamOutput<T> {
+#[derive(Debug, Clone)]
+pub struct StreamOutput<T: Clone> {
     pub text: T,
     pub truncated_after_lines: Option<u32>,
 }
+
 #[derive(Debug)]
 struct RawExecToolCallOutput {
     pub exit_status: ExitStatus,
@@ -285,7 +337,7 @@ fn append_all(dst: &mut Vec<u8>, src: &[u8]) {
     dst.extend_from_slice(src);
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ExecToolCallOutput {
     pub exit_code: i32,
     pub stdout: StreamOutput<String>,
@@ -302,7 +354,11 @@ async fn exec(
 ) -> Result<RawExecToolCallOutput> {
     let timeout = params.timeout_duration();
     let ExecParams {
-        command, cwd, env, ..
+        command,
+        cwd,
+        env,
+        arg0,
+        ..
     } = params;
 
     let (program, args) = command.split_first().ok_or_else(|| {
@@ -311,11 +367,11 @@ async fn exec(
             "command args are empty",
         ))
     })?;
-    let arg0 = None;
+    let arg0_ref = arg0.as_deref();
     let child = spawn_child_async(
         PathBuf::from(program),
         args.into(),
-        arg0,
+        arg0_ref,
         cwd,
         sandbox_policy,
         StdioPolicy::RedirectForShellTool,

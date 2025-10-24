@@ -31,18 +31,14 @@ pub enum Feature {
     UnifiedExec,
     /// Use the streamable exec-command/write-stdin tool pair.
     StreamableShell,
-    /// Use the official Rust MCP client (rmcp).
+    /// Enable experimental RMCP features such as OAuth login.
     RmcpClient,
-    /// Include the plan tool.
-    PlanTool,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
     /// Include the view_image tool.
     ViewImageTool,
     /// Allow the model to request web searches.
     WebSearchRequest,
-    /// Automatically approve all approval requests from the harness.
-    ApproveAll,
 }
 
 impl Feature {
@@ -74,7 +70,6 @@ pub struct Features {
 
 #[derive(Debug, Clone, Default)]
 pub struct FeatureOverrides {
-    pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
     pub web_search_request: Option<bool>,
@@ -83,7 +78,6 @@ pub struct FeatureOverrides {
 impl FeatureOverrides {
     fn apply(self, features: &mut Features) {
         LegacyFeatureToggles {
-            include_plan_tool: self.include_plan_tool,
             include_apply_patch_tool: self.include_apply_patch_tool,
             include_view_image_tool: self.include_view_image_tool,
             tools_web_search: self.web_search_request,
@@ -158,7 +152,6 @@ impl Features {
         }
 
         let profile_legacy = LegacyFeatureToggles {
-            include_plan_tool: config_profile.include_plan_tool,
             include_apply_patch_tool: config_profile.include_apply_patch_tool,
             include_view_image_tool: config_profile.include_view_image_tool,
             experimental_use_freeform_apply_patch: config_profile
@@ -226,12 +219,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::PlanTool,
-        key: "plan_tool",
-        stage: Stage::Stable,
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
         stage: Stage::Beta,
@@ -247,12 +234,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::WebSearchRequest,
         key: "web_search_request",
         stage: Stage::Stable,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::ApproveAll,
-        key: "approve_all",
-        stage: Stage::Experimental,
         default_enabled: false,
     },
 ];

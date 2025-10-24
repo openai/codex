@@ -445,15 +445,17 @@ startup_timeout_sec = 20
 tool_timeout_sec = 30
 # Optional: disable a server without removing it
 enabled = false
+# Optional: only expose a subset of tools from this server
+enabled_tools = ["search", "summarize"]
+# Optional: hide specific tools (applied after `enabled_tools`, if set)
+disabled_tools = ["search"]
 ```
+
+When both `enabled_tools` and `disabled_tools` are specified, Codex first restricts the server to the allow-list and then removes any tools that appear in the deny-list.
 
 #### Experimental RMCP client
 
-Codex is transitioning to the [official Rust MCP SDK](https://github.com/modelcontextprotocol/rust-sdk).
-
-This flag enables OAuth support for streamable HTTP servers and switches STDIO servers over to the new client implementation.
-
-Please try and report issues with the new client. To enable it, add this to the top level of your `config.toml`
+This flag enables OAuth support for streamable HTTP servers.
 
 ```toml
 experimental_use_rmcp_client = true
@@ -624,6 +626,7 @@ Specify a program that will be executed to get notified about events generated b
   "type": "agent-turn-complete",
   "thread-id": "b5f6c1c2-1111-2222-3333-444455556666",
   "turn-id": "12345",
+  "cwd": "/Users/alice/projects/example",
   "input-messages": ["Rename `foo` to `bar` and update the callsites."],
   "last-assistant-message": "Rename complete and verified `cargo build` succeeds."
 }
@@ -632,6 +635,8 @@ Specify a program that will be executed to get notified about events generated b
 The `"type"` property will always be set. Currently, `"agent-turn-complete"` is the only notification type that is supported.
 
 `"thread-id"` contains a string that identifies the Codex session that produced the notification; you can use it to correlate multiple turns that belong to the same task.
+
+`"cwd"` reports the absolute working directory for the session so scripts can disambiguate which project triggered the notification.
 
 As an example, here is a Python script that parses the JSON and decides whether to show a desktop push notification using [terminal-notifier](https://github.com/julienXX/terminal-notifier) on macOS:
 
@@ -835,6 +840,22 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 
 > [!NOTE] > `tui.notifications` is built‑in and limited to the TUI session. For programmatic or cross‑environment notifications—or to integrate with OS‑specific notifiers—use the top‑level `notify` option to run an external program that receives event JSON. The two settings are independent and can be used together.
 
+## Forcing a login method
+
+To force users on a given machine to use a specific login method or workspace, use a combination of [managed configurations](https://developers.openai.com/codex/security#managed-configuration) as well as either or both of the following fields:
+
+```toml
+# Force the user to log in with ChatGPT or via an api key.
+forced_login_method = "chatgpt" or "api"
+# When logging in with ChatGPT, only the specified workspace ID will be presented during the login
+# flow and the id will be validated during the oauth callback as well as every time Codex starts.
+forced_chatgpt_workspace_id = "00000000-0000-0000-0000-000000000000"
+```
+
+If the active credentials don't match the config, the user will be logged out and Codex will exit.
+
+If `forced_chatgpt_workspace_id` is set but `forced_login_method` is not set, API key login will still work.
+
 ## Config reference
 
 | Key                                              | Type / Values                                                     | Notes                                                                                                                      |
@@ -859,6 +880,8 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `mcp_servers.<id>.enabled`                       | boolean                                                           | When false, Codex skips starting the server (default: true).                                                               |
 | `mcp_servers.<id>.startup_timeout_sec`           | number                                                            | Startup timeout in seconds (default: 10). Timeout is applied both for initializing MCP server and initially listing tools. |
 | `mcp_servers.<id>.tool_timeout_sec`              | number                                                            | Per-tool timeout in seconds (default: 60). Accepts fractional values; omit to use the default.                             |
+| `mcp_servers.<id>.enabled_tools`                 | array<string>                                                     | Restrict the server to the listed tool names.                                                                              |
+| `mcp_servers.<id>.disabled_tools`                | array<string>                                                     | Remove the listed tool names after applying `enabled_tools`, if any.                                                       |
 | `model_providers.<id>.name`                      | string                                                            | Display name.                                                                                                              |
 | `model_providers.<id>.base_url`                  | string                                                            | API base URL.                                                                                                              |
 | `model_providers.<id>.env_key`                   | string                                                            | Env var for API key.                                                                                                       |
@@ -889,4 +912,6 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `experimental_use_exec_command_tool`             | boolean                                                           | Use experimental exec command tool.                                                                                        |
 | `projects.<path>.trust_level`                    | string                                                            | Mark project/worktree as trusted (only `"trusted"` is recognized).                                                         |
 | `tools.web_search`                               | boolean                                                           | Enable web search tool (alias: `web_search_request`) (default: false).                                                     |
+| `forced_login_method`                            | `chatgpt` \| `api`                                                | Only allow Codex to be used with ChatGPT or API keys.                                                                      |
+| `forced_chatgpt_workspace_id`                    | string (uuid)                                                     | Only allow Codex to be used with the specified ChatGPT workspace.                                                          |
 | `tools.view_image`                               | boolean                                                           | Enable the `view_image` tool so Codex can attach local image files from the workspace (default: false).                    |

@@ -31,16 +31,16 @@ use super::rate_limits::render_status_limit_progress_bar;
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
-    percent_remaining: u8,
-    tokens_in_context: u64,
-    window: u64,
+    percent_remaining: i64,
+    tokens_in_context: i64,
+    window: i64,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatusTokenUsageData {
-    total: u64,
-    input: u64,
-    output: u64,
+    total: i64,
+    input: i64,
+    output: i64,
     context_window: Option<StatusContextWindowData>,
 }
 
