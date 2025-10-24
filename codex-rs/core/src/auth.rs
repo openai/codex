@@ -21,6 +21,7 @@ use codex_app_server_protocol::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 
 use crate::config::Config;
+use crate::default_client::CodexHttpClient;
 use crate::token_data::PlanType;
 use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;
@@ -32,7 +33,7 @@ pub struct CodexAuth {
     pub(crate) api_key: Option<String>,
     pub(crate) auth_dot_json: Arc<Mutex<Option<AuthDotJson>>>,
     pub(crate) auth_file: PathBuf,
-    pub(crate) client: reqwest::Client,
+    pub(crate) client: CodexHttpClient,
 }
 
 impl PartialEq for CodexAuth {
@@ -180,7 +181,7 @@ impl CodexAuth {
         }
     }
 
-    fn from_api_key_with_client(api_key: &str, client: reqwest::Client) -> Self {
+    fn from_api_key_with_client(api_key: &str, client: CodexHttpClient) -> Self {
         Self {
             api_key: Some(api_key.to_owned()),
             mode: AuthMode::ApiKey,
@@ -400,7 +401,7 @@ async fn update_tokens(
 
 async fn try_refresh_token(
     refresh_token: String,
-    client: &reqwest::Client,
+    client: &CodexHttpClient,
 ) -> std::io::Result<RefreshResponse> {
     let refresh_request = RefreshRequest {
         client_id: CLIENT_ID,
