@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use codex_utils_string::take_bytes_at_char_boundary;
@@ -11,6 +11,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use dunce::canonicalize;
 
 pub struct ReadFileHandler;
 
@@ -19,6 +20,101 @@ const TAB_WIDTH: usize = 4;
 
 // TODO(jif) add support for block comments
 const COMMENT_PREFIXES: &[&str] = &["#", "//", "--"];
+
+fn resolve_within_workspace(
+    workspace: &Path,
+    file_path: &str,
+) -> Result<PathBuf, FunctionCallError> {
+    let workspace_root = canonicalize(workspace).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to resolve workspace root `{}`: {err}",
+            workspace.display()
+        ))
+    })?;
+
+    let candidate = PathBuf::from(file_path);
+    let absolute_candidate = if candidate.is_absolute() {
+        candidate
+    } else {
+        workspace.join(&candidate)
+    };
+
+    let canonical_candidate = canonicalize(&absolute_candidate).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to resolve file path `{}`: {err}",
+            absolute_candidate.display()
+        ))
+    })?;
+
+    if !canonical_candidate.starts_with(&workspace_root) {
+        return Err(FunctionCallError::RespondToModel(
+            "file_path must stay within the workspace".to_string(),
+        ));
+    }
+
+    Ok(canonical_candidate)
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::resolve_within_workspace;
+    use crate::function_tool::FunctionCallError;
+    use dunce::canonicalize;
+    use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+
+    #[test]
+    fn resolves_relative_path_inside_workspace() {
+        let temp = tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let file = workspace.join("file.txt");
+        std::fs::write(&file, "hello").unwrap();
+
+        let resolved = resolve_within_workspace(&workspace, "file.txt").unwrap();
+        let expected = canonicalize(&file).unwrap();
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn rejects_absolute_path_outside_workspace() {
+        let temp = tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+
+        let outside = temp.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        let secret = outside.join("secret.txt");
+        std::fs::write(&secret, "nope").unwrap();
+
+        let err = resolve_within_workspace(&workspace, secret.to_str().unwrap()).unwrap_err();
+        match err {
+            FunctionCallError::RespondToModel(message) => {
+                assert_eq!(message, "file_path must stay within the workspace");
+            }
+            other => panic!("expected RespondToModel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_parent_directory_escape() {
+        let temp = tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let secret = outside.join("secret.txt");
+        std::fs::write(&secret, "top-secret").unwrap();
+
+        let err = resolve_within_workspace(&workspace, "../outside/secret.txt").unwrap_err();
+        match err {
+            FunctionCallError::RespondToModel(message) => {
+                assert_eq!(message, "file_path must stay within the workspace");
+            }
+            other => panic!("expected RespondToModel, got {other:?}"),
+        }
+    }
+}
 
 /// JSON arguments accepted by the `read_file` tool handler.
 #[derive(Deserialize)]
@@ -96,7 +192,7 @@ impl ToolHandler for ReadFileHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation { turn, payload, .. } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -133,12 +229,8 @@ impl ToolHandler for ReadFileHandler {
             ));
         }
 
-        let path = PathBuf::from(&file_path);
-        if !path.is_absolute() {
-            return Err(FunctionCallError::RespondToModel(
-                "file_path must be an absolute path".to_string(),
-            ));
-        }
+        let workspace = turn.cwd.clone();
+        let path = resolve_within_workspace(&workspace, &file_path)?;
 
         let collected = match mode {
             ReadMode::Slice => slice::read(&path, offset, limit).await?,
