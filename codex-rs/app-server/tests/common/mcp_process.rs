@@ -30,6 +30,7 @@ use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SetDefaultModelParams;
+use codex_app_server_protocol::UpdateConfigParams;
 
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -227,9 +228,18 @@ impl McpProcess {
         self.send_request("getAuthStatus", params).await
     }
 
-    /// Send a `getUserSavedConfig` JSON-RPC request.
-    pub async fn send_get_user_saved_config_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("getUserSavedConfig", None).await
+    /// Send a `config/read` JSON-RPC request.
+    pub async fn send_get_config_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("config/read", None).await
+    }
+
+    /// Send a `config/update` JSON-RPC request.
+    pub async fn send_update_config_request(
+        &mut self,
+        params: UpdateConfigParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("config/update", params).await
     }
 
     /// Send a `getUserAgent` JSON-RPC request.

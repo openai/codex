@@ -52,6 +52,8 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
+use codex_app_server_protocol::UpdateConfigParams;
+use codex_app_server_protocol::UpdateConfigResponse;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_backend_client::Client as BackendClient;
@@ -74,6 +76,7 @@ use codex_core::config::load_config_as_toml;
 use codex_core::config_edit::CONFIG_KEY_EFFORT;
 use codex_core::config_edit::CONFIG_KEY_MODEL;
 use codex_core::config_edit::persist_overrides_and_clear_if_none;
+use codex_core::config_edit::persist_user_saved_config;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
@@ -197,6 +200,21 @@ impl CodexMessageProcessor {
                 self.send_unimplemented_error(request_id, "account/read")
                     .await;
             }
+            ClientRequest::GetAccountRateLimits {
+                request_id,
+                params: _,
+            } => {
+                self.get_account_rate_limits(request_id).await;
+            }
+            ClientRequest::GetConfig {
+                request_id,
+                params: _,
+            } => {
+                self.get_user_saved_config(request_id, false).await;
+            }
+            ClientRequest::UpdateConfig { request_id, params } => {
+                self.update_user_saved_config(request_id, params).await;
+            }
             ClientRequest::ResumeConversation { request_id, params } => {
                 self.handle_resume_conversation(request_id, params).await;
             }
@@ -246,7 +264,7 @@ impl CodexMessageProcessor {
                 request_id,
                 params: _,
             } => {
-                self.get_user_saved_config(request_id).await;
+                self.get_user_saved_config(request_id, true).await;
             }
             ClientRequest::SetDefaultModel { request_id, params } => {
                 self.set_default_model(request_id, params).await;
@@ -268,12 +286,6 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
-            }
-            ClientRequest::GetAccountRateLimits {
-                request_id,
-                params: _,
-            } => {
-                self.get_account_rate_limits(request_id).await;
             }
         }
     }
@@ -618,7 +630,7 @@ impl CodexMessageProcessor {
             })
     }
 
-    async fn get_user_saved_config(&self, request_id: RequestId) {
+    async fn get_user_saved_config(&self, request_id: RequestId, wrap: bool) {
         let toml_value = match load_config_as_toml(&self.config.codex_home).await {
             Ok(val) => val,
             Err(err) => {
@@ -647,9 +659,57 @@ impl CodexMessageProcessor {
 
         let user_saved_config: UserSavedConfig = cfg.into();
 
-        let response = GetUserSavedConfigResponse {
-            config: user_saved_config,
+        if wrap {
+            let response = GetUserSavedConfigResponse {
+                config: user_saved_config,
+            };
+            self.outgoing.send_response(request_id, response).await;
+        } else {
+            self.outgoing
+                .send_response(request_id, user_saved_config)
+                .await;
+        }
+    }
+
+    async fn update_user_saved_config(&self, request_id: RequestId, params: UpdateConfigParams) {
+        let UpdateConfigParams { config } = params;
+        if let Err(err) = persist_user_saved_config(&self.config.codex_home, &config).await {
+            let error = JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to persist config.toml: {err}"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let toml_value = match load_config_as_toml(&self.config.codex_home).await {
+            Ok(val) => val,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to load config.toml: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
         };
+
+        let cfg: ConfigToml = match toml_value.try_into() {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to parse config.toml: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let response = UpdateConfigResponse { config: cfg.into() };
         self.outgoing.send_response(request_id, response).await;
     }
 
