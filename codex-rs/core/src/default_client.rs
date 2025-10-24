@@ -8,7 +8,6 @@ use reqwest::header::HeaderValue;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::iter::Map;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::OnceLock;
