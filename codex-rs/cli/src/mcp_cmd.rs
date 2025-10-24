@@ -274,19 +274,33 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         http_headers,
         env_http_headers,
     } = transport
-        && matches!(supports_oauth_login(&url).await, Ok(true))
     {
-        println!("Detected OAuth support. Starting OAuth flow…");
-        perform_oauth_login(
-            &name,
-            &url,
-            config.mcp_oauth_credentials_store_mode,
-            http_headers.clone(),
-            env_http_headers.clone(),
-            &Vec::new(),
-        )
-        .await?;
-        println!("Successfully logged in.");
+        match supports_oauth_login(&url).await {
+            Ok(true) => {
+                if !config.features.enabled(Feature::RmcpClient) {
+                    println!(
+                        "MCP server supports login. Add `experimental_use_rmcp_client = true` \
+                         to your config.toml and run `codex mcp login {name}` to login."
+                    );
+                } else {
+                    println!("Detected OAuth support. Starting OAuth flow…");
+                    perform_oauth_login(
+                        &name,
+                        &url,
+                        config.mcp_oauth_credentials_store_mode,
+                        http_headers.clone(),
+                        env_http_headers.clone(),
+                        &Vec::new(),
+                    )
+                    .await?;
+                    println!("Successfully logged in.");
+                }
+            }
+            Ok(false) => {}
+            Err(_) => println!(
+                "MCP server may or may not require login. Run `codex mcp login {name}` to login."
+            ),
+        }
     }
 
     Ok(())
