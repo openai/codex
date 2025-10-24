@@ -1123,7 +1123,7 @@ pub(crate) fn new_mcp_tools_output(
                     pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
                     let display = pairs
                         .into_iter()
-                        .map(|(name, _)| format!("{name}=*****"))
+                        .map(|(name, var)| format!("{name}={var}"))
                         .collect::<Vec<_>>()
                         .join(", ");
                     lines.push(vec!["    • Env HTTP headers: ".into(), display.into()].into());
@@ -1537,10 +1537,7 @@ mod tests {
         );
         let rendered = render_lines(&cell.display_lines(120)).join("\n");
 
-        assert!(rendered.contains("Env: TOKEN=*****"));
-        assert!(rendered.contains("APP_TOKEN=*****"));
-        assert!(rendered.contains("HTTP headers: Authorization=*****"));
-        assert!(rendered.contains("Env HTTP headers: X-API-Key=*****"));
+        insta::assert_snapshot!(rendered);
     }
 
     #[test]

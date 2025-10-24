@@ -757,11 +757,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
         } => {
             println!("  transport: streamable_http");
             println!("  url: {url}");
-            let bearer_token_display = if bearer_token_env_var.is_some() {
-                "*****"
-            } else {
-                "-"
-            };
+            let bearer_token_display = bearer_token_env_var.as_deref().unwrap_or("-");
             println!("  bearer_token_env_var: {bearer_token_display}");
             let headers_display = match http_headers {
                 Some(map) if !map.is_empty() => {
@@ -782,7 +778,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
                     pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
                     pairs
                         .into_iter()
-                        .map(|(k, _)| format!("{k}=*****"))
+                        .map(|(k, var)| format!("{k}={var}"))
                         .collect::<Vec<_>>()
                         .join(", ")
                 }
