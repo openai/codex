@@ -10,7 +10,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::Token;
-use std::borrow::ToOwned;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -52,8 +51,7 @@ impl SessionTask for GhostSnapshotTask {
                             session
                                 .session
                                 .record_conversation_items(&[ResponseItem::GhostSnapshot {
-                                    commit_id: ghost_commit.id().to_string(),
-                                    parent: ghost_commit.parent().map(ToOwned::to_owned),
+                                    ghost_commit: ghost_commit.clone(),
                                 }])
                                 .await;
                             info!("ghost commit captured: {}", ghost_commit.id());
