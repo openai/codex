@@ -37,6 +37,19 @@ pub enum AuthCredentialsStoreMode {
     // TODO: Implement keyring support.
 }
 
+fn get_auth_file(codex_home: &Path) -> PathBuf {
+    codex_home.join("auth.json")
+}
+
+fn delete_file_if_exists(codex_home: &Path) -> std::io::Result<bool> {
+    let auth_file = get_auth_file(codex_home);
+    match std::fs::remove_file(&auth_file) {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
 trait AuthStorageBackend: Debug + Send + Sync {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>>;
     fn save(&self, auth: &AuthDotJson) -> std::io::Result<()>;
@@ -53,29 +66,6 @@ impl FileAuthStorage {
         Self { codex_home }
     }
 
-    fn load_from_file(&self) -> std::io::Result<Option<AuthDotJson>> {
-        let auth_file = self.get_auth_file(&self.codex_home);
-        let auth_dot_json = match self.try_read_auth_json(&auth_file) {
-            Ok(auth) => auth,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(err),
-        };
-        Ok(Some(auth_dot_json))
-    }
-
-    fn save_to_file(&self, auth: &AuthDotJson) -> std::io::Result<()> {
-        self.write_auth_json(&self.get_auth_file(&self.codex_home), auth)
-    }
-
-    fn delete_file_if_exists(&self) -> std::io::Result<bool> {
-        let auth_file = self.get_auth_file(&self.codex_home);
-        match std::fs::remove_file(&auth_file) {
-            Ok(()) => Ok(true),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(err) => Err(err),
-        }
-    }
-
     /// Attempt to read and refresh the `auth.json` file in the given `CODEX_HOME` directory.
     /// Returns the full AuthDotJson structure after refreshing if necessary.
     fn try_read_auth_json(&self, auth_file: &Path) -> std::io::Result<AuthDotJson> {
@@ -85,10 +75,6 @@ impl FileAuthStorage {
         let auth_dot_json: AuthDotJson = serde_json::from_str(&contents)?;
 
         Ok(auth_dot_json)
-    }
-
-    fn get_auth_file(&self, codex_home: &Path) -> PathBuf {
-        codex_home.join("auth.json")
     }
 
     fn write_auth_json(
@@ -115,14 +101,20 @@ impl FileAuthStorage {
 
 impl AuthStorageBackend for FileAuthStorage {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
-        self.load_from_file()
+        let auth_file = get_auth_file(&self.codex_home);
+        let auth_dot_json = match self.try_read_auth_json(&auth_file) {
+            Ok(auth) => auth,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        Ok(Some(auth_dot_json))
     }
 
     fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
-        self.save_to_file(auth)
+        self.write_auth_json(&get_auth_file(&self.codex_home), auth)
     }
     fn delete(&self) -> std::io::Result<bool> {
-        self.delete_file_if_exists()
+        delete_file_if_exists(&self.codex_home)
     }
 }
 
@@ -142,7 +134,7 @@ pub struct CodexAuth {
     pub(crate) api_key: Option<String>,
     pub(crate) auth_dot_json: Arc<Mutex<Option<AuthDotJson>>>,
     storage: Arc<dyn AuthStorageBackend>,
-    pub(crate) client: reqwest::Client,
+    pub(crate) client: CodexHttpClient,
 }
 
 impl PartialEq for CodexAuth {
@@ -594,7 +586,7 @@ mod tests {
         )
         .expect("failed to write auth file");
 
-        let file = storage.get_auth_file(codex_home.path());
+        let file = get_auth_file(codex_home.path());
         let auth_dot_json = storage.try_read_auth_json(&file).unwrap();
         storage.write_auth_json(&file, &auth_dot_json).unwrap();
 
@@ -759,8 +751,7 @@ mod tests {
     }
 
     fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result<String> {
-        let storage = FileAuthStorage::new(codex_home.to_path_buf());
-        let auth_file = storage.get_auth_file(codex_home);
+        let auth_file = get_auth_file(codex_home);
         // Create a minimal valid JWT for the id_token field.
         #[derive(Serialize)]
         struct Header {
