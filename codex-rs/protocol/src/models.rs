@@ -8,6 +8,7 @@ use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
+use crate::platform;
 use crate::user_input::UserInput;
 use schemars::JsonSchema;
 
@@ -227,6 +228,29 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             })
                         }
                         Err(err) => {
+                            // If the file couldn't be read, attempt a fallback for Windows
+                            // style paths when running under WSL. Many users copy/paste
+                            // Windows paths (e.g. C:\\Users\\...) into a Linux terminal
+                            // under WSL; try mapping to /mnt/<drive>/path and read again.
+                            // If running under WSL, attempt to map Windows-style paths
+                            // (e.g., "C:\\...") to their WSL mounts (/mnt/c/...) and
+                            // read the mapped file.
+                            if platform::is_running_under_wsl() {
+                                let win_path_str = path.to_string_lossy();
+                                if let Some(mapped) = platform::try_map_windows_drive_to_wsl_path(&win_path_str) {
+                                    if let Ok(bytes2) = std::fs::read(&mapped) {
+                                        let mime = mime_guess::from_path(&mapped)
+                                            .first()
+                                            .map(|m| m.essence_str().to_owned())
+                                            .unwrap_or_else(|| "image".to_string());
+                                        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes2);
+                                        return Some(ContentItem::InputImage {
+                                            image_url: format!("data:{mime};base64,{encoded}"),
+                                        });
+                                    }
+                                }
+                            }
+
                             tracing::warn!(
                                 "Skipping image {} – could not read file: {}",
                                 path.display(),

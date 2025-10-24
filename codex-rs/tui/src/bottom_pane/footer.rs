@@ -3,6 +3,8 @@ use crate::key_hint::KeyBinding;
 use crate::render::line_utils::prefix_lines;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
+use crossterm::event::KeyModifiers;
+use codex_protocol::platform::is_running_under_wsl;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -83,16 +85,17 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
         FooterMode::ShortcutSummary => {
             let mut line = context_window_line(props.context_window_percent);
             line.push_span(" · ".dim());
-            line.extend(vec![
-                key_hint::plain(KeyCode::Char('?')).into(),
-                " for shortcuts".dim(),
-            ]);
+            line.extend(vec![key_hint::plain(KeyCode::Char('?')).into(), " for shortcuts".dim()]);
             vec![line]
         }
-        FooterMode::ShortcutOverlay => shortcut_overlay_lines(ShortcutsState {
-            use_shift_enter_hint: props.use_shift_enter_hint,
-            esc_backtrack_hint: props.esc_backtrack_hint,
-        }),
+        FooterMode::ShortcutOverlay => {
+            let state = ShortcutsState {
+                use_shift_enter_hint: props.use_shift_enter_hint,
+                esc_backtrack_hint: props.esc_backtrack_hint,
+                is_wsl: is_running_under_wsl(),
+            };
+            shortcut_overlay_lines(state)
+        }
         FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
         FooterMode::ContextOnly => vec![context_window_line(props.context_window_percent)],
     }
@@ -107,6 +110,7 @@ struct CtrlCReminderState {
 struct ShortcutsState {
     use_shift_enter_hint: bool,
     esc_backtrack_hint: bool,
+    is_wsl: bool,
 }
 
 fn ctrl_c_reminder_line(state: CtrlCReminderState) -> Line<'static> {
@@ -226,6 +230,8 @@ fn context_window_line(percent: Option<i64>) -> Line<'static> {
     Line::from(vec![Span::from(format!("{percent}% context left")).dim()])
 }
 
+
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShortcutId {
     Commands,
@@ -254,6 +260,7 @@ enum DisplayCondition {
     Always,
     WhenShiftEnterHint,
     WhenNotShiftEnterHint,
+    WhenUnderWSL,
 }
 
 impl DisplayCondition {
@@ -262,6 +269,7 @@ impl DisplayCondition {
             DisplayCondition::Always => true,
             DisplayCondition::WhenShiftEnterHint => state.use_shift_enter_hint,
             DisplayCondition::WhenNotShiftEnterHint => !state.use_shift_enter_hint,
+            DisplayCondition::WhenUnderWSL => state.is_wsl,
         }
     }
 }
@@ -280,6 +288,18 @@ impl ShortcutDescriptor {
 
     fn overlay_entry(&self, state: ShortcutsState) -> Option<Line<'static>> {
         let binding = self.binding_for(state)?;
+        // Special-case paste-image: when running under WSL prefer showing
+        // the explicit "ctrl + alt + v" hint (terminals often intercept
+        // plain Ctrl+V). We render a custom label instead of relying on a
+        // KeyBinding that combines modifiers (which cannot be created in a
+        // const context due to bitflags not being const-friendly).
+        if matches!(self.id, ShortcutId::PasteImage) && state.is_wsl {
+            let mut line = Line::from(vec![self.prefix.into()]);
+            line.push_span("ctrl + alt + v".dim());
+            line.push_span(self.label);
+            return Some(line);
+        }
+
         let mut line = Line::from(vec![self.prefix.into(), binding.key.into()]);
         match self.id {
             ShortcutId::EditPrevious => {
@@ -335,10 +355,20 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     },
     ShortcutDescriptor {
         id: ShortcutId::PasteImage,
-        bindings: &[ShortcutBinding {
-            key: key_hint::ctrl(KeyCode::Char('v')),
-            condition: DisplayCondition::Always,
-        }],
+        // Show Ctrl+Alt+V when running under WSL (terminals often intercept plain
+        // Ctrl+V); otherwise fall back to Ctrl+V.
+        bindings: &[
+            ShortcutBinding {
+                // Use a plain 'v' binding here; overlay_entry will render the
+                // full "ctrl + alt + v" label when state.is_wsl is true.
+                key: key_hint::plain(KeyCode::Char('v')),
+                condition: DisplayCondition::WhenUnderWSL,
+            },
+            ShortcutBinding {
+                key: key_hint::ctrl(KeyCode::Char('v')),
+                condition: DisplayCondition::Always,
+            },
+        ],
         prefix: "",
         label: " to paste images",
     },

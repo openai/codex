@@ -9,5 +9,6 @@ pub mod models;
 pub mod num_format;
 pub mod parse_command;
 pub mod plan_tool;
+pub mod platform;
 pub mod protocol;
 pub mod user_input;
