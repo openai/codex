@@ -97,10 +97,12 @@ impl StatusIndicatorWidget {
     }
 
     /// Update the animated header label (left of the brackets).
-    pub(crate) fn update_header(&mut self, header: String) {
-        if self.header != header {
-            self.header = header;
+    pub(crate) fn update_header(&mut self, header: String) -> bool {
+        if self.header == header {
+            return false;
         }
+        self.header = header;
+        true
     }
 
     #[cfg(test)]

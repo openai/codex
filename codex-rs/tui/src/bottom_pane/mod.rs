@@ -287,8 +287,9 @@ impl BottomPane {
     /// indicator is not active.
     pub(crate) fn update_status_header(&mut self, header: String) {
         if let Some(status) = self.status.as_mut() {
-            status.update_header(header);
-            self.request_redraw();
+            if status.update_header(header) {
+                self.request_redraw();
+            }
         }
     }
 

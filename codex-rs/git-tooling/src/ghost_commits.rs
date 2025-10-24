@@ -159,13 +159,13 @@ pub fn restore_ghost_commit(repo_path: &Path, commit: &GhostCommit) -> Result<()
     let repo_prefix = repo_subdir(repo_root.as_path(), repo_path);
     let current_untracked =
         capture_existing_untracked(repo_root.as_path(), repo_prefix.as_deref())?;
+    restore_to_commit_inner(repo_root.as_path(), repo_prefix.as_deref(), commit.id())?;
     remove_new_untracked(
         repo_root.as_path(),
         commit.preexisting_untracked_files(),
         commit.preexisting_untracked_dirs(),
         current_untracked,
-    )?;
-    restore_to_commit_inner(repo_root.as_path(), repo_prefix.as_deref(), commit.id())
+    )
 }
 
 /// Restore the working tree to match the given commit ID.
