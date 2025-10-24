@@ -1428,7 +1428,6 @@ dependencies = [
  "codex-core",
  "codex-feedback",
  "codex-file-search",
- "codex-git-tooling",
  "codex-login",
  "codex-ollama",
  "codex-protocol",

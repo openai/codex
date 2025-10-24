@@ -176,6 +176,9 @@ pub enum Op {
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
 
+    /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
+    Undo,
+
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
 
@@ -483,6 +486,10 @@ pub enum EventMsg {
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
 
     BackgroundEvent(BackgroundEventEvent),
+
+    UndoStarted(UndoStartedEvent),
+
+    UndoCompleted(UndoCompletedEvent),
 
     /// Notification that a model stream experienced an error or disconnect
     /// and the system is handling it (e.g., retrying with backoff).
@@ -1156,6 +1163,19 @@ pub struct ApplyPatchApprovalRequestEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct BackgroundEventEvent {
     pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct UndoStartedEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct UndoCompletedEvent {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

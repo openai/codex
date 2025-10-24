@@ -43,6 +43,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::TokenCount(_)
         | EventMsg::EnteredReviewMode(_)
         | EventMsg::ExitedReviewMode(_)
+        | EventMsg::UndoCompleted(_)
         | EventMsg::TurnAborted(_) => true,
         EventMsg::Error(_)
         | EventMsg::TaskStarted(_)
@@ -67,6 +68,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::PatchApplyEnd(_)
         | EventMsg::TurnDiff(_)
         | EventMsg::GetHistoryEntryResponse(_)
+        | EventMsg::UndoStarted(_)
         | EventMsg::McpListToolsResponse(_)
         | EventMsg::ListCustomPromptsResponse(_)
         | EventMsg::PlanUpdate(_)
