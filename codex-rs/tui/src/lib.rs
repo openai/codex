@@ -508,8 +508,10 @@ async fn load_config_or_exit(
 /// show the trust screen.
 fn should_show_trust_screen(config: &Config) -> bool {
     if config.did_user_set_custom_approval_policy_or_sandbox_mode {
-        // if the user has overridden either approval policy or sandbox mode,
-        // skip the trust flow
+        // Respect explicit approval/sandbox overrides made by the user.
+        false
+    } else if cfg!(target_os = "windows") && config.forced_auto_mode_downgraded_on_windows {
+        // Auto mode is unavailable on native Windows; bypass the trust prompt and remain read-only.
         false
     } else {
         // otherwise, skip iff the active project is trusted
@@ -542,4 +544,40 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
     }
 
     login_status == LoginStatus::NotAuthenticated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::config::ConfigOverrides;
+    use codex_core::config::ConfigToml;
+    use codex_core::config::ProjectConfig;
+    use tempfile::TempDir;
+
+    #[test]
+    fn windows_auto_mode_downgrade_skips_trust_prompt() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            temp_dir.path().to_path_buf(),
+        )?;
+        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
+        config.active_project = ProjectConfig { trust_level: None };
+        config.forced_auto_mode_downgraded_on_windows = true;
+
+        let should_show = should_show_trust_screen(&config);
+        if cfg!(target_os = "windows") {
+            assert!(
+                !should_show,
+                "Windows trust prompt should be skipped when auto mode is forced off"
+            );
+        } else {
+            assert!(
+                should_show,
+                "Non-Windows should still show trust prompt when project is untrusted"
+            );
+        }
+        Ok(())
+    }
 }
