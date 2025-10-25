@@ -52,6 +52,8 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
+use codex_app_server_protocol::UploadFeedbackParams;
+use codex_app_server_protocol::UploadFeedbackResponse;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_backend_client::Client as BackendClient;
@@ -85,6 +87,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
@@ -103,6 +106,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use tokio::fs;
 use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
@@ -136,6 +140,7 @@ pub(crate) struct CodexMessageProcessor {
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<RequestId>>>>,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    feedback: CodexFeedback,
 }
 
 impl CodexMessageProcessor {
@@ -145,6 +150,7 @@ impl CodexMessageProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         codex_linux_sandbox_exe: Option<PathBuf>,
         config: Arc<Config>,
+        feedback: CodexFeedback,
     ) -> Self {
         Self {
             auth_manager,
@@ -156,6 +162,7 @@ impl CodexMessageProcessor {
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
+            feedback,
         }
     }
 
@@ -274,6 +281,9 @@ impl CodexMessageProcessor {
                 params: _,
             } => {
                 self.get_account_rate_limits(request_id).await;
+            }
+            ClientRequest::UploadFeedback { request_id, params } => {
+                self.upload_feedback(request_id, params).await;
             }
         }
     }
@@ -1417,6 +1427,134 @@ impl CodexMessageProcessor {
 
         let response = FuzzyFileSearchResponse { files: results };
         self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn upload_feedback(&self, request_id: RequestId, params: UploadFeedbackParams) {
+        let UploadFeedbackParams {
+            classification,
+            reason,
+            conversation_id,
+            include_logs,
+            rollout_path,
+        } = params;
+
+        let snapshot = self.feedback.snapshot(conversation_id.clone());
+        let thread_id = snapshot.thread_id.clone();
+
+        let validated_rollout_path = if include_logs {
+            if let Some(path) = rollout_path {
+                match self
+                    .validate_rollout_path(path, conversation_id.clone())
+                    .await
+                {
+                    Ok(validated) => Some(validated),
+                    Err(err) => {
+                        self.outgoing.send_error(request_id, err).await;
+                        return;
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let cli_version = env!("CARGO_PKG_VERSION").to_string();
+        let upload_result = tokio::task::spawn_blocking(move || {
+            let rollout_path_ref = validated_rollout_path
+                .as_ref()
+                .map(std::path::PathBuf::as_path);
+            snapshot.upload_feedback(
+                &classification,
+                reason.as_deref(),
+                cli_version.as_str(),
+                include_logs,
+                rollout_path_ref,
+            )
+        })
+        .await;
+
+        let upload_result = match upload_result {
+            Ok(result) => result,
+            Err(join_err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to upload feedback: {join_err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match upload_result {
+            Ok(()) => {
+                let response = UploadFeedbackResponse { thread_id };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to upload feedback: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn validate_rollout_path(
+        &self,
+        path: PathBuf,
+        conversation_id: Option<ConversationId>,
+    ) -> Result<PathBuf, JSONRPCErrorError> {
+        let rollout_folder = self.config.codex_home.join(codex_core::SESSIONS_SUBDIR);
+        let canonical = match fs::canonicalize(&path).await {
+            Ok(c) => c,
+            Err(err) => {
+                return Err(JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("failed to resolve rollout path `{}`: {err}", path.display()),
+                    data: None,
+                });
+            }
+        };
+
+        if !canonical.starts_with(&rollout_folder) {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!(
+                    "rollout path `{}` must be in sessions directory",
+                    path.display()
+                ),
+                data: None,
+            });
+        }
+
+        if let Some(conversation_id) = conversation_id {
+            let expected_suffix = format!("{conversation_id}.jsonl");
+            let Some(file_name) = canonical.file_name().and_then(|name| name.to_str()) else {
+                return Err(JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("rollout path `{}` missing file name", path.display()),
+                    data: None,
+                });
+            };
+
+            if !file_name.ends_with(expected_suffix.as_str()) {
+                return Err(JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!(
+                        "rollout path `{}` must end with `{expected_suffix}`",
+                        path.display()
+                    ),
+                    data: None,
+                });
+            }
+        }
+
+        Ok(canonical)
     }
 }
 
