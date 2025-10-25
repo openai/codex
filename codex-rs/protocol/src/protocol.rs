@@ -34,6 +34,12 @@ use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
 
+pub use crate::approvals::ApplyPatchApprovalRequestEvent;
+pub use crate::approvals::ExecApprovalRequestEvent;
+pub use crate::approvals::SandboxCommandAssessment;
+pub use crate::approvals::SandboxRiskCategory;
+pub use crate::approvals::SandboxRiskLevel;
+
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
 pub const USER_INSTRUCTIONS_OPEN_TAG: &str = "<user_instructions>";
@@ -520,6 +526,8 @@ pub enum EventMsg {
 
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
+
+    RawResponseItem(ResponseItem),
 
     ItemStarted(ItemStartedEvent),
     ItemCompleted(ItemCompletedEvent),
@@ -1124,33 +1132,6 @@ pub struct ExecCommandOutputDeltaEvent {
     #[schemars(with = "String")]
     #[ts(type = "string")]
     pub chunk: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ExecApprovalRequestEvent {
-    /// Identifier for the associated exec call, if available.
-    pub call_id: String,
-    /// The command to be executed.
-    pub command: Vec<String>,
-    /// The command's working directory.
-    pub cwd: PathBuf,
-    /// Optional human-readable reason for the approval (e.g. retry without sandbox).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    pub parsed_cmd: Vec<ParsedCommand>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ApplyPatchApprovalRequestEvent {
-    /// Responses API call id for the associated patch apply call, if available.
-    pub call_id: String,
-    pub changes: HashMap<PathBuf, FileChange>,
-    /// Optional explanatory reason (e.g. request for extra write access).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    /// When set, the agent is asking the user to allow writes under this root for the remainder of the session.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub grant_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
