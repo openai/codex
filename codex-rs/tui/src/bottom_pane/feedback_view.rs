@@ -76,17 +76,17 @@ impl FeedbackNoteView {
         let cli_version = crate::version::CODEX_CLI_VERSION;
         let mut thread_id = self.snapshot.thread_id.clone();
 
-        let result = if self.include_logs {
-            self.snapshot.upload_feedback_with_rollout(
-                classification,
-                reason_opt,
-                cli_version,
-                rollout_path_ref,
-            )
-        } else {
-            self.snapshot
-                .upload_feedback_metadata_only(classification, reason_opt, cli_version)
-        };
+        let result = self.snapshot.upload_feedback(
+            classification,
+            reason_opt,
+            cli_version,
+            self.include_logs,
+            if self.include_logs {
+                rollout_path_ref
+            } else {
+                None
+            },
+        );
 
         match result {
             Ok(()) => {
@@ -380,6 +380,7 @@ fn make_feedback_item(
 pub(crate) fn feedback_upload_consent_params(
     app_event_tx: AppEventSender,
     category: FeedbackCategory,
+    rollout_path: Option<std::path::PathBuf>,
 ) -> super::SelectionViewParams {
     use super::popup_consts::standard_popup_hint_line;
     let yes_action: super::SelectionAction = Box::new({
@@ -404,8 +405,20 @@ pub(crate) fn feedback_upload_consent_params(
         }
     });
 
+    // Build header listing files that would be sent if user consents.
+    let mut header_lines: Vec<Box<dyn crate::render::renderable::Renderable>> = vec![
+        Line::from("Upload logs?".bold()).into(),
+        Line::from("").into(),
+        Line::from("The following files will be sent:".dim()).into(),
+        Line::from(vec!["  • ".into(), "codex-logs.log".into()]).into(),
+    ];
+    if let Some(path) = rollout_path.as_deref()
+        && let Some(name) = path.file_name().map(|s| s.to_string_lossy().to_string())
+    {
+        header_lines.push(Line::from(vec!["  • ".into(), name.into()]).into());
+    }
+
     super::SelectionViewParams {
-        title: Some("Upload logs?".to_string()),
         footer_hint: Some(standard_popup_hint_line()),
         items: vec![
             super::SelectionItem {
@@ -426,6 +439,9 @@ pub(crate) fn feedback_upload_consent_params(
                 ..Default::default()
             },
         ],
+        header: Box::new(crate::render::renderable::ColumnRenderable::with(
+            header_lines,
+        )),
         ..Default::default()
     }
 }

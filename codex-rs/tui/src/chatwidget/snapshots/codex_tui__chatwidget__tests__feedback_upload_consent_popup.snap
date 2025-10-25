@@ -4,6 +4,9 @@ expression: popup
 ---
   Upload logs?
 
+  The following files will be sent:
+    • codex-logs.log
+
 › 1. Yes  Share the current Codex session logs with the team for
           troubleshooting.
   2. No

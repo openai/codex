@@ -370,8 +370,11 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_feedback_consent(&mut self, category: crate::app_event::FeedbackCategory) {
-        let params =
-            crate::bottom_pane::feedback_upload_consent_params(self.app_event_tx.clone(), category);
+        let params = crate::bottom_pane::feedback_upload_consent_params(
+            self.app_event_tx.clone(),
+            category,
+            self.current_rollout_path.clone(),
+        );
         self.bottom_pane.show_selection_view(params);
         self.request_redraw();
     }
