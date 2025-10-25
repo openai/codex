@@ -80,6 +80,40 @@ describe("McpManager", () => {
     await expect(manager.list()).rejects.toThrow("example failure");
   });
 
+  it("passes env flags before stdio command when adding", async () => {
+    mockSpawn({ stdout: "" });
+    const manager = new McpManager({ configOverrides: new ConfigOverrideStore() });
+
+    await manager.add(
+      "context7",
+      {
+        type: "stdio",
+        command: "server",
+        args: ["start"],
+        env: {
+          FIRST: "1",
+          SECOND: "2",
+        },
+      },
+      {},
+    );
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const [, args] = spawnMock.mock.calls[0]!;
+    expect(args).toEqual([
+      "mcp",
+      "add",
+      "context7",
+      "--env",
+      "FIRST=1",
+      "--env",
+      "SECOND=2",
+      "--",
+      "server",
+      "start",
+    ]);
+  });
+
   it("manages temporary overrides", () => {
     const overrides = new ConfigOverrideStore();
     const manager = new McpManager({ configOverrides: overrides });

@@ -65,15 +65,15 @@ export class McpManager {
   async add(name: string, transport: McpAddTransportOptions, fields: McpMutableFields = {}): Promise<void> {
     const args = ["mcp", "add", name];
     if (transport.type === "stdio") {
-      args.push("--");
-      args.push(transport.command);
-      if (transport.args && transport.args.length) {
-        args.push(...transport.args);
-      }
       if (transport.env) {
         for (const [key, value] of Object.entries(transport.env)) {
           args.push("--env", `${key}=${value}`);
         }
+      }
+      args.push("--");
+      args.push(transport.command);
+      if (transport.args && transport.args.length) {
+        args.push(...transport.args);
       }
     } else {
       args.push("--url", transport.url);
