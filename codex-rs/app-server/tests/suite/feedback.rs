@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::create_mock_chat_completions_server;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::NewConversationParams;
