@@ -127,7 +127,7 @@ client_request_definitions! {
     #[ts(rename = "account/read")]
     GetAccount {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: Option<Account>,
+        response: GetAccountResponse,
     },
 
     /// DEPRECATED APIs below
@@ -533,6 +533,12 @@ pub struct ExecOneOffCommandResponse {
 pub struct GetAccountRateLimitsResponse {
     pub rate_limits: RateLimitSnapshot,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(transparent)]
+#[ts(export)]
+#[ts(type = "Account | null")]
+pub struct GetAccountResponse(#[ts(type = "Account | null")] pub Option<Account>);
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
