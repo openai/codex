@@ -1,0 +1,20 @@
+[package]
+name = "codex-llmcc"
+version.workspace = true
+edition.workspace = true
+# publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+path = "src/main.rs"
+name = "llmcc"
+
+[dependencies]
+# llmcc-core.workspace = true
+llmcc-rust.workspace = true
+llmcc-python.workspace = true
+regex.workspace = true
+clap.workspace = true
+rayon.workspace = true

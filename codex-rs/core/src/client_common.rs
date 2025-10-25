@@ -22,6 +22,7 @@ use tokio::sync::mpsc;
 
 /// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
 pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
+pub const LLMCC_PROMPT: &str = include_str!("../../llmcc/llmcc_tool_instructions.md");
 
 /// API request payload for a single model turn
 #[derive(Default, Debug, Clone)]
@@ -62,9 +63,11 @@ impl Prompt {
             && model.needs_special_apply_patch_instructions
             && !is_apply_patch_tool_present
         {
-            Cow::Owned(format!("{base}\n{APPLY_PATCH_TOOL_INSTRUCTIONS}"))
+            Cow::Owned(format!(
+                "{base}\n{APPLY_PATCH_TOOL_INSTRUCTIONS}\n{LLMCC_PROMPT}"
+            ))
         } else {
-            Cow::Borrowed(base)
+            Cow::Owned(format!("{base}\n{LLMCC_PROMPT}"))
         }
     }
 

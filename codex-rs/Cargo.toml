@@ -20,6 +20,7 @@ members = [
     "git-tooling",
     "linux-sandbox",
     "login",
+    "llmcc",
     "mcp-server",
     "mcp-types",
     "ollama",
@@ -66,6 +67,7 @@ codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
 codex-git-tooling = { path = "git-tooling" }
 codex-linux-sandbox = { path = "linux-sandbox" }
+codex-llmcc = { path = "llmcc" }
 codex-login = { path = "login" }
 codex-mcp-server = { path = "mcp-server" }
 codex-ollama = { path = "ollama" }
@@ -205,6 +207,11 @@ which = "6"
 wildmatch = "2.5.0"
 wiremock = "0.6"
 zeroize = "1.8.1"
+regex = "1.11"
+rayon = "1.10"
+llmcc = "0.2.18"
+llmcc-rust = "0.2.18"
+llmcc-python = "0.2.18"
 
 [workspace.lints]
 rust = {}
