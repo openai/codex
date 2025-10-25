@@ -50,6 +50,27 @@ for await (const event of events) {
 }
 ```
 
+### Aborting a turn
+
+Both `run()` and `runStreamed()` accept an `AbortSignal` via `TurnOptions.signal`. Attach a signal from an
+`AbortController` to stop an in-flight turn.
+
+```typescript
+const controller = new AbortController();
+
+const turnPromise = thread.run("Perform a health check", { signal: controller.signal });
+
+setTimeout(() => controller.abort(), 1000);
+
+try {
+  await turnPromise;
+} catch (error) {
+  if ((error as Error).name === "AbortError") {
+    console.log("Turn cancelled");
+  }
+}
+```
+
 ### Structured output
 
 The Codex agent can produce a JSON response that conforms to a specified schema. The schema can be provided for each turn as a plain JSON object.

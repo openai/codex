@@ -22,6 +22,7 @@ export type CodexExecArgs = {
   skipGitRepoCheck?: boolean;
   // --output-schema
   outputSchemaFile?: string;
+  signal?: AbortSignal;
 };
 
 const INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
@@ -34,6 +35,9 @@ export class CodexExec {
   }
 
   async *run(args: CodexExecArgs): AsyncGenerator<string> {
+    if (args.signal?.aborted) {
+      throw createAbortError(args.signal);
+    }
     const commandArgs: string[] = ["exec", "--experimental-json"];
 
     if (args.model) {
@@ -98,6 +102,23 @@ export class CodexExec {
       throw new Error("Child process has no stdout");
     }
     const stderrChunks: Buffer[] = [];
+    let abortError: unknown | null = null;
+
+    const exitPromise: Promise<void> = new Promise((resolve, reject) => {
+      child.once("exit", (code, signal) => {
+        if (abortError) {
+          reject(abortError);
+          return;
+        }
+        if (code === 0) {
+          resolve();
+          return;
+        }
+        const stderrBuffer = Buffer.concat(stderrChunks);
+        const exitDescription = signal ? `signal ${signal}` : `code ${code}`;
+        reject(new Error(`Codex Exec exited with ${exitDescription}: ${stderrBuffer.toString("utf8")}`));
+      });
+    });
 
     if (child.stderr) {
       child.stderr.on("data", (data) => {
@@ -110,28 +131,34 @@ export class CodexExec {
       crlfDelay: Infinity,
     });
 
+    const abortHandler = () => {
+      abortError = createAbortError(args.signal);
+      try {
+        rl.close();
+      } catch {
+        // ignore
+      }
+      try {
+        if (!child.killed) child.kill();
+      } catch {
+        // ignore
+      }
+    };
+    if (args.signal) {
+      args.signal.addEventListener("abort", abortHandler, { once: true });
+    }
+
     try {
       for await (const line of rl) {
         // `line` is a string (Node sets default encoding to utf8 for readline)
         yield line as string;
       }
-
-      const exitCode = new Promise((resolve, reject) => {
-        child.once("exit", (code) => {
-          if (code === 0) {
-            resolve(code);
-          } else {
-            const stderrBuffer = Buffer.concat(stderrChunks);
-            reject(
-              new Error(`Codex Exec exited with code ${code}: ${stderrBuffer.toString("utf8")}`),
-            );
-          }
-        });
-      });
-
       if (spawnError) throw spawnError;
-      await exitCode;
+      await exitPromise;
     } finally {
+      if (args.signal) {
+        args.signal.removeEventListener("abort", abortHandler);
+      }
       rl.close();
       child.removeAllListeners();
       try {
@@ -141,6 +168,15 @@ export class CodexExec {
       }
     }
   }
+}
+
+function createAbortError(signal?: AbortSignal): unknown {
+  if (signal?.reason !== undefined) {
+    return signal.reason;
+  }
+  const error = new Error("Codex turn aborted");
+  error.name = "AbortError";
+  return error;
 }
 
 const scriptFileName = fileURLToPath(import.meta.url);
