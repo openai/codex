@@ -361,7 +361,8 @@ impl Tui {
                             }
                             Event::FocusGained => {
                                 terminal_focused.store(true, Ordering::Relaxed);
-                                crate::terminal_palette::requery_default_colors();
+                                // DISABLED: OSC color query responses bleed into input stream
+                                // crate::terminal_palette::requery_default_colors();
                                 yield TuiEvent::Draw;
                             }
                             Event::FocusLost => {
