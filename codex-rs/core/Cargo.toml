@@ -21,13 +21,14 @@ bytes = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
+codex-async-utils = { workspace = true }
 codex-file-search = { workspace = true }
+codex-keyring-store = { workspace = true }
 codex-otel = { workspace = true, features = ["otel"] }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
-codex-async-utils = { workspace = true }
-codex-utils-string = { workspace = true }
 codex-utils-pty = { workspace = true }
+codex-utils-string = { workspace = true }
 codex-utils-tokenizer = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
@@ -36,6 +37,7 @@ eventsource-stream = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 indexmap = { workspace = true }
+keyring = { workspace = true }
 libc = { workspace = true }
 mcp-types = { workspace = true }
 os_info = { workspace = true }
@@ -45,6 +47,7 @@ reqwest = { workspace = true, features = ["json", "stream"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha1 = { workspace = true }
+sha2 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
 strum_macros = { workspace = true }

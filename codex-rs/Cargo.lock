@@ -1061,6 +1061,7 @@ dependencies = [
  "codex-apply-patch",
  "codex-async-utils",
  "codex-file-search",
+ "codex-keyring-store",
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
@@ -1077,6 +1078,7 @@ dependencies = [
  "futures",
  "http",
  "indexmap 2.10.0",
+ "keyring",
  "landlock",
  "libc",
  "maplit",
@@ -1093,6 +1095,7 @@ dependencies = [
  "serde_json",
  "serial_test",
  "sha1",
+ "sha2",
  "shlex",
  "similar",
  "strum_macros 0.27.2",
@@ -1211,6 +1214,14 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.16",
  "walkdir",
+]
+
+[[package]]
+name = "codex-keyring-store"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "keyring",
 ]
 
 [[package]]
@@ -1376,6 +1387,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "axum",
+ "codex-keyring-store",
  "codex-protocol",
  "dirs",
  "escargot",

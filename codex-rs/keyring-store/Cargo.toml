@@ -1,0 +1,11 @@
+[package]
+edition = "2024"
+name = "codex-keyring-store"
+version = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+keyring = { workspace = true }
