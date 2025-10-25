@@ -34,6 +34,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
                         content: format!("err: {e}"),
+                        content_items: None,
                         success: Some(false),
                     },
                 };

@@ -13,10 +13,13 @@ use codex_core::WireApi;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
+use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ReasoningItemContent;
 use core_test_support::load_default_config_for_test;
 use futures::StreamExt;
 use serde_json::Value;
+use serde_json::json;
 use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -252,6 +255,66 @@ async fn attaches_reasoning_to_function_call_anchor() {
     };
     assert_eq!(tool_calls.len(), 1);
     assert_eq!(tool_calls[0]["type"], Value::String("function".into()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn function_call_output_uses_content_items_for_images() {
+    if network_disabled() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    let content_items = vec![
+        FunctionCallOutputContentItem::InputText {
+            text: "See image".to_string(),
+        },
+        FunctionCallOutputContentItem::InputImage {
+            image_url: "data:image/png;base64,abc".to_string(),
+        },
+    ];
+    let serialized_items = serde_json::to_string(&content_items).expect("serialize content items");
+    let payload = FunctionCallOutputPayload {
+        content: serialized_items,
+        content_items: Some(content_items),
+        success: Some(true),
+    };
+
+    let body = run_request(vec![
+        user_message("u1"),
+        function_call(),
+        ResponseItem::FunctionCallOutput {
+            call_id: "c1".to_string(),
+            output: payload,
+        },
+    ])
+    .await;
+
+    let messages = messages_from(&body);
+    let tool = messages
+        .iter()
+        .find(|msg| msg["role"] == "tool")
+        .expect("tool message present");
+    let content = tool["content"]
+        .as_array()
+        .expect("tool content serialized as array");
+
+    assert_eq!(content.len(), 2);
+    assert_eq!(
+        content[0],
+        json!({
+            "type": "input_text",
+            "text": "See image",
+        })
+    );
+    assert_eq!(
+        content[1],
+        json!({
+            "type": "input_image",
+            "image_url": "data:image/png;base64,abc",
+        })
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

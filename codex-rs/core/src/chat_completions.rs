@@ -17,6 +17,7 @@ use crate::util::backoff;
 use bytes::Bytes;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
 use eventsource_stream::Eventsource;
@@ -237,10 +238,30 @@ pub(crate) async fn stream_chat_completions(
                 messages.push(msg);
             }
             ResponseItem::FunctionCallOutput { call_id, output } => {
+                let content = match &output.content_items {
+                    Some(items) => serde_json::Value::Array(
+                        items
+                            .iter()
+                            .map(|item| match item {
+                                FunctionCallOutputContentItem::InputText { text } => json!({
+                                    "type": "input_text",
+                                    "text": text,
+                                }),
+                                FunctionCallOutputContentItem::InputImage { image_url } => {
+                                    json!({
+                                        "type": "input_image",
+                                        "image_url": image_url,
+                                    })
+                                }
+                            })
+                            .collect(),
+                    ),
+                    None => serde_json::Value::String(output.content.clone()),
+                };
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": call_id,
-                    "content": output.content,
+                    "content": content,
                 }));
             }
             ResponseItem::CustomToolCall {
