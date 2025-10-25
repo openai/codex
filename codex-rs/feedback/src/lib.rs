@@ -206,8 +206,7 @@ impl CodexLogSnapshot {
             (String::from("cli_version"), cli_version.to_string()),
         ]);
 
-        // Reason (freeform) – prefer to include as message to be visible; also add a short tag if tiny.
-        let message = reason.map(|r| r.to_string());
+        // Reason (freeform) – include as a short tag when tiny; keep title in message.
         if let Some(r) = reason.filter(|r| r.len() <= 64) {
             tags.insert(String::from("reason"), r.to_string());
         }
@@ -219,9 +218,15 @@ impl CodexLogSnapshot {
         };
 
         let mut envelope = Envelope::new();
+        // Title is the message in Sentry: "[Classification]: Codex session <thread_id>"
+        let title = format!(
+            "[{}]: Codex session {}",
+            display_classification(classification),
+            self.thread_id
+        );
         let event = Event {
             level,
-            message,
+            message: Some(title),
             tags,
             ..Default::default()
         };
@@ -298,9 +303,15 @@ impl CodexLogSnapshot {
         };
 
         let mut envelope = Envelope::new();
+        // Title is the message in Sentry: "[Classification]: Codex session <thread_id>"
+        let title = format!(
+            "[{}]: Codex session {}",
+            display_classification(classification),
+            self.thread_id
+        );
         let event = Event {
             level,
-            message: reason.map(|r| r.to_string()),
+            message: Some(title),
             tags,
             ..Default::default()
         };
@@ -309,6 +320,15 @@ impl CodexLogSnapshot {
         client.send_envelope(envelope);
         client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
         Ok(())
+    }
+}
+
+fn display_classification(classification: &str) -> String {
+    match classification {
+        "bug" => "Bug".to_string(),
+        "bad_result" => "Bad result".to_string(),
+        "good_result" => "Good result".to_string(),
+        _ => "Other".to_string(),
     }
 }
 
