@@ -394,8 +394,6 @@ pub struct UploadFeedbackParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<ConversationId>,
     pub include_logs: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rollout_path: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

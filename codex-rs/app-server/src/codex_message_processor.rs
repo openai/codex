@@ -106,7 +106,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use tokio::fs;
 use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
@@ -1435,26 +1434,15 @@ impl CodexMessageProcessor {
             reason,
             conversation_id,
             include_logs,
-            rollout_path,
         } = params;
 
-        let snapshot = self.feedback.snapshot(conversation_id.clone());
+        let snapshot = self.feedback.snapshot(conversation_id);
         let thread_id = snapshot.thread_id.clone();
 
         let validated_rollout_path = if include_logs {
-            if let Some(path) = rollout_path {
-                match self
-                    .validate_rollout_path(path, conversation_id.clone())
-                    .await
-                {
-                    Ok(validated) => Some(validated),
-                    Err(err) => {
-                        self.outgoing.send_error(request_id, err).await;
-                        return;
-                    }
-                }
-            } else {
-                None
+            match conversation_id {
+                Some(conv_id) => self.resolve_rollout_path(conv_id).await,
+                None => None,
             }
         } else {
             None
@@ -1462,9 +1450,7 @@ impl CodexMessageProcessor {
 
         let cli_version = env!("CARGO_PKG_VERSION").to_string();
         let upload_result = tokio::task::spawn_blocking(move || {
-            let rollout_path_ref = validated_rollout_path
-                .as_ref()
-                .map(std::path::PathBuf::as_path);
+            let rollout_path_ref = validated_rollout_path.as_deref();
             snapshot.upload_feedback(
                 &classification,
                 reason.as_deref(),
@@ -1504,57 +1490,15 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn validate_rollout_path(
-        &self,
-        path: PathBuf,
-        conversation_id: Option<ConversationId>,
-    ) -> Result<PathBuf, JSONRPCErrorError> {
-        let rollout_folder = self.config.codex_home.join(codex_core::SESSIONS_SUBDIR);
-        let canonical = match fs::canonicalize(&path).await {
-            Ok(c) => c,
-            Err(err) => {
-                return Err(JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("failed to resolve rollout path `{}`: {err}", path.display()),
-                    data: None,
-                });
-            }
-        };
-
-        if !canonical.starts_with(&rollout_folder) {
-            return Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!(
-                    "rollout path `{}` must be in sessions directory",
-                    path.display()
-                ),
-                data: None,
-            });
+    async fn resolve_rollout_path(&self, conversation_id: ConversationId) -> Option<PathBuf> {
+        match self
+            .conversation_manager
+            .get_conversation(conversation_id)
+            .await
+        {
+            Ok(conv) => Some(conv.rollout_path()),
+            Err(_) => None,
         }
-
-        if let Some(conversation_id) = conversation_id {
-            let expected_suffix = format!("{conversation_id}.jsonl");
-            let Some(file_name) = canonical.file_name().and_then(|name| name.to_str()) else {
-                return Err(JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("rollout path `{}` missing file name", path.display()),
-                    data: None,
-                });
-            };
-
-            if !file_name.ends_with(expected_suffix.as_str()) {
-                return Err(JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!(
-                        "rollout path `{}` must end with `{expected_suffix}`",
-                        path.display()
-                    ),
-                    data: None,
-                });
-            }
-        }
-
-        Ok(canonical)
     }
 }
 
