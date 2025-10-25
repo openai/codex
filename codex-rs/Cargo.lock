@@ -843,6 +843,7 @@ dependencies = [
  "codex-backend-client",
  "codex-common",
  "codex-core",
+ "codex-feedback",
  "codex-file-search",
  "codex-login",
  "codex-protocol",

@@ -98,7 +98,10 @@ impl ConversationManager {
             }
         };
 
-        let conversation = Arc::new(CodexConversation::new(codex));
+        let conversation = Arc::new(CodexConversation::new(
+            codex,
+            session_configured.rollout_path.clone(),
+        ));
         self.conversations
             .write()
             .await
