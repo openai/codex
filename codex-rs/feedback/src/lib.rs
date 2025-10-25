@@ -12,7 +12,7 @@ use anyhow::anyhow;
 use codex_protocol::ConversationId;
 use tracing_subscriber::fmt::writer::MakeWriter;
 
-const DEFAULT_MAX_BYTES: usize = 2 * 1024 * 1024; // 2 MiB
+const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
 const SENTRY_DSN: &str =
     "https://ae32ed50620d7a7792c1ce5df38b3e3e@o33249.ingest.us.sentry.io/4510195390611458";
 const UPLOAD_TIMEOUT_SECS: u64 = 10;

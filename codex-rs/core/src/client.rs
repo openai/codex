@@ -134,6 +134,14 @@ impl ModelClient {
         self.stream_with_task_kind(prompt, TaskKind::Regular).await
     }
 
+    pub fn config(&self) -> Arc<Config> {
+        Arc::clone(&self.config)
+    }
+
+    pub fn provider(&self) -> &ModelProviderInfo {
+        &self.provider
+    }
+
     pub(crate) async fn stream_with_task_kind(
         &self,
         prompt: &Prompt,
@@ -301,6 +309,7 @@ impl ModelClient {
             "POST to {}: {:?}",
             self.provider.get_full_url(&auth),
             serde_json::to_string(payload_json)
+                .unwrap_or("<unable to serialize payload>".to_string())
         );
 
         let mut req_builder = self

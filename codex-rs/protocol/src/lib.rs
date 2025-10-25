@@ -1,6 +1,7 @@
 pub mod account;
 mod conversation_id;
 pub use conversation_id::ConversationId;
+pub mod approvals;
 pub mod config_types;
 pub mod custom_prompts;
 pub mod items;
