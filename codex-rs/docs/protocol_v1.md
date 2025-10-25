@@ -1,4 +1,4 @@
-Overview of Protocol Defined in [protocol.rs](../core/src/protocol.rs) and [agent.rs](../core/src/agent.rs).
+Overview of Protocol Defined in [protocol.rs](../protocol/src/protocol.rs) and [codex.rs](../core/src/codex.rs).
 
 The goal of this document is to define terminology used in the system and explain the expected behavior of the system.
 
@@ -62,7 +62,7 @@ Since only 1 `Task` can be run at a time, for parallel tasks it is recommended t
     - This enum is `non_exhaustive`; variants can be added at future dates
     - It should be expected that new `EventMsg` variants will be added over time to expose more detailed information about the model's actions.
 
-For complete documentation of the `Op` and `EventMsg` variants, refer to [protocol.rs](../core/src/protocol.rs). Some example payload types:
+For complete documentation of the `Op` and `EventMsg` variants, refer to [protocol.rs](../protocol/src/protocol.rs). Some example payload types:
 
 - `Op`
   - `Op::UserInput` – Any input from the user to kick off a `Task`
