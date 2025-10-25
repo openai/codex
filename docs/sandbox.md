@@ -14,7 +14,7 @@ If you want maximum guardrails for a trusted repo, switch back to Read Only from
 
 - Every session starts in a sandbox. Until a repo is trusted, Codex enforces read-only access and will prompt before any write or command.
 - Marking a repo as trusted switches the default preset to Auto (`workspace-write` + `ask-for-approval on-request`) so Codex can keep iterating locally without nagging you.
-- The workspace always includes the current directory plus temporary directories like `/tmp`. Use `/status` to confirm the exact writable roots.
+- The workspace always includes the current directory plus temporary directories like `/tmp`.
 - You can override the defaults from the command line at any time:
   - `codex --sandbox read-only --ask-for-approval on-request`
   - `codex --sandbox workspace-write --ask-for-approval on-request`
@@ -56,12 +56,12 @@ You can also save presets as **profiles**:
 ```toml
 [profiles.full_auto]
 approval_policy = "on-request"
-sandbox_mode    = "workspace-write"
 
 [profiles.readonly_quiet]
 approval_policy = "never"
-sandbox_mode    = "read-only"
 ```
+
+> Profiles currently apply only their approval policy. Set the sandbox mode via CLI flags or top-level config keys until profile support catches up.
 
 ### Sandbox mechanics by platform {#platform-sandboxing-details}
 
