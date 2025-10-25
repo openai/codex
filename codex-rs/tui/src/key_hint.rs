@@ -6,6 +6,9 @@ use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Span;
 
+#[cfg(target_os = "macos")]
+const ALT_PREFIX: &str = "⌥ + ";
+#[cfg(not(target_os = "macos"))]
 const ALT_PREFIX: &str = "alt + ";
 const CTRL_PREFIX: &str = "ctrl + ";
 const SHIFT_PREFIX: &str = "shift + ";

@@ -23,6 +23,7 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use ts_rs::ExportError;
 use ts_rs::TS;
 
 const HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
@@ -104,6 +105,19 @@ macro_rules! for_each_schema_type {
     };
 }
 
+fn export_ts_with_context<F>(label: &str, export: F) -> Result<()>
+where
+    F: FnOnce() -> std::result::Result<(), ExportError>,
+{
+    match export() {
+        Ok(()) => Ok(()),
+        Err(ExportError::CannotBeExported(ty)) => Err(anyhow!(
+            "failed to export {label}: dependency {ty} cannot be exported"
+        )),
+        Err(err) => Err(err.into()),
+    }
+}
+
 pub fn generate_types(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     generate_ts(out_dir, prettier)?;
     generate_json(out_dir)?;
@@ -113,13 +127,17 @@ pub fn generate_types(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
 pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     ensure_dir(out_dir)?;
 
-    ClientRequest::export_all_to(out_dir)?;
-    export_client_responses(out_dir)?;
-    ClientNotification::export_all_to(out_dir)?;
+    export_ts_with_context("ClientRequest", || ClientRequest::export_all_to(out_dir))?;
+    export_ts_with_context("client responses", || export_client_responses(out_dir))?;
+    export_ts_with_context("ClientNotification", || {
+        ClientNotification::export_all_to(out_dir)
+    })?;
 
-    ServerRequest::export_all_to(out_dir)?;
-    export_server_responses(out_dir)?;
-    ServerNotification::export_all_to(out_dir)?;
+    export_ts_with_context("ServerRequest", || ServerRequest::export_all_to(out_dir))?;
+    export_ts_with_context("server responses", || export_server_responses(out_dir))?;
+    export_ts_with_context("ServerNotification", || {
+        ServerNotification::export_all_to(out_dir)
+    })?;
 
     generate_index_ts(out_dir)?;
 

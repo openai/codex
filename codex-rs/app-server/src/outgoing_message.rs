@@ -142,6 +142,8 @@ pub(crate) struct OutgoingError {
 #[cfg(test)]
 mod tests {
     use codex_app_server_protocol::LoginChatGptCompleteNotification;
+    use codex_protocol::protocol::RateLimitSnapshot;
+    use codex_protocol::protocol::RateLimitWindow;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use uuid::Uuid;
@@ -169,6 +171,36 @@ mod tests {
             serde_json::to_value(jsonrpc_notification)
                 .expect("ensure the strum macros serialize the method field correctly"),
             "ensure the strum macros serialize the method field correctly"
+        );
+    }
+
+    #[test]
+    fn verify_account_rate_limits_notification_serialization() {
+        let notification = ServerNotification::AccountRateLimitsUpdated(RateLimitSnapshot {
+            primary: Some(RateLimitWindow {
+                used_percent: 25.0,
+                window_minutes: Some(15),
+                resets_at: Some(123),
+            }),
+            secondary: None,
+        });
+
+        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
+        assert_eq!(
+            json!({
+                "method": "account/rateLimits/updated",
+                "params": {
+                    "primary": {
+                        "used_percent": 25.0,
+                        "window_minutes": 15,
+                        "resets_at": 123,
+                    },
+                    "secondary": null,
+                },
+            }),
+            serde_json::to_value(jsonrpc_notification)
+                .expect("ensure the notification serializes correctly"),
+            "ensure the notification serializes correctly"
         );
     }
 }

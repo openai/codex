@@ -1,6 +1,6 @@
 //! Connection manager for Model Context Protocol (MCP) servers.
 //!
-//! The [`McpConnectionManager`] owns one [`codex_mcp_client::McpClient`] per
+//! The [`McpConnectionManager`] owns one [`codex_rmcp_client::RmcpClient`] per
 //! configured server (keyed by the *server name*). It offers convenience
 //! helpers to query the available tools across *all* servers and returns them
 //! in a single aggregated map using the fully-qualified tool name
@@ -10,14 +10,12 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_mcp_client::McpClient;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_rmcp_client::RmcpClient;
 use mcp_types::ClientCapabilities;
@@ -51,7 +49,7 @@ const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
 
 /// Default timeout for initializing MCP server & initially listing tools.
-const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Default timeout for individual tool calls.
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -99,134 +97,12 @@ struct ToolInfo {
 }
 
 struct ManagedClient {
-    client: McpClientAdapter,
+    client: Arc<RmcpClient>,
     startup_timeout: Duration,
     tool_timeout: Option<Duration>,
 }
 
-#[derive(Clone)]
-enum McpClientAdapter {
-    Legacy(Arc<McpClient>),
-    Rmcp(Arc<RmcpClient>),
-}
-
-impl McpClientAdapter {
-    #[allow(clippy::too_many_arguments)]
-    async fn new_stdio_client(
-        use_rmcp_client: bool,
-        program: OsString,
-        args: Vec<OsString>,
-        env: Option<HashMap<String, String>>,
-        env_vars: Vec<String>,
-        cwd: Option<PathBuf>,
-        params: mcp_types::InitializeRequestParams,
-        startup_timeout: Duration,
-    ) -> Result<Self> {
-        if use_rmcp_client {
-            let client =
-                Arc::new(RmcpClient::new_stdio_client(program, args, env, &env_vars, cwd).await?);
-            client.initialize(params, Some(startup_timeout)).await?;
-            Ok(McpClientAdapter::Rmcp(client))
-        } else {
-            let client =
-                Arc::new(McpClient::new_stdio_client(program, args, env, &env_vars, cwd).await?);
-            client.initialize(params, Some(startup_timeout)).await?;
-            Ok(McpClientAdapter::Legacy(client))
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn new_streamable_http_client(
-        server_name: String,
-        url: String,
-        bearer_token: Option<String>,
-        http_headers: Option<HashMap<String, String>>,
-        env_http_headers: Option<HashMap<String, String>>,
-        params: mcp_types::InitializeRequestParams,
-        startup_timeout: Duration,
-        store_mode: OAuthCredentialsStoreMode,
-    ) -> Result<Self> {
-        let client = Arc::new(
-            RmcpClient::new_streamable_http_client(
-                &server_name,
-                &url,
-                bearer_token,
-                http_headers,
-                env_http_headers,
-                store_mode,
-            )
-            .await?,
-        );
-        client.initialize(params, Some(startup_timeout)).await?;
-        Ok(McpClientAdapter::Rmcp(client))
-    }
-
-    async fn list_tools(
-        &self,
-        params: Option<mcp_types::ListToolsRequestParams>,
-        timeout: Option<Duration>,
-    ) -> Result<mcp_types::ListToolsResult> {
-        match self {
-            McpClientAdapter::Legacy(client) => client.list_tools(params, timeout).await,
-            McpClientAdapter::Rmcp(client) => client.list_tools(params, timeout).await,
-        }
-    }
-
-    async fn list_resources(
-        &self,
-        params: Option<mcp_types::ListResourcesRequestParams>,
-        timeout: Option<Duration>,
-    ) -> Result<mcp_types::ListResourcesResult> {
-        match self {
-            McpClientAdapter::Legacy(_) => Ok(ListResourcesResult {
-                next_cursor: None,
-                resources: Vec::new(),
-            }),
-            McpClientAdapter::Rmcp(client) => client.list_resources(params, timeout).await,
-        }
-    }
-
-    async fn read_resource(
-        &self,
-        params: mcp_types::ReadResourceRequestParams,
-        timeout: Option<Duration>,
-    ) -> Result<mcp_types::ReadResourceResult> {
-        match self {
-            McpClientAdapter::Legacy(_) => Err(anyhow!(
-                "resources/read is not supported by legacy MCP clients"
-            )),
-            McpClientAdapter::Rmcp(client) => client.read_resource(params, timeout).await,
-        }
-    }
-
-    async fn list_resource_templates(
-        &self,
-        params: Option<mcp_types::ListResourceTemplatesRequestParams>,
-        timeout: Option<Duration>,
-    ) -> Result<mcp_types::ListResourceTemplatesResult> {
-        match self {
-            McpClientAdapter::Legacy(_) => Ok(ListResourceTemplatesResult {
-                next_cursor: None,
-                resource_templates: Vec::new(),
-            }),
-            McpClientAdapter::Rmcp(client) => client.list_resource_templates(params, timeout).await,
-        }
-    }
-
-    async fn call_tool(
-        &self,
-        name: String,
-        arguments: Option<serde_json::Value>,
-        timeout: Option<Duration>,
-    ) -> Result<mcp_types::CallToolResult> {
-        match self {
-            McpClientAdapter::Legacy(client) => client.call_tool(name, arguments, timeout).await,
-            McpClientAdapter::Rmcp(client) => client.call_tool(name, arguments, timeout).await,
-        }
-    }
-}
-
-/// A thin wrapper around a set of running [`McpClient`] instances.
+/// A thin wrapper around a set of running [`RmcpClient`] instances.
 #[derive(Default)]
 pub(crate) struct McpConnectionManager {
     /// Server-name -> client instance.
@@ -243,7 +119,7 @@ pub(crate) struct McpConnectionManager {
 }
 
 impl McpConnectionManager {
-    /// Spawn a [`McpClient`] for each configured server.
+    /// Spawn a [`RmcpClient`] for each configured server.
     ///
     /// * `mcp_servers` – Map loaded from the user configuration where *keys*
     ///   are human-readable server identifiers and *values* are the spawn
@@ -253,7 +129,6 @@ impl McpConnectionManager {
     /// user should be informed about these errors.
     pub async fn new(
         mcp_servers: HashMap<String, McpServerConfig>,
-        use_rmcp_client: bool,
         store_mode: OAuthCredentialsStoreMode,
     ) -> Result<(Self, ClientStartErrors)> {
         // Early exit if no servers are configured.
@@ -316,7 +191,8 @@ impl McpConnectionManager {
                     protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
                 };
 
-                let client = match transport {
+                let resolved_bearer_token = resolved_bearer_token.unwrap_or_default();
+                let client_result = match transport {
                     McpServerTransportConfig::Stdio {
                         command,
                         args,
@@ -326,17 +202,18 @@ impl McpConnectionManager {
                     } => {
                         let command_os: OsString = command.into();
                         let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
-                        McpClientAdapter::new_stdio_client(
-                            use_rmcp_client,
-                            command_os,
-                            args_os,
-                            env,
-                            env_vars,
-                            cwd,
-                            params,
-                            startup_timeout,
-                        )
-                        .await
+                        match RmcpClient::new_stdio_client(command_os, args_os, env, &env_vars, cwd)
+                            .await
+                        {
+                            Ok(client) => {
+                                let client = Arc::new(client);
+                                client
+                                    .initialize(params.clone(), Some(startup_timeout))
+                                    .await
+                                    .map(|_| client)
+                            }
+                            Err(err) => Err(err.into()),
+                        }
                     }
                     McpServerTransportConfig::StreamableHttp {
                         url,
@@ -344,22 +221,32 @@ impl McpConnectionManager {
                         env_http_headers,
                         ..
                     } => {
-                        McpClientAdapter::new_streamable_http_client(
-                            server_name.clone(),
-                            url,
-                            resolved_bearer_token.unwrap_or_default(),
+                        match RmcpClient::new_streamable_http_client(
+                            &server_name,
+                            &url,
+                            resolved_bearer_token.clone(),
                             http_headers,
                             env_http_headers,
-                            params,
-                            startup_timeout,
                             store_mode,
                         )
                         .await
+                        {
+                            Ok(client) => {
+                                let client = Arc::new(client);
+                                client
+                                    .initialize(params.clone(), Some(startup_timeout))
+                                    .await
+                                    .map(|_| client)
+                            }
+                            Err(err) => Err(err),
+                        }
                     }
-                }
-                .map(|c| (c, startup_timeout));
+                };
 
-                ((server_name, tool_timeout), client)
+                (
+                    (server_name, tool_timeout),
+                    client_result.map(|client| (client, startup_timeout)),
+                )
             });
         }
 

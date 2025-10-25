@@ -5,6 +5,7 @@ use crate::JSONRPCNotification;
 use crate::JSONRPCRequest;
 use crate::RequestId;
 use codex_protocol::ConversationId;
+use codex_protocol::account::Account;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
@@ -16,6 +17,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::SandboxCommandAssessment;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnAbortReason;
 use paste::paste;
@@ -93,6 +95,43 @@ macro_rules! client_request_definitions {
 }
 
 client_request_definitions! {
+    /// NEW APIs
+    #[serde(rename = "model/list")]
+    #[ts(rename = "model/list")]
+    ListModels {
+        params: ListModelsParams,
+        response: ListModelsResponse,
+    },
+
+    #[serde(rename = "account/login")]
+    #[ts(rename = "account/login")]
+    LoginAccount {
+        params: LoginAccountParams,
+        response: LoginAccountResponse,
+    },
+
+    #[serde(rename = "account/logout")]
+    #[ts(rename = "account/logout")]
+    LogoutAccount {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: LogoutAccountResponse,
+    },
+
+    #[serde(rename = "account/rateLimits/read")]
+    #[ts(rename = "account/rateLimits/read")]
+    GetAccountRateLimits {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: GetAccountRateLimitsResponse,
+    },
+
+    #[serde(rename = "account/read")]
+    #[ts(rename = "account/read")]
+    GetAccount {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: GetAccountResponse,
+    },
+
+    /// DEPRECATED APIs below
     Initialize {
         params: InitializeParams,
         response: InitializeResponse,
@@ -105,13 +144,6 @@ client_request_definitions! {
     ListConversations {
         params: ListConversationsParams,
         response: ListConversationsResponse,
-    },
-    #[serde(rename = "model/list")]
-    #[ts(rename = "model/list")]
-    /// List available Codex models along with display metadata.
-    ListModels {
-        params: ListModelsParams,
-        response: ListModelsResponse,
     },
     /// Resume a recorded Codex conversation from a rollout file.
     ResumeConversation {
@@ -190,12 +222,6 @@ client_request_definitions! {
     ExecOneOffCommand {
         params: ExecOneOffCommandParams,
         response: ExecOneOffCommandResponse,
-    },
-    #[serde(rename = "account/rateLimits/read")]
-    #[ts(rename = "account/rateLimits/read")]
-    GetAccountRateLimits {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: GetAccountRateLimitsResponse,
     },
 }
 
@@ -353,6 +379,38 @@ pub struct ListModelsResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type")]
+#[ts(tag = "type")]
+pub enum LoginAccountParams {
+    #[serde(rename = "apiKey")]
+    #[ts(rename = "apiKey")]
+    ApiKey {
+        #[serde(rename = "apiKey")]
+        #[ts(rename = "apiKey")]
+        api_key: String,
+    },
+    #[serde(rename = "chatgpt")]
+    #[ts(rename = "chatgpt")]
+    ChatGpt,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginAccountResponse {
+    /// Only set if the login method is ChatGPT.
+    #[schemars(with = "String")]
+    pub login_id: Option<Uuid>,
+
+    /// URL the client should open in a browser to initiate the OAuth flow.
+    /// Only set if the login method is ChatGPT.
+    pub auth_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LogoutAccountResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumeConversationParams {
     /// Absolute path to the rollout JSONL file.
@@ -476,6 +534,12 @@ pub struct ExecOneOffCommandResponse {
 pub struct GetAccountRateLimitsResponse {
     pub rate_limits: RateLimitSnapshot,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(transparent)]
+#[ts(export)]
+#[ts(type = "Account | null")]
+pub struct GetAccountResponse(#[ts(type = "Account | null")] pub Option<Account>);
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -653,6 +717,8 @@ pub struct SendUserMessageResponse {}
 #[serde(rename_all = "camelCase")]
 pub struct AddConversationListenerParams {
     pub conversation_id: ConversationId,
+    #[serde(default)]
+    pub experimental_raw_events: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -784,6 +850,8 @@ pub struct ExecCommandApprovalParams {
     pub cwd: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk: Option<SandboxCommandAssessment>,
     pub parsed_cmd: Vec<ParsedCommand>,
 }
 
@@ -875,6 +943,13 @@ pub struct AuthStatusChangeNotification {
 #[serde(tag = "method", content = "params", rename_all = "camelCase")]
 #[strum(serialize_all = "camelCase")]
 pub enum ServerNotification {
+    /// NEW NOTIFICATIONS
+    #[serde(rename = "account/rateLimits/updated")]
+    #[ts(rename = "account/rateLimits/updated")]
+    #[strum(serialize = "account/rateLimits/updated")]
+    AccountRateLimitsUpdated(RateLimitSnapshot),
+
+    /// DEPRECATED NOTIFICATIONS below
     /// Authentication status changed
     AuthStatusChange(AuthStatusChangeNotification),
 
@@ -888,6 +963,7 @@ pub enum ServerNotification {
 impl ServerNotification {
     pub fn to_params(self) -> Result<serde_json::Value, serde_json::Error> {
         match self {
+            ServerNotification::AccountRateLimitsUpdated(params) => serde_json::to_value(params),
             ServerNotification::AuthStatusChange(params) => serde_json::to_value(params),
             ServerNotification::LoginChatGptComplete(params) => serde_json::to_value(params),
             ServerNotification::SessionConfigured(params) => serde_json::to_value(params),
@@ -992,6 +1068,7 @@ mod tests {
             command: vec!["echo".to_string(), "hello".to_string()],
             cwd: PathBuf::from("/tmp"),
             reason: Some("because tests".to_string()),
+            risk: None,
             parsed_cmd: vec![ParsedCommand::Unknown {
                 cmd: "echo hello".to_string(),
             }],
@@ -1044,15 +1121,88 @@ mod tests {
     }
 
     #[test]
+    fn serialize_account_login_api_key() -> Result<()> {
+        let request = ClientRequest::LoginAccount {
+            request_id: RequestId::Integer(2),
+            params: LoginAccountParams::ApiKey {
+                api_key: "secret".to_string(),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "account/login",
+                "id": 2,
+                "params": {
+                    "type": "apiKey",
+                    "apiKey": "secret"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_account_login_chatgpt() -> Result<()> {
+        let request = ClientRequest::LoginAccount {
+            request_id: RequestId::Integer(3),
+            params: LoginAccountParams::ChatGpt,
+        };
+        assert_eq!(
+            json!({
+                "method": "account/login",
+                "id": 3,
+                "params": {
+                    "type": "chatgpt"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_account_logout() -> Result<()> {
+        let request = ClientRequest::LogoutAccount {
+            request_id: RequestId::Integer(4),
+            params: None,
+        };
+        assert_eq!(
+            json!({
+                "method": "account/logout",
+                "id": 4,
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_get_account() -> Result<()> {
+        let request = ClientRequest::GetAccount {
+            request_id: RequestId::Integer(5),
+            params: None,
+        };
+        assert_eq!(
+            json!({
+                "method": "account/read",
+                "id": 5,
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_list_models() -> Result<()> {
         let request = ClientRequest::ListModels {
-            request_id: RequestId::Integer(2),
+            request_id: RequestId::Integer(6),
             params: ListModelsParams::default(),
         };
         assert_eq!(
             json!({
                 "method": "model/list",
-                "id": 2,
+                "id": 6,
                 "params": {}
             }),
             serde_json::to_value(&request)?,

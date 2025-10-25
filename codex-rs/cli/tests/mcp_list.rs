@@ -68,9 +68,9 @@ async fn list_and_get_render_expected_output() -> Result<()> {
     assert!(stdout.contains("Name"));
     assert!(stdout.contains("docs"));
     assert!(stdout.contains("docs-server"));
-    assert!(stdout.contains("TOKEN=secret"));
-    assert!(stdout.contains("APP_TOKEN=$APP_TOKEN"));
-    assert!(stdout.contains("WORKSPACE_ID=$WORKSPACE_ID"));
+    assert!(stdout.contains("TOKEN=*****"));
+    assert!(stdout.contains("APP_TOKEN=*****"));
+    assert!(stdout.contains("WORKSPACE_ID=*****"));
     assert!(stdout.contains("Status"));
     assert!(stdout.contains("Auth"));
     assert!(stdout.contains("enabled"));
@@ -119,9 +119,9 @@ async fn list_and_get_render_expected_output() -> Result<()> {
     assert!(stdout.contains("transport: stdio"));
     assert!(stdout.contains("command: docs-server"));
     assert!(stdout.contains("args: --port 4000"));
-    assert!(stdout.contains("env: TOKEN=secret"));
-    assert!(stdout.contains("APP_TOKEN=$APP_TOKEN"));
-    assert!(stdout.contains("WORKSPACE_ID=$WORKSPACE_ID"));
+    assert!(stdout.contains("env: TOKEN=*****"));
+    assert!(stdout.contains("APP_TOKEN=*****"));
+    assert!(stdout.contains("WORKSPACE_ID=*****"));
     assert!(stdout.contains("enabled: true"));
     assert!(stdout.contains("remove: codex mcp remove docs"));
 

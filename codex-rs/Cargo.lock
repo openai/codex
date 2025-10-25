@@ -853,6 +853,7 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+ "serial_test",
  "tempfile",
  "tokio",
  "toml",
@@ -1061,12 +1062,12 @@ dependencies = [
  "codex-apply-patch",
  "codex-async-utils",
  "codex-file-search",
- "codex-mcp-client",
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
  "codex-utils-pty",
  "codex-utils-string",
+ "codex-utils-tokenizer",
  "core-foundation 0.9.4",
  "core_test_support",
  "dirs",
@@ -1075,6 +1076,7 @@ dependencies = [
  "escargot",
  "eventsource-stream",
  "futures",
+ "http",
  "indexmap 2.10.0",
  "landlock",
  "libc",
@@ -1247,19 +1249,6 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "wiremock",
-]
-
-[[package]]
-name = "codex-mcp-client"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "mcp-types",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1647,6 +1636,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "codex-core",
+ "codex-protocol",
  "notify",
  "regex-lite",
  "serde_json",
@@ -4966,9 +4956,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e35d31f89beb59c83bc31363426da25b323ce0c2e5b53c7bf29867d16ee7898"
+checksum = "1fdad1258f7259fdc0f2dfc266939c82c3b5d1fd72bcde274d600cdc27e60243"
 dependencies = [
  "base64",
  "bytes",
@@ -5000,9 +4990,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d88518b38110c439a03f0f4eee40e5105d648a530711cb87f98991e3f324a664"
+checksum = "ede0589a208cc7ce81d1be68aa7e74b917fcd03c81528408bab0457e187dcd9b"
 dependencies = [
  "darling 0.21.3",
  "proc-macro2",
