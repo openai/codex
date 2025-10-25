@@ -597,8 +597,16 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
                 move_path,
                 chunks,
             } => {
-                let AppliedPatch { new_contents, .. } =
-                    derive_new_contents_from_chunks(path, chunks)?;
+                let AppliedPatch {
+                    original_contents,
+                    new_contents,
+                } = derive_new_contents_from_chunks(path, chunks)?;
+                let target_eol = detect_eol(&original_contents);
+                let final_contents = if target_eol == Eol::Crlf {
+                    normalize_to_eol(&new_contents, Eol::Crlf)
+                } else {
+                    new_contents
+                };
                 if let Some(dest) = move_path {
                     if let Some(parent) = dest.parent()
                         && !parent.as_os_str().is_empty()
@@ -607,13 +615,13 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
                             format!("Failed to create parent directories for {}", dest.display())
                         })?;
                     }
-                    std::fs::write(dest, new_contents)
+                    std::fs::write(dest, final_contents)
                         .with_context(|| format!("Failed to write file {}", dest.display()))?;
                     std::fs::remove_file(path)
                         .with_context(|| format!("Failed to remove original {}", path.display()))?;
                     modified.push(dest.clone());
                 } else {
-                    std::fs::write(path, new_contents)
+                    std::fs::write(path, final_contents)
                         .with_context(|| format!("Failed to write file {}", path.display()))?;
                     modified.push(path.clone());
                 }
@@ -838,6 +846,32 @@ pub fn print_summary(
         writeln!(out, "D {}", path.display())?;
     }
     Ok(())
+}
+
+// Line ending handling for text files written by apply_patch.
+// Detect the original file's EOL and normalize the final text to match.
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum Eol {
+    Lf,
+    Crlf,
+}
+
+fn detect_eol(s: &str) -> Eol {
+    if s.contains("\r\n") {
+        Eol::Crlf
+    } else {
+        Eol::Lf
+    }
+}
+
+fn normalize_to_eol(s: &str, e: Eol) -> String {
+    match e {
+        Eol::Lf => s.to_string(),
+        Eol::Crlf => {
+            let collapsed = s.replace("\r\n", "\n");
+            collapsed.replace('\n', "\r\n")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1336,6 +1370,56 @@ PATCH"#,
 
         // No stderr expected.
         assert_eq!(String::from_utf8(stderr).unwrap(), "");
+    }
+
+    #[test]
+    fn test_update_preserves_crlf_line_endings() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("eol_crlf.txt");
+        // Original uses CRLF endings
+        std::fs::write(&path, "line1\r\nline2\r\n").unwrap();
+
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@
+ line1
+-line2
++line2-replacement
++added"#,
+            path.display()
+        ));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(&patch, &mut stdout, &mut stderr).unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        // All lines should use CRLF after update
+        assert_eq!(contents, "line1\r\nline2-replacement\r\nadded\r\n");
+    }
+
+    #[test]
+    fn test_update_preserves_lf_line_endings() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("eol_lf.txt");
+        std::fs::write(&path, "line1\nline2\n").unwrap();
+
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@
+ line1
+-line2
++line2-replacement
++added"#,
+            path.display()
+        ));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(&patch, &mut stdout, &mut stderr).unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, "line1\nline2-replacement\nadded\n");
     }
 
     #[test]
