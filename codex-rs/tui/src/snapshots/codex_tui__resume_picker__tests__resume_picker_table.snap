@@ -1,8 +1,11 @@
 ---
 source: tui/src/resume_picker.rs
+assertion_line: 1593
 expression: snapshot
 ---
   Created         Updated         Conversation
+--- Today ---
   16 minutes ago  42 seconds ago  Fix resume picker timestamps
 > 1 hour ago      35 minutes ago  Investigate lazy pagination cap
+--- Yesterday ---
   2 hours ago     2 hours ago     Explain the codebase
