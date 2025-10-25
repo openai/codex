@@ -64,6 +64,10 @@ pub struct ModelProviderInfo {
     #[serde(default)]
     pub wire_api: WireApi,
 
+    // Optional flag to force the storing reasoning IDs in the response. This workaround
+    // is necessary to make codex work in some proxies like Azure and litellm.
+    pub force_responses_api_store_reasoning_ids: Option<bool>,
+
     /// Optional query parameters to append to the base URL.
     pub query_params: Option<HashMap<String, String>>,
 
@@ -287,6 +291,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key_instructions: None,
                 experimental_bearer_token: None,
                 wire_api: WireApi::Responses,
+                force_responses_api_store_reasoning_ids: Some(false),
                 query_params: None,
                 http_headers: Some(
                     [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
@@ -347,6 +352,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api: WireApi::Chat,
+        force_responses_api_store_reasoning_ids: None,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -387,6 +393,7 @@ base_url = "http://localhost:11434/v1"
             env_key_instructions: None,
             experimental_bearer_token: None,
             wire_api: WireApi::Chat,
+            force_responses_api_store_reasoning_ids: None,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -415,6 +422,7 @@ query_params = { api-version = "2025-04-01-preview" }
             env_key_instructions: None,
             experimental_bearer_token: None,
             wire_api: WireApi::Chat,
+            force_responses_api_store_reasoning_ids: None,
             query_params: Some(maplit::hashmap! {
                 "api-version".to_string() => "2025-04-01-preview".to_string(),
             }),
@@ -446,6 +454,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             env_key_instructions: None,
             experimental_bearer_token: None,
             wire_api: WireApi::Chat,
+            force_responses_api_store_reasoning_ids: None,
             query_params: None,
             http_headers: Some(maplit::hashmap! {
                 "X-Example-Header".to_string() => "example-value".to_string(),
@@ -473,6 +482,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 env_key_instructions: None,
                 experimental_bearer_token: None,
                 wire_api: WireApi::Responses,
+                force_responses_api_store_reasoning_ids: None,
                 query_params: None,
                 http_headers: None,
                 env_http_headers: None,
@@ -506,6 +516,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             env_key_instructions: None,
             experimental_bearer_token: None,
             wire_api: WireApi::Responses,
+            force_responses_api_store_reasoning_ids: None,
             query_params: None,
             http_headers: None,
             env_http_headers: None,

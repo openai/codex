@@ -52,6 +52,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api: WireApi::Chat,
+        force_responses_api_store_reasoning_ids: None,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
