@@ -352,13 +352,13 @@ set = { CI = "1" }
 include_only = ["PATH", "HOME"]
 ```
 
-| Field                     | Type                 | Default | Description                                                                                                                                     |
-| ------------------------- | -------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inherit`                 | string               | `all`   | Starting template for the environment:<br>`all` (clone full parent env), `core` (`HOME`, `PATH`, `USER`, …), or `none` (start empty).           |
-| `ignore_default_excludes` | boolean              | `false` | When `false`, Codex removes any var whose **name** contains `KEY`, `SECRET`, or `TOKEN` (case-insensitive) before other rules run.              |
-| `exclude`                 | array<string>        | `[]`    | Case-insensitive glob patterns to drop after the default filter.<br>Examples: `"AWS_*"`, `"AZURE_*"`.                                           |
-| `set`                     | table<string,string> | `{}`    | Explicit key/value overrides or additions – always win over inherited values.                                                                   |
-| `include_only`            | array<string>        | `[]`    | If non-empty, a whitelist of patterns; only variables that match _one_ pattern survive the final step. (Generally used with `inherit = "all"`.) |
+| Field                     | Type                 | Default | Description                                                                                                                                      |
+| ------------------------- | -------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `inherit`                 | string               | `all`   | Starting template for the environment:<br>`all` (clone full parent env), `core` (`HOME`, `PATH`, `USER`, …), or `none` (start empty).            |
+| `ignore_default_excludes` | boolean              | `false` | When `false`, Codex removes any var whose **name** contains `KEY`, `SECRET`, or `TOKEN` (case-insensitive) before other rules run.               |
+| `exclude`                 | array<string>        | `[]`    | Case-insensitive glob patterns to drop after the default filter.<br>Examples: `"AWS_*"`, `"AZURE_*"`.                                            |
+| `set`                     | table<string,string> | `{}`    | Explicit key/value overrides or additions – always win over inherited values.                                                                    |
+| `include_only`            | array<string>        | `[]`    | If non-empty, an allowlist of patterns; only variables that match _one_ pattern survive the final step. (Generally used with `inherit = "all"`.) |
 
 The patterns are **glob style**, not full regular expressions: `*` matches any
 number of characters, `?` matches exactly one, and character classes like
@@ -396,13 +396,13 @@ command = "npx"
 # Optional
 args = ["-y", "mcp-server"]
 # Optional: propagate additional env vars to the MVP server.
-# A default whitelist of env vars will be propagated to the MCP server.
+# A default list of env vars which will be propagated to the MCP server.
 # https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/utils.rs#L82
 env = { "API_KEY" = "value" }
 # or
 [mcp_servers.server_name.env]
 API_KEY = "value"
-# Optional: Additional list of environment variables that will be whitelisted in the MCP server's environment.
+# Optional: Additional list of environment variables that will be passed through to the MCP server's environment.
 env_vars = ["API_KEY2"]
 
 # Optional: cwd that the command will be run from
