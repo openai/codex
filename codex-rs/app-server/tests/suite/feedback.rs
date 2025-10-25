@@ -14,8 +14,7 @@ use codex_app_server_protocol::UploadFeedbackResponse;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
-const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn upload_feedback_succeeds() -> Result<()> {
