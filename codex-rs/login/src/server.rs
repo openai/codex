@@ -15,7 +15,7 @@ use crate::pkce::generate_pkce;
 use base64::Engine;
 use chrono::Utc;
 use codex_core::auth::AuthDotJson;
-use codex_core::auth::get_auth_file;
+use codex_core::auth::save_auth;
 use codex_core::default_client::originator;
 use codex_core::token_data::TokenData;
 use codex_core::token_data::parse_id_token;
@@ -540,13 +540,6 @@ pub(crate) async fn persist_tokens_async(
     // Reuse existing synchronous logic but run it off the async runtime.
     let codex_home = codex_home.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        let auth_file = get_auth_file(&codex_home);
-        if let Some(parent) = auth_file.parent()
-            && !parent.exists()
-        {
-            std::fs::create_dir_all(parent).map_err(io::Error::other)?;
-        }
-
         let mut tokens = TokenData {
             id_token: parse_id_token(&id_token).map_err(io::Error::other)?,
             access_token,
@@ -564,7 +557,7 @@ pub(crate) async fn persist_tokens_async(
             tokens: Some(tokens),
             last_refresh: Some(Utc::now()),
         };
-        codex_core::auth::write_auth_json(&auth_file, &auth)
+        save_auth(&codex_home, &auth)
     })
     .await
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?
