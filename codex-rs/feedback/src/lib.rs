@@ -206,8 +206,8 @@ impl CodexLogSnapshot {
             (String::from("cli_version"), cli_version.to_string()),
         ]);
 
-        // Reason (freeform) – include as a short tag when tiny; keep title in message.
-        if let Some(r) = reason.filter(|r| r.len() <= 64) {
+        // Reason (freeform) – include entire note as a tag; keep title in message.
+        if let Some(r) = reason {
             tags.insert(String::from("reason"), r.to_string());
         }
 
@@ -293,7 +293,7 @@ impl CodexLogSnapshot {
             (String::from("classification"), classification.to_string()),
             (String::from("cli_version"), cli_version.to_string()),
         ]);
-        if let Some(r) = reason.filter(|r| r.len() <= 64) {
+        if let Some(r) = reason {
             tags.insert(String::from("reason"), r.to_string());
         }
 
