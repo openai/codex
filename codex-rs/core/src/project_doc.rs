@@ -14,7 +14,17 @@
 //! 3.  We do **not** walk past the Git root.
 
 use crate::config::Config;
+use crate::exec::SandboxType;
+use crate::exec_env::create_env;
+use crate::protocol::SandboxPolicy;
+use crate::sandboxing::CommandSpec;
+use crate::sandboxing::SandboxManager;
+use crate::sandboxing::SandboxTransformError;
+use crate::sandboxing::execute_env;
+use codex_utils_string::take_bytes_at_char_boundary;
 use dunce::canonicalize as normalize_path;
+use std::io;
+use std::path::Path;
 use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
 use tracing::error;
@@ -27,6 +37,8 @@ pub const LOCAL_PROJECT_DOC_FILENAME: &str = "AGENTS.override.md";
 /// When both `Config::instructions` and the project doc are present, they will
 /// be concatenated with the following separator.
 const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
+
+const INTERPOLATION_TIMEOUT_MS: u64 = 5_000;
 
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
@@ -93,8 +105,30 @@ pub async fn read_project_docs(config: &Config) -> std::io::Result<Option<String
 
         let text = String::from_utf8_lossy(&data).to_string();
         if !text.trim().is_empty() {
-            parts.push(text);
-            remaining = remaining.saturating_sub(data.len() as u64);
+            let doc_dir = p
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| config.cwd.clone());
+
+            let mut interpolated = apply_interpolations(&text, &doc_dir, config).await;
+            let budget = remaining.min(usize::MAX as u64) as usize;
+            if interpolated.len() > budget {
+                tracing::warn!(
+                    "Project doc `{}` interpolations exceed remaining budget ({} bytes) - truncating.",
+                    p.display(),
+                    budget
+                );
+                if budget == 0 {
+                    interpolated.clear();
+                } else {
+                    interpolated = take_bytes_at_char_boundary(&interpolated, budget).to_string();
+                }
+            }
+
+            if !interpolated.trim().is_empty() {
+                remaining = remaining.saturating_sub(interpolated.len() as u64);
+                parts.push(interpolated);
+            }
         }
     }
 
@@ -176,6 +210,167 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
     }
 
     Ok(found)
+}
+
+async fn apply_interpolations(text: &str, doc_dir: &Path, config: &Config) -> String {
+    if !text.contains("{!") {
+        return text.to_string();
+    }
+
+    let mut cursor = 0;
+    let mut output = String::with_capacity(text.len());
+
+    while let Some(relative_start) = text[cursor..].find("{!") {
+        let start = cursor + relative_start;
+        output.push_str(&text[cursor..start]);
+
+        let script_start = start + 2;
+        let remaining = &text[script_start..];
+        match remaining.find('}') {
+            Some(relative_end) => {
+                let end = script_start + relative_end;
+                let placeholder = &text[start..=end];
+                let script = text[script_start..end].trim();
+
+                if script.is_empty() {
+                    cursor = end + 1;
+                    continue;
+                }
+
+                match run_interpolation_script(script, doc_dir, config).await {
+                    Ok(replacement) => output.push_str(&replacement),
+                    Err(err) => {
+                        tracing::warn!(
+                            script,
+                            error = %err,
+                            "Failed to evaluate AGENTS.md interpolation"
+                        );
+                        output.push_str(placeholder);
+                    }
+                }
+
+                cursor = end + 1;
+            }
+            None => {
+                output.push_str(&text[start..]);
+                cursor = text.len();
+            }
+        }
+    }
+
+    if cursor < text.len() {
+        output.push_str(&text[cursor..]);
+    }
+
+    output
+}
+
+async fn run_interpolation_script(
+    script: &str,
+    doc_dir: &Path,
+    config: &Config,
+) -> io::Result<String> {
+    let policy = SandboxPolicy::new_read_only_policy();
+    let env = create_env(&config.shell_environment_policy);
+    let spec = CommandSpec {
+        program: "bash".to_string(),
+        args: vec!["-lc".to_string(), script.to_string()],
+        cwd: doc_dir.to_path_buf(),
+        env,
+        timeout_ms: Some(INTERPOLATION_TIMEOUT_MS),
+        with_escalated_permissions: None,
+        justification: None,
+    };
+
+    let manager = SandboxManager::new();
+    let initial = determine_sandbox_type();
+    let allow_fallback = !matches!(initial, SandboxType::None);
+    let sandbox_exe = config.codex_linux_sandbox_exe.as_ref();
+    let mut attempts: Vec<(SandboxType, Option<&PathBuf>, bool)> =
+        vec![(initial, sandbox_exe, allow_fallback)];
+
+    if allow_fallback {
+        attempts.push((SandboxType::None, None, false));
+    }
+
+    for (sandbox_type, exe, can_fallback) in attempts {
+        let exec_env = match manager.transform(&spec, &policy, sandbox_type, doc_dir, exe) {
+            Ok(env) => env,
+            Err(SandboxTransformError::MissingLinuxSandboxExecutable) if can_fallback => {
+                tracing::warn!(
+                    "codex-linux-sandbox executable missing; retrying AGENTS.md interpolation without sandbox"
+                );
+                continue;
+            }
+            Err(err) if can_fallback => {
+                tracing::warn!(
+                    error = %err,
+                    "Sandbox setup failed for AGENTS.md interpolation; retrying without sandbox"
+                );
+                continue;
+            }
+            Err(err) => return Err(sandbox_error_to_io(err)),
+        };
+
+        match execute_env(&exec_env, &policy, None).await {
+            Ok(result) => {
+                if result.exit_code == 0 {
+                    let stdout = result.stdout.text;
+                    return Ok(stdout.trim_end_matches(['\n', '\r']).to_string());
+                }
+
+                if can_fallback && manager.denied(sandbox_type, &result) {
+                    tracing::warn!(
+                        exit_code = result.exit_code,
+                        "Sandbox denied AGENTS.md interpolation; retrying without sandbox"
+                    );
+                    continue;
+                }
+
+                let aggregated = result.aggregated_output.text;
+                let trimmed = aggregated.trim();
+                let mut message = format!("command `{script}` exited with {}", result.exit_code);
+                if !trimmed.is_empty() {
+                    message.push_str(": ");
+                    message.push_str(trimmed);
+                }
+                return Err(io::Error::other(message));
+            }
+            Err(err) if can_fallback => {
+                tracing::warn!(
+                    error = %err,
+                    "Sandbox execution failed for AGENTS.md interpolation; retrying without sandbox"
+                );
+                continue;
+            }
+            Err(err) => {
+                return Err(io::Error::other(err.to_string()));
+            }
+        }
+    }
+
+    Err(io::Error::other(format!(
+        "command `{script}` failed to execute"
+    )))
+}
+
+#[cfg(target_os = "macos")]
+fn determine_sandbox_type() -> SandboxType {
+    SandboxType::MacosSeatbelt
+}
+
+#[cfg(target_os = "linux")]
+fn determine_sandbox_type() -> SandboxType {
+    SandboxType::LinuxSeccomp
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn determine_sandbox_type() -> SandboxType {
+    SandboxType::None
+}
+
+fn sandbox_error_to_io(err: SandboxTransformError) -> io::Error {
+    io::Error::other(err.to_string())
 }
 
 fn candidate_filenames<'a>(config: &'a Config) -> Vec<&'a str> {
@@ -446,5 +641,47 @@ mod tests {
                 .to_string_lossy()
                 .eq(DEFAULT_PROJECT_DOC_FILENAME)
         );
+    }
+
+    #[tokio::test]
+    async fn interpolates_commands_in_project_doc() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("data.txt"), "alpha\n").unwrap();
+        fs::write(tmp.path().join("AGENTS.md"), "value: {!cat data.txt}").unwrap();
+
+        let res = get_user_instructions(&make_config(&tmp, 4096, None))
+            .await
+            .expect("doc expected");
+
+        assert_eq!(res, "value: alpha");
+    }
+
+    #[tokio::test]
+    async fn leaves_placeholder_when_command_fails() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("AGENTS.md"), "value: {!exit 42}").unwrap();
+
+        let res = get_user_instructions(&make_config(&tmp, 4096, None))
+            .await
+            .expect("doc expected");
+
+        assert_eq!(res, "value: {!exit 42}");
+    }
+
+    #[tokio::test]
+    async fn interpolation_uses_doc_directory() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        let nested = repo.path().join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        fs::write(nested.join("info.txt"), "nested\n").unwrap();
+        fs::write(nested.join("AGENTS.md"), "{!cat info.txt}").unwrap();
+
+        let mut cfg = make_config(&repo, 4096, None);
+        cfg.cwd = nested.clone();
+
+        let res = get_user_instructions(&cfg).await.expect("doc expected");
+
+        assert_eq!(res, "nested");
     }
 }
