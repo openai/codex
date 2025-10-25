@@ -154,6 +154,8 @@ async fn run_compact_task_inner(
     let initial_context = sess.build_initial_context(turn_context.as_ref());
     let new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
     sess.replace_history(new_history).await;
+    sess.reset_last_token_usage().await;
+    sess.send_token_count_event(turn_context.as_ref()).await;
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {
         message: summary_text.clone(),
