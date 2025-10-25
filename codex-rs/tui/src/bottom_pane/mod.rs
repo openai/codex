@@ -28,6 +28,7 @@ mod list_selection_view;
 mod prompt_args;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
+pub(crate) use feedback_view::feedback_selection_params;
 mod paste_burst;
 pub mod popup_consts;
 mod scroll_state;
