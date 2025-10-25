@@ -14,11 +14,14 @@ use super::SelectionAction;
 use super::SelectionItem;
 use super::SelectionViewParams;
 
+#[allow(dead_code)]
 const BASE_ISSUE_URL: &str = "https://github.com/openai/codex/issues/new?template=2-bug-report.yml";
 
+#[allow(dead_code)]
 pub(crate) struct FeedbackView;
 
 impl FeedbackView {
+    #[allow(dead_code)]
     pub fn show(
         bottom_pane: &mut BottomPane,
         file_path: PathBuf,
@@ -27,6 +30,7 @@ impl FeedbackView {
         bottom_pane.show_selection_view(Self::selection_params(file_path, snapshot));
     }
 
+    #[allow(dead_code)]
     fn selection_params(
         file_path: PathBuf,
         snapshot: codex_feedback::CodexLogSnapshot,
@@ -110,15 +114,18 @@ impl FeedbackView {
     }
 }
 
+#[allow(dead_code)]
 struct FeedbackHeader {
     file_path: PathBuf,
 }
 
 impl FeedbackHeader {
+    #[allow(dead_code)]
     fn new(file_path: PathBuf) -> Self {
         Self { file_path }
     }
 
+    #[allow(dead_code)]
     fn lines(&self) -> Vec<Line<'static>> {
         vec![
             Line::from("Do you want to upload logs before reporting issue?".bold()),

@@ -210,6 +210,95 @@ impl CodexLogSnapshot {
 
         Ok(())
     }
+
+    /// Uploads feedback to Sentry with both the in-memory Codex logs and an optional
+    /// rollout file attached. Also records metadata such as classification,
+    /// reason (free-form note), and CLI version as Sentry tags or message.
+    pub fn upload_feedback_with_rollout(
+        &self,
+        classification: &str,
+        reason: Option<&str>,
+        cli_version: &str,
+        rollout_path: Option<&std::path::Path>,
+    ) -> Result<()> {
+        use std::collections::BTreeMap;
+        use std::fs;
+        use std::str::FromStr;
+        use std::sync::Arc;
+
+        use sentry::Client;
+        use sentry::ClientOptions;
+        use sentry::protocol::Attachment;
+        use sentry::protocol::Envelope;
+        use sentry::protocol::EnvelopeItem;
+        use sentry::protocol::Event;
+        use sentry::protocol::Level;
+        use sentry::transports::DefaultTransportFactory;
+        use sentry::types::Dsn;
+
+        // Build Sentry client
+        let client = Client::from_config(ClientOptions {
+            dsn: Some(Dsn::from_str(SENTRY_DSN).map_err(|e| anyhow!("invalid DSN: {}", e))?),
+            transport: Some(Arc::new(DefaultTransportFactory {})),
+            ..Default::default()
+        });
+
+        // Tags: thread id, classification, cli_version
+        let mut tags = BTreeMap::from([
+            (String::from("thread_id"), self.thread_id.to_string()),
+            (String::from("classification"), classification.to_string()),
+            (String::from("cli_version"), cli_version.to_string()),
+        ]);
+
+        // Reason (freeform) – prefer to include as message to be visible; also add a short tag if tiny.
+        let message = reason.map(|r| r.to_string());
+        if let Some(r) = reason.filter(|r| r.len() <= 64) {
+            tags.insert(String::from("reason"), r.to_string());
+        }
+
+        // Elevate level for error-like classifications
+        let level = match classification {
+            "bug" | "bad_result" => Level::Error,
+            _ => Level::Info,
+        };
+
+        let mut envelope = Envelope::new();
+        let event = Event {
+            level,
+            message,
+            tags,
+            ..Default::default()
+        };
+        envelope.add_item(EnvelopeItem::Event(event));
+
+        // Attachment 1: Codex logs snapshot
+        envelope.add_item(EnvelopeItem::Attachment(Attachment {
+            buffer: self.bytes.clone(),
+            filename: String::from("codex-logs.log"),
+            content_type: Some("text/plain".to_string()),
+            ty: None,
+        }));
+
+        // Attachment 2: rollout file (if provided and readable)
+        if let Some((path, data)) = rollout_path.and_then(|p| fs::read(p).ok().map(|d| (p, d))) {
+            // Name the file by suffix so users can spot it.
+            let fname = path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "rollout.jsonl".to_string());
+            envelope.add_item(EnvelopeItem::Attachment(Attachment {
+                buffer: data,
+                filename: fname,
+                content_type: Some("application/jsonl".to_string()),
+                ty: None,
+            }));
+        }
+
+        client.send_envelope(envelope);
+        client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

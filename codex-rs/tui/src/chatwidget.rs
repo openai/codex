@@ -58,6 +58,58 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+
+fn build_feedback_selection_items(
+    app_event_tx: crate::app_event_sender::AppEventSender,
+) -> Vec<crate::bottom_pane::SelectionItem> {
+    vec![
+        make_feedback_item(
+            app_event_tx.clone(),
+            "bug",
+            "Crash, error message, hang, or broken UI/behavior.",
+            crate::app_event::FeedbackCategory::Bug,
+        ),
+        make_feedback_item(
+            app_event_tx.clone(),
+            "bad result",
+            "Output was off-target, incorrect, incomplete, or unhelpful.",
+            crate::app_event::FeedbackCategory::BadResult,
+        ),
+        make_feedback_item(
+            app_event_tx.clone(),
+            "good result",
+            "Helpful, correct, high‑quality, or delightful result worth celebrating.",
+            crate::app_event::FeedbackCategory::GoodResult,
+        ),
+        make_feedback_item(
+            app_event_tx,
+            "other",
+            "Slowness, feature suggestion, UX feedback, or anything else.",
+            crate::app_event::FeedbackCategory::Other,
+        ),
+    ]
+}
+
+fn make_feedback_item(
+    app_event_tx: crate::app_event_sender::AppEventSender,
+    name: &str,
+    description: &str,
+    category: crate::app_event::FeedbackCategory,
+) -> crate::bottom_pane::SelectionItem {
+    let action: crate::bottom_pane::SelectionAction =
+        Box::new(move |sender: &crate::app_event_sender::AppEventSender| {
+            let _ = sender;
+            app_event_tx.send(crate::app_event::AppEvent::OpenFeedbackNote { category });
+        });
+
+    crate::bottom_pane::SelectionItem {
+        name: name.to_string(),
+        description: Some(description.to_string()),
+        actions: vec![action],
+        dismiss_on_select: true,
+        ..Default::default()
+    }
+}
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
@@ -276,6 +328,8 @@ pub(crate) struct ChatWidget {
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
+    // Current session rollout path (if known)
+    current_rollout_path: Option<PathBuf>,
 }
 
 struct UserMessage {
@@ -322,6 +376,7 @@ impl ChatWidget {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.conversation_id = Some(event.session_id);
+        self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
@@ -341,6 +396,20 @@ impl ChatWidget {
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn open_feedback_note(&mut self, category: crate::app_event::FeedbackCategory) {
+        // Build a fresh snapshot at the time of opening the note overlay.
+        let snapshot = self.feedback.snapshot(self.conversation_id);
+        let rollout = self.current_rollout_path.clone();
+        let view = crate::bottom_pane::FeedbackNoteView::new(
+            category,
+            snapshot,
+            rollout,
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
     }
 
     fn on_agent_message(&mut self, message: String) {
@@ -496,7 +565,7 @@ impl ChatWidget {
 
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
-                "Conversation interrupted - tell the model what to do differently".to_owned(),
+                "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_owned(),
             ));
         }
 
@@ -957,6 +1026,7 @@ impl ChatWidget {
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
+            current_rollout_path: None,
         }
     }
 
@@ -1024,6 +1094,7 @@ impl ChatWidget {
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
+            current_rollout_path: None,
         }
     }
 
@@ -1128,23 +1199,16 @@ impl ChatWidget {
         }
         match cmd {
             SlashCommand::Feedback => {
-                let snapshot = self.feedback.snapshot(self.conversation_id);
-                match snapshot.save_to_temp_file() {
-                    Ok(path) => {
-                        crate::bottom_pane::FeedbackView::show(
-                            &mut self.bottom_pane,
-                            path,
-                            snapshot,
-                        );
-                        self.request_redraw();
-                    }
-                    Err(e) => {
-                        self.add_to_history(history_cell::new_error_event(format!(
-                            "Failed to save feedback logs: {e}"
-                        )));
-                        self.request_redraw();
-                    }
-                }
+                use crate::bottom_pane::SelectionViewParams;
+                // Step 1: pick a category
+                let items = build_feedback_selection_items(self.app_event_tx.clone());
+
+                self.bottom_pane.show_selection_view(SelectionViewParams {
+                    title: Some("How was this?".to_string()),
+                    items,
+                    ..Default::default()
+                });
+                self.request_redraw();
             }
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
