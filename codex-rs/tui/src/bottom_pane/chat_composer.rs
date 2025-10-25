@@ -28,7 +28,6 @@ use super::footer::reset_mode_after_activity;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
-use crate::bottom_pane::paste_burst::FlushResult;
 use crate::bottom_pane::prompt_args::expand_custom_prompt;
 use crate::bottom_pane::prompt_args::expand_if_numeric_with_positional_args;
 use crate::bottom_pane::prompt_args::parse_slash_name;
@@ -1047,15 +1046,12 @@ impl ChatComposer {
     }
 
     fn handle_paste_burst_flush(&mut self, now: Instant) -> bool {
-        match self.paste_burst.flush_if_due(now) {
-            FlushResult::Paste(pasted) => {
-                self.handle_paste(pasted);
-                true
-            }
-            FlushResult::Typed(ch) => {
+        if let Some(text) = self.paste_burst.flush_if_due(now) {
+            // Distinguish between single-char typed input and paste based on length
+            if text.chars().count() == 1 {
                 // Mirror insert_str() behavior so popups stay in sync when a
                 // pending fast char flushes as normal typed input.
-                self.textarea.insert_str(ch.to_string().as_str());
+                self.textarea.insert_str(&text);
                 // Keep popup sync consistent with key handling: prefer slash popup; only
                 // sync file popup when slash popup is NOT active.
                 self.sync_command_popup();
@@ -1064,9 +1060,12 @@ impl ChatComposer {
                 } else {
                     self.sync_file_search_popup();
                 }
-                true
+            } else {
+                self.handle_paste(text);
             }
-            FlushResult::None => false,
+            true
+        } else {
+            false
         }
     }
 
