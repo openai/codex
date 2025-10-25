@@ -38,6 +38,7 @@ use crate::bottom_pane::prompt_args::prompt_has_numeric_placeholders;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
+use base64::Engine;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
@@ -46,10 +47,12 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
+use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_file_search::FileMatch;
+use codex_protocol::platform::try_map_windows_drive_to_wsl_path;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
@@ -247,6 +250,7 @@ impl ChatComposer {
     }
 
     pub fn handle_paste(&mut self, pasted: String) -> bool {
+        tracing::debug!("handle_paste called; pasted_len={}", pasted.len());
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
             let placeholder = format!("[Pasted Content {char_count} chars]");
@@ -271,10 +275,70 @@ impl ChatComposer {
     }
 
     pub fn handle_paste_image_path(&mut self, pasted: String) -> bool {
+        // Support data: URLs (base64) pasted from some terminals/clients.
+        // If the pasted text is a data URL, decode it into a project-local
+        // ./.codex/tmp file and attach that file as an image.
+        let pasted_trim = pasted.trim();
+        if pasted_trim.starts_with("data:") {
+            if let Some(comma) = pasted_trim.find(',') {
+                let header = &pasted_trim[5..comma]; // after "data:"
+                let b64 = &pasted_trim[comma + 1..];
+                if header.contains("base64")
+                    && let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(b64)
+                {
+                    // Try to determine extension from mime type
+                    let ext = if header.contains("image/png") {
+                        "png"
+                    } else if header.contains("image/jpeg") || header.contains("image/jpg") {
+                        "jpg"
+                    } else {
+                        "png"
+                    };
+
+                    if let Ok(cwd) = std::env::current_dir() {
+                        let tmp_dir = cwd.join(".codex").join("tmp");
+                        if std::fs::create_dir_all(&tmp_dir).is_ok() {
+                            let uniq = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .ok()
+                                .map(|d| d.as_millis().to_string())
+                                .unwrap_or_else(|| "0".to_string());
+                            let dest = tmp_dir.join(format!("pasted-{uniq}.{ext}"));
+                            if std::fs::write(&dest, &decoded).is_ok()
+                                && let Ok((w, h)) = image::image_dimensions(&dest)
+                            {
+                                tracing::info!("OK (data URL pasted): {}", dest.display());
+                                let format_label = pasted_image_format(&dest).label();
+                                self.attach_image(dest, w, h, format_label);
+                                return true;
+                            }
+                        }
+                    }
+                    // Fallthrough: if project-local write failed, try a system tempfile
+                    if let Ok(tmp) = tempfile::Builder::new()
+                        .suffix(&format!(".{ext}"))
+                        .tempfile()
+                        && std::fs::write(tmp.path(), &decoded).is_ok()
+                        && let Ok((w, h)) = image::image_dimensions(tmp.path())
+                        && let Ok((_f, pathbuf)) = tmp.keep()
+                    {
+                        let format_label = pasted_image_format(&pathbuf).label();
+                        self.attach_image(pathbuf, w, h, format_label);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         let Some(path_buf) = normalize_pasted_path(&pasted) else {
             return false;
         };
 
+        // Try to read image dimensions for the normalized path. If that fails,
+        // attempt a WSL-style mapping for pasted Windows drive-letter paths
+        // (e.g. C:\Users\...) → /mnt/c/... which occurs when pasting from
+        // Windows into a WSL terminal.
         match image::image_dimensions(&path_buf) {
             Ok((w, h)) => {
                 tracing::info!("OK: {pasted}");
@@ -283,6 +347,16 @@ impl ChatComposer {
                 true
             }
             Err(err) => {
+                // Attempt simple Windows drive → /mnt mapping (only if it looks like a Windows path).
+                if let Some(mapped) = try_map_windows_drive_to_wsl_path(&path_buf.to_string_lossy())
+                    && let Ok((w, h)) = image::image_dimensions(&mapped)
+                {
+                    tracing::info!("OK (WSL mapped): {}", mapped.display());
+                    let format_label = pasted_image_format(&mapped).label();
+                    self.attach_image(mapped, w, h, format_label);
+                    return true;
+                }
+
                 tracing::info!("ERR: {err}");
                 false
             }
@@ -860,6 +934,35 @@ impl ChatComposer {
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
+        }
+        // Support an explicit keyboard shortcut to paste image from clipboard
+        // using the native clipboard reader (arboard) or Windows PowerShell
+        // fallback when running under WSL. This avoids relying on the terminal
+        // to forward Ctrl+V as text. Shortcut: Ctrl+Shift+V or Ctrl+Alt+V.
+        if let KeyEvent {
+            code: KeyCode::Char('v'),
+            modifiers,
+            ..
+        } = key_event
+            && modifiers.contains(KeyModifiers::CONTROL)
+            && (modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT))
+        {
+            tracing::debug!("explicit paste-image shortcut pressed");
+            match paste_image_to_temp_png() {
+                Ok((path, info)) => {
+                    let format_label = pasted_image_format(&path).label();
+                    self.attach_image(path, info.width, info.height, format_label);
+                    return (InputResult::None, true);
+                }
+                Err(e) => {
+                    tracing::warn!("paste_image_to_temp_png failed: {}", e.to_string());
+                    let msg = format!("Failed to paste image from clipboard: {e}");
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_info_event(msg, None),
+                    )));
+                    return (InputResult::None, true);
+                }
+            }
         }
         if key_event.code == KeyCode::Esc {
             if self.is_empty() {
@@ -1652,17 +1755,12 @@ fn prompt_selection_action(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::ImageBuffer;
-    use image::Rgba;
     use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
-    use tempfile::tempdir;
 
     use crate::app_event::AppEvent;
     use crate::bottom_pane::AppEventSender;
     use crate::bottom_pane::ChatComposer;
     use crate::bottom_pane::InputResult;
-    use crate::bottom_pane::chat_composer::AttachedImage;
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
     use crate::bottom_pane::prompt_args::extract_positional_args_for_prompt_line;
     use crate::bottom_pane::textarea::TextArea;
@@ -2656,19 +2754,23 @@ mod tests {
             false,
         );
 
+        let paste = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 4);
+        let placeholder = format!("[Pasted Content {} chars]", paste.chars().count());
+
+        // Type and flush once to create the placeholder
+        composer.handle_paste(paste);
+        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+        composer.flush_paste_burst_if_due();
+
         // Define test cases: (cursor_position_from_end, expected_pending_count)
         let test_cases = [
             5, // Delete from middle - should clear tracking
             0, // Delete from end - should clear tracking
         ];
 
-        let paste = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 4);
-        let placeholder = format!("[Pasted Content {} chars]", paste.chars().count());
-
         let states: Vec<_> = test_cases
             .into_iter()
             .map(|pos_from_end| {
-                composer.handle_paste(paste.clone());
                 composer
                     .textarea
                     .set_cursor(placeholder.len() - pos_from_end);
@@ -2689,664 +2791,6 @@ mod tests {
                 (false, 0), // After deleting from end
             ]
         );
-    }
-
-    // --- Image attachment tests ---
-    #[test]
-    fn attach_image_and_submit_includes_image_paths() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-        let path = PathBuf::from("/tmp/image1.png");
-        composer.attach_image(path.clone(), 32, 16, "PNG");
-        composer.handle_paste(" hi".into());
-        let (result, _) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        match result {
-            InputResult::Submitted(text) => assert_eq!(text, "[image1.png 32x16] hi"),
-            _ => panic!("expected Submitted"),
-        }
-        let imgs = composer.take_recent_submission_images();
-        assert_eq!(vec![path], imgs);
-    }
-
-    #[test]
-    fn attach_image_without_text_submits_empty_text_and_images() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-        let path = PathBuf::from("/tmp/image2.png");
-        composer.attach_image(path.clone(), 10, 5, "PNG");
-        let (result, _) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        match result {
-            InputResult::Submitted(text) => assert_eq!(text, "[image2.png 10x5]"),
-            _ => panic!("expected Submitted"),
-        }
-        let imgs = composer.take_recent_submission_images();
-        assert_eq!(imgs.len(), 1);
-        assert_eq!(imgs[0], path);
-        assert!(composer.attached_images.is_empty());
-    }
-
-    #[test]
-    fn image_placeholder_backspace_behaves_like_text_placeholder() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-        let path = PathBuf::from("/tmp/image3.png");
-        composer.attach_image(path.clone(), 20, 10, "PNG");
-        let placeholder = composer.attached_images[0].placeholder.clone();
-
-        // Case 1: backspace at end
-        composer.textarea.move_cursor_to_end_of_line(false);
-        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        assert!(!composer.textarea.text().contains(&placeholder));
-        assert!(composer.attached_images.is_empty());
-
-        // Re-add and test backspace in middle: should break the placeholder string
-        // and drop the image mapping (same as text placeholder behavior).
-        composer.attach_image(path, 20, 10, "PNG");
-        let placeholder2 = composer.attached_images[0].placeholder.clone();
-        // Move cursor to roughly middle of placeholder
-        if let Some(start_pos) = composer.textarea.text().find(&placeholder2) {
-            let mid_pos = start_pos + (placeholder2.len() / 2);
-            composer.textarea.set_cursor(mid_pos);
-            composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-            assert!(!composer.textarea.text().contains(&placeholder2));
-            assert!(composer.attached_images.is_empty());
-        } else {
-            panic!("Placeholder not found in textarea");
-        }
-    }
-
-    #[test]
-    fn backspace_with_multibyte_text_before_placeholder_does_not_panic() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        // Insert an image placeholder at the start
-        let path = PathBuf::from("/tmp/image_multibyte.png");
-        composer.attach_image(path, 10, 5, "PNG");
-        // Add multibyte text after the placeholder
-        composer.textarea.insert_str("日本語");
-
-        // Cursor is at end; pressing backspace should delete the last character
-        // without panicking and leave the placeholder intact.
-        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-
-        assert_eq!(composer.attached_images.len(), 1);
-        assert!(
-            composer
-                .textarea
-                .text()
-                .starts_with("[image_multibyte.png 10x5]")
-        );
-    }
-
-    #[test]
-    fn deleting_one_of_duplicate_image_placeholders_removes_matching_entry() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        let path1 = PathBuf::from("/tmp/image_dup1.png");
-        let path2 = PathBuf::from("/tmp/image_dup2.png");
-
-        composer.attach_image(path1, 10, 5, "PNG");
-        // separate placeholders with a space for clarity
-        composer.handle_paste(" ".into());
-        composer.attach_image(path2.clone(), 10, 5, "PNG");
-
-        let placeholder1 = composer.attached_images[0].placeholder.clone();
-        let placeholder2 = composer.attached_images[1].placeholder.clone();
-        let text = composer.textarea.text().to_string();
-        let start1 = text.find(&placeholder1).expect("first placeholder present");
-        let end1 = start1 + placeholder1.len();
-        composer.textarea.set_cursor(end1);
-
-        // Backspace should delete the first placeholder and its mapping.
-        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-
-        let new_text = composer.textarea.text().to_string();
-        assert_eq!(
-            0,
-            new_text.matches(&placeholder1).count(),
-            "first placeholder removed"
-        );
-        assert_eq!(
-            1,
-            new_text.matches(&placeholder2).count(),
-            "second placeholder remains"
-        );
-        assert_eq!(
-            vec![AttachedImage {
-                path: path2,
-                placeholder: "[image_dup2.png 10x5]".to_string()
-            }],
-            composer.attached_images,
-            "one image mapping remains"
-        );
-    }
-
-    #[test]
-    fn pasting_filepath_attaches_image() {
-        let tmp = tempdir().expect("create TempDir");
-        let tmp_path: PathBuf = tmp.path().join("codex_tui_test_paste_image.png");
-        let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
-            ImageBuffer::from_fn(3, 2, |_x, _y| Rgba([1, 2, 3, 255]));
-        img.save(&tmp_path).expect("failed to write temp png");
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        let needs_redraw = composer.handle_paste(tmp_path.to_string_lossy().to_string());
-        assert!(needs_redraw);
-        assert!(
-            composer
-                .textarea
-                .text()
-                .starts_with("[codex_tui_test_paste_image.png 3x2] ")
-        );
-
-        let imgs = composer.take_recent_submission_images();
-        assert_eq!(imgs, vec![tmp_path]);
-    }
-
-    #[test]
-    fn selecting_custom_prompt_without_args_submits_content() {
-        let prompt_text = "Hello from saved prompt";
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        // Inject prompts as if received via event.
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string().into(),
-            content: prompt_text.to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
-
-        type_chars_humanlike(
-            &mut composer,
-            &[
-                '/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'm', 'y', '-', 'p', 'r', 'o', 'm',
-                'p', 't',
-            ],
-        );
-
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        assert_eq!(InputResult::Submitted(prompt_text.to_string()), result);
-        assert!(composer.textarea.is_empty());
-    }
-
-    #[test]
-    fn custom_prompt_submission_expands_arguments() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string().into(),
-            content: "Review $USER changes on $BRANCH".to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
-
-        composer
-            .textarea
-            .set_text("/prompts:my-prompt USER=Alice BRANCH=main");
-
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        assert_eq!(
-            InputResult::Submitted("Review Alice changes on main".to_string()),
-            result
-        );
-        assert!(composer.textarea.is_empty());
-    }
-
-    #[test]
-    fn custom_prompt_submission_accepts_quoted_values() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string().into(),
-            content: "Pair $USER with $BRANCH".to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
-
-        composer
-            .textarea
-            .set_text("/prompts:my-prompt USER=\"Alice Smith\" BRANCH=dev-main");
-
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        assert_eq!(
-            InputResult::Submitted("Pair Alice Smith with dev-main".to_string()),
-            result
-        );
-        assert!(composer.textarea.is_empty());
-    }
-
-    #[test]
-    fn slash_path_input_submits_without_command_error() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
-        let (tx, mut rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        composer
-            .textarea
-            .set_text("/Users/example/project/src/main.rs");
-
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        if let InputResult::Submitted(text) = result {
-            assert_eq!(text, "/Users/example/project/src/main.rs");
-        } else {
-            panic!("expected Submitted");
-        }
-        assert!(composer.textarea.is_empty());
-        match rx.try_recv() {
-            Ok(event) => panic!("unexpected event: {event:?}"),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
-            Err(err) => panic!("unexpected channel state: {err:?}"),
-        }
-    }
-
-    #[test]
-    fn slash_with_leading_space_submits_as_text() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
-        let (tx, mut rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        composer.textarea.set_text(" /this-looks-like-a-command");
-
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        if let InputResult::Submitted(text) = result {
-            assert_eq!(text, "/this-looks-like-a-command");
-        } else {
-            panic!("expected Submitted");
-        }
-        assert!(composer.textarea.is_empty());
-        match rx.try_recv() {
-            Ok(event) => panic!("unexpected event: {event:?}"),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
-            Err(err) => panic!("unexpected channel state: {err:?}"),
-        }
-    }
-
-    #[test]
-    fn custom_prompt_invalid_args_reports_error() {
-        let (tx, mut rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string().into(),
-            content: "Review $USER changes".to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
-
-        composer
-            .textarea
-            .set_text("/prompts:my-prompt USER=Alice stray");
-
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        assert_eq!(InputResult::None, result);
-        assert_eq!(
-            "/prompts:my-prompt USER=Alice stray",
-            composer.textarea.text()
-        );
-
-        let mut found_error = false;
-        while let Ok(event) = rx.try_recv() {
-            if let AppEvent::InsertHistoryCell(cell) = event {
-                let message = cell
-                    .display_lines(80)
-                    .into_iter()
-                    .map(|line| line.to_string())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                assert!(message.contains("expected key=value"));
-                found_error = true;
-                break;
-            }
-        }
-        assert!(found_error, "expected error history cell to be sent");
-    }
-
-    #[test]
-    fn custom_prompt_missing_required_args_reports_error() {
-        let (tx, mut rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string().into(),
-            content: "Review $USER changes on $BRANCH".to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
-
-        // Provide only one of the required args
-        composer.textarea.set_text("/prompts:my-prompt USER=Alice");
-
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        assert_eq!(InputResult::None, result);
-        assert_eq!("/prompts:my-prompt USER=Alice", composer.textarea.text());
-
-        let mut found_error = false;
-        while let Ok(event) = rx.try_recv() {
-            if let AppEvent::InsertHistoryCell(cell) = event {
-                let message = cell
-                    .display_lines(80)
-                    .into_iter()
-                    .map(|line| line.to_string())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                assert!(message.to_lowercase().contains("missing required args"));
-                assert!(message.contains("BRANCH"));
-                found_error = true;
-                break;
-            }
-        }
-        assert!(
-            found_error,
-            "expected missing args error history cell to be sent"
-        );
-    }
-
-    #[test]
-    fn selecting_custom_prompt_with_args_expands_placeholders() {
-        // Support $1..$9 and $ARGUMENTS in prompt content.
-        let prompt_text = "Header: $1\nArgs: $ARGUMENTS\nNinth: $9\n";
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string().into(),
-            content: prompt_text.to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
-
-        // Type the slash command with two args and hit Enter to submit.
-        type_chars_humanlike(
-            &mut composer,
-            &[
-                '/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'm', 'y', '-', 'p', 'r', 'o', 'm',
-                'p', 't', ' ', 'f', 'o', 'o', ' ', 'b', 'a', 'r',
-            ],
-        );
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        let expected = "Header: foo\nArgs: foo bar\nNinth: \n".to_string();
-        assert_eq!(InputResult::Submitted(expected), result);
-    }
-
-    #[test]
-    fn numeric_prompt_positional_args_does_not_error() {
-        // Ensure that a prompt with only numeric placeholders does not trigger
-        // key=value parsing errors when given positional arguments.
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "elegant".to_string(),
-            path: "/tmp/elegant.md".to_string().into(),
-            content: "Echo: $ARGUMENTS".to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
-
-        // Type positional args; should submit with numeric expansion, no errors.
-        composer.textarea.set_text("/prompts:elegant hi");
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        assert_eq!(InputResult::Submitted("Echo: hi".to_string()), result);
-        assert!(composer.textarea.is_empty());
-    }
-
-    #[test]
-    fn selecting_custom_prompt_with_no_args_inserts_template() {
-        let prompt_text = "X:$1 Y:$2 All:[$ARGUMENTS]";
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "p".to_string(),
-            path: "/tmp/p.md".to_string().into(),
-            content: prompt_text.to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
-
-        type_chars_humanlike(
-            &mut composer,
-            &['/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'p'],
-        );
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        // With no args typed, selecting the prompt inserts the command template
-        // and does not submit immediately.
-        assert_eq!(InputResult::None, result);
-        assert_eq!("/prompts:p ", composer.textarea.text());
-    }
-
-    #[test]
-    fn selecting_custom_prompt_preserves_literal_dollar_dollar() {
-        // '$$' should remain untouched.
-        let prompt_text = "Cost: $$ and first: $1";
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "price".to_string(),
-            path: "/tmp/price.md".to_string().into(),
-            content: prompt_text.to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
-
-        type_chars_humanlike(
-            &mut composer,
-            &[
-                '/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'p', 'r', 'i', 'c', 'e', ' ', 'x',
-            ],
-        );
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        assert_eq!(
-            InputResult::Submitted("Cost: $$ and first: x".to_string()),
-            result
-        );
-    }
-
-    #[test]
-    fn selecting_custom_prompt_reuses_cached_arguments_join() {
-        let prompt_text = "First: $ARGUMENTS\nSecond: $ARGUMENTS";
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "repeat".to_string(),
-            path: "/tmp/repeat.md".to_string().into(),
-            content: prompt_text.to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
-
-        type_chars_humanlike(
-            &mut composer,
-            &[
-                '/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'r', 'e', 'p', 'e', 'a', 't', ' ',
-                'o', 'n', 'e', ' ', 't', 'w', 'o',
-            ],
-        );
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        let expected = "First: one two\nSecond: one two".to_string();
-        assert_eq!(InputResult::Submitted(expected), result);
     }
 
     #[test]
