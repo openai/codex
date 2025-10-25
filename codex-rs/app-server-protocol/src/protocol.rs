@@ -885,6 +885,8 @@ pub struct FuzzyFileSearchResult {
     pub score: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indices: Option<Vec<u32>>,
+    #[serde(default)]
+    pub is_directory: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
