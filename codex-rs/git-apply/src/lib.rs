@@ -346,6 +346,16 @@ pub fn parse_git_apply_output(
             }
             continue;
         }
+        if let Some(path) = extract_conflict_path(line) {
+            add(&mut conflicted, path.as_str());
+            let p = conflicted.iter().next_back().cloned();
+            if let Some(p) = p {
+                applied.remove(&p);
+                skipped.remove(&p);
+                last_seen_path = Some(p);
+            }
+            continue;
+        }
         if let Some(c) = APPLIED_CONFLICTS.captures(line) {
             if let Some(m) = c.name("path") {
                 add(&mut conflicted, m.as_str());
@@ -471,6 +481,43 @@ pub fn parse_git_apply_output(
 
 fn regex_ci(pat: &str) -> Regex {
     Regex::new(&format!("(?i){pat}")).unwrap_or_else(|e| panic!("invalid regex: {e}"))
+}
+
+fn extract_conflict_path(line: &str) -> Option<String> {
+    if !line.starts_with("CONFLICT (") {
+        return None;
+    }
+
+    let (_, rest) = line.split_once(':')?;
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return None;
+    }
+
+    if let Some(path) = rest.strip_prefix("Merge conflict in ") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    const MARKERS: [&str; 5] = [
+        " deleted in ",
+        " added in ",
+        " modified in ",
+        " renamed in ",
+        " rename of ",
+    ];
+    for marker in MARKERS {
+        if let Some((path, _)) = rest.split_once(marker) {
+            let trimmed = path.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -694,5 +741,26 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
             !r2.cmd_for_log.contains("--check"),
             "non-preflight path should not use --check"
         );
+    }
+
+    #[test]
+    fn parse_rebase_conflict_output_marks_conflicted_paths() {
+        let stderr = "Applying: some change\nerror: could not apply 1234567 some change\nCONFLICT (content): Merge conflict in src/lib.rs\nhint: after resolving the conflicts, mark the corrected paths\n";
+        let (applied, skipped, conflicted) = parse_git_apply_output("", stderr);
+
+        assert!(applied.is_empty(), "unexpected applied paths: {applied:?}");
+        assert!(skipped.is_empty(), "unexpected skipped paths: {skipped:?}");
+        assert_eq!(conflicted, vec!["src/lib.rs".to_string()]);
+    }
+
+    #[test]
+    fn parse_modify_delete_conflict() {
+        let stderr =
+            "CONFLICT (modify/delete): src/foo.rs deleted in HEAD and modified in abc123\n";
+        let (applied, skipped, conflicted) = parse_git_apply_output("", stderr);
+
+        assert!(applied.is_empty(), "unexpected applied paths: {applied:?}");
+        assert!(skipped.is_empty(), "unexpected skipped paths: {skipped:?}");
+        assert_eq!(conflicted, vec!["src/foo.rs".to_string()]);
     }
 }
