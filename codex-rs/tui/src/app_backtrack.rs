@@ -411,6 +411,18 @@ mod tests {
     use ratatui::prelude::Line;
     use std::sync::Arc;
 
+    fn lines_to_strings(lines: &[Line<'static>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
     #[test]
     fn trim_transcript_for_first_user_drops_user_and_newer_cells() {
         let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
@@ -445,12 +457,7 @@ mod tests {
             .expect("agent cell");
         let agent_lines = agent.display_lines(u16::MAX);
         assert_eq!(agent_lines.len(), 1);
-        let intro_text: String = agent_lines[0]
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-        assert_eq!(intro_text, "• intro");
+        assert_eq!(lines_to_strings(&agent_lines), vec!["• intro".to_string()]);
     }
 
     #[test]
@@ -477,12 +484,7 @@ mod tests {
             .downcast_ref::<AgentMessageCell>()
             .expect("intro agent");
         let intro_lines = agent_intro.display_lines(u16::MAX);
-        let intro_text: String = intro_lines[0]
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-        assert_eq!(intro_text, "• intro");
+        assert_eq!(lines_to_strings(&intro_lines), vec!["• intro".to_string()]);
 
         let user_first = cells[1]
             .as_any()
@@ -495,11 +497,9 @@ mod tests {
             .downcast_ref::<AgentMessageCell>()
             .expect("between agent");
         let between_lines = agent_between.display_lines(u16::MAX);
-        let between_text: String = between_lines[0]
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-        assert_eq!(between_text, "  between");
+        assert_eq!(
+            lines_to_strings(&between_lines),
+            vec!["  between".to_string()]
+        );
     }
 }

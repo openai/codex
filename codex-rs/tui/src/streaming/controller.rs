@@ -188,17 +188,49 @@ mod tests {
             lines.extend(cell.transcript_lines(u16::MAX));
         }
 
+        // Full render of the same source
+        let source: String = deltas.iter().copied().collect();
+        let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
+        crate::markdown::append_markdown(&source, None, &mut rendered);
+        let rendered_strs = lines_to_plain_strings(&rendered);
+
         let streamed: Vec<_> = lines_to_plain_strings(&lines)
             .into_iter()
             // skip • and 2-space indentation
             .map(|s| s.chars().skip(2).collect::<String>())
             .collect();
 
-        // Full render of the same source
-        let source: String = deltas.iter().copied().collect();
-        let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
-        crate::markdown::append_markdown(&source, None, &mut rendered);
-        let rendered_strs = lines_to_plain_strings(&rendered);
+        // Collapse padding blanks inserted by message theming.
+        let mut collapsed: Vec<String> = Vec::with_capacity(streamed.len());
+        for entry in streamed.into_iter() {
+            if entry.is_empty() && collapsed.last().is_some_and(std::string::String::is_empty) {
+                continue;
+            }
+            collapsed.push(entry);
+        }
+        if collapsed.first().is_some_and(std::string::String::is_empty) {
+            collapsed.remove(0);
+        }
+        if collapsed.last().is_some_and(std::string::String::is_empty) {
+            collapsed.pop();
+        }
+
+        let mut normalized: Vec<String> = Vec::with_capacity(rendered_strs.len());
+        let mut collapsed_iter = collapsed.into_iter();
+        for expected in &rendered_strs {
+            loop {
+                let entry = collapsed_iter
+                    .next()
+                    .expect("streamed transcript ended before matching rendered output");
+                if entry.is_empty() && !expected.is_empty() {
+                    continue;
+                }
+                normalized.push(entry.clone());
+                break;
+            }
+        }
+        assert!(collapsed_iter.all(|entry| entry.is_empty()));
+        let streamed = normalized;
 
         assert_eq!(streamed, rendered_strs);
 

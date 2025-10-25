@@ -9,6 +9,7 @@ use codex_file_search::FileMatch;
 use crate::bottom_pane::ApprovalRequest;
 use crate::history_cell::HistoryCell;
 
+use codex_core::config_types::ThemeMode;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort;
@@ -83,6 +84,12 @@ pub(crate) enum AppEvent {
 
     /// Persist the acknowledgement flag for the full access warning prompt.
     PersistFullAccessWarningAcknowledged,
+
+    /// Update the active theme in the running app and widget.
+    UpdateTheme(ThemeMode),
+
+    /// Persist the selected theme to the appropriate config.
+    PersistTheme(ThemeMode),
 
     /// Re-open the approval presets popup.
     OpenApprovalsPopup,

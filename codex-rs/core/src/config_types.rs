@@ -349,6 +349,11 @@ pub struct Tui {
     /// Defaults to `false`.
     #[serde(default)]
     pub notifications: Notifications,
+
+    /// Theme mode for the TUI.
+    /// Defaults to `Auto`.
+    #[serde(default)]
+    pub theme: ThemeMode,
 }
 
 /// Settings for notices we display to users via the tui and app-server clients
@@ -490,6 +495,66 @@ pub enum ReasoningSummaryFormat {
     #[default]
     None,
     Experimental,
+}
+
+/// Theme configuration for the TUI
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemeMode {
+    /// Auto-detect theme based on terminal background
+    Auto,
+    /// Light theme
+    Light,
+    /// Dark theme
+    Dark,
+    /// Catppuccin Mocha - soft purple-blue dark theme
+    CatppuccinMocha,
+    /// Gruvbox Dark - warm dark gray theme
+    GruvboxDark,
+    /// Nord - comfortable deep blue-gray theme
+    Nord,
+    /// Solarized Dark - classic deep cyan theme
+    SolarizedDark,
+    /// Solarized Light - warm beige light theme
+    SolarizedLight,
+    /// Dracula - classic purple theme
+    Dracula,
+    /// Custom theme with user-defined colors
+    Custom(CustomThemeColors),
+}
+
+impl Default for ThemeMode {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+/// Custom color scheme for the TUI
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+pub struct CustomThemeColors {
+    /// Background color for user messages (RGB)
+    #[serde(default)]
+    pub user_message_bg: Option<(u8, u8, u8)>,
+
+    /// Background color for assistant messages (RGB)
+    #[serde(default)]
+    pub assistant_message_bg: Option<(u8, u8, u8)>,
+
+    /// Primary accent color (RGB)
+    #[serde(default)]
+    pub accent: Option<(u8, u8, u8)>,
+
+    /// Secondary color (RGB)
+    #[serde(default)]
+    pub secondary: Option<(u8, u8, u8)>,
+
+    /// Text color for highlighted content (RGB)
+    #[serde(default)]
+    pub highlight: Option<(u8, u8, u8)>,
+
+    /// Dimmed text color (RGB)
+    #[serde(default)]
+    pub dim: Option<(u8, u8, u8)>,
 }
 
 #[cfg(test)]
