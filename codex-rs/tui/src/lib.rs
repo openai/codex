@@ -391,11 +391,13 @@ async fn run_ratatui_app(
             }
         }
     } else if cli.resume_last {
+        let provider_filter = vec![String::from("openai")];
         match RolloutRecorder::list_conversations(
             &config.codex_home,
             1,
             None,
             INTERACTIVE_SESSION_SOURCES,
+            Some(provider_filter.as_slice()),
         )
         .await
         {

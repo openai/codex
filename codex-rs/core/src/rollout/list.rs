@@ -54,6 +54,7 @@ struct HeadTailSummary {
     saw_session_meta: bool,
     saw_user_event: bool,
     source: Option<SessionSource>,
+    model_provider: Option<String>,
     created_at: Option<String>,
     updated_at: Option<String>,
 }
@@ -109,6 +110,7 @@ pub(crate) async fn get_conversations(
     page_size: usize,
     cursor: Option<&Cursor>,
     allowed_sources: &[SessionSource],
+    model_providers: Option<&[String]>,
 ) -> io::Result<ConversationsPage> {
     let mut root = codex_home.to_path_buf();
     root.push(SESSIONS_SUBDIR);
@@ -124,8 +126,14 @@ pub(crate) async fn get_conversations(
 
     let anchor = cursor.cloned();
 
-    let result =
-        traverse_directories_for_paths(root.clone(), page_size, anchor, allowed_sources).await?;
+    let result = traverse_directories_for_paths(
+        root.clone(),
+        page_size,
+        anchor,
+        allowed_sources,
+        model_providers,
+    )
+    .await?;
     Ok(result)
 }
 
@@ -145,6 +153,7 @@ async fn traverse_directories_for_paths(
     page_size: usize,
     anchor: Option<Cursor>,
     allowed_sources: &[SessionSource],
+    model_providers: Option<&[String]>,
 ) -> io::Result<ConversationsPage> {
     let mut items: Vec<ConversationItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
@@ -205,6 +214,12 @@ async fn traverse_directories_for_paths(
                         && !summary
                             .source
                             .is_some_and(|source| allowed_sources.iter().any(|s| s == &source))
+                    {
+                        continue;
+                    }
+                    if let Some(filters) = model_providers
+                        && !filters.is_empty()
+                        && !provider_matches(filters, summary.model_provider.as_deref())
                     {
                         continue;
                     }
@@ -328,6 +343,17 @@ fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uui
     Some((ts, uuid))
 }
 
+fn provider_matches(filters: &[String], session_provider: Option<&str>) -> bool {
+    if filters.is_empty() {
+        return true;
+    }
+    let has_openai = filters.iter().any(|provider| provider == "openai");
+    match session_provider {
+        Some(provider) => filters.iter().any(|candidate| candidate == provider),
+        None => has_openai,
+    }
+}
+
 async fn read_head_and_tail(
     path: &Path,
     head_limit: usize,
@@ -354,6 +380,7 @@ async fn read_head_and_tail(
         match rollout_line.item {
             RolloutItem::SessionMeta(session_meta_line) => {
                 summary.source = Some(session_meta_line.meta.source);
+                summary.model_provider = session_meta_line.meta.model_provider.clone();
                 summary.created_at = summary
                     .created_at
                     .clone()

@@ -389,8 +389,15 @@ async fn resolve_resume_path(
     args: &crate::cli::ResumeArgs,
 ) -> anyhow::Result<Option<PathBuf>> {
     if args.last {
-        match codex_core::RolloutRecorder::list_conversations(&config.codex_home, 1, None, &[])
-            .await
+        let default_provider_filter = vec!["openai".to_string()];
+        match codex_core::RolloutRecorder::list_conversations(
+            &config.codex_home,
+            1,
+            None,
+            &[],
+            Some(default_provider_filter.as_slice()),
+        )
+        .await
         {
             Ok(page) => Ok(page.items.first().map(|it| it.path.clone())),
             Err(e) => {

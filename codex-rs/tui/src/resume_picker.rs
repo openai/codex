@@ -72,11 +72,13 @@ pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<Resum
     let page_loader: PageLoader = Arc::new(move |request: PageLoadRequest| {
         let tx = loader_tx.clone();
         tokio::spawn(async move {
+            let provider_filter = vec![String::from("openai")];
             let page = RolloutRecorder::list_conversations(
                 &request.codex_home,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
                 INTERACTIVE_SESSION_SOURCES,
+                Some(provider_filter.as_slice()),
             )
             .await;
             let _ = tx.send(BackgroundEvent::PageLoaded {
@@ -324,11 +326,13 @@ impl PickerState {
     }
 
     async fn load_initial_page(&mut self) -> Result<()> {
+        let provider_filter = vec![String::from("openai")];
         let page = RolloutRecorder::list_conversations(
             &self.codex_home,
             PAGE_SIZE,
             None,
             INTERACTIVE_SESSION_SOURCES,
+            Some(provider_filter.as_slice()),
         )
         .await?;
         self.reset_pagination();

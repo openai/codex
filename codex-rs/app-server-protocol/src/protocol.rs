@@ -314,6 +314,9 @@ pub struct ListConversationsParams {
     /// Opaque pagination cursor returned by a previous call.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
+    /// Optional model provider filter (matches against session metadata).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -325,6 +328,9 @@ pub struct ConversationSummary {
     /// RFC3339 timestamp string for the session start, if available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
+    /// Optional model provider recorded for the session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

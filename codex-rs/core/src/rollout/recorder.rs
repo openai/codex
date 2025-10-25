@@ -97,8 +97,16 @@ impl RolloutRecorder {
         page_size: usize,
         cursor: Option<&Cursor>,
         allowed_sources: &[SessionSource],
+        model_providers: Option<&[String]>,
     ) -> std::io::Result<ConversationsPage> {
-        get_conversations(codex_home, page_size, cursor, allowed_sources).await
+        get_conversations(
+            codex_home,
+            page_size,
+            cursor,
+            allowed_sources,
+            model_providers,
+        )
+        .await
     }
 
     /// Attempt to create a new [`RolloutRecorder`]. If the sessions directory
@@ -137,6 +145,7 @@ impl RolloutRecorder {
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         instructions,
                         source,
+                        model_provider: Some(config.model_provider_id.clone()),
                     }),
                 )
             }
