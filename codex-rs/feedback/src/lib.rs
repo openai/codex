@@ -12,7 +12,7 @@ use anyhow::anyhow;
 use codex_protocol::ConversationId;
 use tracing_subscriber::fmt::writer::MakeWriter;
 
-const DEFAULT_MAX_BYTES: usize = 2 * 1024 * 1024; // 2 MiB
+const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
 const SENTRY_DSN: &str =
     "https://ae32ed50620d7a7792c1ce5df38b3e3e@o33249.ingest.us.sentry.io/4510195390611458";
 const UPLOAD_TIMEOUT_SECS: u64 = 10;
@@ -167,8 +167,18 @@ impl CodexLogSnapshot {
         Ok(path)
     }
 
-    pub fn upload_to_sentry(&self) -> Result<()> {
+    /// Uploads feedback to Sentry with both the in-memory Codex logs and an optional
+    /// rollout file attached. Also records metadata such as classification,
+    /// reason (free-form note), and CLI version as Sentry tags or message.
+    pub fn upload_feedback_with_rollout(
+        &self,
+        classification: &str,
+        reason: Option<&str>,
+        cli_version: &str,
+        rollout_path: Option<&std::path::Path>,
+    ) -> Result<()> {
         use std::collections::BTreeMap;
+        use std::fs;
         use std::str::FromStr;
         use std::sync::Arc;
 
@@ -182,22 +192,47 @@ impl CodexLogSnapshot {
         use sentry::transports::DefaultTransportFactory;
         use sentry::types::Dsn;
 
+        // Build Sentry client
         let client = Client::from_config(ClientOptions {
             dsn: Some(Dsn::from_str(SENTRY_DSN).map_err(|e| anyhow!("invalid DSN: {}", e))?),
             transport: Some(Arc::new(DefaultTransportFactory {})),
             ..Default::default()
         });
 
-        let tags = BTreeMap::from([(String::from("thread_id"), self.thread_id.to_string())]);
+        // Tags: thread id, classification, cli_version
+        let mut tags = BTreeMap::from([
+            (String::from("thread_id"), self.thread_id.to_string()),
+            (String::from("classification"), classification.to_string()),
+            (String::from("cli_version"), cli_version.to_string()),
+        ]);
 
+        // Reason (freeform) – include entire note as a tag; keep title in message.
+        if let Some(r) = reason {
+            tags.insert(String::from("reason"), r.to_string());
+        }
+
+        // Elevate level for error-like classifications
+        let level = match classification {
+            "bug" | "bad_result" => Level::Error,
+            _ => Level::Info,
+        };
+
+        let mut envelope = Envelope::new();
+        // Title is the message in Sentry: "[Classification]: Codex session <thread_id>"
+        let title = format!(
+            "[{}]: Codex session {}",
+            display_classification(classification),
+            self.thread_id
+        );
         let event = Event {
-            level: Level::Error,
-            message: Some("Codex Log Upload ".to_string() + &self.thread_id),
+            level,
+            message: Some(title),
             tags,
             ..Default::default()
         };
-        let mut envelope = Envelope::new();
         envelope.add_item(EnvelopeItem::Event(event));
+
+        // Attachment 1: Codex logs snapshot
         envelope.add_item(EnvelopeItem::Attachment(Attachment {
             buffer: self.bytes.clone(),
             filename: String::from("codex-logs.log"),
@@ -205,10 +240,95 @@ impl CodexLogSnapshot {
             ty: None,
         }));
 
+        // Attachment 2: rollout file (if provided and readable)
+        if let Some((path, data)) = rollout_path.and_then(|p| fs::read(p).ok().map(|d| (p, d))) {
+            // Name the file by suffix so users can spot it.
+            let fname = path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "rollout.jsonl".to_string());
+            envelope.add_item(EnvelopeItem::Attachment(Attachment {
+                buffer: data,
+                filename: fname,
+                content_type: Some("application/jsonl".to_string()),
+                ty: None,
+            }));
+        }
+
         client.send_envelope(envelope);
         client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
 
         Ok(())
+    }
+
+    /// Upload a metadata-only feedback event (no attachments). Includes classification,
+    /// optional reason, CLI version and thread ID as tags.
+    pub fn upload_feedback_metadata_only(
+        &self,
+        classification: &str,
+        reason: Option<&str>,
+        cli_version: &str,
+    ) -> Result<()> {
+        use std::collections::BTreeMap;
+        use std::str::FromStr;
+        use std::sync::Arc;
+
+        use sentry::Client;
+        use sentry::ClientOptions;
+        use sentry::protocol::Envelope;
+        use sentry::protocol::EnvelopeItem;
+        use sentry::protocol::Event;
+        use sentry::protocol::Level;
+        use sentry::transports::DefaultTransportFactory;
+        use sentry::types::Dsn;
+
+        let client = Client::from_config(ClientOptions {
+            dsn: Some(Dsn::from_str(SENTRY_DSN).map_err(|e| anyhow!("invalid DSN: {}", e))?),
+            transport: Some(Arc::new(DefaultTransportFactory {})),
+            ..Default::default()
+        });
+
+        let mut tags = BTreeMap::from([
+            (String::from("thread_id"), self.thread_id.to_string()),
+            (String::from("classification"), classification.to_string()),
+            (String::from("cli_version"), cli_version.to_string()),
+        ]);
+        if let Some(r) = reason {
+            tags.insert(String::from("reason"), r.to_string());
+        }
+
+        let level = match classification {
+            "bug" | "bad_result" => Level::Error,
+            _ => Level::Info,
+        };
+
+        let mut envelope = Envelope::new();
+        // Title is the message in Sentry: "[Classification]: Codex session <thread_id>"
+        let title = format!(
+            "[{}]: Codex session {}",
+            display_classification(classification),
+            self.thread_id
+        );
+        let event = Event {
+            level,
+            message: Some(title),
+            tags,
+            ..Default::default()
+        };
+        envelope.add_item(EnvelopeItem::Event(event));
+
+        client.send_envelope(envelope);
+        client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
+        Ok(())
+    }
+}
+
+fn display_classification(classification: &str) -> String {
+    match classification {
+        "bug" => "Bug".to_string(),
+        "bad_result" => "Bad result".to_string(),
+        "good_result" => "Good result".to_string(),
+        _ => "Other".to_string(),
     }
 }
 
