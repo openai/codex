@@ -890,17 +890,17 @@ pub(crate) fn build_specs(
         || matches!(config.shell_type, ConfigShellToolType::Streamable);
 
     if use_unified_exec {
-        builder.push_spec(create_exec_command_tool());
-        builder.push_spec(create_write_stdin_tool());
+        builder.push_spec_with_parallel_support(create_exec_command_tool(), true);
+        builder.push_spec_with_parallel_support(create_write_stdin_tool(), true);
         builder.register_handler("exec_command", unified_exec_handler.clone());
         builder.register_handler("write_stdin", unified_exec_handler);
     }
     match &config.shell_type {
         ConfigShellToolType::Default => {
-            builder.push_spec(create_shell_tool());
+            builder.push_spec_with_parallel_support(create_shell_tool(), true);
         }
         ConfigShellToolType::Local => {
-            builder.push_spec(ToolSpec::LocalShell {});
+            builder.push_spec_with_parallel_support(ToolSpec::LocalShell {}, true);
         }
         ConfigShellToolType::Streamable => {
             // Already handled by use_unified_exec.
