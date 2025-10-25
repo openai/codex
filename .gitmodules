@@ -1,3 +1,0 @@
-[submodule "codex-rs/llmcc"]
-	path = codex-rs/llmcc
-	url = https://github.com/allenanswerzq/llmcc.git
