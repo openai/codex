@@ -31,6 +31,9 @@
     "dist"
   ],
   "sideEffects": false,
+  "dependencies": {
+    "@iarna/toml": "^2.2.5"
+  },
   "scripts": {
     "clean": "rm -rf dist",
     "build": "tsup",

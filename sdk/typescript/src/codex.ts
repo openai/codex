@@ -2,6 +2,8 @@ import { CodexOptions } from "./codexOptions";
 import { CodexExec } from "./exec";
 import { Thread } from "./thread";
 import { ThreadOptions } from "./threadOptions";
+import { ConfigOverrideStore } from "./configOverrides";
+import { McpManager } from "./mcp";
 
 /**
  * Codex is the main class for interacting with the Codex agent.
@@ -11,9 +13,16 @@ import { ThreadOptions } from "./threadOptions";
 export class Codex {
   private exec: CodexExec;
   private options: CodexOptions;
+  private readonly overrideStore: ConfigOverrideStore;
+  public readonly mcp: McpManager;
 
   constructor(options: CodexOptions = {}) {
-    this.exec = new CodexExec(options.codexPathOverride);
+    this.overrideStore = new ConfigOverrideStore();
+    this.exec = new CodexExec(options.codexPathOverride, this.overrideStore);
+    this.mcp = new McpManager({
+      codexPathOverride: options.codexPathOverride ?? null,
+      configOverrides: this.overrideStore,
+    });
     this.options = options;
   }
 

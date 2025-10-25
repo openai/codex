@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
-import path from "node:path";
 import readline from "node:readline";
-import { fileURLToPath } from "node:url";
 
 import { SandboxMode } from "./threadOptions";
+import { ConfigOverrideStore } from "./configOverrides";
+import { findCodexPath } from "./binaryPath";
 
 export type CodexExecArgs = {
   input: string;
@@ -29,8 +29,18 @@ const TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
 
 export class CodexExec {
   private executablePath: string;
-  constructor(executablePath: string | null = null) {
-    this.executablePath = executablePath || findCodexPath();
+  private readonly configOverrides: ConfigOverrideStore;
+
+  constructor(
+    executablePath: string | null = null,
+    configOverrides: ConfigOverrideStore | null = null,
+  ) {
+    this.executablePath = findCodexPath(executablePath);
+    this.configOverrides = configOverrides ?? new ConfigOverrideStore();
+  }
+
+  get overrideStore(): ConfigOverrideStore {
+    return this.configOverrides;
   }
 
   async *run(args: CodexExecArgs): AsyncGenerator<string> {
@@ -79,7 +89,9 @@ export class CodexExec {
       env.CODEX_API_KEY = args.apiKey;
     }
 
-    const child = spawn(this.executablePath, commandArgs, {
+    const finalArgs = [...this.configOverrides.toCliArgs(), ...commandArgs];
+
+    const child = spawn(this.executablePath, finalArgs, {
       env,
     });
 
@@ -141,65 +153,4 @@ export class CodexExec {
       }
     }
   }
-}
-
-const scriptFileName = fileURLToPath(import.meta.url);
-const scriptDirName = path.dirname(scriptFileName);
-
-function findCodexPath() {
-  const { platform, arch } = process;
-
-  let targetTriple = null;
-  switch (platform) {
-    case "linux":
-    case "android":
-      switch (arch) {
-        case "x64":
-          targetTriple = "x86_64-unknown-linux-musl";
-          break;
-        case "arm64":
-          targetTriple = "aarch64-unknown-linux-musl";
-          break;
-        default:
-          break;
-      }
-      break;
-    case "darwin":
-      switch (arch) {
-        case "x64":
-          targetTriple = "x86_64-apple-darwin";
-          break;
-        case "arm64":
-          targetTriple = "aarch64-apple-darwin";
-          break;
-        default:
-          break;
-      }
-      break;
-    case "win32":
-      switch (arch) {
-        case "x64":
-          targetTriple = "x86_64-pc-windows-msvc";
-          break;
-        case "arm64":
-          targetTriple = "aarch64-pc-windows-msvc";
-          break;
-        default:
-          break;
-      }
-      break;
-    default:
-      break;
-  }
-
-  if (!targetTriple) {
-    throw new Error(`Unsupported platform: ${platform} (${arch})`);
-  }
-
-  const vendorRoot = path.join(scriptDirName, "..", "vendor");
-  const archRoot = path.join(vendorRoot, targetTriple);
-  const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
-  const binaryPath = path.join(archRoot, "codex", codexBinaryName);
-
-  return binaryPath;
 }

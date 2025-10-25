@@ -30,5 +30,14 @@ export { Codex } from "./codex";
 
 export type { CodexOptions } from "./codexOptions";
 
+export type {
+  McpServerSummary,
+  McpServerDetails,
+  McpTransportSummary,
+  McpAddTransportOptions,
+  McpMutableFields,
+  EnableOnceOptions,
+} from "./mcp";
+
 export type { ThreadOptions, ApprovalMode, SandboxMode } from "./threadOptions";
 export type { TurnOptions } from "./turnOptions";
