@@ -1256,7 +1256,10 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: AddConversationListenerParams,
     ) {
-        let AddConversationListenerParams { conversation_id } = params;
+        let AddConversationListenerParams {
+            conversation_id,
+            experimental_raw_events,
+        } = params;
         let Ok(conversation) = self
             .conversation_manager
             .get_conversation(conversation_id)
@@ -1292,6 +1295,11 @@ impl CodexMessageProcessor {
                                 break;
                             }
                         };
+
+                        if let EventMsg::RawResponseItem(_) = &event.msg
+                            && !experimental_raw_events {
+                                continue;
+                            }
 
                         // For now, we send a notification for every event,
                         // JSON-serializing the `Event` as-is, but these should
@@ -1447,6 +1455,7 @@ async fn apply_bespoke_event_handling(
             command,
             cwd,
             reason,
+            risk,
             parsed_cmd,
         }) => {
             let params = ExecCommandApprovalParams {
@@ -1455,6 +1464,7 @@ async fn apply_bespoke_event_handling(
                 command,
                 cwd,
                 reason,
+                risk,
                 parsed_cmd,
             };
             let rx = outgoing
@@ -1523,6 +1533,7 @@ async fn derive_config_from_params(
         include_view_image_tool: None,
         show_raw_agent_reasoning: None,
         tools_web_search_request: None,
+        experimental_sandbox_command_assessment: None,
         additional_writable_roots: Vec::new(),
     };
 
