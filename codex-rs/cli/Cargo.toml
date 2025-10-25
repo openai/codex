@@ -33,6 +33,10 @@ codex-protocol = { workspace = true }
 codex-protocol-ts = { workspace = true }
 codex-responses-api-proxy = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-cloud-tasks-client = { path = "../cloud-tasks-client" }
+codex-backend-client = { path = "../backend-client" }
+chrono = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 codex-stdio-to-uds = { workspace = true }
 codex-tui = { workspace = true }
 ctor = { workspace = true }
@@ -46,6 +50,8 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "signal",
 ] }
+
+uuid = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

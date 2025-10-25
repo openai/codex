@@ -1,4 +1,5 @@
 use crate::types::CodeTaskDetailsResponse;
+use crate::types::EnvironmentSummary;
 use crate::types::PaginatedListTaskListItem;
 use crate::types::RateLimitStatusPayload;
 use crate::types::RateLimitWindowSnapshot;
@@ -194,6 +195,16 @@ impl Client {
         };
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         self.decode_json::<PaginatedListTaskListItem>(&url, &ct, &body)
+    }
+
+    pub async fn list_environments(&self) -> Result<Vec<EnvironmentSummary>> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/environments", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/environments", self.base_url),
+        };
+        let req = self.http.get(&url).headers(self.headers());
+        let (body, ct) = self.exec_request(req, "GET", &url).await?;
+        self.decode_json::<Vec<EnvironmentSummary>>(&url, &ct, &body)
     }
 
     pub async fn get_task_details(&self, task_id: &str) -> Result<CodeTaskDetailsResponse> {

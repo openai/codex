@@ -6,6 +6,14 @@ pub use codex_backend_openapi_models::models::RateLimitWindowSnapshot;
 pub use codex_backend_openapi_models::models::TaskListItem;
 
 use serde::Deserialize;
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct EnvironmentSummary {
+    pub id: String,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
 use serde::de::Deserializer;
 use serde_json::Value;
 use std::collections::HashMap;
