@@ -103,7 +103,10 @@ async fn test_codex_jsonrpc_conversation_flow() {
 
     // 2) addConversationListener
     let add_listener_id = mcp
-        .send_add_conversation_listener_request(AddConversationListenerParams { conversation_id })
+        .send_add_conversation_listener_request(AddConversationListenerParams {
+            conversation_id,
+            experimental_raw_events: false,
+        })
         .await
         .expect("send addConversationListener");
     let add_listener_resp: JSONRPCResponse = timeout(
@@ -252,7 +255,10 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
 
     // 2) addConversationListener
     let add_listener_id = mcp
-        .send_add_conversation_listener_request(AddConversationListenerParams { conversation_id })
+        .send_add_conversation_listener_request(AddConversationListenerParams {
+            conversation_id,
+            experimental_raw_events: false,
+        })
         .await
         .expect("send addConversationListener");
     let _: AddConversationSubscriptionResponse =
@@ -311,6 +317,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
             ],
             cwd: working_directory.clone(),
             reason: None,
+            risk: None,
             parsed_cmd: vec![ParsedCommand::Unknown {
                 cmd: "python3 -c 'print(42)'".to_string()
             }],
@@ -458,7 +465,10 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() {
         .expect("deserialize newConversation response");
 
     let add_listener_id = mcp
-        .send_add_conversation_listener_request(AddConversationListenerParams { conversation_id })
+        .send_add_conversation_listener_request(AddConversationListenerParams {
+            conversation_id,
+            experimental_raw_events: false,
+        })
         .await
         .expect("send addConversationListener");
     timeout(
