@@ -394,7 +394,7 @@ pub(crate) fn feedback_upload_consent_params(
     });
 
     let no_action: super::SelectionAction = Box::new({
-        let tx = app_event_tx.clone();
+        let tx = app_event_tx;
         move |sender: &AppEventSender| {
             let _ = sender;
             tx.send(AppEvent::OpenFeedbackNote {

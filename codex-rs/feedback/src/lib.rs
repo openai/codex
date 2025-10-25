@@ -167,50 +167,6 @@ impl CodexLogSnapshot {
         Ok(path)
     }
 
-    pub fn upload_to_sentry(&self) -> Result<()> {
-        use std::collections::BTreeMap;
-        use std::str::FromStr;
-        use std::sync::Arc;
-
-        use sentry::Client;
-        use sentry::ClientOptions;
-        use sentry::protocol::Attachment;
-        use sentry::protocol::Envelope;
-        use sentry::protocol::EnvelopeItem;
-        use sentry::protocol::Event;
-        use sentry::protocol::Level;
-        use sentry::transports::DefaultTransportFactory;
-        use sentry::types::Dsn;
-
-        let client = Client::from_config(ClientOptions {
-            dsn: Some(Dsn::from_str(SENTRY_DSN).map_err(|e| anyhow!("invalid DSN: {}", e))?),
-            transport: Some(Arc::new(DefaultTransportFactory {})),
-            ..Default::default()
-        });
-
-        let tags = BTreeMap::from([(String::from("thread_id"), self.thread_id.to_string())]);
-
-        let event = Event {
-            level: Level::Error,
-            message: Some("Codex Log Upload ".to_string() + &self.thread_id),
-            tags,
-            ..Default::default()
-        };
-        let mut envelope = Envelope::new();
-        envelope.add_item(EnvelopeItem::Event(event));
-        envelope.add_item(EnvelopeItem::Attachment(Attachment {
-            buffer: self.bytes.clone(),
-            filename: String::from("codex-logs.log"),
-            content_type: Some("text/plain".to_string()),
-            ty: None,
-        }));
-
-        client.send_envelope(envelope);
-        client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
-
-        Ok(())
-    }
-
     /// Uploads feedback to Sentry with both the in-memory Codex logs and an optional
     /// rollout file attached. Also records metadata such as classification,
     /// reason (free-form note), and CLI version as Sentry tags or message.
