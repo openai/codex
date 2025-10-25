@@ -321,6 +321,33 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unified_exec_exposes_session_id_env_var() -> anyhow::Result<()> {
+        skip_if_sandbox!(Ok(()));
+
+        let (session, turn) = test_session_and_turn();
+        let expected_session_id = session.conversation_id().to_string();
+
+        let open_shell = exec_command(&session, &turn, "bash -i", Some(2_500)).await?;
+        let session_id = open_shell.session_id.expect("expected session id");
+
+        let env_output = write_stdin(
+            &session,
+            session_id,
+            "echo $CODEX_SESSION_ID\n",
+            Some(2_500),
+        )
+        .await?;
+
+        assert!(
+            env_output.output.contains(&expected_session_id),
+            "shell output did not include session id: {}",
+            env_output.output
+        );
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn unified_exec_timeouts() -> anyhow::Result<()> {
         skip_if_sandbox!(Ok(()));

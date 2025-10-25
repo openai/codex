@@ -5,8 +5,10 @@ use std::sync::Arc;
 use crate::apply_patch;
 use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
+use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
+use crate::exec_env::CODEX_SESSION_ID_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
@@ -26,12 +28,22 @@ use crate::tools::sandboxing::ToolCtx;
 pub struct ShellHandler;
 
 impl ShellHandler {
-    fn to_exec_params(params: ShellToolCallParams, turn_context: &TurnContext) -> ExecParams {
+    fn to_exec_params(
+        params: ShellToolCallParams,
+        session: &Session,
+        turn_context: &TurnContext,
+    ) -> ExecParams {
+        let mut env = create_env(&turn_context.shell_environment_policy);
+        env.insert(
+            CODEX_SESSION_ID_ENV_VAR.to_string(),
+            session.conversation_id().to_string(),
+        );
+
         ExecParams {
             command: params.command,
             cwd: turn_context.resolve_path(params.workdir.clone()),
             timeout_ms: params.timeout_ms,
-            env: create_env(&turn_context.shell_environment_policy),
+            env,
             with_escalated_permissions: params.with_escalated_permissions,
             justification: params.justification,
             arg0: None,
@@ -70,7 +82,7 @@ impl ToolHandler for ShellHandler {
                             "failed to parse function arguments: {e:?}"
                         ))
                     })?;
-                let exec_params = Self::to_exec_params(params, turn.as_ref());
+                let exec_params = Self::to_exec_params(params, session.as_ref(), turn.as_ref());
                 Self::run_exec_like(
                     tool_name.as_str(),
                     exec_params,
@@ -82,7 +94,7 @@ impl ToolHandler for ShellHandler {
                 .await
             }
             ToolPayload::LocalShell { params } => {
-                let exec_params = Self::to_exec_params(params, turn.as_ref());
+                let exec_params = Self::to_exec_params(params, session.as_ref(), turn.as_ref());
                 Self::run_exec_like(
                     tool_name.as_str(),
                     exec_params,
@@ -104,12 +116,11 @@ impl ShellHandler {
     async fn run_exec_like(
         tool_name: &str,
         exec_params: ExecParams,
-        session: Arc<crate::codex::Session>,
+        session: Arc<Session>,
         turn: Arc<TurnContext>,
         tracker: crate::tools::context::SharedTurnDiffTracker,
         call_id: String,
     ) -> Result<ToolOutput, FunctionCallError> {
-        // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params.with_escalated_permissions.unwrap_or(false)
             && !matches!(
                 turn.approval_policy,
@@ -122,7 +133,6 @@ impl ShellHandler {
             )));
         }
 
-        // Intercept apply_patch if present.
         match codex_apply_patch::maybe_parse_apply_patch_verified(
             &exec_params.command,
             &exec_params.cwd,
@@ -132,7 +142,6 @@ impl ShellHandler {
                     .await
                 {
                     InternalApplyPatchInvocation::Output(item) => {
-                        // Programmatic apply_patch path; return its result.
                         let content = item?;
                         return Ok(ToolOutput::Function {
                             content,
@@ -191,14 +200,10 @@ impl ShellHandler {
             }
             codex_apply_patch::MaybeApplyPatchVerified::ShellParseError(error) => {
                 tracing::trace!("Failed to parse shell command, {error:?}");
-                // Fall through to regular shell execution.
             }
-            codex_apply_patch::MaybeApplyPatchVerified::NotApplyPatch => {
-                // Fall through to regular shell execution.
-            }
+            codex_apply_patch::MaybeApplyPatchVerified::NotApplyPatch => {}
         }
 
-        // Regular shell execution path.
         let emitter = ToolEmitter::shell(exec_params.command.clone(), exec_params.cwd.clone());
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         emitter.begin(event_ctx).await;
@@ -228,5 +233,33 @@ impl ShellHandler {
             content,
             success: Some(true),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codex::make_session_and_context;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn to_exec_params_includes_session_id() {
+        let (session, turn) = make_session_and_context();
+        let expected_session_id = session.conversation_id().to_string();
+
+        let params = ShellToolCallParams {
+            command: vec!["echo".to_string()],
+            workdir: None,
+            timeout_ms: None,
+            with_escalated_permissions: None,
+            justification: None,
+        };
+
+        let exec_params = ShellHandler::to_exec_params(params, &session, &turn);
+
+        assert_eq!(
+            exec_params.env.get(CODEX_SESSION_ID_ENV_VAR),
+            Some(&expected_session_id)
+        );
     }
 }

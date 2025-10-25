@@ -598,6 +598,10 @@ impl Session {
         self.tx_event.clone()
     }
 
+    pub(crate) fn conversation_id(&self) -> ConversationId {
+        self.conversation_id
+    }
+
     fn next_internal_sub_id(&self) -> String {
         let id = self
             .next_internal_sub_id

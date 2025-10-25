@@ -4,6 +4,8 @@ use crate::config_types::ShellEnvironmentPolicyInherit;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+pub const CODEX_SESSION_ID_ENV_VAR: &str = "CODEX_SESSION_ID";
+
 /// Construct an environment map based on the rules in the specified policy. The
 /// resulting map can be passed directly to `Command::envs()` after calling
 /// `env_clear()` to ensure no unintended variables are leaked to the spawned
