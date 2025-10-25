@@ -14,7 +14,10 @@ pub struct CodexConversation {
 /// in Codex.
 impl CodexConversation {
     pub(crate) fn new(codex: Codex, rollout_path: PathBuf) -> Self {
-        Self { codex, rollout_path }
+        Self {
+            codex,
+            rollout_path,
+        }
     }
 
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
