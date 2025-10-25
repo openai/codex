@@ -1448,13 +1448,11 @@ impl CodexMessageProcessor {
             None
         };
 
-        let cli_version = env!("CARGO_PKG_VERSION").to_string();
         let upload_result = tokio::task::spawn_blocking(move || {
             let rollout_path_ref = validated_rollout_path.as_deref();
             snapshot.upload_feedback(
                 &classification,
                 reason.as_deref(),
-                cli_version.as_str(),
                 include_logs,
                 rollout_path_ref,
             )
