@@ -283,51 +283,48 @@ impl ChatComposer {
             if let Some(comma) = pasted_trim.find(',') {
                 let header = &pasted_trim[5..comma]; // after "data:"
                 let b64 = &pasted_trim[comma + 1..];
-                if header.contains("base64") {
-                    if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(b64) {
-                        // Try to determine extension from mime type
-                        let ext = if header.contains("image/png") {
-                            "png"
-                        } else if header.contains("image/jpeg") || header.contains("image/jpg") {
-                            "jpg"
-                        } else {
-                            "png"
-                        };
+                if header.contains("base64")
+                    && let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(b64)
+                {
+                    // Try to determine extension from mime type
+                    let ext = if header.contains("image/png") {
+                        "png"
+                    } else if header.contains("image/jpeg") || header.contains("image/jpg") {
+                        "jpg"
+                    } else {
+                        "png"
+                    };
 
-                        if let Ok(cwd) = std::env::current_dir() {
-                            let tmp_dir = cwd.join(".codex").join("tmp");
-                            if std::fs::create_dir_all(&tmp_dir).is_ok() {
-                                let uniq = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .ok()
-                                    .map(|d| d.as_millis().to_string())
-                                    .unwrap_or_else(|| "0".to_string());
-                                let dest = tmp_dir.join(format!("pasted-{}.{}", uniq, ext));
-                                if std::fs::write(&dest, &decoded).is_ok() {
-                                    if let Ok((w, h)) = image::image_dimensions(&dest) {
-                                        tracing::info!("OK (data URL pasted): {}", dest.display());
-                                        let format_label = pasted_image_format(&dest).label();
-                                        self.attach_image(dest, w, h, format_label);
-                                        return true;
-                                    }
-                                }
+                    if let Ok(cwd) = std::env::current_dir() {
+                        let tmp_dir = cwd.join(".codex").join("tmp");
+                        if std::fs::create_dir_all(&tmp_dir).is_ok() {
+                            let uniq = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .ok()
+                                .map(|d| d.as_millis().to_string())
+                                .unwrap_or_else(|| "0".to_string());
+                            let dest = tmp_dir.join(format!("pasted-{uniq}.{ext}"));
+                            if std::fs::write(&dest, &decoded).is_ok()
+                                && let Ok((w, h)) = image::image_dimensions(&dest)
+                            {
+                                tracing::info!("OK (data URL pasted): {}", dest.display());
+                                let format_label = pasted_image_format(&dest).label();
+                                self.attach_image(dest, w, h, format_label);
+                                return true;
                             }
                         }
-                        // Fallthrough: if project-local write failed, try a system tempfile
-                        if let Ok(tmp) = tempfile::Builder::new()
-                            .suffix(&format!(".{}", ext))
-                            .tempfile()
-                        {
-                            if std::fs::write(tmp.path(), &decoded).is_ok() {
-                                if let Ok((w, h)) = image::image_dimensions(tmp.path()) {
-                                    if let Ok((_f, pathbuf)) = tmp.keep() {
-                                        let format_label = pasted_image_format(&pathbuf).label();
-                                        self.attach_image(pathbuf, w, h, format_label);
-                                        return true;
-                                    }
-                                }
-                            }
-                        }
+                    }
+                    // Fallthrough: if project-local write failed, try a system tempfile
+                    if let Ok(tmp) = tempfile::Builder::new()
+                        .suffix(&format!(".{ext}"))
+                        .tempfile()
+                        && std::fs::write(tmp.path(), &decoded).is_ok()
+                        && let Ok((w, h)) = image::image_dimensions(tmp.path())
+                        && let Ok((_f, pathbuf)) = tmp.keep()
+                    {
+                        let format_label = pasted_image_format(&pathbuf).label();
+                        self.attach_image(pathbuf, w, h, format_label);
+                        return true;
                     }
                 }
             }
@@ -352,13 +349,12 @@ impl ChatComposer {
             Err(err) => {
                 // Attempt simple Windows drive → /mnt mapping (only if it looks like a Windows path).
                 if let Some(mapped) = try_map_windows_drive_to_wsl_path(&path_buf.to_string_lossy())
+                    && let Ok((w, h)) = image::image_dimensions(&mapped)
                 {
-                    if let Ok((w, h)) = image::image_dimensions(&mapped) {
-                        tracing::info!("OK (WSL mapped): {}", mapped.display());
-                        let format_label = pasted_image_format(&mapped).label();
-                        self.attach_image(mapped, w, h, format_label);
-                        return true;
-                    }
+                    tracing::info!("OK (WSL mapped): {}", mapped.display());
+                    let format_label = pasted_image_format(&mapped).label();
+                    self.attach_image(mapped, w, h, format_label);
+                    return true;
                 }
 
                 tracing::info!("ERR: {err}");
@@ -948,26 +944,23 @@ impl ChatComposer {
             modifiers,
             ..
         } = key_event
+            && modifiers.contains(KeyModifiers::CONTROL)
+            && (modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT))
         {
-            if modifiers.contains(KeyModifiers::CONTROL)
-                && (modifiers.contains(KeyModifiers::SHIFT)
-                    || modifiers.contains(KeyModifiers::ALT))
-            {
-                tracing::debug!("explicit paste-image shortcut pressed");
-                match paste_image_to_temp_png() {
-                    Ok((path, info)) => {
-                        let format_label = pasted_image_format(&path).label();
-                        self.attach_image(path, info.width, info.height, format_label);
-                        return (InputResult::None, true);
-                    }
-                    Err(e) => {
-                        tracing::warn!("paste_image_to_temp_png failed: {}", e.to_string());
-                        let msg = format!("Failed to paste image from clipboard: {}", e);
-                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                            history_cell::new_info_event(msg, None),
-                        )));
-                        return (InputResult::None, true);
-                    }
+            tracing::debug!("explicit paste-image shortcut pressed");
+            match paste_image_to_temp_png() {
+                Ok((path, info)) => {
+                    let format_label = pasted_image_format(&path).label();
+                    self.attach_image(path, info.width, info.height, format_label);
+                    return (InputResult::None, true);
+                }
+                Err(e) => {
+                    tracing::warn!("paste_image_to_temp_png failed: {}", e.to_string());
+                    let msg = format!("Failed to paste image from clipboard: {e}");
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_info_event(msg, None),
+                    )));
+                    return (InputResult::None, true);
                 }
             }
         }
@@ -1762,17 +1755,12 @@ fn prompt_selection_action(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::ImageBuffer;
-    use image::Rgba;
     use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
-    use tempfile::tempdir;
 
     use crate::app_event::AppEvent;
     use crate::bottom_pane::AppEventSender;
     use crate::bottom_pane::ChatComposer;
     use crate::bottom_pane::InputResult;
-    use crate::bottom_pane::chat_composer::AttachedImage;
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
     use crate::bottom_pane::prompt_args::extract_positional_args_for_prompt_line;
     use crate::bottom_pane::textarea::TextArea;
@@ -2770,7 +2758,7 @@ mod tests {
         let placeholder = format!("[Pasted Content {} chars]", paste.chars().count());
 
         // Type and flush once to create the placeholder
-        composer.handle_paste(paste.clone());
+        composer.handle_paste(paste);
         std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
         composer.flush_paste_burst_if_due();
 

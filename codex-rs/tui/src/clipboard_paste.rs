@@ -135,7 +135,7 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
             let (_file, path) = tmp
                 .keep()
                 .map_err(|e| PasteImageError::IoError(e.error.to_string()))?;
-            return Ok((path, info));
+            Ok((path, info))
         }
         Err(e) => {
             // If clipboard is unavailable (common under WSL because arboard cannot access
@@ -150,67 +150,67 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
                     tracing::debug!("attempting Windows PowerShell clipboard fallback");
                     if let Some(win_path) = try_dump_windows_clipboard_image() {
                         tracing::debug!("powershell produced path: {}", win_path);
-                        if let Some(mapped_path) = try_map_windows_drive_to_wsl_path(&win_path) {
-                            if let Ok((w, h)) = image::image_dimensions(&mapped_path) {
-                                // Try to copy into a project-local ./.codex/tmp so the user
-                                // can easily find pasted images. If that fails, fall back
-                                // to a system tempfile as before.
-                                if let Ok(cwd) = std::env::current_dir() {
-                                    let tmp_dir = cwd.join(".codex").join("tmp");
-                                    if std::fs::create_dir_all(&tmp_dir).is_ok() {
-                                        let uniq = std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .ok()
-                                            .map(|d| d.as_millis().to_string())
-                                            .unwrap_or_else(|| "0".to_string());
-                                        let dest = tmp_dir.join(format!("pasted-{}.png", uniq));
-                                        if std::fs::copy(&mapped_path, &dest).is_ok() {
-                                            return Ok((
-                                                dest,
-                                                PastedImageInfo {
-                                                    width: w,
-                                                    height: h,
-                                                    encoded_format: EncodedImageFormat::Png,
-                                                },
-                                            ));
-                                        }
+                        if let Some(mapped_path) = try_map_windows_drive_to_wsl_path(&win_path)
+                            && let Ok((w, h)) = image::image_dimensions(&mapped_path)
+                        {
+                            // Try to copy into a project-local ./.codex/tmp so the user
+                            // can easily find pasted images. If that fails, fall back
+                            // to a system tempfile as before.
+                            if let Ok(cwd) = std::env::current_dir() {
+                                let tmp_dir = cwd.join(".codex").join("tmp");
+                                if std::fs::create_dir_all(&tmp_dir).is_ok() {
+                                    let uniq = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .ok()
+                                        .map(|d| d.as_millis().to_string())
+                                        .unwrap_or_else(|| "0".to_string());
+                                    let dest = tmp_dir.join(format!("pasted-{uniq}.png"));
+                                    if std::fs::copy(&mapped_path, &dest).is_ok() {
+                                        return Ok((
+                                            dest,
+                                            PastedImageInfo {
+                                                width: w,
+                                                height: h,
+                                                encoded_format: EncodedImageFormat::Png,
+                                            },
+                                        ));
                                     }
                                 }
-
-                                // Fallback to system tempfile if project-local copy failed.
-                                let tmp = Builder::new()
-                                    .prefix("codex-clipboard-")
-                                    .suffix(".png")
-                                    .tempfile()
-                                    .map_err(|e| PasteImageError::IoError(e.to_string()))?;
-                                std::fs::copy(&mapped_path, tmp.path())
-                                    .map_err(|e| PasteImageError::IoError(e.to_string()))?;
-                                let (_file, path) = tmp
-                                    .keep()
-                                    .map_err(|e| PasteImageError::IoError(e.error.to_string()))?;
-                                return Ok((
-                                    path,
-                                    PastedImageInfo {
-                                        width: w,
-                                        height: h,
-                                        encoded_format: EncodedImageFormat::Png,
-                                    },
-                                ));
                             }
+
+                            // Fallback to system tempfile if project-local copy failed.
+                            let tmp = Builder::new()
+                                .prefix("codex-clipboard-")
+                                .suffix(".png")
+                                .tempfile()
+                                .map_err(|e| PasteImageError::IoError(e.to_string()))?;
+                            std::fs::copy(&mapped_path, tmp.path())
+                                .map_err(|e| PasteImageError::IoError(e.to_string()))?;
+                            let (_file, path) = tmp
+                                .keep()
+                                .map_err(|e| PasteImageError::IoError(e.error.to_string()))?;
+                            return Ok((
+                                path,
+                                PastedImageInfo {
+                                    width: w,
+                                    height: h,
+                                    encoded_format: EncodedImageFormat::Png,
+                                },
+                            ));
                         }
                     }
                 }
                 _ => {}
             }
             // If we reach here, fall through to returning the original error.
-            return Err(e);
+            Err(e)
         }
     }
 }
 
-/// Map a Windows drive-letter path (e.g. C:\\Users\\Alice\\file.png) to a WSL path
-/// (/mnt/c/Users/Alice/file.png). Returns None if the input does not look like a
-/// drive-letter path.
+// Map a Windows drive-letter path (e.g. C:\\Users\\Alice\\file.png) to a WSL path
+// (/mnt/c/Users/Alice/file.png). Returns None if the input does not look like a
+// drive-letter path.
 // mapping delegated to `tui::platform::try_map_windows_drive_to_wsl_path`
 
 /// Try to call a Windows PowerShell command (several common names) to save the
