@@ -288,7 +288,7 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
                             path,
                             ApplyPatchFileChange::Update {
                                 unified_diff,
-                                move_path: move_path.map(|p| cwd.join(p)),
+                                move_path: move_path.map(|p| effective_cwd.join(p)),
                                 new_content: contents,
                             },
                         );
@@ -1601,6 +1601,53 @@ g
                 cwd: session_dir.path().to_path_buf(),
             })
         );
+    }
+
+    #[test]
+    fn test_apply_patch_resolves_move_path_with_effective_cwd() {
+        let session_dir = tempdir().unwrap();
+        let worktree_rel = "alt";
+        let worktree_dir = session_dir.path().join(worktree_rel);
+        fs::create_dir_all(&worktree_dir).unwrap();
+
+        let source_name = "old.txt";
+        let dest_name = "renamed.txt";
+        let source_path = worktree_dir.join(source_name);
+        fs::write(&source_path, "before\n").unwrap();
+
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {source_name}
+*** Move to: {dest_name}
+@@
+-before
++after"#
+        ));
+
+        let shell_script = format!("cd {worktree_rel} && apply_patch <<'PATCH'\n{patch}\nPATCH");
+        let argv = vec!["bash".into(), "-lc".into(), shell_script];
+
+        let result = maybe_parse_apply_patch_verified(&argv, session_dir.path());
+        let action = match result {
+            MaybeApplyPatchVerified::Body(action) => action,
+            other => panic!("expected verified body, got {other:?}"),
+        };
+
+        assert_eq!(action.cwd, worktree_dir);
+
+        let change = action
+            .changes()
+            .get(&worktree_dir.join(source_name))
+            .expect("source file change present");
+
+        match change {
+            ApplyPatchFileChange::Update { move_path, .. } => {
+                assert_eq!(
+                    move_path.as_deref(),
+                    Some(worktree_dir.join(dest_name).as_path())
+                );
+            }
+            other => panic!("expected update change, got {other:?}"),
+        }
     }
 
     #[test]
