@@ -306,3 +306,58 @@ fn feedback_classification(category: FeedbackCategory) -> &'static str {
         FeedbackCategory::Other => "other",
     }
 }
+
+// Build the selection popup params for feedback categories.
+pub(crate) fn feedback_selection_params(
+    app_event_tx: AppEventSender,
+) -> super::SelectionViewParams {
+    super::SelectionViewParams {
+        title: Some("How was this?".to_string()),
+        items: vec![
+            make_feedback_item(
+                app_event_tx.clone(),
+                "bug",
+                "Crash, error message, hang, or broken UI/behavior.",
+                FeedbackCategory::Bug,
+            ),
+            make_feedback_item(
+                app_event_tx.clone(),
+                "bad result",
+                "Output was off-target, incorrect, incomplete, or unhelpful.",
+                FeedbackCategory::BadResult,
+            ),
+            make_feedback_item(
+                app_event_tx.clone(),
+                "good result",
+                "Helpful, correct, high‑quality, or delightful result worth celebrating.",
+                FeedbackCategory::GoodResult,
+            ),
+            make_feedback_item(
+                app_event_tx,
+                "other",
+                "Slowness, feature suggestion, UX feedback, or anything else.",
+                FeedbackCategory::Other,
+            ),
+        ],
+        ..Default::default()
+    }
+}
+
+fn make_feedback_item(
+    app_event_tx: AppEventSender,
+    name: &str,
+    description: &str,
+    category: FeedbackCategory,
+) -> super::SelectionItem {
+    let action: super::SelectionAction = Box::new(move |sender: &AppEventSender| {
+        let _ = sender;
+        app_event_tx.send(AppEvent::OpenFeedbackNote { category });
+    });
+    super::SelectionItem {
+        name: name.to_string(),
+        description: Some(description.to_string()),
+        actions: vec![action],
+        dismiss_on_select: true,
+        ..Default::default()
+    }
+}
