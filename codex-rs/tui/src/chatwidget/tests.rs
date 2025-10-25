@@ -996,6 +996,37 @@ fn interrupt_exec_marks_failed_snapshot() {
     assert_snapshot!("interrupt_exec_marks_failed", exec_blob);
 }
 
+// Snapshot test: after an interrupted turn, a gentle error message is inserted
+// suggesting the user to tell the model what to do differently and to use /feedback.
+#[test]
+fn interrupted_turn_error_message_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    // Simulate an in-progress task so the widget is in a running state.
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }),
+    });
+
+    // Abort the turn (like pressing Esc) and drain inserted history.
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        !cells.is_empty(),
+        "expected error message to be inserted after interruption"
+    );
+    let last = lines_to_single_string(cells.last().unwrap());
+    assert_snapshot!("interrupted_turn_error_message", last);
+}
+
 /// Opening custom prompt from the review popup, pressing Esc returns to the
 /// parent popup, pressing Esc again dismisses all panels (back to normal mode).
 #[test]
@@ -1171,6 +1202,17 @@ fn model_reasoning_selection_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_reasoning_selection_popup", popup);
+}
+
+#[test]
+fn feedback_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Open the feedback category selection popup via slash command.
+    chat.dispatch_command(SlashCommand::Feedback);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("feedback_selection_popup", popup);
 }
 
 #[test]

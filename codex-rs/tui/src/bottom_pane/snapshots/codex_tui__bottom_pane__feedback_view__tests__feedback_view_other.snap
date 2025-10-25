@@ -1,0 +1,9 @@
+---
+source: tui/src/bottom_pane/feedback_view.rs
+expression: rendered
+---
+▌ Tell us more (other)
+▌
+▌ Slowness, feature suggestion, UX feedback, or anything els
+
+Press enter to confirm or esc to go back

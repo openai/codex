@@ -361,3 +361,75 @@ fn make_feedback_item(
         ..Default::default()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use crate::app_event_sender::AppEventSender;
+
+    fn render(view: &FeedbackNoteView, width: u16) -> String {
+        let height = view.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let mut lines: Vec<String> = (0..area.height)
+            .map(|row| {
+                let mut line = String::new();
+                for col in 0..area.width {
+                    let symbol = buf[(area.x + col, area.y + row)].symbol();
+                    if symbol.is_empty() {
+                        line.push(' ');
+                    } else {
+                        line.push_str(symbol);
+                    }
+                }
+                line.trim_end().to_string()
+            })
+            .collect();
+
+        while lines.first().is_some_and(|l| l.trim().is_empty()) {
+            lines.remove(0);
+        }
+        while lines.last().is_some_and(|l| l.trim().is_empty()) {
+            lines.pop();
+        }
+        lines.join("\n")
+    }
+
+    fn make_view(category: FeedbackCategory) -> FeedbackNoteView {
+        let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
+        FeedbackNoteView::new(category, snapshot, None, tx)
+    }
+
+    #[test]
+    fn feedback_view_bad_result() {
+        let view = make_view(FeedbackCategory::BadResult);
+        let rendered = render(&view, 60);
+        insta::assert_snapshot!("feedback_view_bad_result", rendered);
+    }
+
+    #[test]
+    fn feedback_view_good_result() {
+        let view = make_view(FeedbackCategory::GoodResult);
+        let rendered = render(&view, 60);
+        insta::assert_snapshot!("feedback_view_good_result", rendered);
+    }
+
+    #[test]
+    fn feedback_view_bug() {
+        let view = make_view(FeedbackCategory::Bug);
+        let rendered = render(&view, 60);
+        insta::assert_snapshot!("feedback_view_bug", rendered);
+    }
+
+    #[test]
+    fn feedback_view_other() {
+        let view = make_view(FeedbackCategory::Other);
+        let rendered = render(&view, 60);
+        insta::assert_snapshot!("feedback_view_other", rendered);
+    }
+}
