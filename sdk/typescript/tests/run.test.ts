@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { codexExecSpy } from "./codexExecSpy";
-import { describe, expect, it } from "@jest/globals";
+import { describe, expect, it, xit } from "@jest/globals";
 
 import { Codex } from "../src/codex";
 
