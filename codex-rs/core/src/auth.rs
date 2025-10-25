@@ -7,7 +7,6 @@ use serde::Serialize;
 use serial_test::serial;
 use std::env;
 use std::fmt::Debug;
-#[cfg(unix)]
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -454,34 +453,13 @@ mod tests {
     use crate::token_data::IdTokenInfo;
     use crate::token_data::KnownPlan;
     use crate::token_data::PlanType;
+
     use base64::Engine;
     use codex_protocol::config_types::ForcedLoginMethod;
     use pretty_assertions::assert_eq;
     use serde::Serialize;
     use serde_json::json;
     use tempfile::tempdir;
-
-    #[tokio::test]
-    async fn roundtrip_auth_dot_json() {
-        let codex_home = tempdir().unwrap();
-        let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
-        let _ = write_auth_file(
-            AuthFileParams {
-                openai_api_key: None,
-                chatgpt_plan_type: "pro".to_string(),
-                chatgpt_account_id: None,
-            },
-            codex_home.path(),
-        )
-        .expect("failed to write auth file");
-
-        let file = get_auth_file(codex_home.path());
-        let auth_dot_json = storage.try_read_auth_json(&file).unwrap();
-        storage.write_auth_json(&file, &auth_dot_json).unwrap();
-
-        let same_auth_dot_json = storage.try_read_auth_json(&file).unwrap();
-        assert_eq!(auth_dot_json, same_auth_dot_json);
-    }
 
     #[tokio::test]
     async fn refresh_without_id_token() {
@@ -624,12 +602,11 @@ mod tests {
             tokens: None,
             last_refresh: None,
         };
-        let storage = create_auth_storage(dir.path().to_path_buf(), AuthCredentialsStoreMode::File);
-        storage.save(&auth_dot_json)?;
-        assert!(dir.path().join("auth.json").exists());
-        let removed = logout(dir.path())?;
-        assert!(removed);
-        assert!(!dir.path().join("auth.json").exists());
+        super::save_auth(dir.path(), &auth_dot_json)?;
+        let auth_file = get_auth_file(dir.path());
+        assert!(auth_file.exists());
+        assert!(logout(dir.path())?);
+        assert!(!auth_file.exists());
         Ok(())
     }
 

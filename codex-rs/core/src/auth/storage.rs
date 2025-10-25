@@ -77,12 +77,22 @@ impl FileAuthStorage {
 
         Ok(auth_dot_json)
     }
+}
 
-    pub(super) fn write_auth_json(
-        &self,
-        auth_file: &Path,
-        auth_dot_json: &AuthDotJson,
-    ) -> std::io::Result<()> {
+impl AuthStorageBackend for FileAuthStorage {
+    fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
+        let auth_file = get_auth_file(&self.codex_home);
+        let auth_dot_json = match self.try_read_auth_json(&auth_file) {
+            Ok(auth) => auth,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        Ok(Some(auth_dot_json))
+    }
+
+    fn save(&self, auth_dot_json: &AuthDotJson) -> std::io::Result<()> {
+        let auth_file = get_auth_file(&self.codex_home);
+
         if let Some(parent) = auth_file.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -98,22 +108,7 @@ impl FileAuthStorage {
         file.flush()?;
         Ok(())
     }
-}
 
-impl AuthStorageBackend for FileAuthStorage {
-    fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
-        let auth_file = get_auth_file(&self.codex_home);
-        let auth_dot_json = match self.try_read_auth_json(&auth_file) {
-            Ok(auth) => auth,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(err),
-        };
-        Ok(Some(auth_dot_json))
-    }
-
-    fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
-        self.write_auth_json(&get_auth_file(&self.codex_home), auth)
-    }
     fn delete(&self) -> std::io::Result<bool> {
         delete_file_if_exists(&self.codex_home)
     }
@@ -125,5 +120,72 @@ pub(super) fn create_auth_storage(
 ) -> Arc<dyn AuthStorageBackend> {
     match mode {
         AuthCredentialsStoreMode::File => Arc::new(FileAuthStorage::new(codex_home)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Context;
+    use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn file_storage_load_returns_auth_dot_json() -> anyhow::Result<()> {
+        let codex_home = tempdir().unwrap();
+        let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+        let auth_dot_json = AuthDotJson {
+            openai_api_key: Some("test-key".to_string()),
+            tokens: None,
+            last_refresh: Some(Utc::now()),
+        };
+
+        storage
+            .save(&auth_dot_json)
+            .context("failed to save auth file")?;
+
+        let loaded = storage.load().context("failed to load auth file")?;
+        assert_eq!(Some(auth_dot_json), loaded);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn file_storage_save_persists_auth_dot_json() -> anyhow::Result<()> {
+        let codex_home = tempdir().unwrap();
+        let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+        let auth_dot_json = AuthDotJson {
+            openai_api_key: Some("test-key".to_string()),
+            tokens: None,
+            last_refresh: Some(Utc::now()),
+        };
+
+        let file = get_auth_file(codex_home.path());
+        storage
+            .save(&auth_dot_json)
+            .context("failed to save auth file")?;
+
+        let same_auth_dot_json = storage
+            .try_read_auth_json(&file)
+            .context("failed to read auth file after save")?;
+        assert_eq!(auth_dot_json, same_auth_dot_json);
+        Ok(())
+    }
+
+    #[test]
+    fn file_storage_delete_removes_auth_file() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let auth_dot_json = AuthDotJson {
+            openai_api_key: Some("sk-test-key".to_string()),
+            tokens: None,
+            last_refresh: None,
+        };
+        let storage = create_auth_storage(dir.path().to_path_buf(), AuthCredentialsStoreMode::File);
+        storage.save(&auth_dot_json)?;
+        assert!(dir.path().join("auth.json").exists());
+        let storage = FileAuthStorage::new(dir.path().to_path_buf());
+        let removed = storage.delete()?;
+        assert!(removed);
+        assert!(!dir.path().join("auth.json").exists());
+        Ok(())
     }
 }
