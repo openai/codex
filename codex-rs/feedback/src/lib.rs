@@ -299,6 +299,61 @@ impl CodexLogSnapshot {
 
         Ok(())
     }
+
+    /// Upload a metadata-only feedback event (no attachments). Includes classification,
+    /// optional reason, CLI version and thread ID as tags.
+    pub fn upload_feedback_metadata_only(
+        &self,
+        classification: &str,
+        reason: Option<&str>,
+        cli_version: &str,
+    ) -> Result<()> {
+        use std::collections::BTreeMap;
+        use std::str::FromStr;
+        use std::sync::Arc;
+
+        use sentry::Client;
+        use sentry::ClientOptions;
+        use sentry::protocol::Envelope;
+        use sentry::protocol::EnvelopeItem;
+        use sentry::protocol::Event;
+        use sentry::protocol::Level;
+        use sentry::transports::DefaultTransportFactory;
+        use sentry::types::Dsn;
+
+        let client = Client::from_config(ClientOptions {
+            dsn: Some(Dsn::from_str(SENTRY_DSN).map_err(|e| anyhow!("invalid DSN: {}", e))?),
+            transport: Some(Arc::new(DefaultTransportFactory {})),
+            ..Default::default()
+        });
+
+        let mut tags = BTreeMap::from([
+            (String::from("thread_id"), self.thread_id.to_string()),
+            (String::from("classification"), classification.to_string()),
+            (String::from("cli_version"), cli_version.to_string()),
+        ]);
+        if let Some(r) = reason.filter(|r| r.len() <= 64) {
+            tags.insert(String::from("reason"), r.to_string());
+        }
+
+        let level = match classification {
+            "bug" | "bad_result" => Level::Error,
+            _ => Level::Info,
+        };
+
+        let mut envelope = Envelope::new();
+        let event = Event {
+            level,
+            message: reason.map(|r| r.to_string()),
+            tags,
+            ..Default::default()
+        };
+        envelope.add_item(EnvelopeItem::Event(event));
+
+        client.send_envelope(envelope);
+        client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
+        Ok(())
+    }
 }
 
 #[cfg(test)]

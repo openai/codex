@@ -346,17 +346,33 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn open_feedback_note(&mut self, category: crate::app_event::FeedbackCategory) {
+    pub(crate) fn open_feedback_note(
+        &mut self,
+        category: crate::app_event::FeedbackCategory,
+        include_logs: bool,
+    ) {
         // Build a fresh snapshot at the time of opening the note overlay.
         let snapshot = self.feedback.snapshot(self.conversation_id);
-        let rollout = self.current_rollout_path.clone();
+        let rollout = if include_logs {
+            self.current_rollout_path.clone()
+        } else {
+            None
+        };
         let view = crate::bottom_pane::FeedbackNoteView::new(
             category,
             snapshot,
             rollout,
             self.app_event_tx.clone(),
+            include_logs,
         );
         self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn open_feedback_consent(&mut self, category: crate::app_event::FeedbackCategory) {
+        let params =
+            crate::bottom_pane::feedback_upload_consent_params(self.app_event_tx.clone(), category);
+        self.bottom_pane.show_selection_view(params);
         self.request_redraw();
     }
 

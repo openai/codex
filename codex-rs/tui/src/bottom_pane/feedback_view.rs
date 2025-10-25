@@ -35,6 +35,7 @@ pub(crate) struct FeedbackNoteView {
     snapshot: codex_feedback::CodexLogSnapshot,
     rollout_path: Option<PathBuf>,
     app_event_tx: AppEventSender,
+    include_logs: bool,
 
     // UI state
     textarea: TextArea,
@@ -48,12 +49,14 @@ impl FeedbackNoteView {
         snapshot: codex_feedback::CodexLogSnapshot,
         rollout_path: Option<PathBuf>,
         app_event_tx: AppEventSender,
+        include_logs: bool,
     ) -> Self {
         Self {
             category,
             snapshot,
             rollout_path,
             app_event_tx,
+            include_logs,
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
             complete: false,
@@ -73,19 +76,31 @@ impl FeedbackNoteView {
         let cli_version = crate::version::CODEX_CLI_VERSION;
         let mut thread_id = self.snapshot.thread_id.clone();
 
-        match self.snapshot.upload_feedback_with_rollout(
-            classification,
-            reason_opt,
-            cli_version,
-            rollout_path_ref,
-        ) {
+        let result = if self.include_logs {
+            self.snapshot.upload_feedback_with_rollout(
+                classification,
+                reason_opt,
+                cli_version,
+                rollout_path_ref,
+            )
+        } else {
+            self.snapshot
+                .upload_feedback_metadata_only(classification, reason_opt, cli_version)
+        };
+
+        match result {
             Ok(()) => {
                 let issue_url = format!("{BASE_ISSUE_URL}&steps=Uploaded%20thread:%20{thread_id}");
+                let prefix = if self.include_logs {
+                    "• Feedback uploaded."
+                } else {
+                    "• Feedback recorded (no logs)."
+                };
                 self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                     history_cell::PlainHistoryCell::new(vec![
-                        Line::from(
-                            "• Feedback uploaded. Please open an issue using the following URL:",
-                        ),
+                        Line::from(format!(
+                            "{prefix} Please open an issue using the following URL:"
+                        )),
                         "".into(),
                         Line::from(vec!["  ".into(), issue_url.cyan().underlined()]),
                         "".into(),
@@ -281,19 +296,19 @@ fn feedback_title_and_placeholder(category: FeedbackCategory) -> (String, String
     match category {
         FeedbackCategory::BadResult => (
             "Tell us more (bad result)".to_string(),
-            "What went wrong? What did you expect?".to_string(),
+            "(optional) Write a short description to help us further".to_string(),
         ),
         FeedbackCategory::GoodResult => (
             "Tell us more (good result)".to_string(),
-            "What worked well? Anything to highlight?".to_string(),
+            "(optional) Write a short description to help us further".to_string(),
         ),
         FeedbackCategory::Bug => (
             "Tell us more (bug)".to_string(),
-            "What broke? Steps to reproduce help a lot.".to_string(),
+            "(optional) Write a short description to help us further".to_string(),
         ),
         FeedbackCategory::Other => (
             "Tell us more (other)".to_string(),
-            "Slowness, feature suggestion, UX feedback, or anything else.".to_string(),
+            "(optional) Write a short description to help us further".to_string(),
         ),
     }
 }
@@ -349,15 +364,68 @@ fn make_feedback_item(
     description: &str,
     category: FeedbackCategory,
 ) -> super::SelectionItem {
-    let action: super::SelectionAction = Box::new(move |sender: &AppEventSender| {
-        let _ = sender;
-        app_event_tx.send(AppEvent::OpenFeedbackNote { category });
+    let action: super::SelectionAction = Box::new(move |_sender: &AppEventSender| {
+        app_event_tx.send(AppEvent::OpenFeedbackConsent { category });
     });
     super::SelectionItem {
         name: name.to_string(),
         description: Some(description.to_string()),
         actions: vec![action],
         dismiss_on_select: true,
+        ..Default::default()
+    }
+}
+
+/// Build the upload consent popup params for a given feedback category.
+pub(crate) fn feedback_upload_consent_params(
+    app_event_tx: AppEventSender,
+    category: FeedbackCategory,
+) -> super::SelectionViewParams {
+    use super::popup_consts::standard_popup_hint_line;
+    let yes_action: super::SelectionAction = Box::new({
+        let tx = app_event_tx.clone();
+        move |sender: &AppEventSender| {
+            let _ = sender;
+            tx.send(AppEvent::OpenFeedbackNote {
+                category,
+                include_logs: true,
+            });
+        }
+    });
+
+    let no_action: super::SelectionAction = Box::new({
+        let tx = app_event_tx.clone();
+        move |sender: &AppEventSender| {
+            let _ = sender;
+            tx.send(AppEvent::OpenFeedbackNote {
+                category,
+                include_logs: false,
+            });
+        }
+    });
+
+    super::SelectionViewParams {
+        title: Some("Upload logs?".to_string()),
+        footer_hint: Some(standard_popup_hint_line()),
+        items: vec![
+            super::SelectionItem {
+                name: "Yes".to_string(),
+                description: Some(
+                    "Share the current Codex session logs with the team for troubleshooting."
+                        .to_string(),
+                ),
+                actions: vec![yes_action],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            super::SelectionItem {
+                name: "No".to_string(),
+                description: Some("".to_string()),
+                actions: vec![no_action],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ],
         ..Default::default()
     }
 }
@@ -402,7 +470,7 @@ mod tests {
         let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
-        FeedbackNoteView::new(category, snapshot, None, tx)
+        FeedbackNoteView::new(category, snapshot, None, tx, true)
     }
 
     #[test]

@@ -105,6 +105,12 @@ pub(crate) enum AppEvent {
     /// Open the feedback note entry overlay after the user selects a category.
     OpenFeedbackNote {
         category: FeedbackCategory,
+        include_logs: bool,
+    },
+
+    /// Open the upload consent popup for feedback after selecting a category.
+    OpenFeedbackConsent {
+        category: FeedbackCategory,
     },
 }
 
