@@ -5,6 +5,7 @@ Slash commands are special commands you can type that start with `/`.
 ---
 
 ### Built-in slash commands
+
 Control Codex’s behavior during an interactive session with slash commands.
 
 | Command      | Purpose                                                     |
