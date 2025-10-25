@@ -274,19 +274,33 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         http_headers,
         env_http_headers,
     } = transport
-        && matches!(supports_oauth_login(&url).await, Ok(true))
     {
-        println!("Detected OAuth support. Starting OAuth flow…");
-        perform_oauth_login(
-            &name,
-            &url,
-            config.mcp_oauth_credentials_store_mode,
-            http_headers.clone(),
-            env_http_headers.clone(),
-            &Vec::new(),
-        )
-        .await?;
-        println!("Successfully logged in.");
+        match supports_oauth_login(&url).await {
+            Ok(true) => {
+                if !config.features.enabled(Feature::RmcpClient) {
+                    println!(
+                        "MCP server supports login. Add `experimental_use_rmcp_client = true` \
+                         to your config.toml and run `codex mcp login {name}` to login."
+                    );
+                } else {
+                    println!("Detected OAuth support. Starting OAuth flow…");
+                    perform_oauth_login(
+                        &name,
+                        &url,
+                        config.mcp_oauth_credentials_store_mode,
+                        http_headers.clone(),
+                        env_http_headers.clone(),
+                        &Vec::new(),
+                    )
+                    .await?;
+                    println!("Successfully logged in.");
+                }
+            }
+            Ok(false) => {}
+            Err(_) => println!(
+                "MCP server may or may not require login. Run `codex mcp login {name}` to login."
+            ),
+        }
     }
 
     Ok(())
@@ -523,10 +537,12 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                     .map(|entry| entry.auth_status)
                     .unwrap_or(McpAuthStatus::Unsupported)
                     .to_string();
+                let bearer_token_display =
+                    bearer_token_env_var.as_deref().unwrap_or("-").to_string();
                 http_rows.push([
                     name.clone(),
                     url.clone(),
-                    bearer_token_env_var.clone().unwrap_or("-".to_string()),
+                    bearer_token_display,
                     status,
                     auth_status,
                 ]);
@@ -752,15 +768,15 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
         } => {
             println!("  transport: streamable_http");
             println!("  url: {url}");
-            let env_var = bearer_token_env_var.as_deref().unwrap_or("-");
-            println!("  bearer_token_env_var: {env_var}");
+            let bearer_token_display = bearer_token_env_var.as_deref().unwrap_or("-");
+            println!("  bearer_token_env_var: {bearer_token_display}");
             let headers_display = match http_headers {
                 Some(map) if !map.is_empty() => {
                     let mut pairs: Vec<_> = map.iter().collect();
                     pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
                     pairs
                         .into_iter()
-                        .map(|(k, v)| format!("{k}={v}"))
+                        .map(|(k, _)| format!("{k}=*****"))
                         .collect::<Vec<_>>()
                         .join(", ")
                 }
@@ -773,7 +789,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
                     pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
                     pairs
                         .into_iter()
-                        .map(|(k, v)| format!("{k}={v}"))
+                        .map(|(k, var)| format!("{k}={var}"))
                         .collect::<Vec<_>>()
                         .join(", ")
                 }

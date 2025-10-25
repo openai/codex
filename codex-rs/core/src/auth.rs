@@ -44,6 +44,8 @@ impl PartialEq for CodexAuth {
 
 impl CodexAuth {
     pub async fn refresh_token(&self) -> Result<String, std::io::Error> {
+        tracing::info!("Refreshing token");
+
         let token_data = self
             .get_current_token_data()
             .ok_or(std::io::Error::other("Token data is not available."))?;
@@ -917,7 +919,10 @@ impl AuthManager {
                 self.reload();
                 Ok(Some(token))
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                tracing::error!("Failed to refresh token: {}", e);
+                Err(e)
+            }
         }
     }
 
