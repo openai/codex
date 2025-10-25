@@ -12,6 +12,42 @@ pub fn default_prompts_dir() -> Option<PathBuf> {
         .map(|home| home.join("prompts"))
 }
 
+/// Return the project-local prompts directory for the given current working directory.
+pub fn project_prompts_dir_for(cwd: &Path) -> PathBuf {
+    cwd.join(".codex").join("prompts")
+}
+
+/// Discover and merge prompts from both global and project-local directories.
+/// If the same prompt name exists in both locations, the local (project) version takes precedence.
+/// Returns a sorted list of unique prompts by name.
+pub async fn discover_prompts_merged(
+    global: Option<&Path>,
+    local: Option<&Path>,
+) -> Vec<CustomPrompt> {
+    use std::collections::HashMap;
+
+    let mut prompts_by_name: HashMap<String, CustomPrompt> = HashMap::new();
+
+    // First, load global prompts
+    if let Some(global_dir) = global {
+        for prompt in discover_prompts_in(global_dir).await {
+            prompts_by_name.insert(prompt.name.clone(), prompt);
+        }
+    }
+
+    // Then, load local prompts (overwriting global on conflicts)
+    if let Some(local_dir) = local {
+        for prompt in discover_prompts_in(local_dir).await {
+            prompts_by_name.insert(prompt.name.clone(), prompt);
+        }
+    }
+
+    // Convert to Vec and sort by name
+    let mut result: Vec<CustomPrompt> = prompts_by_name.into_values().collect();
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+    result
+}
+
 /// Discover prompt files in the given directory, returning entries sorted by name.
 /// Non-files are ignored. If the directory does not exist or cannot be read, returns empty.
 pub async fn discover_prompts_in(dir: &Path) -> Vec<CustomPrompt> {
@@ -222,5 +258,74 @@ mod tests {
         assert_eq!(desc.as_deref(), Some("Line endings"));
         assert_eq!(hint.as_deref(), Some("[arg]"));
         assert_eq!(body, "First line\r\nSecond line\r\n");
+    }
+
+    #[tokio::test]
+    async fn merges_global_and_local() {
+        let tmp = tempdir().expect("create TempDir");
+        let global_dir = tmp.path().join("global");
+        let local_dir = tmp.path().join("local");
+        fs::create_dir(&global_dir).unwrap();
+        fs::create_dir(&local_dir).unwrap();
+
+        fs::write(global_dir.join("a.md"), b"global a").unwrap();
+        fs::write(local_dir.join("b.md"), b"local b").unwrap();
+
+        let prompts = discover_prompts_merged(Some(&global_dir), Some(&local_dir)).await;
+        let names: Vec<String> = prompts.iter().map(|p| p.name.clone()).collect();
+
+        assert_eq!(names, vec!["a", "b"], "should merge both directories");
+        assert_eq!(prompts[0].content, "global a");
+        assert_eq!(prompts[1].content, "local b");
+    }
+
+    #[tokio::test]
+    async fn local_wins_on_conflict() {
+        let tmp = tempdir().expect("create TempDir");
+        let global_dir = tmp.path().join("global");
+        let local_dir = tmp.path().join("local");
+        fs::create_dir(&global_dir).unwrap();
+        fs::create_dir(&local_dir).unwrap();
+
+        fs::write(global_dir.join("review.md"), b"global review").unwrap();
+        fs::write(local_dir.join("review.md"), b"local review").unwrap();
+
+        let prompts = discover_prompts_merged(Some(&global_dir), Some(&local_dir)).await;
+
+        assert_eq!(prompts.len(), 1, "should have exactly one review prompt");
+        assert_eq!(prompts[0].name, "review");
+        assert_eq!(
+            prompts[0].content, "local review",
+            "local should override global"
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_dirs_are_ok() {
+        let tmp = tempdir().expect("create TempDir");
+        let global_dir = tmp.path().join("global");
+        let missing_dir = tmp.path().join("missing");
+        fs::create_dir(&global_dir).unwrap();
+
+        fs::write(global_dir.join("test.md"), b"test").unwrap();
+
+        // Only global exists
+        let prompts = discover_prompts_merged(Some(&global_dir), None).await;
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].name, "test");
+
+        // Only local exists (global missing)
+        let prompts = discover_prompts_merged(None, Some(&global_dir)).await;
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].name, "test");
+
+        // Both missing
+        let prompts = discover_prompts_merged(None, None).await;
+        assert!(prompts.is_empty());
+
+        // One exists, one missing
+        let prompts = discover_prompts_merged(Some(&global_dir), Some(&missing_dir)).await;
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].name, "test");
     }
 }
