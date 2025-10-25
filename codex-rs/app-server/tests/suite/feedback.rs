@@ -62,8 +62,6 @@ async fn upload_feedback_succeeds() -> Result<()> {
     Ok(())
 }
 
-// Removed invalid rollout path test: rollout path is now resolved server-side.
-
 fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
