@@ -257,8 +257,9 @@ impl ChatComposer {
         } else {
             self.textarea.insert_str(&pasted);
         }
-        // Explicit paste events should not trigger Enter suppression.
-        self.paste_burst.clear_after_explicit_paste();
+        // Track explicit paste so submit remains gated across multi-read bursts.
+        self.paste_burst
+            .mark_explicit_paste(char_count, Instant::now());
         // Keep popup sync consistent with key handling: prefer slash popup; only
         // sync file popup when slash popup is NOT active.
         self.sync_command_popup();
@@ -3447,5 +3448,47 @@ mod tests {
 
         assert_eq!(composer.textarea.text(), "z".repeat(count));
         assert!(composer.pending_pastes.is_empty());
+    }
+
+    #[test]
+    fn fast_enter_after_single_char_is_treated_as_paste_newline() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Simulate a quick burst: first char immediately followed by Enter.
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        // Enter should be treated as part of the burst (newline), not submit.
+        assert_eq!(InputResult::None, result);
+        // UI should not show buffered content until the burst flushes.
+        assert_eq!(composer.textarea.text(), "");
+
+        // After the flush interval, the buffered content should appear as a paste.
+        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+        let flushed = composer.flush_paste_burst_if_due();
+        assert!(flushed, "expected buffered paste to flush after delay");
+        let text = composer.textarea.text().to_string();
+        assert!(
+            !text.is_empty(),
+            "expected pasted content to be inserted after flush"
+        );
+        assert!(
+            text.contains('\n'),
+            "expected newline to be inserted instead of submit; got: {:?}",
+            text
+        );
     }
 }

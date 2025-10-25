@@ -5,7 +5,29 @@ use std::time::Instant;
 // Detect quickly to avoid showing typed prefix before paste is recognized
 const PASTE_BURST_MIN_CHARS: u16 = 3;
 const PASTE_BURST_CHAR_INTERVAL: Duration = Duration::from_millis(8);
-const PASTE_ENTER_SUPPRESS_WINDOW: Duration = Duration::from_millis(120);
+
+#[inline]
+fn paste_guard_duration() -> Duration {
+    match std::env::var("CODEX_PASTE_GUARD_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        Some(ms) if ms > 0 => Duration::from_millis(ms),
+        _ => Duration::from_millis(180),
+    }
+}
+
+#[inline]
+fn adaptive_window_for_size(size: usize) -> Duration {
+    let base = paste_guard_duration();
+    if size >= 2048 {
+        base + Duration::from_millis(320)
+    } else if size >= 1024 {
+        base + Duration::from_millis(160)
+    } else {
+        base
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct PasteBurst {
@@ -16,6 +38,8 @@ pub(crate) struct PasteBurst {
     active: bool,
     // Hold first fast char briefly to avoid rendering flicker
     pending_first_char: Option<(char, Instant)>,
+    // Timestamp of most recent explicit/captured paste activity
+    last_paste_at: Option<Instant>,
 }
 
 pub(crate) enum CharDecision {
@@ -64,7 +88,8 @@ impl PasteBurst {
         self.last_plain_char_time = Some(now);
 
         if self.active {
-            self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+            let win = adaptive_window_for_size(self.buffer.len());
+            self.burst_window_until = Some(now + win);
             return CharDecision::BufferAppend;
         }
 
@@ -77,7 +102,8 @@ impl PasteBurst {
             // take() to clear pending; we already captured the held char above
             let _ = self.pending_first_char.take();
             self.buffer.push(held);
-            self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+            let win = adaptive_window_for_size(self.buffer.len());
+            self.burst_window_until = Some(now + win);
             return CharDecision::BeginBufferFromPending;
         }
 
@@ -125,27 +151,53 @@ impl PasteBurst {
     /// While bursting: accumulate a newline into the buffer instead of
     /// submitting the textarea.
     ///
-    /// Returns true if a newline was appended (we are in a burst context),
-    /// false otherwise.
+    /// Returns true if a newline was appended (we are in or just entered a
+    /// burst context), false otherwise.
     pub fn append_newline_if_active(&mut self, now: Instant) -> bool {
-        if self.is_active() {
+        // Normal case: already buffering a burst; just append a newline.
+        if self.is_active_internal() {
             self.buffer.push('\n');
-            self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+            let win = adaptive_window_for_size(self.buffer.len());
+            self.burst_window_until = Some(now + win);
+            self.last_paste_at = Some(now);
             true
         } else {
-            false
+            // Fallback: if we very recently saw the first fast char and are
+            // holding it pending, treat an immediate Enter as part of the
+            // paste-like burst. This prevents the first newline from acting as
+            // submit on platforms where bracketed paste is unavailable.
+            if let Some((held, held_at)) = self.pending_first_char
+                && now.duration_since(held_at) <= PASTE_BURST_CHAR_INTERVAL
+            {
+                self.active = true;
+                let _ = self.pending_first_char.take();
+                self.buffer.push(held);
+                self.buffer.push('\n');
+                let win = adaptive_window_for_size(self.buffer.len());
+                self.burst_window_until = Some(now + win);
+                self.last_paste_at = Some(now);
+                true
+            } else {
+                false
+            }
         }
     }
 
     /// Decide if Enter should insert a newline (burst context) vs submit.
     pub fn newline_should_insert_instead_of_submit(&self, now: Instant) -> bool {
-        let in_burst_window = self.burst_window_until.is_some_and(|until| now <= until);
-        self.is_active() || in_burst_window
+        let in_burst_window = self
+            .burst_window_until
+            .is_some_and(|until| now <= until + Duration::from_millis(16));
+        let recent_explicit = self
+            .last_paste_at
+            .is_some_and(|t| now.saturating_duration_since(t) <= paste_guard_duration());
+        self.is_active() || in_burst_window || recent_explicit
     }
 
     /// Keep the burst window alive.
     pub fn extend_window(&mut self, now: Instant) {
-        self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+        let win = adaptive_window_for_size(self.buffer.len());
+        self.burst_window_until = Some(now + win);
     }
 
     /// Begin buffering with retroactively grabbed text.
@@ -154,13 +206,17 @@ impl PasteBurst {
             self.buffer.push_str(&grabbed);
         }
         self.active = true;
-        self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+        let win = adaptive_window_for_size(self.buffer.len().saturating_add(grabbed.len()));
+        self.burst_window_until = Some(now + win);
+        self.last_paste_at = Some(now);
     }
 
     /// Append a char into the burst buffer.
     pub fn append_char_to_buffer(&mut self, ch: char, now: Instant) {
         self.buffer.push(ch);
-        self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+        let win = adaptive_window_for_size(self.buffer.len());
+        self.burst_window_until = Some(now + win);
+        self.last_paste_at = Some(now);
     }
 
     /// Decide whether to begin buffering by retroactively capturing recent
@@ -232,13 +288,11 @@ impl PasteBurst {
         self.active || !self.buffer.is_empty()
     }
 
-    pub fn clear_after_explicit_paste(&mut self) {
-        self.last_plain_char_time = None;
-        self.consecutive_plain_char_burst = 0;
-        self.burst_window_until = None;
-        self.active = false;
-        self.buffer.clear();
-        self.pending_first_char = None;
+    pub fn mark_explicit_paste(&mut self, size: usize, now: Instant) {
+        if size >= 64 {
+            self.last_paste_at = Some(now);
+            self.burst_window_until = Some(now + adaptive_window_for_size(size));
+        }
     }
 }
 
