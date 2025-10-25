@@ -417,7 +417,7 @@ cwd = "/Users/<user>/code/my-server"
 [mcp_servers.figma]
 url = "https://mcp.linear.app/mcp"
 # Optional environment variable containing a bearer token to use for auth
-bearer_token_env_var = "<token>"
+bearer_token_env_var = "ENV_VAR"
 # Optional map of headers with hard-coded values.
 http_headers = { "HEADER_NAME" = "HEADER_VALUE" }
 # Optional map of headers whose values will be replaced with the environment variable.
