@@ -48,15 +48,47 @@ The following phases outline the order specs will be written. Within each phase,
 4. Authentication/login (`login/src/*.rs`), capturing OAuth and credential storage flows.
 
 ### Phase 3 – Tools & External Integrations
-1. File & git tooling (`file-search/src/*.rs`, `git-tooling/src/*.rs`, `git-apply/src/*.rs`, `apply-patch/src/*.rs`).
-2. Client libraries (`backend-client/src/*.rs`, `cloud-tasks/src/*.rs`, `cloud-tasks-client/src/*.rs`, `rmcp-client/src/*.rs`, `ollama/src/*.rs`, `responses-api-proxy/src/*.rs`).
-3. Feedback & analytics (`feedback/src/*.rs`, `otel/src/*.rs`, `ansi-escape/src/*.rs`).
-4. Async utilities (`async-utils/src/*.rs`, `arg0/src/*.rs`, `stdio-to-uds/src/*.rs`), documenting concurrency primitives and IPC helpers.
+Phase 3 is the next active focus. Before opening new crates, sweep remaining Phase 1/2 stragglers so upstream docs stay consistent:
+- `core`: add specs for `command_safety/mod.rs`, `error.rs`, `flags.rs`, `mcp/mod.rs`, `mcp/auth.rs`, `mcp_connection_manager.rs`, `message_history.rs`, `safety.rs`, and `terminal.rs`.
+- `app-server`: cover `main.rs`, `codex_message_processor.rs`, `models.rs`, `outgoing_message.rs`, `error_code.rs`, and `fuzzy_file_search.rs`.
+- `mcp-server`: cover `main.rs`, `lib.rs`, `codex_tool_runner.rs`, `codex_tool_config.rs`, `exec_approval.rs`, `patch_approval.rs`, `tool_handlers/mod.rs`, `outgoing_message.rs`, and `error_code.rs`.
+
+After the sweep, proceed crate-by-crate with the following order, pausing for a context compaction checkpoint after each crate-level `mod.spec.md` is finalized.
+
+#### 3A. File & Git Tooling
+1. `file-search`: `mod.spec.md`, `lib.rs`, `cli.rs`, `main.rs` — document search pipeline, filters, and CLI wiring. ✅ Completed; crate specs now committed locally.
+2. `git-tooling`: `mod.spec.md`, `lib.rs`, `operations.rs`, `ghost_commits.rs`, `errors.rs`, `platform.rs` — emphasize safety guards around git mutations.
+3. `git-apply`: `mod.spec.md`, `lib.rs` — describe patch application and reconciliation helpers.
+4. `apply-patch`: `mod.spec.md`, `lib.rs`, `main.rs`, `parser.rs`, `seek_sequence.rs`, `standalone_executable.rs` — include how this crate cooperates with `core::tools::handlers::apply_patch`.
+
+#### 3B. Client Libraries & Proxies
+1. `backend-client`: `mod.spec.md`, `lib.rs`, `client.rs`, `types.rs` — outline request flow to backend services. ✅ Completed.
+2. `cloud-tasks`: `mod.spec.md`, `lib.rs`, `app.rs`, `cli.rs`, `new_task.rs`, `scrollable_diff.rs`, `ui.rs`, `util.rs`, `env_detect.rs`. ✅ Completed.
+3. `cloud-tasks-client`: `mod.spec.md`, `lib.rs`, `api.rs`, `http.rs`, `mock.rs` — clarify local vs. remote execution paths. ✅ Completed.
+4. `responses-api-proxy`: add `mod.spec.md`, `lib.rs.spec.md`, `read_api_key.rs.spec.md`, and reconcile with existing `main.rs` spec. ✅ Completed.
+5. `rmcp-client`: `mod.spec.md`, `lib.rs`, `rmcp_client.rs`, `perform_oauth_login.rs`, `oauth.rs`, `auth_status.rs`, `logging_client_handler.rs`, `utils.rs`, `find_codex_home.rs`. ✅ Completed.
+6. `ollama`: `mod.spec.md`, `lib.rs`, `client.rs`, `parser.rs`, `pull.rs`, `url.rs`. ✅ Completed.
+
+#### 3C. Feedback & Telemetry
+1. `feedback`: `mod.spec.md`, `lib.rs`. ✅ Completed.
+2. `otel`: `mod.spec.md`, `lib.rs`, `config.rs`, `otel_provider.rs`, `otel_event_manager.rs`. ✅ Completed.
+3. `ansi-escape`: `mod.spec.md`, `lib.rs` — focus on terminal formatting helpers reused across crates. ✅ Completed.
+
+#### 3D. Async & IPC Utilities
+1. `async-utils`: `mod.spec.md`, `lib.rs`. ✅ Completed.
+2. `arg0`: `mod.spec.md`, `lib.rs`. ✅ Completed.
+3. `stdio-to-uds`: `mod.spec.md`, `lib.rs`, `main.rs` — capture IPC bridging and safety checks. ✅ Completed.
 
 ### Phase 4 – Utilities, Tests, and Scripts
 1. `utils/*` crates (`json-to-toml`, `string`, `tokenizer`, `pty`, `readiness`): document conversions, wrappers, and readiness checks.
 2. `code/`, `chatgpt/`, `app-server/tests/common`, `core/tests/common`, `mcp-server/tests/common`, capturing test harness utilities.
 3. script crates (`ansi-escape`, `process-hardening` test harness) and any remaining binaries under `src/bin`.
+
+## Progress Snapshot
+- **Phase 0 – Workspace Foundations:** Complete. Specs exist for all `common`, `protocol`, `mcp-types`, `codex-backend-openapi-models`, and `protocol-ts` modules identified in the phase outline.
+- **Phase 1 – Core Orchestration & Execution:** Core conversation flow, tooling orchestration, execution, and configuration stacks are documented. Remaining files: `command_safety/mod.rs`, `error.rs`, `flags.rs`, `mcp/auth.rs`, `mcp/mod.rs`, `mcp_connection_manager.rs`, `message_history.rs`, `safety.rs`, `terminal.rs`.
+- **Phase 2 – Interfaces & Services:** CLI, TUI, and initial service entrypoints (`responses-api-proxy/main.rs`, `app-server/lib.rs`, `app-server/message_processor.rs`, `mcp-server/message_processor.rs`) are covered. Outstanding modules slated for the Phase 3 sweep: remaining `app-server` and `mcp-server` internals plus supporting response helpers.
+- **Phase 3 – Tools & External Integrations:** File search crate documented; git tooling, git-apply, and apply-patch specs underway next.
 
 ## Workflow Per File
 1. **Analyze context**: trace module exports/imports, note upstream dependencies, identify external services, and record invariants.
@@ -80,8 +112,8 @@ The following phases outline the order specs will be written. Within each phase,
 - Quarterly review issue template referencing this plan to reassess priorities and record drift.
 
 ## Next Steps
-1. Circulate this plan with maintainers for feedback.
-2. Create skeleton `docs/code-specs/README.md` and per-crate subdirectories before authoring individual specs.
-3. Kick off Phase 0 by documenting `common/src/lib.rs` and `protocol/src/lib.rs`, updating the index accordingly.
-4. Establish lightweight automation (e.g., `just docs-check`) later to ensure new source files ship with companion specs.
-5. Begin Phase 1 with `core/src/lib.rs`, `core/src/codex.rs`, and `core/src/codex_conversation.rs`, pausing for a user compaction checkpoint before proceeding deeper into the `core` module tree.
+1. Confirm with maintainers that the Phase 1/2 straggler sweep ordering matches expectations; adjust if additional files surface.
+2. Document the remaining `core`, `app-server`, and `mcp-server` modules listed under Phase 3 and pause for a context compaction checkpoint.
+3. Start the Phase 3 crate cadence with `file-search`, producing the crate `mod.spec.md` plus specs for `lib.rs`, `cli.rs`, and `main.rs`.
+4. Continue through the Git tooling crates (`git-tooling`, `git-apply`, `apply-patch`), coordinating compaction checkpoints between crates.
+5. Reassess plan readiness for Phase 3B (client libraries) once the Git tooling sweep is complete and update this document before proceeding.
