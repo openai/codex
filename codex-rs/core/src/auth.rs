@@ -25,6 +25,7 @@ use crate::default_client::CodexHttpClient;
 use crate::token_data::PlanType;
 use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;
+use crate::util::try_parse_error_message;
 
 #[derive(Debug, Clone)]
 pub struct CodexAuth {
@@ -41,6 +42,8 @@ impl PartialEq for CodexAuth {
         self.mode == other.mode
     }
 }
+
+const TOKEN_REFRESH_INTERVAL: i64 = 8;
 
 impl CodexAuth {
     pub async fn refresh_token(&self) -> Result<String, std::io::Error> {
@@ -91,7 +94,7 @@ impl CodexAuth {
                 last_refresh: Some(last_refresh),
                 ..
             }) => {
-                if last_refresh < Utc::now() - chrono::Duration::days(28) {
+                if last_refresh < Utc::now() - chrono::Duration::days(TOKEN_REFRESH_INTERVAL) {
                     let refresh_response = tokio::time::timeout(
                         Duration::from_secs(60),
                         try_refresh_token(tokens.refresh_token.clone(), &self.client),
@@ -429,8 +432,9 @@ async fn try_refresh_token(
         Ok(refresh_response)
     } else {
         Err(std::io::Error::other(format!(
-            "Failed to refresh token: {}",
-            response.status()
+            "Failed to refresh token: {}: {}",
+            response.status(),
+            try_parse_error_message(&response.text().await.unwrap_or_default()),
         )))
     }
 }
