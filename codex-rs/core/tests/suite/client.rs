@@ -247,7 +247,11 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         session_configured,
         ..
     } = conversation_manager
-        .resume_conversation_from_rollout(config, session_path.clone(), auth_manager)
+        .resume_conversation_from_rollout(
+            config.clone(),
+            session_path.clone(),
+            auth_manager.clone(),
+        )
         .await
         .expect("resume conversation");
 
@@ -259,6 +263,23 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let initial_json = serde_json::to_value(&initial_msgs).unwrap();
     let expected_initial_json = json!([]);
     assert_eq!(initial_json, expected_initial_json);
+
+    let NewConversation {
+        conversation: codex_again,
+        session_configured: session_configured_again,
+        ..
+    } = conversation_manager
+        .resume_conversation_from_rollout(
+            config.clone(),
+            session_path.clone(),
+            auth_manager.clone(),
+        )
+        .await
+        .expect("resume existing conversation");
+    assert!(Arc::ptr_eq(&codex, &codex_again));
+    let session_configured_json = serde_json::to_value(&session_configured).unwrap();
+    let session_configured_again_json = serde_json::to_value(&session_configured_again).unwrap();
+    assert_eq!(session_configured_json, session_configured_again_json);
 
     // 2) Submit new input; the request body must include the prior item followed by the new user input.
     codex
