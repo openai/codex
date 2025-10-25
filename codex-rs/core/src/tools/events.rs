@@ -19,7 +19,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use super::format_exec_output;
 use super::format_exec_output_str;
 
 #[derive(Clone, Copy)]
@@ -146,7 +145,7 @@ impl ToolEmitter {
                     (*message).to_string(),
                     -1,
                     Duration::ZERO,
-                    format_exec_output(&message),
+                    message.clone(),
                 )
                 .await;
             }
@@ -241,7 +240,7 @@ impl ToolEmitter {
                     (*message).to_string(),
                     -1,
                     Duration::ZERO,
-                    format_exec_output(&message),
+                    message.clone(),
                 )
                 .await;
             }
@@ -277,7 +276,7 @@ impl ToolEmitter {
             }
             Err(ToolError::Codex(err)) => {
                 let message = format!("execution error: {err:?}");
-                let response = super::format_exec_output(&message);
+                let response = message.clone();
                 event = ToolEventStage::Failure(ToolEventFailure::Message(message));
                 Err(FunctionCallError::RespondToModel(response))
             }
@@ -289,9 +288,9 @@ impl ToolEmitter {
                 } else {
                     msg
                 };
-                let response = super::format_exec_output(&normalized);
-                event = ToolEventStage::Failure(ToolEventFailure::Message(normalized));
-                Err(FunctionCallError::RespondToModel(response))
+                let response = &normalized;
+                event = ToolEventStage::Failure(ToolEventFailure::Message(normalized.clone()));
+                Err(FunctionCallError::RespondToModel(response.clone()))
             }
         };
         self.emit(ctx, event).await;
