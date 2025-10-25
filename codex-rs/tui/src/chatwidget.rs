@@ -58,58 +58,6 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
-
-fn build_feedback_selection_items(
-    app_event_tx: crate::app_event_sender::AppEventSender,
-) -> Vec<crate::bottom_pane::SelectionItem> {
-    vec![
-        make_feedback_item(
-            app_event_tx.clone(),
-            "bug",
-            "Crash, error message, hang, or broken UI/behavior.",
-            crate::app_event::FeedbackCategory::Bug,
-        ),
-        make_feedback_item(
-            app_event_tx.clone(),
-            "bad result",
-            "Output was off-target, incorrect, incomplete, or unhelpful.",
-            crate::app_event::FeedbackCategory::BadResult,
-        ),
-        make_feedback_item(
-            app_event_tx.clone(),
-            "good result",
-            "Helpful, correct, high‑quality, or delightful result worth celebrating.",
-            crate::app_event::FeedbackCategory::GoodResult,
-        ),
-        make_feedback_item(
-            app_event_tx,
-            "other",
-            "Slowness, feature suggestion, UX feedback, or anything else.",
-            crate::app_event::FeedbackCategory::Other,
-        ),
-    ]
-}
-
-fn make_feedback_item(
-    app_event_tx: crate::app_event_sender::AppEventSender,
-    name: &str,
-    description: &str,
-    category: crate::app_event::FeedbackCategory,
-) -> crate::bottom_pane::SelectionItem {
-    let action: crate::bottom_pane::SelectionAction =
-        Box::new(move |sender: &crate::app_event_sender::AppEventSender| {
-            let _ = sender;
-            app_event_tx.send(crate::app_event::AppEvent::OpenFeedbackNote { category });
-        });
-
-    crate::bottom_pane::SelectionItem {
-        name: name.to_string(),
-        description: Some(description.to_string()),
-        actions: vec![action],
-        dismiss_on_select: true,
-        ..Default::default()
-    }
-}
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
@@ -1199,15 +1147,11 @@ impl ChatWidget {
         }
         match cmd {
             SlashCommand::Feedback => {
-                use crate::bottom_pane::SelectionViewParams;
-                // Step 1: pick a category
-                let items = build_feedback_selection_items(self.app_event_tx.clone());
-
-                self.bottom_pane.show_selection_view(SelectionViewParams {
-                    title: Some("How was this?".to_string()),
-                    items,
-                    ..Default::default()
-                });
+                // Step 1: pick a category (UI built in feedback_view)
+                let params = crate::bottom_pane::feedback_view::feedback_selection_params(
+                    self.app_event_tx.clone(),
+                );
+                self.bottom_pane.show_selection_view(params);
                 self.request_redraw();
             }
             SlashCommand::New => {
