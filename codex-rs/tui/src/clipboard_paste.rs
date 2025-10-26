@@ -183,8 +183,10 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
 /// clipboard image to a temporary PNG and return the Windows path to that file.
 /// Returns None if no command succeeded or no image was present.
 fn try_dump_windows_clipboard_image() -> Option<String> {
-    // Powershell script: save image from clipboard to a temp png and print the path
-    let script = r#"$img = Get-Clipboard -Format Image; if ($img -ne $null) { $p=[System.IO.Path]::GetTempFileName(); $p = [System.IO.Path]::ChangeExtension($p,'png'); $img.Save($p,[System.Drawing.Imaging.ImageFormat]::Png); Write-Output $p } else { exit 1 }"#;
+    // Powershell script: save image from clipboard to a temp png and print the path.
+    // Force UTF-8 output to avoid encoding issues between powershell.exe (UTF-16LE default)
+    // and pwsh (UTF-8 default).
+    let script = r#"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $img = Get-Clipboard -Format Image; if ($img -ne $null) { $p=[System.IO.Path]::GetTempFileName(); $p = [System.IO.Path]::ChangeExtension($p,'png'); $img.Save($p,[System.Drawing.Imaging.ImageFormat]::Png); Write-Output $p } else { exit 1 }"#;
 
     for cmd in ["powershell.exe", "pwsh", "powershell"] {
         match std::process::Command::new(cmd)
@@ -194,6 +196,7 @@ fn try_dump_windows_clipboard_image() -> Option<String> {
             // Executing PowerShell command
             Ok(output) => {
                 if output.status.success() {
+                    // Decode as UTF-8 (forced by the script above).
                     let win_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                     if !win_path.is_empty() {
                         tracing::debug!("{} saved clipboard image to {}", cmd, win_path);
