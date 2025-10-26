@@ -153,44 +153,10 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
                         if let Some(mapped_path) = try_map_windows_drive_to_wsl_path(&win_path)
                             && let Ok((w, h)) = image::image_dimensions(&mapped_path)
                         {
-                            // Try to copy into a project-local ./.codex/tmp so the user
-                            // can easily find pasted images. If that fails, fall back
-                            // to a system tempfile as before.
-                            if let Ok(cwd) = std::env::current_dir() {
-                                let tmp_dir = cwd.join(".codex").join("tmp");
-                                if std::fs::create_dir_all(&tmp_dir).is_ok() {
-                                    let uniq = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .ok()
-                                        .map(|d| d.as_millis().to_string())
-                                        .unwrap_or_else(|| "0".to_string());
-                                    let dest = tmp_dir.join(format!("pasted-{uniq}.png"));
-                                    if std::fs::copy(&mapped_path, &dest).is_ok() {
-                                        return Ok((
-                                            dest,
-                                            PastedImageInfo {
-                                                width: w,
-                                                height: h,
-                                                encoded_format: EncodedImageFormat::Png,
-                                            },
-                                        ));
-                                    }
-                                }
-                            }
-
-                            // Fallback to system tempfile if project-local copy failed.
-                            let tmp = Builder::new()
-                                .prefix("codex-clipboard-")
-                                .suffix(".png")
-                                .tempfile()
-                                .map_err(|e| PasteImageError::IoError(e.to_string()))?;
-                            std::fs::copy(&mapped_path, tmp.path())
-                                .map_err(|e| PasteImageError::IoError(e.to_string()))?;
-                            let (_file, path) = tmp
-                                .keep()
-                                .map_err(|e| PasteImageError::IoError(e.error.to_string()))?;
+                            // Return the mapped path directly without copying.
+                            // The file will be read and base64-encoded during serialization.
                             return Ok((
-                                path,
+                                mapped_path,
                                 PastedImageInfo {
                                     width: w,
                                     height: h,
