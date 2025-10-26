@@ -1,46 +1,46 @@
 ## Overview
-`codex-tui::chatwidget` renders the main chat transcript, handles agent/user events, manages approval flows, and coordinates with the `BottomPane` composer. It converts Codex protocol events into history cells, maintains command execution state, and drives auxiliary popups (model selection, approvals, diff views).
+`chatwidget` orchestrates the main chat experience in the TUI. It listens to Codex events, manages history cells, coordinates streaming output, handles approvals, rate-limit warnings, ghost commits, and integrates with the bottom pane for user input.
 
 ## Detailed Behavior
-- Key components:
-  - `ChatWidget` stores references to the conversation manager, app event sender, bottom pane, file search manager, and session metadata (e.g., rate limit warnings, ghost commits).
-  - Submodules (`agent`, `interrupts`, `session_header`) encapsulate agent spawning/resume logic, Ctrl+C handling, and header rendering.
-- Initialization:
-  - `ChatWidget::new` (or `new_from_existing`) constructs the widget with `ChatWidgetInit` (config, frame requester, event sender, initial prompt/images, auth manager, feedback).
-  - When resuming, `spawn_agent_from_existing` restores conversation state before rendering.
+- `ChatWidgetInit` captures initialization parameters (config, initial prompt/images, auth manager, feedback sink).
+- `ChatWidget` holds:
+  - App wiring (`app_event_tx`, `codex_op_tx`, `FrameRequester`).
+  - UI components (`BottomPane`, `SessionHeader`, active `HistoryCell`).
+  - Conversation and streaming state (`ConversationId`, `StreamController`, queued user messages).
+  - Rate limit tracking, status headers, task flags, interrupt manager, ghost commit snapshots, and feedback sink.
 - Event handling:
-  - Methods respond to `EventMsg` variants: agent messages/reasoning, command begin/end, approvals, diff updates, background/status events, rate limit snapshots, turn completion, errors, etc.
-  - Maintains a `VecDeque` of history cells (`HistoryCell` trait) representing transcript entries (user prompts, agent messages, command output, MCP calls).
-  - Tracks running commands (`RunningCommand`) to aggregate output, parse commands, and flush results into history cells once complete.
-  - Triggers rate-limit warnings when thresholds (75/90/95%) are crossed, queuing messages via `RateLimitWarningState`.
-- Bottom pane coordination:
-  - Interfaces with `BottomPane` to display composer, selection popups, and approval prompts (`ApprovalRequest`).
-  - Handles slash commands (`SlashCommand`), diff requests, custom prompt view, selection actions, and queued user messages.
-- File operations / git integration:
-  - Manages ghost commits (`create_ghost_commit`, `restore_ghost_commit`) to safely preview agent edits.
-  - Launches `FileSearchManager` tasks for `@search` commands and displays results.
-  - Fetches git diff (`get_git_diff`) and branch/commit lists for review workflows.
-- Rendering:
-  - Implements `Renderable`/`ColumnRenderable` to draw transcript columns with Ratatui.
-  - Uses `SessionHeader` to show workspace metadata (model, cwd, git branch).
-  - Integrates approval overlays via `ApprovalOverlay`.
+  - `handle_event(event)` routes `EventMsg` variants: session configuration, agent deltas (message/reasoning), tool calls, approvals, exec command lifecycle, patch apply events, errors, task completion, rate limit updates, and background notifications.
+  - Streaming: `handle_streaming_delta`, `handle_stream_finished`, `stream_controller` buffer agent output and convert to `HistoryCell`s; reasoning deltas update status headers and transcript-only cells.
+  - Approvals: enqueue `ApprovalRequest`s via bottom pane, manage interrupts through `InterruptManager`.
+  - Command execution: tracking `RunningCommand`, building `ExecCell`s, inserting command outputs into history.
+  - Rate limits: `RateLimitWarningState` monitors `RateLimitSnapshot` thresholds and queues warning messages.
+- User submission:
+  - `handle_input_result` processes composer results (user messages, slash commands), performing prompt expansion, image attachments, history insertion, and `CodexOp` submission.
+  - Slash commands map to app events (`/status`, `/resume`, `/feedback`, etc.) or model adjustments (model preset, approval preset).
+- History/UI updates:
+  - `add_to_history` inserts cells into the transcript; `request_redraw` schedules frames when state changes.
+  - `session_header` tracks model and displays session metadata in the transcript.
+  - Notifications queue when the terminal is unfocused and render on the next draw.
+- Ghost commits:
+  - `CreateGhostCommitOptions`, `ghost_snapshots` track sandboxed changes, enabling `/undo` and per-turn commit restore.
+  - `restore_snapshot` handles rollbacks, updating history cells and bottom pane state.
+- Feedback & onboarding:
+  - Integrates `codex_feedback` for `/feedback`, stores `feedback` sink to send structured feedback.
+  - Handles onboarding banners/welcome messages via `history_cell::new_session_info`.
 
 ## Broader Context
-- `App::handle_event` forwards Codex events to `ChatWidget` methods, while the bottom pane returns input events through `AppEvent`.
-- Rendering relies on history cells (`history_cell` module) and diff rendering utilities. Other widgets (status indicator, bottom pane) consume the same app event channel.
-- Context can't yet be determined for multi-threaded rendering; current design assumes single-threaded UI updates with background tasks using `AppEventSender`.
+- `App` owns a `ChatWidget` and drives its `render`/`handle_event` methods. The widget bridges core events to UI updates and bottom pane interactions, ensuring a cohesive chat loop.
 
 ## Technical Debt
-- `chatwidget.rs` is large (handles command parsing, approvals, git integration); extracting features into dedicated structs (e.g., rate limits, file operations) would reduce complexity.
-- Running command tracking is ad-hoc; consider generalizing into an execution manager shared with other UI surfaces.
+- The module is large and multitasks configuration, event handling, UI coordination, and command pipeline. Future refactors could extract dedicated managers (streaming, approvals, slash command execution, ghost commit handling) to reduce complexity.
 
 ---
 tech_debt:
   severity: high
   highest_priority_items:
-    - Refactor command/execution handling into a dedicated component to simplify event methods.
-    - Separate git/ghost commit logic from the chat widget core to limit responsibilities.
+    - Split streaming/approval/ghost-commit logic into focused components to make event handling easier to maintain and test.
 related_specs:
+  - ./chatwidget/agent.rs.spec.md
+  - ./chatwidget/interrupts.rs.spec.md
   - ./bottom_pane/mod.rs.spec.md
-  - ./history_cell.rs.spec.md
-  - ./render/mod.rs.spec.md
+  - ./exec_cell/mod.rs.spec.md

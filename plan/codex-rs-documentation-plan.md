@@ -80,15 +80,16 @@ After the sweep, proceed crate-by-crate with the following order, pausing for a 
 3. `stdio-to-uds`: `mod.spec.md`, `lib.rs`, `main.rs` — capture IPC bridging and safety checks. ✅ Completed.
 
 ### Phase 4 – Utilities, Tests, and Scripts
-1. `utils/*` crates (`json-to-toml`, `string`, `tokenizer`, `pty`, `readiness`): document conversions, wrappers, and readiness checks.
-2. `code/`, `chatgpt/`, `app-server/tests/common`, `core/tests/common`, `mcp-server/tests/common`, capturing test harness utilities.
-3. script crates (`ansi-escape`, `process-hardening` test harness) and any remaining binaries under `src/bin`.
+1. `utils/*` crates (`json-to-toml`, `string`, `tokenizer`, `pty`, `readiness`): document conversions, wrappers, and readiness checks. ✅ Completed.
+2. `code/`, `chatgpt/`, `app-server/tests/common`, `core/tests/common`, `mcp-server/tests/common`, capturing test harness utilities. ✅ Completed (`code/` unavailable; no docs required).
+3. script crates (`ansi-escape`, `process-hardening` test harness) and any remaining binaries under `src/bin`. ✅ Completed (`ansi-escape` documented in Phase 3; scripts covered; binaries deferred per workflow).
 
 ## Progress Snapshot
 - **Phase 0 – Workspace Foundations:** Complete. Specs exist for all `common`, `protocol`, `mcp-types`, `codex-backend-openapi-models`, and `protocol-ts` modules identified in the phase outline.
-- **Phase 1 – Core Orchestration & Execution:** Core conversation flow, tooling orchestration, execution, and configuration stacks are documented. Remaining files: `command_safety/mod.rs`, `error.rs`, `flags.rs`, `mcp/auth.rs`, `mcp/mod.rs`, `mcp_connection_manager.rs`, `message_history.rs`, `safety.rs`, `terminal.rs`.
+- **Phase 1 – Core Orchestration & Execution:** Core conversation flow, tooling orchestration, execution, and configuration stacks are documented.
 - **Phase 2 – Interfaces & Services:** CLI, TUI, and initial service entrypoints (`responses-api-proxy/main.rs`, `app-server/lib.rs`, `app-server/message_processor.rs`, `mcp-server/message_processor.rs`) are covered. Outstanding modules slated for the Phase 3 sweep: remaining `app-server` and `mcp-server` internals plus supporting response helpers.
-- **Phase 3 – Tools & External Integrations:** File search crate documented; git tooling, git-apply, and apply-patch specs underway next.
+- **Phase 3 – Tools & External Integrations:** Completed. Specs cover file search, git tooling, patch application, client libraries, telemetry, and IPC utilities.
+- **Phase 4 – Utilities, Tests, and Scripts:** Completed. Specs added for `utils/*`, `chatgpt`, shared test harness crates, and release scripts; no additional documentation required for absent `code/` crate or skipped binaries.
 
 ## Workflow Per File
 1. **Analyze context**: trace module exports/imports, note upstream dependencies, identify external services, and record invariants.
@@ -113,7 +114,5 @@ After the sweep, proceed crate-by-crate with the following order, pausing for a 
 
 ## Next Steps
 1. Confirm with maintainers that the Phase 1/2 straggler sweep ordering matches expectations; adjust if additional files surface.
-2. Document the remaining `core`, `app-server`, and `mcp-server` modules listed under Phase 3 and pause for a context compaction checkpoint.
-3. Start the Phase 3 crate cadence with `file-search`, producing the crate `mod.spec.md` plus specs for `lib.rs`, `cli.rs`, and `main.rs`.
-4. Continue through the Git tooling crates (`git-tooling`, `git-apply`, `apply-patch`), coordinating compaction checkpoints between crates.
-5. Reassess plan readiness for Phase 3B (client libraries) once the Git tooling sweep is complete and update this document before proceeding.
+2. Audit the codebase for any remaining `.rs` files lacking specs (e.g., login crate, generated models) and prioritize coverage per plan scope.
+3. Refresh the global index (`docs/code-specs/README.md`) to reflect Phase 4 completion once merged, then retire `progress_summary.md` or fold its contents into the index.

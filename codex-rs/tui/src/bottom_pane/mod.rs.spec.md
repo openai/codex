@@ -1,44 +1,42 @@
 ## Overview
-`codex-tui::bottom_pane` renders the lower-half composer area (chat input, popups, approvals). It manages the active view stack, handles keyboard events, and coordinates status indicators while the chat widget occupies the upper transcript.
+`bottom_pane` manages the lower portion of the TUI, including the chat composer, status indicator, and modal overlays (approvals, selection lists, custom prompts). It routes input events, renders the active view, and coordinates task-running UI hints.
 
 ## Detailed Behavior
-- Core struct `BottomPane`:
-  - Owns a `ChatComposer` (text input), a stack of modal `BottomPaneView`s (popups, selection lists, approval overlays), and state flags (input focus, task running, hints).
-  - Maintains an optional `StatusIndicatorWidget` to show progress above the composer, along with queued user messages and context window usage.
-  - Uses `AppEventSender` to push UI actions back to the app loop and `FrameRequester` to request redraws.
-- Layout and rendering:
-  - `desired_height(width)` computes the total height needed (status indicator + composer or active view) plus margins.
-  - `layout(area)` splits the pane into status vs composer sections, or uses the full area for popups.
-  - `cursor_pos(area)` hides the cursor when overlays are active; otherwise delegates to the composer.
+- Main types:
+  - `BottomPane` owns a `ChatComposer`, a stack of `BottomPaneView` implementations, status indicator widget, queued user messages, and focus/task state flags.
+  - `BottomPaneParams` seeds the pane with event senders, frame scheduler, placeholder text, and configuration toggles (enhanced keys, paste burst).
+  - `CancellationEvent` communicates whether `Ctrl-C` handling was consumed by the active view.
 - Event handling:
-  - `handle_key_event` routes key events to the active view or composer. ESC close semantics (`CancellationEvent`) pop overlays when complete.
-  - `push_view`, `pop_view`, and `active_view` manage the view stack; completion triggers cleanup via `on_active_view_complete`.
-  - `input_submitted`/`input_cancelled` send messages to the app (e.g., submit user prompt, cancel approvals).
-- Constructors / helpers:
-  - `BottomPane::new(BottomPaneParams)` configures composer focus, placeholder text, paste burst behavior, etc.
-  - Re-exports `ApprovalOverlay`, `ApprovalRequest`, `ChatComposer`, `InputResult`, `SelectionViewParams`, `SelectionAction`, `SelectionItem`, and `FeedbackView` for other modules.
-- Submodules:
-  - `chat_composer`, `textarea`, `paste_burst` manage the text input component.
-  - `command_popup`, `file_search_popup`, `custom_prompt_view`, `list_selection_view`, `feedback_view` implement specific modal views.
-  - `approval_overlay` handles approval prompts; `prompt_args`, `scroll_state`, and `selection_popup_common` provide shared helpers.
-  - `footer` draws hint lines; `popup_consts` defines standard messages.
+  - `handle_key_event` forwards keys to the active view, handles `Esc` for approvals/status interrupts, manages paste burst scheduling, and returns `InputResult` from the composer when appropriate.
+  - `on_ctrl_c` gives modal views a chance to handle `Ctrl-C`; otherwise clears the composer and shows quit hints.
+  - `handle_paste`, `insert_str`, `set_composer_text`, `clear_composer_for_ctrl_c`, `composer_text` manipulate the composer when no modal is active.
+- Status and hints:
+  - `set_task_running` shows/hides the status indicator, updates queued user messages, and coordinates timer pausing when modals appear.
+  - Hint methods (`show_ctrl_c_quit_hint`, `show_esc_backtrack_hint`, etc.) synchronize composer tooltips with app-level state.
+  - `set_context_window_percent` feeds context metrics into the composer.
+- Views and overlays:
+  - `push_view`, `show_view`, `show_selection_view`, `push_approval_request` manage modal overlays, pausing status timers as needed and resuming them when views complete.
+  - Approval flow tries to let existing modals consume new requests; otherwise it pushes an `ApprovalOverlay`.
+- Rendering/layout:
+  - `desired_height`, `layout`, and `cursor_pos` compute how much vertical space is needed, splitting between status and composer or dedicating the area to modal views.
+  - Implements `WidgetRef` for direct rendering.
+- History/attachments:
+  - `set_history_metadata`, `on_history_entry_response`, and paste burst helpers coordinate with the composer to display fetched history lines.
+  - `on_file_search_result`, `attach_image`, `take_recent_submission_images` expose attachment and file-search integration.
+- State queries signal backtrack eligibility (`is_normal_backtrack_mode`), task state, and popup activity to the app layer.
 
 ## Broader Context
-- `ChatWidget` uses `BottomPane` to display the composer and pivot into popups based on events (e.g., approvals, diff reviews, custom prompts).
-- Status indicators integrate with `status_indicator_widget`; composer history interacts with `chat_composer_history`.
-- Context can't yet be determined for multi-column layouts; the current design assumes a single bottom pane across the terminal width.
+- `App` directs user input and status updates through `BottomPane`, while other modules (e.g., backtrack, approvals) rely on its view stack to present interactive overlays.
 
 ## Technical Debt
-- Extensive responsibilities (composer, popups, status) reside in this module; factoring views into a trait object hierarchy is a start, but additional structure could improve testability.
-- Key handling logic has many branches; consider centralizing ESC/backtrack behavior to avoid duplication across views.
+- The module centralizes many responsibilities (composer interaction, modal stack, status indicator); separating modal management into its own helper could simplify event routing and future extensions.
 
 ---
 tech_debt:
   severity: medium
   highest_priority_items:
-    - Continue isolating modal view logic into dedicated structs to keep `BottomPane` focused on orchestration.
-    - Add tests around key handling (especially ESC/backtrack) to prevent regressions.
+    - Extract a dedicated modal/view manager to reduce the amount of conditional logic in `BottomPane::handle_key_event` and colleagues.
 related_specs:
-  - ./chatwidget.rs.spec.md
-  - ./status_indicator_widget.rs.spec.md
-  - ./bottom_pane/chat_composer.rs.spec.md (to add)
+  - ./chat_composer.rs.spec.md
+  - ./approval_overlay.rs.spec.md
+  - ./command_popup.rs.spec.md
