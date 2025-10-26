@@ -1027,9 +1027,11 @@ impl ConfigToml {
     fn derive_sandbox_policy(
         &self,
         sandbox_mode_override: Option<SandboxMode>,
+        profile_sandbox_mode: Option<SandboxMode>,
         resolved_cwd: &Path,
     ) -> SandboxPolicy {
         let resolved_sandbox_mode = sandbox_mode_override
+            .or(profile_sandbox_mode)
             .or(self.sandbox_mode)
             .or_else(|| {
                 // if no sandbox_mode is set, but user has marked directory as trusted, use WorkspaceWrite
@@ -1219,7 +1221,8 @@ impl Config {
             .get_active_project(&resolved_cwd)
             .unwrap_or(ProjectConfig { trust_level: None });
 
-        let mut sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode, &resolved_cwd);
+        let mut sandbox_policy =
+            cfg.derive_sandbox_policy(sandbox_mode, config_profile.sandbox_mode, &resolved_cwd);
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
             for path in additional_writable_roots {
                 if !writable_roots.iter().any(|existing| existing == &path) {
@@ -1242,8 +1245,8 @@ impl Config {
             .is_some()
             || config_profile.approval_policy.is_some()
             || cfg.approval_policy.is_some()
-            // TODO(#3034): profile.sandbox_mode is not implemented
             || sandbox_mode.is_some()
+            || config_profile.sandbox_mode.is_some()
             || cfg.sandbox_mode.is_some();
 
         let mut model_providers = built_in_model_providers();
@@ -1603,8 +1606,11 @@ network_access = false  # This should be ignored.
         let sandbox_mode_override = None;
         assert_eq!(
             SandboxPolicy::DangerFullAccess,
-            sandbox_full_access_cfg
-                .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
+            sandbox_full_access_cfg.derive_sandbox_policy(
+                sandbox_mode_override,
+                None,
+                &PathBuf::from("/tmp/test")
+            )
         );
 
         let sandbox_read_only = r#"
@@ -1619,8 +1625,11 @@ network_access = true  # This should be ignored.
         let sandbox_mode_override = None;
         assert_eq!(
             SandboxPolicy::ReadOnly,
-            sandbox_read_only_cfg
-                .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
+            sandbox_read_only_cfg.derive_sandbox_policy(
+                sandbox_mode_override,
+                None,
+                &PathBuf::from("/tmp/test")
+            )
         );
 
         let sandbox_workspace_write = r#"
@@ -1644,8 +1653,11 @@ exclude_slash_tmp = true
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             },
-            sandbox_workspace_write_cfg
-                .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
+            sandbox_workspace_write_cfg.derive_sandbox_policy(
+                sandbox_mode_override,
+                None,
+                &PathBuf::from("/tmp/test")
+            )
         );
 
         let sandbox_workspace_write = r#"
@@ -1672,8 +1684,11 @@ trust_level = "trusted"
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             },
-            sandbox_workspace_write_cfg
-                .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
+            sandbox_workspace_write_cfg.derive_sandbox_policy(
+                sandbox_mode_override,
+                None,
+                &PathBuf::from("/tmp/test")
+            )
         );
     }
 
@@ -1761,6 +1776,75 @@ trust_level = "trusted"
 
         assert!(!config.features.enabled(Feature::ViewImageTool));
         assert!(!config.include_view_image_tool);
+
+        Ok(())
+    }
+
+    #[test]
+    fn profile_sandbox_mode_overrides_base() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "work".to_string(),
+            ConfigProfile {
+                sandbox_mode: Some(SandboxMode::DangerFullAccess),
+                ..Default::default()
+            },
+        );
+        let cfg = ConfigToml {
+            profiles,
+            profile: Some("work".to_string()),
+            sandbox_mode: Some(SandboxMode::ReadOnly),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(matches!(
+            config.sandbox_policy,
+            SandboxPolicy::DangerFullAccess
+        ));
+        assert!(config.did_user_set_custom_approval_policy_or_sandbox_mode);
+
+        Ok(())
+    }
+
+    #[test]
+    fn cli_override_takes_precedence_over_profile_sandbox_mode() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "work".to_string(),
+            ConfigProfile {
+                sandbox_mode: Some(SandboxMode::DangerFullAccess),
+                ..Default::default()
+            },
+        );
+        let cfg = ConfigToml {
+            profiles,
+            profile: Some("work".to_string()),
+            ..Default::default()
+        };
+
+        let overrides = ConfigOverrides {
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            overrides,
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(matches!(
+            config.sandbox_policy,
+            SandboxPolicy::WorkspaceWrite { .. }
+        ));
 
         Ok(())
     }
