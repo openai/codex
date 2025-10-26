@@ -196,6 +196,7 @@ fn create_expected_elicitation_request(
             codex_cwd: workdir.to_path_buf(),
             codex_call_id: "call1234".to_string(),
             codex_parsed_cmd,
+            codex_risk: None,
         })?),
     })
 }
