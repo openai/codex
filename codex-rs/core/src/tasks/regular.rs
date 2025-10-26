@@ -5,8 +5,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex::TurnContext;
 use crate::codex::run_task;
-use crate::protocol::InputItem;
 use crate::state::TaskKind;
+use codex_protocol::user_input::UserInput;
 
 use super::SessionTask;
 use super::SessionTaskContext;
@@ -24,19 +24,10 @@ impl SessionTask for RegularTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        sub_id: String,
-        input: Vec<InputItem>,
+        input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         let sess = session.clone_session();
-        run_task(
-            sess,
-            ctx,
-            sub_id,
-            input,
-            TaskKind::Regular,
-            cancellation_token,
-        )
-        .await
+        run_task(sess, ctx, input, TaskKind::Regular, cancellation_token).await
     }
 }

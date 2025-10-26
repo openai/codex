@@ -44,6 +44,7 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
         env: create_env_from_core_vars(),
         with_escalated_permissions: None,
         justification: None,
+        arg0: None,
         disable_timeout: false,
         passthrough_stdio: false,
     };
@@ -148,6 +149,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
         env: create_env_from_core_vars(),
         with_escalated_permissions: None,
         justification: None,
+        arg0: None,
         disable_timeout: false,
         passthrough_stdio: false,
     };

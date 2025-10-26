@@ -1,10 +1,23 @@
-Codex but with a --yolo3 command to avoid timeouts and sandboxing 
+Codex but with a --yolo3 command to avoid timeouts and sandboxing
 
 ```
 cargo build --release -p codex-cli
 ./codex-rs/target/release/codex --yolo3
 also the --auto-next-steps and --auto-next-idea args together make it fully autonomous
 ```
+
+<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
+
+<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
+</br>
+</br>If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE</a>
+</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a></p>
+
+<p align="center">
+  <img src="./.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
+  </p>
+
+---
 
 ## Quickstart
 
@@ -19,7 +32,7 @@ npm install -g @openai/codex
 Alternatively, if you use Homebrew:
 
 ```shell
-brew install codex
+brew install --cask codex
 ```
 
 Then simply run `codex` to get started:
@@ -27,6 +40,8 @@ Then simply run `codex` to get started:
 ```shell
 codex
 ```
+
+If you're running into upgrade issues with Homebrew, see the [FAQ entry on brew upgrade codex](./docs/faq.md#brew-update-codex-isnt-upgrading-me).
 
 <details>
 <summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
@@ -70,6 +85,7 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
   - [CLI usage](./docs/getting-started.md#cli-usage)
   - [Running with a prompt as input](./docs/getting-started.md#running-with-a-prompt-as-input)
   - [Example prompts](./docs/getting-started.md#example-prompts)
+  - [Custom prompts](./docs/prompts.md)
   - [Memory with AGENTS.md](./docs/getting-started.md#memory-with-agentsmd)
   - [Configuration](./docs/config.md)
 - [**Sandbox & approvals**](./docs/sandbox.md)

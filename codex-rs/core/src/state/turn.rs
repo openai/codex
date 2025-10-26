@@ -11,6 +11,7 @@ use tokio_util::task::AbortOnDropHandle;
 use codex_protocol::models::ResponseInputItem;
 use tokio::sync::oneshot;
 
+use crate::codex::TurnContext;
 use crate::protocol::ReviewDecision;
 use crate::tasks::SessionTask;
 
@@ -53,10 +54,12 @@ pub(crate) struct RunningTask {
     pub(crate) task: Arc<dyn SessionTask>,
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) handle: Arc<AbortOnDropHandle<()>>,
+    pub(crate) turn_context: Arc<TurnContext>,
 }
 
 impl ActiveTurn {
-    pub(crate) fn add_task(&mut self, sub_id: String, task: RunningTask) {
+    pub(crate) fn add_task(&mut self, task: RunningTask) {
+        let sub_id = task.turn_context.sub_id.clone();
         self.tasks.insert(sub_id, task);
     }
 
@@ -65,8 +68,8 @@ impl ActiveTurn {
         self.tasks.is_empty()
     }
 
-    pub(crate) fn drain_tasks(&mut self) -> IndexMap<String, RunningTask> {
-        std::mem::take(&mut self.tasks)
+    pub(crate) fn drain_tasks(&mut self) -> Vec<RunningTask> {
+        self.tasks.drain(..).map(|(_, task)| task).collect()
     }
 }
 
@@ -100,6 +103,10 @@ impl TurnState {
 
     pub(crate) fn push_pending_input(&mut self, input: ResponseInputItem) {
         self.pending_input.push(input);
+    }
+
+    pub(crate) fn has_pending_input(&self) -> bool {
+        !self.pending_input.is_empty()
     }
 
     pub(crate) fn take_pending_input(&mut self) -> Vec<ResponseInputItem> {

@@ -150,6 +150,10 @@ pub struct RemoveArgs {
 pub struct LoginArgs {
     /// Name of the MCP server to authenticate with oauth.
     pub name: String,
+
+    /// Comma-separated list of OAuth scopes to request.
+    #[arg(long, value_delimiter = ',', value_name = "SCOPE,SCOPE")]
+    pub scopes: Vec<String>,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -253,6 +257,8 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         enabled: true,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
+        enabled_tools: None,
+        disabled_tools: None,
     };
 
     servers.insert(name.clone(), new_entry);
@@ -268,18 +274,33 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         http_headers,
         env_http_headers,
     } = transport
-        && matches!(supports_oauth_login(&url).await, Ok(true))
     {
-        println!("Detected OAuth support. Starting OAuth flow…");
-        perform_oauth_login(
-            &name,
-            &url,
-            config.mcp_oauth_credentials_store_mode,
-            http_headers.clone(),
-            env_http_headers.clone(),
-        )
-        .await?;
-        println!("Successfully logged in.");
+        match supports_oauth_login(&url).await {
+            Ok(true) => {
+                if !config.features.enabled(Feature::RmcpClient) {
+                    println!(
+                        "MCP server supports login. Add `experimental_use_rmcp_client = true` \
+                         to your config.toml and run `codex mcp login {name}` to login."
+                    );
+                } else {
+                    println!("Detected OAuth support. Starting OAuth flow…");
+                    perform_oauth_login(
+                        &name,
+                        &url,
+                        config.mcp_oauth_credentials_store_mode,
+                        http_headers.clone(),
+                        env_http_headers.clone(),
+                        &Vec::new(),
+                    )
+                    .await?;
+                    println!("Successfully logged in.");
+                }
+            }
+            Ok(false) => {}
+            Err(_) => println!(
+                "MCP server may or may not require login. Run `codex mcp login {name}` to login."
+            ),
+        }
     }
 
     Ok(())
@@ -325,7 +346,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         );
     }
 
-    let LoginArgs { name } = login_args;
+    let LoginArgs { name, scopes } = login_args;
 
     let Some(server) = config.mcp_servers.get(&name) else {
         bail!("No MCP server named '{name}' found.");
@@ -347,6 +368,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         config.mcp_oauth_credentials_store_mode,
         http_headers,
         env_http_headers,
+        &scopes,
     )
     .await?;
     println!("Successfully logged in to MCP server '{name}'.");
@@ -400,7 +422,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
             .map(|(name, cfg)| {
                 let auth_status = auth_statuses
                     .get(name.as_str())
-                    .copied()
+                    .map(|entry| entry.auth_status)
                     .unwrap_or(McpAuthStatus::Unsupported);
                 let transport = match &cfg.transport {
                     McpServerTransportConfig::Stdio {
@@ -487,7 +509,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                 };
                 let auth_status = auth_statuses
                     .get(name.as_str())
-                    .copied()
+                    .map(|entry| entry.auth_status)
                     .unwrap_or(McpAuthStatus::Unsupported)
                     .to_string();
                 stdio_rows.push([
@@ -512,13 +534,15 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                 };
                 let auth_status = auth_statuses
                     .get(name.as_str())
-                    .copied()
+                    .map(|entry| entry.auth_status)
                     .unwrap_or(McpAuthStatus::Unsupported)
                     .to_string();
+                let bearer_token_display =
+                    bearer_token_env_var.as_deref().unwrap_or("-").to_string();
                 http_rows.push([
                     name.clone(),
                     url.clone(),
-                    bearer_token_env_var.clone().unwrap_or("-".to_string()),
+                    bearer_token_display,
                     status,
                     auth_status,
                 ]);
@@ -676,6 +700,8 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
             "name": get_args.name,
             "enabled": server.enabled,
             "transport": transport,
+            "enabled_tools": server.enabled_tools.clone(),
+            "disabled_tools": server.disabled_tools.clone(),
             "startup_timeout_sec": server
                 .startup_timeout_sec
                 .map(|timeout| timeout.as_secs_f64()),
@@ -687,8 +713,28 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
         return Ok(());
     }
 
+    if !server.enabled {
+        println!("{} (disabled)", get_args.name);
+        return Ok(());
+    }
+
     println!("{}", get_args.name);
     println!("  enabled: {}", server.enabled);
+    let format_tool_list = |tools: &Option<Vec<String>>| -> String {
+        match tools {
+            Some(list) if list.is_empty() => "[]".to_string(),
+            Some(list) => list.join(", "),
+            None => "-".to_string(),
+        }
+    };
+    if server.enabled_tools.is_some() {
+        let enabled_tools_display = format_tool_list(&server.enabled_tools);
+        println!("  enabled_tools: {enabled_tools_display}");
+    }
+    if server.disabled_tools.is_some() {
+        let disabled_tools_display = format_tool_list(&server.disabled_tools);
+        println!("  disabled_tools: {disabled_tools_display}");
+    }
     match &server.transport {
         McpServerTransportConfig::Stdio {
             command,
@@ -722,15 +768,15 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
         } => {
             println!("  transport: streamable_http");
             println!("  url: {url}");
-            let env_var = bearer_token_env_var.as_deref().unwrap_or("-");
-            println!("  bearer_token_env_var: {env_var}");
+            let bearer_token_display = bearer_token_env_var.as_deref().unwrap_or("-");
+            println!("  bearer_token_env_var: {bearer_token_display}");
             let headers_display = match http_headers {
                 Some(map) if !map.is_empty() => {
                     let mut pairs: Vec<_> = map.iter().collect();
                     pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
                     pairs
                         .into_iter()
-                        .map(|(k, v)| format!("{k}={v}"))
+                        .map(|(k, _)| format!("{k}=*****"))
                         .collect::<Vec<_>>()
                         .join(", ")
                 }
@@ -743,7 +789,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
                     pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
                     pairs
                         .into_iter()
-                        .map(|(k, v)| format!("{k}={v}"))
+                        .map(|(k, var)| format!("{k}={var}"))
                         .collect::<Vec<_>>()
                         .join(", ")
                 }

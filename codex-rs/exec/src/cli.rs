@@ -62,7 +62,7 @@ pub struct Cli {
     )]
     pub dangerously_disable_environment_wrapping: bool,
 
-    /// Like --yolo3 but also streams command stdout/stderr directly to your terminal and skips all sandbox wrappers. EXTREMELY DANGEROUS.
+    /// Like --yolo3 but also streams command stdout/stderr directly to your terminal.
     #[arg(
         long = "yolo4",
         alias = "dangerously-passthrough-stdio",

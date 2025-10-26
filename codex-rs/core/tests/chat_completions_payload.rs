@@ -8,12 +8,12 @@ use codex_core::LocalShellStatus;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
-use codex_core::ReasoningItemContent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
+use codex_protocol::models::ReasoningItemContent;
 use core_test_support::load_default_config_for_test;
 use futures::StreamExt;
 use serde_json::Value;
@@ -50,6 +50,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         base_url: Some(format!("{}/v1", server.uri())),
         env_key: None,
         env_key_instructions: None,
+        experimental_bearer_token: None,
         wire_api: WireApi::Chat,
         query_params: None,
         http_headers: None,

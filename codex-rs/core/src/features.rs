@@ -31,18 +31,18 @@ pub enum Feature {
     UnifiedExec,
     /// Use the streamable exec-command/write-stdin tool pair.
     StreamableShell,
-    /// Use the official Rust MCP client (rmcp).
+    /// Enable experimental RMCP features such as OAuth login.
     RmcpClient,
-    /// Include the plan tool.
-    PlanTool,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
     /// Include the view_image tool.
     ViewImageTool,
     /// Allow the model to request web searches.
     WebSearchRequest,
-    /// Automatically approve all approval requests from the harness.
-    ApproveAll,
+    /// Enable the model-based risk assessments for sandboxed commands.
+    SandboxCommandAssessment,
+    /// Allow the agent to use the plan tool to communicate progress.
+    PlanTool,
 }
 
 impl Feature {
@@ -74,16 +74,17 @@ pub struct Features {
 
 #[derive(Debug, Clone, Default)]
 pub struct FeatureOverrides {
-    pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
     pub web_search_request: Option<bool>,
+    pub experimental_sandbox_command_assessment: Option<bool>,
+    pub plan_tool: Option<bool>,
 }
 
 impl FeatureOverrides {
     fn apply(self, features: &mut Features) {
         LegacyFeatureToggles {
-            include_plan_tool: self.include_plan_tool,
+            include_plan_tool: self.plan_tool,
             include_apply_patch_tool: self.include_apply_patch_tool,
             include_view_image_tool: self.include_view_image_tool,
             tools_web_search: self.web_search_request,
@@ -143,6 +144,8 @@ impl Features {
         let mut features = Features::with_defaults();
 
         let base_legacy = LegacyFeatureToggles {
+            include_plan_tool: cfg.include_plan_tool,
+            experimental_sandbox_command_assessment: cfg.experimental_sandbox_command_assessment,
             experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
             experimental_use_exec_command_tool: cfg.experimental_use_exec_command_tool,
             experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
@@ -161,6 +164,8 @@ impl Features {
             include_plan_tool: config_profile.include_plan_tool,
             include_apply_patch_tool: config_profile.include_apply_patch_tool,
             include_view_image_tool: config_profile.include_view_image_tool,
+            experimental_sandbox_command_assessment: config_profile
+                .experimental_sandbox_command_assessment,
             experimental_use_freeform_apply_patch: config_profile
                 .experimental_use_freeform_apply_patch,
             experimental_use_exec_command_tool: config_profile.experimental_use_exec_command_tool,
@@ -250,8 +255,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ApproveAll,
-        key: "approve_all",
+        id: Feature::SandboxCommandAssessment,
+        key: "experimental_sandbox_command_assessment",
         stage: Stage::Experimental,
         default_enabled: false,
     },
