@@ -62,8 +62,8 @@ Outstanding:
 - Scripts: [`codex-rs/scripts/create_github_release.spec.md`](../../codex-rs/scripts/create_github_release.spec.md).
 
 ## Outstanding Coverage Gaps
-Remaining files without specs (83 total) cluster in these areas:
-- Core integration suites (`codex-rs/core/tests/**`) and generated openapi models.
+Remaining files without specs (per latest `spec_coverage.py` run):
+- Core integration suites (`codex-rs/core/tests/**`) and generated openapi models (`codex-backend-openapi-models/src/models/*.rs`).
 - Service test suites (`codex-rs/app-server/tests/suite/**`, `codex-rs/mcp-server/tests/**`).
 - CLI/TUI integration tests under `codex-rs/cli/tests/**` and `codex-rs/tui/tests/**`.
 - Exec policy tests (`codex-rs/execpolicy/tests/**`).

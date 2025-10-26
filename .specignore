@@ -1,0 +1,21 @@
+# Patterns to exclude from spec coverage scans.
+# Use glob syntax; directories should end with a trailing slash.
+
+# Build artifacts and version control metadata
+.git/
+target/
+
+# Generated or external dependencies
+node_modules/
+vendor/
+
+# Documentation
+docs/
+
+# Test suites (spec coverage deferred)
+codex-rs/app-server/tests/
+codex-rs/cli/tests/
+codex-rs/core/tests/
+codex-rs/execpolicy/tests/
+codex-rs/rmcp-client/tests/
+codex-rs/tui/tests/
