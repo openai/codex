@@ -368,7 +368,8 @@ async fn review_input_isolated_from_parent_history() {
                 "instructions": null,
                 "cwd": ".",
                 "originator": "test_originator",
-                "cli_version": "test_version"
+                "cli_version": "test_version",
+                "model_provider": "test-provider"
             }
         });
         f.write_all(format!("{meta_line}\n").as_bytes())
