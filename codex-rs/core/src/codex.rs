@@ -109,6 +109,7 @@ use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use crate::tasks::UndoTask;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
@@ -906,7 +907,7 @@ impl Session {
         state.record_items(items.iter());
     }
 
-    async fn replace_history(&self, items: Vec<ResponseItem>) {
+    pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
         let mut state = self.state.lock().await;
         state.replace_history(items);
     }
@@ -1357,6 +1358,13 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     }),
                 };
                 sess.send_event_raw(event).await;
+            }
+            Op::Undo => {
+                let turn_context = sess
+                    .new_turn_with_sub_id(sub.id.clone(), SessionSettingsUpdate::default())
+                    .await;
+                sess.spawn_task(turn_context, Vec::new(), UndoTask::new())
+                    .await;
             }
             Op::Compact => {
                 let turn_context = sess

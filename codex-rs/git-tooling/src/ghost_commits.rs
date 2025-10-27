@@ -1,4 +1,7 @@
+use std::collections::HashSet;
 use std::ffi::OsString;
+use std::fs;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -14,6 +17,7 @@ use crate::operations::resolve_head;
 use crate::operations::resolve_repository_root;
 use crate::operations::run_git_for_status;
 use crate::operations::run_git_for_stdout;
+use crate::operations::run_git_for_stdout_all;
 
 /// Default commit message used for ghost commits when none is provided.
 const DEFAULT_COMMIT_MESSAGE: &str = "codex snapshot";
@@ -69,6 +73,8 @@ pub fn create_ghost_commit(
     let repo_root = resolve_repository_root(options.repo_path)?;
     let repo_prefix = repo_subdir(repo_root.as_path(), options.repo_path);
     let parent = resolve_head(repo_root.as_path())?;
+    let existing_untracked =
+        capture_existing_untracked(repo_root.as_path(), repo_prefix.as_deref())?;
 
     let normalized_force = options
         .force_include
@@ -83,6 +89,16 @@ pub fn create_ghost_commit(
         OsString::from("GIT_INDEX_FILE"),
         OsString::from(index_path.as_os_str()),
     )];
+
+    // Pre-populate the temporary index with HEAD so unchanged tracked files
+    // are included in the snapshot tree.
+    if let Some(parent_sha) = parent.as_deref() {
+        run_git_for_status(
+            repo_root.as_path(),
+            vec![OsString::from("read-tree"), OsString::from(parent_sha)],
+            Some(base_env.as_slice()),
+        )?;
+    }
 
     let mut add_args = vec![OsString::from("add"), OsString::from("--all")];
     if let Some(prefix) = repo_prefix.as_deref() {
@@ -127,12 +143,29 @@ pub fn create_ghost_commit(
         Some(commit_env.as_slice()),
     )?;
 
-    Ok(GhostCommit::new(commit_id, parent))
+    Ok(GhostCommit::new(
+        commit_id,
+        parent,
+        existing_untracked.files,
+        existing_untracked.dirs,
+    ))
 }
 
 /// Restore the working tree to match the provided ghost commit.
 pub fn restore_ghost_commit(repo_path: &Path, commit: &GhostCommit) -> Result<(), GitToolingError> {
-    restore_to_commit(repo_path, commit.id())
+    ensure_git_repository(repo_path)?;
+
+    let repo_root = resolve_repository_root(repo_path)?;
+    let repo_prefix = repo_subdir(repo_root.as_path(), repo_path);
+    let current_untracked =
+        capture_existing_untracked(repo_root.as_path(), repo_prefix.as_deref())?;
+    remove_new_untracked(
+        repo_root.as_path(),
+        commit.preexisting_untracked_files(),
+        commit.preexisting_untracked_dirs(),
+        current_untracked,
+    )?;
+    restore_to_commit_inner(repo_root.as_path(), repo_prefix.as_deref(), commit.id())
 }
 
 /// Restore the working tree to match the given commit ID.
@@ -141,7 +174,16 @@ pub fn restore_to_commit(repo_path: &Path, commit_id: &str) -> Result<(), GitToo
 
     let repo_root = resolve_repository_root(repo_path)?;
     let repo_prefix = repo_subdir(repo_root.as_path(), repo_path);
+    restore_to_commit_inner(repo_root.as_path(), repo_prefix.as_deref(), commit_id)
+}
 
+/// Restores the working tree and index to the given commit using `git restore`.
+/// The repository root and optional repository-relative prefix limit the restore scope.
+fn restore_to_commit_inner(
+    repo_root: &Path,
+    repo_prefix: Option<&Path>,
+    commit_id: &str,
+) -> Result<(), GitToolingError> {
     let mut restore_args = vec![
         OsString::from("restore"),
         OsString::from("--source"),
@@ -150,13 +192,143 @@ pub fn restore_to_commit(repo_path: &Path, commit_id: &str) -> Result<(), GitToo
         OsString::from("--staged"),
         OsString::from("--"),
     ];
-    if let Some(prefix) = repo_prefix.as_deref() {
+    if let Some(prefix) = repo_prefix {
         restore_args.push(prefix.as_os_str().to_os_string());
     } else {
         restore_args.push(OsString::from("."));
     }
 
-    run_git_for_status(repo_root.as_path(), restore_args, None)?;
+    run_git_for_status(repo_root, restore_args, None)?;
+    Ok(())
+}
+
+#[derive(Default)]
+struct UntrackedSnapshot {
+    files: Vec<PathBuf>,
+    dirs: Vec<PathBuf>,
+}
+
+/// Captures the untracked and ignored entries under `repo_root`, optionally limited by `repo_prefix`.
+/// Returns the result as an `UntrackedSnapshot`.
+fn capture_existing_untracked(
+    repo_root: &Path,
+    repo_prefix: Option<&Path>,
+) -> Result<UntrackedSnapshot, GitToolingError> {
+    // Ask git for the zero-delimited porcelain status so we can enumerate
+    // every untracked or ignored path (including ones filtered by prefix).
+    let mut args = vec![
+        OsString::from("status"),
+        OsString::from("--porcelain=2"),
+        OsString::from("-z"),
+        OsString::from("--ignored=matching"),
+        OsString::from("--untracked-files=all"),
+    ];
+    if let Some(prefix) = repo_prefix {
+        args.push(OsString::from("--"));
+        args.push(prefix.as_os_str().to_os_string());
+    }
+
+    let output = run_git_for_stdout_all(repo_root, args, None)?;
+    if output.is_empty() {
+        return Ok(UntrackedSnapshot::default());
+    }
+
+    let mut snapshot = UntrackedSnapshot::default();
+    // Each entry is of the form "<code> <path>" where code is '?' (untracked)
+    // or '!' (ignored); everything else is irrelevant to this snapshot.
+    for entry in output.split('\0') {
+        if entry.is_empty() {
+            continue;
+        }
+        let mut parts = entry.splitn(2, ' ');
+        let code = parts.next();
+        let path_part = parts.next();
+        let (Some(code), Some(path_part)) = (code, path_part) else {
+            continue;
+        };
+        if code != "?" && code != "!" {
+            continue;
+        }
+        if path_part.is_empty() {
+            continue;
+        }
+
+        let normalized = normalize_relative_path(Path::new(path_part))?;
+        let absolute = repo_root.join(&normalized);
+        let is_dir = absolute.is_dir();
+        if is_dir {
+            snapshot.dirs.push(normalized);
+        } else {
+            snapshot.files.push(normalized);
+        }
+    }
+
+    Ok(snapshot)
+}
+
+/// Removes untracked files and directories that were not present when the snapshot was captured.
+fn remove_new_untracked(
+    repo_root: &Path,
+    preserved_files: &[PathBuf],
+    preserved_dirs: &[PathBuf],
+    current: UntrackedSnapshot,
+) -> Result<(), GitToolingError> {
+    if current.files.is_empty() && current.dirs.is_empty() {
+        return Ok(());
+    }
+
+    let preserved_file_set: HashSet<PathBuf> = preserved_files.iter().cloned().collect();
+    let preserved_dirs_vec: Vec<PathBuf> = preserved_dirs.to_vec();
+
+    for path in current.files {
+        if should_preserve(&path, &preserved_file_set, &preserved_dirs_vec) {
+            continue;
+        }
+        remove_path(&repo_root.join(&path))?;
+    }
+
+    for dir in current.dirs {
+        if should_preserve(&dir, &preserved_file_set, &preserved_dirs_vec) {
+            continue;
+        }
+        remove_path(&repo_root.join(&dir))?;
+    }
+
+    Ok(())
+}
+
+/// Determines whether an untracked path should be kept because it existed in the snapshot.
+fn should_preserve(
+    path: &Path,
+    preserved_files: &HashSet<PathBuf>,
+    preserved_dirs: &[PathBuf],
+) -> bool {
+    if preserved_files.contains(path) {
+        return true;
+    }
+
+    preserved_dirs
+        .iter()
+        .any(|dir| path.starts_with(dir.as_path()))
+}
+
+/// Deletes the file or directory at the provided path, ignoring if it is already absent.
+fn remove_path(path: &Path) -> Result<(), GitToolingError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.is_dir() {
+                fs::remove_dir_all(path)?;
+            } else {
+                fs::remove_file(path)?;
+            }
+        }
+        Err(err) => {
+            if err.kind() == io::ErrorKind::NotFound {
+                return Ok(());
+            }
+            return Err(err.into());
+        }
+    }
     Ok(())
 }
 
@@ -239,6 +411,9 @@ mod tests {
             ],
         );
 
+        let preexisting_untracked = repo.join("notes.txt");
+        std::fs::write(&preexisting_untracked, "notes before\n")?;
+
         let tracked_contents = "modified contents\n";
         std::fs::write(repo.join("tracked.txt"), tracked_contents)?;
         std::fs::remove_file(repo.join("delete-me.txt"))?;
@@ -267,6 +442,7 @@ mod tests {
         std::fs::write(repo.join("ignored.txt"), "changed\n")?;
         std::fs::remove_file(repo.join("new-file.txt"))?;
         std::fs::write(repo.join("ephemeral.txt"), "temp data\n")?;
+        std::fs::write(&preexisting_untracked, "notes after\n")?;
 
         restore_ghost_commit(repo, &ghost)?;
 
@@ -277,7 +453,9 @@ mod tests {
         let new_file_after = std::fs::read_to_string(repo.join("new-file.txt"))?;
         assert_eq!(new_file_after, new_file_contents);
         assert_eq!(repo.join("delete-me.txt").exists(), false);
-        assert!(repo.join("ephemeral.txt").exists());
+        assert!(!repo.join("ephemeral.txt").exists());
+        let notes_after = std::fs::read_to_string(&preexisting_untracked)?;
+        assert_eq!(notes_after, "notes before\n");
 
         Ok(())
     }
@@ -488,7 +666,43 @@ mod tests {
         assert!(vscode.join("settings.json").exists());
         let settings_after = std::fs::read_to_string(vscode.join("settings.json"))?;
         assert_eq!(settings_after, "{\n  \"after\": true\n}\n");
-        assert!(repo.join("temp.txt").exists());
+        assert!(!repo.join("temp.txt").exists());
+
+        Ok(())
+    }
+
+    #[test]
+    /// Restoring removes ignored directories created after the snapshot.
+    fn restore_removes_new_ignored_directory() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        std::fs::write(repo.join(".gitignore"), ".vscode/\n")?;
+        std::fs::write(repo.join("tracked.txt"), "snapshot version\n")?;
+        run_git_in(repo, &["add", ".gitignore", "tracked.txt"]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(repo))?;
+
+        let vscode = repo.join(".vscode");
+        std::fs::create_dir_all(&vscode)?;
+        std::fs::write(vscode.join("settings.json"), "{\n  \"after\": true\n}\n")?;
+
+        restore_ghost_commit(repo, &ghost)?;
+
+        assert!(!vscode.exists());
 
         Ok(())
     }

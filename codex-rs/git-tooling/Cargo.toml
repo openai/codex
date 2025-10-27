@@ -9,13 +9,20 @@ name = "codex_git_tooling"
 path = "src/lib.rs"
 
 [dependencies]
-tempfile = "3"
-thiserror = "2"
-walkdir = "2"
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+walkdir = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+ts-rs = { workspace = true, features = [
+    "uuid-impl",
+    "serde-json-impl",
+    "no-serde-warnings",
+] }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 assert_matches = { workspace = true }
-pretty_assertions = "1.4.1"
+pretty_assertions = { workspace = true }
