@@ -1007,6 +1007,45 @@ pub(crate) fn new_warning_event(message: String) -> PlainHistoryCell {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct DeprecationNoticeCell {
+    summary: String,
+    details: Option<String>,
+}
+
+pub(crate) fn new_deprecation_notice(
+    summary: String,
+    details: Option<String>,
+) -> DeprecationNoticeCell {
+    DeprecationNoticeCell { summary, details }
+}
+
+impl HistoryCell for DeprecationNoticeCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(
+            vec![
+                "⚠ ".magenta(),
+                "Deprecated".magenta().bold(),
+                ": ".into(),
+                self.summary.clone().into(),
+            ]
+            .into(),
+        );
+
+        let wrap_width = width.saturating_sub(4).max(1) as usize;
+
+        if let Some(details) = &self.details {
+            let detail_line = Line::from(details.clone().dim());
+            let wrapped = word_wrap_line(&detail_line, RtOptions::new(wrap_width));
+            let owned: Vec<Line<'static>> = wrapped.iter().map(line_to_static).collect();
+            lines.extend(prefix_lines(owned, "  • ".dim(), "    ".dim()));
+        }
+
+        lines
+    }
+}
+
 /// Render a summary of configured MCP servers from the current `Config`.
 pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
     let lines: Vec<Line<'static>> = vec![
@@ -2246,5 +2285,22 @@ mod tests {
 
         let rendered_transcript = render_transcript(cell.as_ref());
         assert_eq!(rendered_transcript, vec!["• We should fix the bug next."]);
+    }
+
+    #[test]
+    fn deprecation_notice_renders_summary_with_details() {
+        let cell = new_deprecation_notice(
+            "Feature flag `foo`".to_string(),
+            Some("Use flag `bar` instead.".to_string()),
+        );
+        let lines = cell.display_lines(80);
+        let rendered = render_lines(&lines);
+        assert_eq!(
+            rendered,
+            vec![
+                "⚠ Deprecated: Feature flag `foo`".to_string(),
+                "  • Use flag `bar` instead.".to_string(),
+            ]
+        );
     }
 }

@@ -78,6 +78,7 @@ use crate::protocol::AgentReasoningSectionBreakEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
 use crate::protocol::BackgroundEventEvent;
+use crate::protocol::DeprecationNoticeEvent;
 use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
@@ -1090,6 +1091,22 @@ impl Session {
     /// Helper that emits a BackgroundEvent with the given message. This keeps
     /// the call‑sites terse so adding more diagnostics does not clutter the
     /// core agent logic.
+    #[allow(dead_code)]
+    pub(crate) async fn notify_deprecation_notice<D>(
+        &self,
+        turn_context: &TurnContext,
+        summary: impl Into<String>,
+        details: Option<D>,
+    ) where
+        D: Into<String>,
+    {
+        let event = EventMsg::DeprecationNotice(DeprecationNoticeEvent {
+            summary: summary.into(),
+            details: details.map(Into::into),
+        });
+        self.send_event(turn_context, event).await;
+    }
+
     pub(crate) async fn notify_background_event(
         &self,
         turn_context: &TurnContext,
