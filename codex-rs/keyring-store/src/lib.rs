@@ -6,23 +6,33 @@ use std::fmt::Debug;
 use tracing::trace;
 
 #[derive(Debug)]
-pub struct CredentialStoreError(KeyringError);
+pub enum CredentialStoreError {
+    Other(KeyringError),
+}
 
 impl CredentialStoreError {
     pub fn new(error: KeyringError) -> Self {
-        Self(error)
+        Self::Other(error)
     }
+
     pub fn message(&self) -> String {
-        self.0.to_string()
+        match self {
+            Self::Other(error) => error.to_string(),
+        }
     }
+
     pub fn into_error(self) -> KeyringError {
-        self.0
+        match self {
+            Self::Other(error) => error,
+        }
     }
 }
 
 impl fmt::Display for CredentialStoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        match self {
+            Self::Other(error) => write!(f, "{error}"),
+        }
     }
 }
 
@@ -199,25 +209,18 @@ pub mod tests {
                 return Ok(false);
             };
 
-            match credential.delete_credential() {
-                Ok(()) => {
-                    let mut guard = self
-                        .credentials
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner);
-                    guard.remove(account);
-                    Ok(true)
-                }
-                Err(KeyringError::NoEntry) => {
-                    let mut guard = self
-                        .credentials
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner);
-                    guard.remove(account);
-                    Ok(false)
-                }
+            let removed = match credential.delete_credential() {
+                Ok(()) => Ok(true),
+                Err(KeyringError::NoEntry) => Ok(false),
                 Err(error) => Err(CredentialStoreError::new(error)),
-            }
+            }?;
+
+            let mut guard = self
+                .credentials
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            guard.remove(account);
+            Ok(removed)
         }
     }
 }
