@@ -186,6 +186,49 @@ async fn streams_text_without_reasoning() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn completed_event_includes_usage_estimate() {
+    if network_disabled() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    let sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+
+    let events = run_stream(sse).await;
+    assert_eq!(events.len(), 3, "unexpected events: {events:?}");
+
+    let usage = events
+        .iter()
+        .find_map(|event| match event {
+            ResponseEvent::Completed {
+                token_usage: Some(usage),
+                ..
+            } => Some(usage.clone()),
+            _ => None,
+        })
+        .expect("missing usage estimate on Completed event");
+
+    assert!(
+        usage.input_tokens > 0,
+        "expected input tokens > 0, got {usage:?}"
+    );
+    assert!(
+        usage.output_tokens > 0,
+        "expected output tokens > 0, got {usage:?}"
+    );
+    assert!(
+        usage.total_tokens >= usage.input_tokens + usage.output_tokens,
+        "expected total tokens to cover input + output, got {usage:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn streams_reasoning_from_string_delta() {
     if network_disabled() {
         println!(
