@@ -161,6 +161,27 @@ where
         })
 }
 
+/// Executes `git` and returns the full stdout without trimming so callers
+/// can parse delimiter-sensitive output, propagating UTF-8 errors with context.
+pub(crate) fn run_git_for_stdout_all<I, S>(
+    dir: &Path,
+    args: I,
+    env: Option<&[(OsString, OsString)]>,
+) -> Result<String, GitToolingError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    // Keep the raw stdout untouched so callers can parse delimiter-sensitive
+    // output (e.g. NUL-separated paths) without trimming artefacts.
+    let run = run_git(dir, args, env)?;
+    // Propagate UTF-8 conversion failures with the command context for debugging.
+    String::from_utf8(run.output.stdout).map_err(|source| GitToolingError::GitOutputUtf8 {
+        command: run.command,
+        source,
+    })
+}
+
 fn run_git<I, S>(
     dir: &Path,
     args: I,
