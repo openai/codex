@@ -597,6 +597,18 @@ impl Session {
         self.tx_event.clone()
     }
 
+    /// Ensure all rollout writes are durably flushed.
+    pub(crate) async fn flush_rollout(&self) {
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
+        if let Some(rec) = recorder
+            && let Err(e) = rec.flush().await {
+                warn!("failed to flush rollout recorder: {e}");
+            }
+    }
+
     fn next_internal_sub_id(&self) -> String {
         let id = self
             .next_internal_sub_id
@@ -611,6 +623,8 @@ impl Session {
                 // Build and record initial items (user instructions + environment context)
                 let items = self.build_initial_context(&turn_context);
                 self.record_conversation_items(&turn_context, &items).await;
+                // Ensure initial items are visible to immediate readers (e.g., tests, forks).
+                self.flush_rollout().await;
             }
             InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
                 let rollout_items = conversation_history.get_rollout_items();
@@ -627,6 +641,8 @@ impl Session {
                 if persist && !rollout_items.is_empty() {
                     self.persist_rollout_items(&rollout_items).await;
                 }
+                // Flush after seeding history and any persisted rollout copy.
+                self.flush_rollout().await;
             }
         }
     }
@@ -2204,6 +2220,8 @@ pub(crate) async fn exit_review_mode(
             }],
         )
         .await;
+    // Make the recorded review note visible immediately for readers.
+    session.flush_rollout().await;
 }
 
 fn mcp_init_error_display(
