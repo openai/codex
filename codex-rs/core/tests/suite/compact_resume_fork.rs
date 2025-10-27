@@ -18,7 +18,6 @@ use codex_core::built_in_model_providers;
 use codex_core::codex::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
 use codex_core::config::OPENAI_DEFAULT_MODEL;
-use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
@@ -61,7 +60,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
     user_turn(&base, "AFTER_COMPACT").await;
-    let base_path = fetch_conversation_path(&base, "base conversation").await;
+    let base_path = fetch_conversation_path(&base).await;
     assert!(
         base_path.exists(),
         "compact+resume test expects base path {base_path:?} to exist",
@@ -69,7 +68,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
 
     let resumed = resume_conversation(&manager, &config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
-    let resumed_path = fetch_conversation_path(&resumed, "resumed conversation").await;
+    let resumed_path = fetch_conversation_path(&resumed).await;
     assert!(
         resumed_path.exists(),
         "compact+resume test expects resumed path {resumed_path:?} to exist",
@@ -518,7 +517,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
     user_turn(&base, "AFTER_COMPACT").await;
-    let base_path = fetch_conversation_path(&base, "base conversation").await;
+    let base_path = fetch_conversation_path(&base).await;
     assert!(
         base_path.exists(),
         "second compact test expects base path {base_path:?} to exist",
@@ -526,7 +525,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
 
     let resumed = resume_conversation(&manager, &config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
-    let resumed_path = fetch_conversation_path(&resumed, "resumed conversation").await;
+    let resumed_path = fetch_conversation_path(&resumed).await;
     assert!(
         resumed_path.exists(),
         "second compact test expects resumed path {resumed_path:?} to exist",
@@ -537,7 +536,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
 
     compact_conversation(&forked).await;
     user_turn(&forked, "AFTER_COMPACT_2").await;
-    let forked_path = fetch_conversation_path(&forked, "forked conversation").await;
+    let forked_path = fetch_conversation_path(&forked).await;
     assert!(
         forked_path.exists(),
         "second compact test expects forked path {forked_path:?} to exist",
@@ -792,22 +791,8 @@ async fn compact_conversation(conversation: &Arc<CodexConversation>) {
     wait_for_event(conversation, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 }
 
-async fn fetch_conversation_path(
-    conversation: &Arc<CodexConversation>,
-    context: &str,
-) -> std::path::PathBuf {
-    conversation
-        .submit(Op::GetPath)
-        .await
-        .expect("request conversation path");
-    match wait_for_event(conversation, |ev| {
-        matches!(ev, EventMsg::ConversationPath(_))
-    })
-    .await
-    {
-        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path,
-        _ => panic!("expected ConversationPath event for {context}"),
-    }
+async fn fetch_conversation_path(conversation: &Arc<CodexConversation>) -> std::path::PathBuf {
+    conversation.rollout_path()
 }
 
 async fn resume_conversation(
