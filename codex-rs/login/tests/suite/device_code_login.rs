@@ -1,9 +1,9 @@
 #![allow(clippy::unwrap_used)]
 
+use anyhow::Context;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use codex_core::auth::get_auth_file;
-use codex_core::auth::try_read_auth_json;
+use codex_core::auth::load_auth_dot_json;
 use codex_login::ServerOptions;
 use codex_login::run_device_code_login;
 use serde_json::json;
@@ -108,8 +108,8 @@ fn server_opts(codex_home: &tempfile::TempDir, issuer: String) -> ServerOptions 
 }
 
 #[tokio::test]
-async fn device_code_login_integration_succeeds() {
-    skip_if_no_network!();
+async fn device_code_login_integration_succeeds() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
 
     let codex_home = tempdir().unwrap();
     let mock_server = MockServer::start().await;
@@ -133,19 +133,21 @@ async fn device_code_login_integration_succeeds() {
         .await
         .expect("device code login integration should succeed");
 
-    let auth_path = get_auth_file(codex_home.path());
-    let auth = try_read_auth_json(&auth_path).expect("auth.json written");
+    let auth = load_auth_dot_json(codex_home.path())
+        .context("auth.json should load after login succeeds")?
+        .context("auth.json written")?;
     // assert_eq!(auth.openai_api_key.as_deref(), Some("api-key-321"));
     let tokens = auth.tokens.expect("tokens persisted");
     assert_eq!(tokens.access_token, "access-token-123");
     assert_eq!(tokens.refresh_token, "refresh-token-123");
     assert_eq!(tokens.id_token.raw_jwt, jwt);
     assert_eq!(tokens.account_id.as_deref(), Some("acct_321"));
+    Ok(())
 }
 
 #[tokio::test]
-async fn device_code_login_rejects_workspace_mismatch() {
-    skip_if_no_network!();
+async fn device_code_login_rejects_workspace_mismatch() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
 
     let codex_home = tempdir().unwrap();
     let mock_server = MockServer::start().await;
@@ -172,16 +174,18 @@ async fn device_code_login_rejects_workspace_mismatch() {
         .expect_err("device code login should fail when workspace mismatches");
     assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
 
-    let auth_path = get_auth_file(codex_home.path());
+    let auth =
+        load_auth_dot_json(codex_home.path()).context("auth.json should load after login fails")?;
     assert!(
-        !auth_path.exists(),
+        auth.is_none(),
         "auth.json should not be created when workspace validation fails"
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn device_code_login_integration_handles_usercode_http_failure() {
-    skip_if_no_network!();
+async fn device_code_login_integration_handles_usercode_http_failure() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
 
     let codex_home = tempdir().unwrap();
     let mock_server = MockServer::start().await;
@@ -201,13 +205,19 @@ async fn device_code_login_integration_handles_usercode_http_failure() {
         "unexpected error: {err:?}"
     );
 
-    let auth_path = get_auth_file(codex_home.path());
-    assert!(!auth_path.exists());
+    let auth =
+        load_auth_dot_json(codex_home.path()).context("auth.json should load after login fails")?;
+    assert!(
+        auth.is_none(),
+        "auth.json should not be created when login fails"
+    );
+    Ok(())
 }
 
 #[tokio::test]
-async fn device_code_login_integration_persists_without_api_key_on_exchange_failure() {
-    skip_if_no_network!();
+async fn device_code_login_integration_persists_without_api_key_on_exchange_failure()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
 
     let codex_home = tempdir().unwrap();
 
@@ -235,18 +245,20 @@ async fn device_code_login_integration_persists_without_api_key_on_exchange_fail
         .await
         .expect("device login should succeed without API key exchange");
 
-    let auth_path = get_auth_file(codex_home.path());
-    let auth = try_read_auth_json(&auth_path).expect("auth.json written");
+    let auth = load_auth_dot_json(codex_home.path())
+        .context("auth.json should load after login succeeds")?
+        .context("auth.json written")?;
     assert!(auth.openai_api_key.is_none());
     let tokens = auth.tokens.expect("tokens persisted");
     assert_eq!(tokens.access_token, "access-token-123");
     assert_eq!(tokens.refresh_token, "refresh-token-123");
     assert_eq!(tokens.id_token.raw_jwt, jwt);
+    Ok(())
 }
 
 #[tokio::test]
-async fn device_code_login_integration_handles_error_payload() {
-    skip_if_no_network!();
+async fn device_code_login_integration_handles_error_payload() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
 
     let codex_home = tempdir().unwrap();
 
@@ -288,9 +300,11 @@ async fn device_code_login_integration_handles_error_payload() {
         "Expected an authorization_declined / 400 / 404 error, got {err:?}"
     );
 
-    let auth_path = get_auth_file(codex_home.path());
+    let auth =
+        load_auth_dot_json(codex_home.path()).context("auth.json should load after login fails")?;
     assert!(
-        !auth_path.exists(),
+        auth.is_none(),
         "auth.json should not be created when device auth fails"
     );
+    Ok(())
 }

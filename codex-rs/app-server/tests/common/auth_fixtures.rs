@@ -7,8 +7,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_core::auth::AuthDotJson;
-use codex_core::auth::get_auth_file;
-use codex_core::auth::write_auth_json;
+use codex_core::auth::save_auth;
 use codex_core::token_data::TokenData;
 use codex_core::token_data::parse_id_token;
 use serde_json::json;
@@ -127,5 +126,5 @@ pub fn write_chatgpt_auth(codex_home: &Path, fixture: ChatGptAuthFixture) -> Res
         last_refresh,
     };
 
-    write_auth_json(&get_auth_file(codex_home), &auth).context("write auth.json")
+    save_auth(codex_home, &auth).context("write auth.json")
 }
