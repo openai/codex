@@ -476,7 +476,7 @@ fn get_login_status(config: &Config) -> LoginStatus {
         // Reading the OpenAI API key is an async operation because it may need
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
-        match CodexAuth::from_codex_home(&codex_home) {
+        match CodexAuth::from_auth_storage(&codex_home) {
             Ok(Some(auth)) => LoginStatus::AuthMode(auth.mode),
             Ok(None) => LoginStatus::NotAuthenticated,
             Err(err) => {

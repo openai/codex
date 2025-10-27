@@ -2,8 +2,7 @@ use crate::exec_command::relativize_to_home;
 use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
-use codex_core::auth::get_auth_file;
-use codex_core::auth::try_read_auth_json;
+use codex_core::auth::load_auth_dot_json;
 use codex_core::config::Config;
 use codex_core::project_doc::discover_project_doc_paths;
 use std::path::Path;
@@ -84,8 +83,7 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
 }
 
 pub(crate) fn compose_account_display(config: &Config) -> Option<StatusAccountDisplay> {
-    let auth_file = get_auth_file(&config.codex_home);
-    let auth = try_read_auth_json(&auth_file).ok()?;
+    let auth = load_auth_dot_json(&config.codex_home).ok()??;
 
     if let Some(tokens) = auth.tokens.as_ref() {
         let info = &tokens.id_token;
