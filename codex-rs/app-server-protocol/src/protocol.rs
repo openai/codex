@@ -225,6 +225,12 @@ client_request_definitions! {
     },
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAccountResponse {
+    pub account: Account,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeParams {
@@ -534,12 +540,6 @@ pub struct ExecOneOffCommandResponse {
 pub struct GetAccountRateLimitsResponse {
     pub rate_limits: RateLimitSnapshot,
 }
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(transparent)]
-#[ts(export)]
-#[ts(type = "Account | null")]
-pub struct GetAccountResponse(#[ts(type = "Account | null")] pub Option<Account>);
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
