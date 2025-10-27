@@ -604,9 +604,10 @@ impl Session {
             guard.clone()
         };
         if let Some(rec) = recorder
-            && let Err(e) = rec.flush().await {
-                warn!("failed to flush rollout recorder: {e}");
-            }
+            && let Err(e) = rec.flush().await
+        {
+            warn!("failed to flush rollout recorder: {e}");
+        }
     }
 
     fn next_internal_sub_id(&self) -> String {
