@@ -1,4 +1,4 @@
-﻿use crate::winutil::to_wide;
+use crate::winutil::to_wide;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::ffi::c_void;
@@ -30,56 +30,6 @@ const LUA_TOKEN: u32 = 0x04;
 const WRITE_RESTRICTED: u32 = 0x08;
 const WIN_WORLD_SID: i32 = 1;
 const SE_GROUP_LOGON_ID: u32 = 0xC0000000;
-fn append_debug_log(line: &str) {
-    use std::fs::OpenOptions;
-    use std::io::Write;
-    let path = crate::logging::LOG_FILE_NAME;
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "{}", line);
-    }
-}
-
-unsafe fn log_restricted_sids_debug(h_token: HANDLE, ctx: &str) {
-    // TOKEN_INFORMATION_CLASS::TokenRestrictedSids = 11
-    let mut needed: u32 = 0;
-    unsafe {
-        windows_sys::Win32::Security::GetTokenInformation(
-            h_token,
-            11,
-            std::ptr::null_mut(),
-            0,
-            &mut needed,
-        );
-        if needed == 0 {
-            append_debug_log(&format!(
-                "DEBUG: restricted_sids {}: query failed (size)",
-                ctx
-            ));
-            return;
-        }
-        let mut buf: Vec<u8> = vec![0u8; needed as usize];
-        let ok = windows_sys::Win32::Security::GetTokenInformation(
-            h_token,
-            11,
-            buf.as_mut_ptr() as *mut c_void,
-            needed,
-            &mut needed,
-        );
-        if ok == 0 {
-            append_debug_log(&format!(
-                "DEBUG: restricted_sids {}: query failed (data)",
-                ctx
-            ));
-            return;
-        }
-        if needed < std::mem::size_of::<u32>() as u32 {
-            append_debug_log(&format!("DEBUG: restricted_sids {}: buffer too small", ctx));
-            return;
-        }
-        let count = std::ptr::read_unaligned(buf.as_ptr() as *const u32) as usize;
-        append_debug_log(&format!("DEBUG: restricted_sids {}: count={}", ctx, count));
-    }
-}
 
 pub unsafe fn world_sid() -> Result<Vec<u8>> {
     let mut size: u32 = 0;
@@ -159,7 +109,6 @@ pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
             return None;
         }
         let group_count = std::ptr::read_unaligned(buf.as_ptr() as *const u32) as usize;
-        append_debug_log(&format!("DEBUG: token groups count={}", group_count));
         // TOKEN_GROUPS layout is: DWORD GroupCount; SID_AND_ATTRIBUTES Groups[];
         // On 64-bit, Groups is aligned to pointer alignment after 4-byte GroupCount.
         let after_count = unsafe { buf.as_ptr().add(std::mem::size_of::<u32>()) } as usize;
@@ -168,10 +117,6 @@ pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
         let groups_ptr = aligned as *const SID_AND_ATTRIBUTES;
         for i in 0..group_count {
             let entry: SID_AND_ATTRIBUTES = std::ptr::read_unaligned(groups_ptr.add(i));
-            append_debug_log(&format!(
-                "DEBUG: group[{}] attrs=0x{:08x}",
-                i, entry.Attributes
-            ));
             if (entry.Attributes & SE_GROUP_LOGON_ID) == SE_GROUP_LOGON_ID {
                 let sid = entry.Sid;
                 let sid_len = GetLengthSid(sid);
@@ -321,9 +266,6 @@ pub unsafe fn create_workspace_write_token_with_cap(
     if ok == 0 {
         return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
     }
-    unsafe {
-        log_restricted_sids_debug(new_token, "workspace-write");
-    }
     enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
     Ok((new_token, psid_capability))
 }
@@ -405,9 +347,6 @@ pub unsafe fn create_readonly_token_with_cap(
     );
     if ok == 0 {
         return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
-    }
-    unsafe {
-        log_restricted_sids_debug(new_token, "read-only");
     }
     enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
     Ok((new_token, psid_capability))
