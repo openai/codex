@@ -1801,7 +1801,7 @@ impl ChatWidget {
                 "Codex forced your settings back to Read Only on this Windows machine.".bold()
             ]);
             header.push(line![
-                    "For sandboxed automation, run Codex inside Windows Subsystem for Linux (WSL) or enable Full Access manually.".dim()
+                "To re-enable Auto mode, run Codex inside Windows Subsystem for Linux (WSL) or enable Full Access manually.".dim()
                 ]);
             Box::new(header)
         } else {
