@@ -235,36 +235,62 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                 .into_iter()
                 .map(|c| match c {
                     UserInput::Text { text } => ContentItem::InputText { text },
+
                     UserInput::Image { image_url } => ContentItem::InputImage { image_url },
+
                     UserInput::LocalImage { path } => match load_and_resize_to_fit(&path) {
                         Ok(image) => ContentItem::InputImage {
                             image_url: image.into_data_url(),
                         },
+
                         Err(err) => {
-                            tracing::warn!("Failed to resize image {}: {}", path.display(), err);
+                            // Keep a single return type: always produce a ContentItem.
+                            tracing::warn!(
+                                "Failed to resize image {}: {}",
+                                path.display(),
+                                err
+                            );
+
+                            // 1) If it's a read error, first try the WSL Windows-path mapping.
+                            // 2) If that fails (or not a read error), try reading the original path as-is.
+                            // 3) If everything fails, return a placeholder item.
+                            let try_build_data_url = |bytes: Vec<u8>, mime_path: &std::path::Path| {
+                                let mime = mime_guess::from_path(mime_path)
+                                    .first()
+                                    .map(|m| m.essence_str().to_owned())
+                                    .unwrap_or_else(|| "image".to_string());
+                                let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+                                ContentItem::InputImage {
+                                    image_url: format!("data:{mime};base64,{encoded}"),
+                                }
+                            };
+
+                            // Attempt WSL drive mapping only when relevant.
                             if matches!(&err, ImageProcessingError::Read { .. }) {
-                                local_image_error_placeholder(&path, &err)
-                            } else {
-                                match std::fs::read(&path) {
-                                    Ok(bytes) => {
-                                        let mime = mime_guess::from_path(&path)
-                                            .first()
-                                            .map(|m| m.essence_str().to_owned())
-                                            .unwrap_or_else(|| "image".to_string());
-                                        let encoded =
-                                            base64::engine::general_purpose::STANDARD.encode(bytes);
-                                        ContentItem::InputImage {
-                                            image_url: format!("data:{mime};base64,{encoded}"),
+                                if platform::is_running_under_wsl() {
+                                    let win_path_str = path.to_string_lossy();
+                                    if let Some(mapped) =
+                                        platform::try_map_windows_drive_to_wsl_path(&win_path_str)
+                                    {
+                                        if let Ok(bytes2) = std::fs::read(&mapped) {
+                                            return try_build_data_url(bytes2, std::path::Path::new(&mapped));
                                         }
                                     }
-                                    Err(read_err) => {
-                                        tracing::warn!(
-                                            "Skipping image {} – could not read file: {}",
-                                            path.display(),
-                                            read_err
-                                        );
-                                        local_image_error_placeholder(&path, &read_err)
-                                    }
+                                }
+                            }
+
+                            // Direct raw read fallback (returns original image as data URL without resizing).
+                            match std::fs::read(&path) {
+                                Ok(bytes) => try_build_data_url(bytes, &path),
+
+                                Err(read_err) => {
+                                    tracing::warn!(
+                                        "Skipping image {} – could not read file: {}",
+                                        path.display(),
+                                        read_err
+                                    );
+                                    // Final fallback: placeholder content item (stays type-stable).
+                                    local_image_error_placeholder(&path, &read_err)
                                 }
                             }
                         }
@@ -274,6 +300,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
         }
     }
 }
+
 
 /// If the `name` of a `ResponseItem::FunctionCall` is either `container.exec`
 /// or shell`, the `arguments` field should deserialize to this struct.
