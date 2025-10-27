@@ -250,6 +250,11 @@ impl ConversationHistory {
 
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
+        self.token_info = None;
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.items.len()
     }
 
     /// Removes the corresponding paired item for the provided `item`, if any.

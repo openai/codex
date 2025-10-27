@@ -105,10 +105,6 @@ impl TurnState {
         self.pending_input.push(input);
     }
 
-    pub(crate) fn has_pending_input(&self) -> bool {
-        !self.pending_input.is_empty()
-    }
-
     pub(crate) fn take_pending_input(&mut self) -> Vec<ResponseInputItem> {
         if self.pending_input.is_empty() {
             Vec::with_capacity(0)

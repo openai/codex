@@ -42,6 +42,10 @@ impl SessionState {
         self.history.clone()
     }
 
+    pub(crate) fn history_len(&self) -> usize {
+        self.history.len()
+    }
+
     pub(crate) fn replace_history(&mut self, items: Vec<ResponseItem>) {
         self.history.replace(items);
     }
