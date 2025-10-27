@@ -11,7 +11,9 @@ use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 
 #[cfg(target_os = "windows")]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+#[cfg(target_os = "windows")]
+use std::sync::atomic::Ordering;
 
 #[cfg(target_os = "windows")]
 static WINDOWS_SANDBOX_ENABLED: AtomicBool = AtomicBool::new(false);
