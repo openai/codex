@@ -74,27 +74,13 @@ impl SandboxManager {
         match pref {
             SandboxablePreference::Forbid => SandboxType::None,
             SandboxablePreference::Require => {
-                #[cfg(target_os = "macos")]
-                {
-                    return SandboxType::MacosSeatbelt;
-                }
-                #[cfg(target_os = "linux")]
-                {
-                    return SandboxType::LinuxSeccomp;
-                }
-                #[allow(unreachable_code)]
-                SandboxType::None
+                // Require a platform sandbox when available; on Windows this
+                // respects the experimental enable_windows_sandbox feature.
+                crate::safety::get_platform_sandbox().unwrap_or(SandboxType::None)
             }
             SandboxablePreference::Auto => match policy {
                 SandboxPolicy::DangerFullAccess => SandboxType::None,
-                #[cfg(target_os = "macos")]
-                _ => SandboxType::MacosSeatbelt,
-                #[cfg(target_os = "linux")]
-                _ => SandboxType::LinuxSeccomp,
-                #[cfg(target_os = "windows")]
-                _ => SandboxType::WindowsRestrictedToken,
-                #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-                _ => SandboxType::None,
+                _ => crate::safety::get_platform_sandbox().unwrap_or(SandboxType::None),
             },
         }
     }

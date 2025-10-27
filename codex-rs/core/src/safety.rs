@@ -10,6 +10,20 @@ use crate::exec::SandboxType;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 
+#[cfg(target_os = "windows")]
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(target_os = "windows")]
+static WINDOWS_SANDBOX_ENABLED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "windows")]
+pub fn set_windows_sandbox_enabled(enabled: bool) {
+    WINDOWS_SANDBOX_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_windows_sandbox_enabled(_enabled: bool) {}
+
 #[derive(Debug, PartialEq)]
 pub enum SafetyCheck {
     AutoApprove {
@@ -85,7 +99,11 @@ pub fn get_platform_sandbox() -> Option<SandboxType> {
     } else if cfg!(target_os = "linux") {
         Some(SandboxType::LinuxSeccomp)
     } else if cfg!(target_os = "windows") {
-        Some(SandboxType::WindowsRestrictedToken)
+        if WINDOWS_SANDBOX_ENABLED.load(Ordering::Relaxed) {
+            Some(SandboxType::WindowsRestrictedToken)
+        } else {
+            None
+        }
     } else {
         None
     }

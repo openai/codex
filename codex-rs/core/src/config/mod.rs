@@ -900,6 +900,10 @@ impl Config {
         };
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
+        #[cfg(target_os = "windows")]
+        {
+            crate::safety::set_windows_sandbox_enabled(features.enabled(Feature::WindowsSandbox));
+        }
 
         let resolved_cwd = {
             use std::env;
