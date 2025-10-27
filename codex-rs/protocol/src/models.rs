@@ -142,7 +142,7 @@ impl From<ResponseInputItem> for ResponseItem {
             }
             ResponseInputItem::McpToolCallOutput { call_id, result } => {
                 let output = match result {
-                    Ok(result) => FunctionCallOutputPayload::from_call_tool_result(&result),
+                    Ok(result) => FunctionCallOutputPayload::from(&result),
                     Err(tool_call_err) => FunctionCallOutputPayload {
                         content: format!("err: {tool_call_err:?}"),
                         success: Some(false),
@@ -327,8 +327,8 @@ impl<'de> Deserialize<'de> for FunctionCallOutputPayload {
     }
 }
 
-impl FunctionCallOutputPayload {
-    pub fn from_call_tool_result(call_tool_result: &CallToolResult) -> Self {
+impl From<&CallToolResult> for FunctionCallOutputPayload {
+    fn from(call_tool_result: &CallToolResult) -> Self {
         let CallToolResult {
             content,
             structured_content,
@@ -492,7 +492,7 @@ mod tests {
             structured_content: None,
         };
 
-        let payload = FunctionCallOutputPayload::from_call_tool_result(&call_tool_result);
+        let payload = FunctionCallOutputPayload::from(&call_tool_result);
         assert_eq!(payload.success, Some(true));
         let items = payload.content_items.clone().expect("content items");
         assert_eq!(

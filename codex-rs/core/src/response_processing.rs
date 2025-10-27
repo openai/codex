@@ -59,9 +59,7 @@ pub(crate) async fn process_items(
             ) => {
                 items_to_record_in_conversation_history.push(item);
                 let output = match result {
-                    Ok(call_tool_result) => {
-                        FunctionCallOutputPayload::from_call_tool_result(call_tool_result)
-                    }
+                    Ok(call_tool_result) => FunctionCallOutputPayload::from(call_tool_result),
                     Err(err) => FunctionCallOutputPayload {
                         content: err.clone(),
                         success: Some(false),

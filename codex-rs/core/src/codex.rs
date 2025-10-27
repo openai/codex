@@ -2277,7 +2277,7 @@ mod tests {
             })),
         };
 
-        let got = FunctionCallOutputPayload::from_call_tool_result(&ctr);
+        let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&json!({
                 "ok": true,
@@ -2407,7 +2407,7 @@ mod tests {
             structured_content: Some(serde_json::Value::Null),
         };
 
-        let got = FunctionCallOutputPayload::from_call_tool_result(&ctr);
+        let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&vec![text_block("hello"), text_block("world")])
                 .unwrap(),
@@ -2426,7 +2426,7 @@ mod tests {
             structured_content: Some(json!({ "message": "bad" })),
         };
 
-        let got = FunctionCallOutputPayload::from_call_tool_result(&ctr);
+        let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&json!({ "message": "bad" })).unwrap(),
             success: Some(false),
@@ -2444,7 +2444,7 @@ mod tests {
             structured_content: None,
         };
 
-        let got = FunctionCallOutputPayload::from_call_tool_result(&ctr);
+        let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&vec![text_block("alpha")]).unwrap(),
             success: Some(true),
