@@ -2047,7 +2047,7 @@ async fn try_run_turn(
                             call_id: String::new(),
                             output: FunctionCallOutputPayload {
                                 content: msg.to_string(),
-                                success: None,
+                                ..Default::default()
                             },
                         };
                         add_completed(ProcessedResponseItem {
@@ -2061,7 +2061,7 @@ async fn try_run_turn(
                             call_id: String::new(),
                             output: FunctionCallOutputPayload {
                                 content: message,
-                                success: None,
+                                ..Default::default()
                             },
                         };
                         add_completed(ProcessedResponseItem {
@@ -2199,41 +2199,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
         }
     })
 }
-pub(crate) fn convert_call_tool_result_to_function_call_output_payload(
-    call_tool_result: &CallToolResult,
-) -> FunctionCallOutputPayload {
-    let CallToolResult {
-        content,
-        is_error,
-        structured_content,
-    } = call_tool_result;
-
-    // In terms of what to send back to the model, we prefer structured_content,
-    // if available, and fallback to content, otherwise.
-    let mut is_success = is_error != &Some(true);
-    let content = if let Some(structured_content) = structured_content
-        && structured_content != &serde_json::Value::Null
-        && let Ok(serialized_structured_content) = serde_json::to_string(&structured_content)
-    {
-        serialized_structured_content
-    } else {
-        match serde_json::to_string(&content) {
-            Ok(serialized_content) => serialized_content,
-            Err(err) => {
-                // If we could not serialize either content or structured_content to
-                // JSON, flag this as an error.
-                is_success = false;
-                err.to_string()
-            }
-        }
-    };
-
-    FunctionCallOutputPayload {
-        content,
-        success: Some(is_success),
-    }
-}
-
 /// Emits an ExitedReviewMode Event with optional ReviewOutput,
 /// and records a developer message with the review output.
 pub(crate) async fn exit_review_mode(
@@ -2366,10 +2331,6 @@ mod tests {
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
-    use crate::tools::MODEL_FORMAT_HEAD_LINES;
-    use crate::tools::MODEL_FORMAT_MAX_BYTES;
-    use crate::tools::MODEL_FORMAT_MAX_LINES;
-    use crate::tools::MODEL_FORMAT_TAIL_LINES;
     use crate::tools::ToolRouter;
     use crate::tools::context::ToolInvocation;
     use crate::tools::context::ToolOutput;
@@ -2443,7 +2404,7 @@ mod tests {
             })),
         };
 
-        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&json!({
                 "ok": true,
@@ -2451,98 +2412,10 @@ mod tests {
             }))
             .unwrap(),
             success: Some(true),
+            ..Default::default()
         };
 
         assert_eq!(expected, got);
-    }
-
-    #[test]
-    fn model_truncation_head_tail_by_lines() {
-        // Build 400 short lines so line-count limit, not byte budget, triggers truncation
-        let lines: Vec<String> = (1..=400).map(|i| format!("line{i}")).collect();
-        let full = lines.join("\n");
-
-        let exec = ExecToolCallOutput {
-            exit_code: 0,
-            stdout: StreamOutput::new(String::new()),
-            stderr: StreamOutput::new(String::new()),
-            aggregated_output: StreamOutput::new(full),
-            duration: StdDuration::from_secs(1),
-            timed_out: false,
-        };
-
-        let out = format_exec_output_str(&exec);
-
-        // Strip truncation header if present for subsequent assertions
-        let body = out
-            .strip_prefix("Total output lines: ")
-            .and_then(|rest| rest.split_once("\n\n").map(|x| x.1))
-            .unwrap_or(out.as_str());
-
-        // Expect elision marker with correct counts
-        let omitted = 400 - MODEL_FORMAT_MAX_LINES; // 144
-        let marker = format!("\n[... omitted {omitted} of 400 lines ...]\n\n");
-        assert!(out.contains(&marker), "missing marker: {out}");
-
-        // Validate head and tail
-        let parts: Vec<&str> = body.split(&marker).collect();
-        assert_eq!(parts.len(), 2, "expected one marker split");
-        let head = parts[0];
-        let tail = parts[1];
-
-        let expected_head: String = (1..=MODEL_FORMAT_HEAD_LINES)
-            .map(|i| format!("line{i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(head.starts_with(&expected_head), "head mismatch");
-
-        let expected_tail: String = ((400 - MODEL_FORMAT_TAIL_LINES + 1)..=400)
-            .map(|i| format!("line{i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(tail.ends_with(&expected_tail), "tail mismatch");
-    }
-
-    #[test]
-    fn model_truncation_respects_byte_budget() {
-        // Construct a large output (about 100kB) so byte budget dominates
-        let big_line = "x".repeat(100);
-        let full = std::iter::repeat_n(big_line, 1000)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let exec = ExecToolCallOutput {
-            exit_code: 0,
-            stdout: StreamOutput::new(String::new()),
-            stderr: StreamOutput::new(String::new()),
-            aggregated_output: StreamOutput::new(full.clone()),
-            duration: StdDuration::from_secs(1),
-            timed_out: false,
-        };
-
-        let out = format_exec_output_str(&exec);
-        // Keep strict budget on the truncated body (excluding header)
-        let body = out
-            .strip_prefix("Total output lines: ")
-            .and_then(|rest| rest.split_once("\n\n").map(|x| x.1))
-            .unwrap_or(out.as_str());
-        assert!(body.len() <= MODEL_FORMAT_MAX_BYTES, "exceeds byte budget");
-        assert!(out.contains("omitted"), "should contain elision marker");
-
-        // Ensure head and tail are drawn from the original
-        assert!(full.starts_with(body.chars().take(8).collect::<String>().as_str()));
-        assert!(
-            full.ends_with(
-                body.chars()
-                    .rev()
-                    .take(8)
-                    .collect::<String>()
-                    .chars()
-                    .rev()
-                    .collect::<String>()
-                    .as_str()
-            )
-        );
     }
 
     #[test]
@@ -2572,11 +2445,12 @@ mod tests {
             structured_content: Some(serde_json::Value::Null),
         };
 
-        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&vec![text_block("hello"), text_block("world")])
                 .unwrap(),
             success: Some(true),
+            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -2590,10 +2464,11 @@ mod tests {
             structured_content: Some(json!({ "message": "bad" })),
         };
 
-        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&json!({ "message": "bad" })).unwrap(),
             success: Some(false),
+            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -2607,10 +2482,11 @@ mod tests {
             structured_content: None,
         };
 
-        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&vec![text_block("alpha")]).unwrap(),
             success: Some(true),
+            ..Default::default()
         };
 
         assert_eq!(expected, got);

@@ -171,6 +171,7 @@ impl ToolHandler for UnifiedExecHandler {
 
         Ok(ToolOutput::Function {
             content,
+            content_items: None,
             success: Some(true),
         })
     }
