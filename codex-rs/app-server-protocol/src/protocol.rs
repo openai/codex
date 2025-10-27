@@ -5,7 +5,7 @@ use crate::JSONRPCNotification;
 use crate::JSONRPCRequest;
 use crate::RequestId;
 use codex_protocol::ConversationId;
-use codex_protocol::account::Account;
+use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
@@ -233,6 +233,21 @@ client_request_definitions! {
     ExecOneOffCommand {
         params: ExecOneOffCommandParams,
         response: ExecOneOffCommandResponse,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+pub enum Account {
+    #[serde(rename = "apiKey")]
+    #[ts(rename = "apiKey")]
+    ApiKey { api_key: String },
+    #[serde(rename = "chatgpt")]
+    #[ts(rename = "chatgpt")]
+    ChatGpt {
+        email: Option<String>,
+        plan_type: PlanType,
     },
 }
 
