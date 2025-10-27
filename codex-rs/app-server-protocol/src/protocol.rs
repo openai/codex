@@ -240,11 +240,12 @@ client_request_definitions! {
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
 pub enum Account {
-    #[serde(rename = "apiKey")]
-    #[ts(rename = "apiKey")]
+    #[serde(rename = "apiKey", rename_all = "camelCase")]
+    #[ts(rename = "apiKey", rename_all = "camelCase")]
     ApiKey { api_key: String },
-    #[serde(rename = "chatgpt")]
-    #[ts(rename = "chatgpt")]
+
+    #[serde(rename = "chatgpt", rename_all = "camelCase")]
+    #[ts(rename = "chatgpt", rename_all = "camelCase")]
     ChatGpt {
         email: Option<String>,
         plan_type: PlanType,
@@ -1258,6 +1259,35 @@ mod tests {
             }),
             serde_json::to_value(&request)?,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn account_serializes_fields_in_camel_case() -> Result<()> {
+        let api_key = Account::ApiKey {
+            api_key: "secret".to_string(),
+        };
+        assert_eq!(
+            json!({
+                "type": "apiKey",
+                "apiKey": "secret",
+            }),
+            serde_json::to_value(&api_key)?,
+        );
+
+        let chatgpt = Account::ChatGpt {
+            email: Some("user@example.com".to_string()),
+            plan_type: PlanType::Plus,
+        };
+        assert_eq!(
+            json!({
+                "type": "chatgpt",
+                "email": "user@example.com",
+                "planType": "plus",
+            }),
+            serde_json::to_value(&chatgpt)?,
+        );
+
         Ok(())
     }
 
