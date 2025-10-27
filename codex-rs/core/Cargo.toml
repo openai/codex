@@ -97,6 +97,7 @@ assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 core_test_support = { workspace = true }
 escargot = { workspace = true }
+image = { workspace = true, features = ["jpeg", "png"] }
 maplit = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }

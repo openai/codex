@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use base64::Engine;
+use codex_utils_image::load_and_resize_to_fit;
 use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -10,6 +11,7 @@ use ts_rs::TS;
 
 use crate::user_input::UserInput;
 use codex_git_tooling::GhostCommit;
+use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
@@ -134,6 +136,19 @@ fn should_serialize_reasoning_content(content: &Option<Vec<ReasoningItemContent>
     }
 }
 
+fn local_image_error_placeholder(
+    path: &std::path::Path,
+    error: impl std::fmt::Display,
+) -> ContentItem {
+    ContentItem::InputText {
+        text: format!(
+            "Codex could not read the local image at `{}`: {}",
+            path.display(),
+            error
+        ),
+    }
+}
+
 impl From<ResponseInputItem> for ResponseItem {
     fn from(item: ResponseInputItem) -> Self {
         match item {
@@ -217,27 +232,40 @@ impl From<Vec<UserInput>> for ResponseInputItem {
             role: "user".to_string(),
             content: items
                 .into_iter()
-                .filter_map(|c| match c {
-                    UserInput::Text { text } => Some(ContentItem::InputText { text }),
-                    UserInput::Image { image_url } => Some(ContentItem::InputImage { image_url }),
-                    UserInput::LocalImage { path } => match std::fs::read(&path) {
-                        Ok(bytes) => {
-                            let mime = mime_guess::from_path(&path)
-                                .first()
-                                .map(|m| m.essence_str().to_owned())
-                                .unwrap_or_else(|| "image".to_string());
-                            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-                            Some(ContentItem::InputImage {
-                                image_url: format!("data:{mime};base64,{encoded}"),
-                            })
-                        }
+                .map(|c| match c {
+                    UserInput::Text { text } => ContentItem::InputText { text },
+                    UserInput::Image { image_url } => ContentItem::InputImage { image_url },
+                    UserInput::LocalImage { path } => match load_and_resize_to_fit(&path) {
+                        Ok(image) => ContentItem::InputImage {
+                            image_url: image.into_data_url(),
+                        },
                         Err(err) => {
-                            tracing::warn!(
-                                "Skipping image {} – could not read file: {}",
-                                path.display(),
-                                err
-                            );
-                            None
+                            tracing::warn!("Failed to resize image {}: {}", path.display(), err);
+                            if matches!(&err, ImageProcessingError::Read { .. }) {
+                                local_image_error_placeholder(&path, &err)
+                            } else {
+                                match std::fs::read(&path) {
+                                    Ok(bytes) => {
+                                        let mime = mime_guess::from_path(&path)
+                                            .first()
+                                            .map(|m| m.essence_str().to_owned())
+                                            .unwrap_or_else(|| "image".to_string());
+                                        let encoded =
+                                            base64::engine::general_purpose::STANDARD.encode(bytes);
+                                        ContentItem::InputImage {
+                                            image_url: format!("data:{mime};base64,{encoded}"),
+                                        }
+                                    }
+                                    Err(read_err) => {
+                                        tracing::warn!(
+                                            "Skipping image {} – could not read file: {}",
+                                            path.display(),
+                                            read_err
+                                        );
+                                        local_image_error_placeholder(&path, &read_err)
+                                    }
+                                }
+                            }
                         }
                     },
                 })
@@ -326,6 +354,7 @@ impl std::ops::Deref for FunctionCallOutputPayload {
 mod tests {
     use super::*;
     use anyhow::Result;
+    use tempfile::tempdir;
 
     #[test]
     fn serializes_success_as_plain_string() -> Result<()> {
@@ -381,6 +410,39 @@ mod tests {
             },
             params
         );
+        Ok(())
+    }
+
+    #[test]
+    fn local_image_read_error_adds_placeholder() -> Result<()> {
+        let dir = tempdir()?;
+        let missing_path = dir.path().join("missing-image.png");
+
+        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+            path: missing_path.clone(),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert_eq!(content.len(), 1);
+                match &content[0] {
+                    ContentItem::InputText { text } => {
+                        let display_path = missing_path.display().to_string();
+                        assert!(
+                            text.contains(&display_path),
+                            "placeholder should mention missing path: {text}"
+                        );
+                        assert!(
+                            text.contains("could not read"),
+                            "placeholder should mention read issue: {text}"
+                        );
+                    }
+                    other => panic!("expected placeholder text but found {other:?}"),
+                }
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+
         Ok(())
     }
 }

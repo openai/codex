@@ -147,6 +147,10 @@ client_request_definitions! {
         params: NewConversationParams,
         response: NewConversationResponse,
     },
+    GetConversationSummary {
+        params: GetConversationSummaryParams,
+        response: GetConversationSummaryResponse,
+    },
     /// List recorded Codex conversations (rollouts) with optional pagination and search.
     ListConversations {
         params: ListConversationsParams,
@@ -320,6 +324,18 @@ pub struct ResumeConversationResponse {
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_messages: Option<Vec<EventMsg>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GetConversationSummaryParams {
+    pub rollout_path: PathBuf,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GetConversationSummaryResponse {
+    pub summary: ConversationSummary,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
