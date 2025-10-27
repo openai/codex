@@ -267,10 +267,6 @@ impl RolloutRecorder {
         }))
     }
 
-    pub(crate) fn get_rollout_path(&self) -> PathBuf {
-        self.rollout_path.clone()
-    }
-
     pub async fn shutdown(&self) -> std::io::Result<()> {
         let (tx_done, rx_done) = oneshot::channel();
         match self.tx.send(RolloutCmd::Shutdown { ack: tx_done }).await {
