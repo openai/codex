@@ -328,14 +328,17 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         let initial_images_event_id = conversation.submit(Op::UserInput { items }).await?;
         info!("Sent images with event ID: {initial_images_event_id}");
         while let Some(event) = rx.recv().await {
-            if event.id == initial_images_event_id
+            let is_images_complete = event.id == initial_images_event_id
                 && matches!(
                     event.msg,
                     EventMsg::TaskComplete(TaskCompleteEvent {
                         last_agent_message: _,
                     })
-                )
-            {
+                );
+
+            event_processor.process_event(event);
+
+            if is_images_complete {
                 break;
             }
         }
