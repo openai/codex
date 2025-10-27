@@ -1555,7 +1555,7 @@ async fn spawn_review_thread(
         sub_id: sub_id.to_string(),
         client,
         tools_config,
-        user_instructions: None,
+        user_instructions: parent_turn_context.user_instructions.clone(),
         base_instructions: Some(base_instructions.clone()),
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),

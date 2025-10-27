@@ -154,6 +154,64 @@ async fn review_op_emits_lifecycle_and_review_output() {
     server.verify().await;
 }
 
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn review_respects_user_instructions() {
+    skip_if_no_network!();
+
+    let sse_raw = r#"[
+        {"type":"response.output_item.done", "item":{
+            "type":"message", "role":"assistant",
+            "content":[{"type":"output_text","text":"レビュー結果"}]
+        }},
+        {"type":"response.completed", "response": {"id": "__ID__"}}
+    ]"#;
+    let server = start_responses_server_with_sse(sse_raw, 1).await;
+    let codex_home = TempDir::new().unwrap();
+    let user_instructions_text = "常に日本語で回答してください。".to_string();
+    let codex = new_conversation_for_server(&server, &codex_home, |config| {
+        config.user_instructions = Some(user_instructions_text.clone());
+    })
+    .await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                prompt: "差分をレビューしてください".to_string(),
+                user_facing_hint: "差分をレビューしてください".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    let _closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(_))).await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = &server.received_requests().await.unwrap()[0];
+    let body = request.body_json::<serde_json::Value>().unwrap();
+    let input = body["input"].as_array().expect("input array");
+    assert_eq!(
+        input.len(),
+        3,
+        "expected user instructions, environment context, and review prompt"
+    );
+
+    let instructions_msg = &input[0];
+    assert_eq!(instructions_msg["type"].as_str().unwrap(), "message");
+    assert_eq!(instructions_msg["role"].as_str().unwrap(), "user");
+    let instructions_text = instructions_msg["content"][0]["text"].as_str().unwrap();
+    assert!(
+        instructions_text.contains(&user_instructions_text),
+        "user instructions text missing from review input"
+    );
+
+    let instructions = body["instructions"].as_str().expect("instructions string");
+    assert_eq!(instructions, REVIEW_PROMPT);
+
+    server.verify().await;
+}
+
 /// When the model returns plain text that is not JSON, ensure the child
 /// lifecycle still occurs and the plain text is surfaced via
 /// ExitedReviewMode(Some(..)) as the overall_explanation.
