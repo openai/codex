@@ -131,7 +131,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
         )
 
     // Internal models.
-    } else if slug.starts_with("codex-") {
+    } else if slug.starts_with("codex-exp-") {
         model_family!(
             slug, slug,
             supports_reasoning_summaries: true,
@@ -141,6 +141,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             experimental_supported_tools: vec![
                 "grep_files".to_string(),
                 "list_dir".to_string(),
+                "read_file".to_string(),
             ],
             supports_parallel_tool_calls: true,
         )
