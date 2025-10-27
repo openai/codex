@@ -327,7 +327,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             .collect();
         let initial_images_event_id = conversation.submit(Op::UserInput { items }).await?;
         info!("Sent images with event ID: {initial_images_event_id}");
-        while let Ok(event) = conversation.next_event().await {
+        while let Some(event) = rx.recv().await {
             if event.id == initial_images_event_id
                 && matches!(
                     event.msg,
