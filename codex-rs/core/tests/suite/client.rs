@@ -1112,7 +1112,7 @@ async fn auto_next_steps_queues_follow_up_prompt() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "kick off auto mode".into(),
             }],
         })
@@ -1205,7 +1205,7 @@ async fn auto_next_idea_queues_ideation_prompt() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "kick off auto mode".into(),
             }],
         })
@@ -1307,7 +1307,7 @@ async fn auto_next_steps_and_idea_emit_combined_prompt() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "kick off auto mode".into(),
             }],
         })

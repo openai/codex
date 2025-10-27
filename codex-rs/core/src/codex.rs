@@ -956,6 +956,24 @@ impl Session {
         state.replace_history(items);
     }
 
+    async fn trim_history_to_initial_context(&self, turn_context: &TurnContext) -> bool {
+        let baseline = self.build_initial_context(turn_context);
+        let baseline_len = baseline.len();
+        let trimmed = {
+            let mut state = self.state.lock().await;
+            if state.history_len() <= baseline_len {
+                false
+            } else {
+                state.replace_history(baseline);
+                true
+            }
+        };
+        if trimmed {
+            self.send_token_count_event(turn_context).await;
+        }
+        trimmed
+    }
+
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
         let rollout_items: Vec<RolloutItem> = items
             .iter()
@@ -1704,6 +1722,18 @@ pub(crate) async fn run_task(
 
                 if token_limit_reached {
                     if auto_compact_recently_attempted {
+                        if sess
+                            .trim_history_to_initial_context(turn_context.as_ref())
+                            .await
+                        {
+                            auto_compact_recently_attempted = false;
+                            sess.notify_background_event(
+                                turn_context.as_ref(),
+                                "Cleared earlier conversation history to stay within the model context window.",
+                            )
+                            .await;
+                            continue;
+                        }
                         let limit_str = limit.to_string();
                         let current_tokens = total_usage_tokens
                             .map(|tokens| tokens.to_string())
