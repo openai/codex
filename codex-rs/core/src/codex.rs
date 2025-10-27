@@ -20,7 +20,6 @@ use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
 use codex_protocol::ConversationId;
 use codex_protocol::items::TurnItem;
-use codex_protocol::protocol::ConversationPathResponseEvent;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
@@ -598,6 +597,19 @@ impl Session {
         self.tx_event.clone()
     }
 
+    /// Ensure all rollout writes are durably flushed.
+    pub(crate) async fn flush_rollout(&self) {
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
+        if let Some(rec) = recorder
+            && let Err(e) = rec.flush().await
+        {
+            warn!("failed to flush rollout recorder: {e}");
+        }
+    }
+
     fn next_internal_sub_id(&self) -> String {
         let id = self
             .next_internal_sub_id
@@ -612,6 +624,8 @@ impl Session {
                 // Build and record initial items (user instructions + environment context)
                 let items = self.build_initial_context(&turn_context);
                 self.record_conversation_items(&turn_context, &items).await;
+                // Ensure initial items are visible to immediate readers (e.g., tests, forks).
+                self.flush_rollout().await;
             }
             InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
                 let rollout_items = conversation_history.get_rollout_items();
@@ -628,6 +642,8 @@ impl Session {
                 if persist && !rollout_items.is_empty() {
                     self.persist_rollout_items(&rollout_items).await;
                 }
+                // Flush after seeding history and any persisted rollout copy.
+                self.flush_rollout().await;
             }
         }
     }
@@ -1401,33 +1417,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 sess.send_event_raw(event).await;
                 break;
             }
-            Op::GetPath => {
-                let sub_id = sub.id.clone();
-                // Flush rollout writes before returning the path so readers observe a consistent file.
-                let (path, rec_opt) = {
-                    let guard = sess.services.rollout.lock().await;
-                    match guard.as_ref() {
-                        Some(rec) => (rec.get_rollout_path(), Some(rec.clone())),
-                        None => {
-                            error!("rollout recorder not found");
-                            continue;
-                        }
-                    }
-                };
-                if let Some(rec) = rec_opt
-                    && let Err(e) = rec.flush().await
-                {
-                    warn!("failed to flush rollout recorder before GetHistory: {e}");
-                }
-                let event = Event {
-                    id: sub_id.clone(),
-                    msg: EventMsg::ConversationPath(ConversationPathResponseEvent {
-                        conversation_id: sess.conversation_id,
-                        path,
-                    }),
-                };
-                sess.send_event_raw(event).await;
-            }
+
             Op::Review { review_request } => {
                 let turn_context = sess
                     .new_turn_with_sub_id(sub.id.clone(), SessionSettingsUpdate::default())
@@ -2231,6 +2221,8 @@ pub(crate) async fn exit_review_mode(
             }],
         )
         .await;
+    // Make the recorded review note visible immediately for readers.
+    session.flush_rollout().await;
 }
 
 fn mcp_init_error_display(
