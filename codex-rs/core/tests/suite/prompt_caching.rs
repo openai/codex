@@ -21,6 +21,7 @@ use core_test_support::load_sse_fixture_with_id;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
 use std::collections::HashMap;
+use std::process::Command as StdCommand;
 use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -882,4 +883,175 @@ async fn send_user_turn_with_changes_sends_environment_context() {
         expected_user_message_2,
     ]);
     assert_eq!(body2["input"], expected_input_2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn environment_context_includes_and_clears_git_info_on_cwd_change() {
+    skip_if_no_network!();
+    use pretty_assertions::assert_eq;
+
+    let server = MockServer::start().await;
+
+    let sse = sse_completed("resp");
+    let template = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(sse, "text/event-stream");
+
+    // Expect two POSTs to /v1/responses
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(template)
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    // Create a git repository for the initial cwd so that git_info is present
+    let repo_dir = TempDir::new().unwrap();
+    let repo_path = repo_dir.path();
+    let envs = vec![
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+    ];
+    StdCommand::new("git")
+        .envs(envs.clone())
+        .args(["init"])
+        .current_dir(repo_path)
+        .output()
+        .expect("git init should succeed");
+    StdCommand::new("git")
+        .envs(envs.clone())
+        .args(["config", "user.name", "Test User"])
+        .current_dir(repo_path)
+        .output()
+        .expect("git config user.name should succeed");
+    StdCommand::new("git")
+        .envs(envs.clone())
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(repo_path)
+        .output()
+        .expect("git config user.email should succeed");
+    std::fs::write(repo_path.join("test.txt"), "content").unwrap();
+    StdCommand::new("git")
+        .envs(envs.clone())
+        .args(["add", "."])
+        .current_dir(repo_path)
+        .output()
+        .expect("git add should succeed");
+    let commit_out = StdCommand::new("git")
+        .envs(envs)
+        .args(["commit", "-m", "initial"])
+        .current_dir(repo_path)
+        .output()
+        .expect("git commit should succeed");
+    assert!(commit_out.status.success(), "git commit failed");
+
+    // non-git directory for the override to ensure git_info is cleared
+    let non_git_dir = TempDir::new().unwrap();
+
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.cwd = repo_path.to_path_buf();
+    config.model_provider = model_provider;
+    config.user_instructions = Some("be consistent and helpful".to_string());
+
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create new conversation")
+        .conversation;
+
+    // First turn in the git repo
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello 1".into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    // Override cwd to a non-git directory (this should clear git_info)
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: Some(non_git_dir.path().to_path_buf()),
+            approval_policy: None,
+            sandbox_policy: None,
+            model: None,
+            effort: None,
+            summary: None,
+        })
+        .await
+        .unwrap();
+
+    // Second turn after cwd override
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello 2".into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    // Verify we issued exactly two requests
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2, "expected two POST requests");
+
+    let body1 = requests[0].body_json::<serde_json::Value>().unwrap();
+    let body2 = requests[1].body_json::<serde_json::Value>().unwrap();
+
+    // prompt_cache_key should remain constant across cwd change
+    assert_eq!(
+        body1["prompt_cache_key"], body2["prompt_cache_key"],
+        "prompt_cache_key should not change across cwd override"
+    );
+
+    // Find the environment context message in the first request
+    let input1 = body1["input"].as_array().expect("input must be an array");
+    let env_text_1 = input1
+        .iter()
+        .filter_map(|it| it.get("content"))
+        .filter_map(|c| c.as_array())
+        .flat_map(|arr| arr.iter())
+        .filter_map(|v| v.get("text"))
+        .filter_map(|v| v.as_str())
+        .find(|t| t.contains("<environment_context>"))
+        .expect("first request should contain environment_context text");
+    assert!(
+        env_text_1.contains("<git_info>"),
+        "initial environment_context should include <git_info>"
+    );
+    assert!(
+        env_text_1.contains("<commit_hash>"),
+        "git_info should include commit_hash"
+    );
+    assert!(
+        env_text_1.contains("<branch>"),
+        "git_info should include branch when on a branch"
+    );
+
+    // The second request should include an environment_context update that clears git_info
+    let input2 = body2["input"].as_array().expect("input must be an array");
+    let env_text_2 = input2
+        .iter()
+        .filter_map(|it| it.get("content"))
+        .filter_map(|c| c.as_array())
+        .flat_map(|arr| arr.iter())
+        .filter_map(|v| v.get("text"))
+        .filter_map(|v| v.as_str())
+        .rfind(|t| t.contains("<environment_context>"))
+        .expect("second request should contain environment_context text");
+    assert!(
+        env_text_2.contains("<git_info />"),
+        "environment_context after cwd override should include a cleared <git_info />"
+    );
 }
