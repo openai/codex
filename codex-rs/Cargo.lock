@@ -1071,11 +1071,8 @@ dependencies = [
  "codex-utils-pty",
  "codex-utils-readiness",
  "codex-utils-string",
-<<<<<<< HEAD
  "codex-utils-tokenizer",
-=======
  "codex-windows-sandbox",
->>>>>>> 9e34745e4 (hook up rust sandbox)
  "core-foundation 0.9.4",
  "core_test_support",
  "dirs",
