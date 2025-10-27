@@ -208,11 +208,14 @@ struct UntrackedSnapshot {
     dirs: Vec<PathBuf>,
 }
 
-/// Captures the repository's untracked files and directories scoped to an optional subdirectory.
+/// Captures the untracked and ignored entries under `repo_root`, optionally limited by `repo_prefix`.
+/// Returns the result as an `UntrackedSnapshot`.
 fn capture_existing_untracked(
     repo_root: &Path,
     repo_prefix: Option<&Path>,
 ) -> Result<UntrackedSnapshot, GitToolingError> {
+    // Ask git for the zero-delimited porcelain status so we can enumerate
+    // every untracked or ignored path (including ones filtered by prefix).
     let mut args = vec![
         OsString::from("status"),
         OsString::from("--porcelain=2"),
@@ -231,6 +234,8 @@ fn capture_existing_untracked(
     }
 
     let mut snapshot = UntrackedSnapshot::default();
+    // Each entry is of the form "<code> <path>" where code is '?' (untracked)
+    // or '!' (ignored); everything else is irrelevant to this snapshot.
     for entry in output.split('\0') {
         if entry.is_empty() {
             continue;
