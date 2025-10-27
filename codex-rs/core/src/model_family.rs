@@ -131,7 +131,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
         )
 
     // Internal models.
-    } else if slug.starts_with("codex-") {
+    } else if slug.starts_with("codex-exp-") {
         model_family!(
             slug, slug,
             supports_reasoning_summaries: true,
@@ -147,7 +147,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
         )
 
     // Production models.
-    } else if slug.starts_with("gpt-5-codex") {
+    } else if slug.starts_with("gpt-5-codex") || slug.starts_with("codex-") {
         model_family!(
             slug, slug,
             supports_reasoning_summaries: true,

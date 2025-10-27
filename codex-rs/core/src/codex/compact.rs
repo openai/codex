@@ -200,7 +200,20 @@ pub(crate) fn build_compacted_history(
     user_messages: &[String],
     summary_text: &str,
 ) -> Vec<ResponseItem> {
-    let mut history = initial_context;
+    build_compacted_history_with_limit(
+        initial_context,
+        user_messages,
+        summary_text,
+        COMPACT_USER_MESSAGE_MAX_TOKENS * 4,
+    )
+}
+
+fn build_compacted_history_with_limit(
+    mut history: Vec<ResponseItem>,
+    user_messages: &[String],
+    summary_text: &str,
+    max_bytes: usize,
+) -> Vec<ResponseItem> {
     let mut user_messages_text = if user_messages.is_empty() {
         "(none)".to_string()
     } else {
@@ -208,7 +221,6 @@ pub(crate) fn build_compacted_history(
     };
     // Truncate the concatenated prior user messages so the bridge message
     // stays well under the context window (approx. 4 bytes/token).
-    let max_bytes = COMPACT_USER_MESSAGE_MAX_TOKENS * 4;
     if user_messages_text.len() > max_bytes {
         user_messages_text = truncate_middle(&user_messages_text, max_bytes).0;
     }
@@ -361,11 +373,16 @@ mod tests {
 
     #[test]
     fn build_compacted_history_truncates_overlong_user_messages() {
-        // Prepare a very large prior user message so the aggregated
-        // `user_messages_text` exceeds the truncation threshold used by
-        // `build_compacted_history` (80k bytes).
-        let big = "X".repeat(200_000);
-        let history = build_compacted_history(Vec::new(), std::slice::from_ref(&big), "SUMMARY");
+        // Use a small truncation limit so the test remains fast while still validating
+        // that oversized user content is truncated.
+        let max_bytes = 128;
+        let big = "X".repeat(max_bytes + 50);
+        let history = super::build_compacted_history_with_limit(
+            Vec::new(),
+            std::slice::from_ref(&big),
+            "SUMMARY",
+            max_bytes,
+        );
 
         // Expect exactly one bridge message added to history (plus any initial context we provided, which is none).
         assert_eq!(history.len(), 1);

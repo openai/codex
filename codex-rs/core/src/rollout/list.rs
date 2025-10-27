@@ -54,6 +54,7 @@ struct HeadTailSummary {
     saw_session_meta: bool,
     saw_user_event: bool,
     source: Option<SessionSource>,
+    model_provider: Option<String>,
     created_at: Option<String>,
     updated_at: Option<String>,
 }
@@ -109,6 +110,8 @@ pub(crate) async fn get_conversations(
     page_size: usize,
     cursor: Option<&Cursor>,
     allowed_sources: &[SessionSource],
+    model_providers: Option<&[String]>,
+    default_provider: &str,
 ) -> io::Result<ConversationsPage> {
     let mut root = codex_home.to_path_buf();
     root.push(SESSIONS_SUBDIR);
@@ -124,8 +127,17 @@ pub(crate) async fn get_conversations(
 
     let anchor = cursor.cloned();
 
-    let result =
-        traverse_directories_for_paths(root.clone(), page_size, anchor, allowed_sources).await?;
+    let provider_matcher =
+        model_providers.and_then(|filters| ProviderMatcher::new(filters, default_provider));
+
+    let result = traverse_directories_for_paths(
+        root.clone(),
+        page_size,
+        anchor,
+        allowed_sources,
+        provider_matcher.as_ref(),
+    )
+    .await?;
     Ok(result)
 }
 
@@ -145,6 +157,7 @@ async fn traverse_directories_for_paths(
     page_size: usize,
     anchor: Option<Cursor>,
     allowed_sources: &[SessionSource],
+    provider_matcher: Option<&ProviderMatcher<'_>>,
 ) -> io::Result<ConversationsPage> {
     let mut items: Vec<ConversationItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
@@ -153,6 +166,7 @@ async fn traverse_directories_for_paths(
         Some(c) => (c.ts, c.id),
         None => (OffsetDateTime::UNIX_EPOCH, Uuid::nil()),
     };
+    let mut more_matches_available = false;
 
     let year_dirs = collect_dirs_desc(&root, |s| s.parse::<u16>().ok()).await?;
 
@@ -184,6 +198,7 @@ async fn traverse_directories_for_paths(
                 for (ts, sid, _name_str, path) in day_files.into_iter() {
                     scanned_files += 1;
                     if scanned_files >= MAX_SCAN_FILES && items.len() >= page_size {
+                        more_matches_available = true;
                         break 'outer;
                     }
                     if !anchor_passed {
@@ -194,6 +209,7 @@ async fn traverse_directories_for_paths(
                         }
                     }
                     if items.len() == page_size {
+                        more_matches_available = true;
                         break 'outer;
                     }
                     // Read head and simultaneously detect message events within the same
@@ -205,6 +221,11 @@ async fn traverse_directories_for_paths(
                         && !summary
                             .source
                             .is_some_and(|source| allowed_sources.iter().any(|s| s == &source))
+                    {
+                        continue;
+                    }
+                    if let Some(matcher) = provider_matcher
+                        && !matcher.matches(summary.model_provider.as_deref())
                     {
                         continue;
                     }
@@ -231,12 +252,21 @@ async fn traverse_directories_for_paths(
         }
     }
 
-    let next = build_next_cursor(&items);
+    let reached_scan_cap = scanned_files >= MAX_SCAN_FILES;
+    if reached_scan_cap && !items.is_empty() {
+        more_matches_available = true;
+    }
+
+    let next = if more_matches_available {
+        build_next_cursor(&items)
+    } else {
+        None
+    };
     Ok(ConversationsPage {
         items,
         next_cursor: next,
         num_scanned_files: scanned_files,
-        reached_scan_cap: scanned_files >= MAX_SCAN_FILES,
+        reached_scan_cap,
     })
 }
 
@@ -328,6 +358,32 @@ fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uui
     Some((ts, uuid))
 }
 
+struct ProviderMatcher<'a> {
+    filters: &'a [String],
+    matches_default_provider: bool,
+}
+
+impl<'a> ProviderMatcher<'a> {
+    fn new(filters: &'a [String], default_provider: &'a str) -> Option<Self> {
+        if filters.is_empty() {
+            return None;
+        }
+
+        let matches_default_provider = filters.iter().any(|provider| provider == default_provider);
+        Some(Self {
+            filters,
+            matches_default_provider,
+        })
+    }
+
+    fn matches(&self, session_provider: Option<&str>) -> bool {
+        match session_provider {
+            Some(provider) => self.filters.iter().any(|candidate| candidate == provider),
+            None => self.matches_default_provider,
+        }
+    }
+}
+
 async fn read_head_and_tail(
     path: &Path,
     head_limit: usize,
@@ -354,6 +410,7 @@ async fn read_head_and_tail(
         match rollout_line.item {
             RolloutItem::SessionMeta(session_meta_line) => {
                 summary.source = Some(session_meta_line.meta.source);
+                summary.model_provider = session_meta_line.meta.model_provider.clone();
                 summary.created_at = summary
                     .created_at
                     .clone()

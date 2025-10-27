@@ -178,6 +178,7 @@ async fn run_codex_tool_session_inner(
                         cwd,
                         call_id,
                         reason: _,
+                        risk,
                         parsed_cmd,
                     }) => {
                         handle_exec_approval_request(
@@ -190,6 +191,7 @@ async fn run_codex_tool_session_inner(
                             event.id.clone(),
                             call_id,
                             parsed_cmd,
+                            risk,
                         )
                         .await;
                         continue;
@@ -279,10 +281,10 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::GetHistoryEntryResponse(_)
                     | EventMsg::PlanUpdate(_)
                     | EventMsg::TurnAborted(_)
-                    | EventMsg::ConversationPath(_)
                     | EventMsg::UserMessage(_)
                     | EventMsg::ShutdownComplete
                     | EventMsg::ViewImageToolCall(_)
+                    | EventMsg::RawResponseItem(_)
                     | EventMsg::EnteredReviewMode(_)
                     | EventMsg::ItemStarted(_)
                     | EventMsg::ItemCompleted(_)
