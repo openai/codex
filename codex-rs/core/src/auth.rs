@@ -474,9 +474,12 @@ mod tests {
         )
         .expect("failed to write auth file");
 
-        let auth_file = super::get_auth_file(codex_home.path());
+        let storage = create_auth_storage(
+            codex_home.path().to_path_buf(),
+            AuthCredentialsStoreMode::File,
+        );
         let updated = super::update_tokens(
-            auth_file.as_path(),
+            &storage,
             None,
             Some("new-access-token".to_string()),
             Some("new-refresh-token".to_string()),
