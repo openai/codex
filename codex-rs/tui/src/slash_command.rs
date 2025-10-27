@@ -39,7 +39,7 @@ impl SlashCommand {
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
-            SlashCommand::Undo => "restore the workspace to the last Codex snapshot",
+            SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
@@ -85,14 +85,5 @@ impl SlashCommand {
 
 /// Return all built-in commands in a Vec paired with their command string.
 pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
-    let show_beta_features = beta_features_enabled();
-
-    SlashCommand::iter()
-        .filter(|cmd| *cmd != SlashCommand::Undo || show_beta_features)
-        .map(|c| (c.command(), c))
-        .collect()
-}
-
-fn beta_features_enabled() -> bool {
-    std::env::var_os("BETA_FEATURE").is_some()
+    SlashCommand::iter().map(|c| (c.command(), c)).collect()
 }
