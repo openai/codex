@@ -39,7 +39,12 @@ eventsource-stream = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 indexmap = { workspace = true }
-keyring = { workspace = true }
+keyring = { workspace = true, features = [
+    "apple-native",
+    "crypto-rust",
+    "linux-native-async-persistent",
+    "windows-native",
+] }
 libc = { workspace = true }
 mcp-types = { workspace = true }
 os_info = { workspace = true }
