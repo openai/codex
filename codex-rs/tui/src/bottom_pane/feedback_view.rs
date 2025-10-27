@@ -73,13 +73,11 @@ impl FeedbackNoteView {
         let rollout_path_ref = self.rollout_path.as_deref();
         let classification = feedback_classification(self.category);
 
-        let cli_version = crate::version::CODEX_CLI_VERSION;
         let mut thread_id = self.snapshot.thread_id.clone();
 
         let result = self.snapshot.upload_feedback(
             classification,
             reason_opt,
-            cli_version,
             self.include_logs,
             if self.include_logs {
                 rollout_path_ref
