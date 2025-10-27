@@ -75,9 +75,17 @@ async fn chat_mode_stream_cli() {
     server.verify().await;
 
     // Verify a new session rollout was created and is discoverable via list_conversations
-    let page = RolloutRecorder::list_conversations(home.path(), 10, None, &[])
-        .await
-        .expect("list conversations");
+    let provider_filter = vec!["mock".to_string()];
+    let page = RolloutRecorder::list_conversations(
+        home.path(),
+        10,
+        None,
+        &[],
+        Some(provider_filter.as_slice()),
+        "mock",
+    )
+    .await
+    .expect("list conversations");
     assert!(
         !page.items.is_empty(),
         "expected at least one session to be listed"

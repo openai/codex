@@ -268,6 +268,8 @@ pub(crate) struct ChatWidget {
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
+    // Current session rollout path (if known)
+    current_rollout_path: Option<PathBuf>,
 }
 
 struct UserMessage {
@@ -311,6 +313,7 @@ impl ChatWidget {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.conversation_id = Some(event.session_id);
+        self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
@@ -330,6 +333,39 @@ impl ChatWidget {
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn open_feedback_note(
+        &mut self,
+        category: crate::app_event::FeedbackCategory,
+        include_logs: bool,
+    ) {
+        // Build a fresh snapshot at the time of opening the note overlay.
+        let snapshot = self.feedback.snapshot(self.conversation_id);
+        let rollout = if include_logs {
+            self.current_rollout_path.clone()
+        } else {
+            None
+        };
+        let view = crate::bottom_pane::FeedbackNoteView::new(
+            category,
+            snapshot,
+            rollout,
+            self.app_event_tx.clone(),
+            include_logs,
+        );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn open_feedback_consent(&mut self, category: crate::app_event::FeedbackCategory) {
+        let params = crate::bottom_pane::feedback_upload_consent_params(
+            self.app_event_tx.clone(),
+            category,
+            self.current_rollout_path.clone(),
+        );
+        self.bottom_pane.show_selection_view(params);
+        self.request_redraw();
     }
 
     fn on_agent_message(&mut self, message: String) {
@@ -486,7 +522,7 @@ impl ChatWidget {
 
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
-                "Conversation interrupted - tell the model what to do differently".to_owned(),
+                "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_owned(),
             ));
         }
 
@@ -793,6 +829,7 @@ impl ChatWidget {
             id,
             command: ev.command,
             reason: ev.reason,
+            risk: ev.risk,
         };
         self.bottom_pane.push_approval_request(request);
         self.request_redraw();
@@ -971,6 +1008,7 @@ impl ChatWidget {
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
+            current_rollout_path: None,
         }
     }
 
@@ -1036,6 +1074,7 @@ impl ChatWidget {
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
+            current_rollout_path: None,
         }
     }
 
@@ -1140,23 +1179,11 @@ impl ChatWidget {
         }
         match cmd {
             SlashCommand::Feedback => {
-                let snapshot = self.feedback.snapshot(self.conversation_id);
-                match snapshot.save_to_temp_file() {
-                    Ok(path) => {
-                        crate::bottom_pane::FeedbackView::show(
-                            &mut self.bottom_pane,
-                            path,
-                            snapshot,
-                        );
-                        self.request_redraw();
-                    }
-                    Err(e) => {
-                        self.add_to_history(history_cell::new_error_event(format!(
-                            "Failed to save feedback logs: {e}"
-                        )));
-                        self.request_redraw();
-                    }
-                }
+                // Step 1: pick a category (UI built in feedback_view)
+                let params =
+                    crate::bottom_pane::feedback_selection_params(self.app_event_tx.clone());
+                self.bottom_pane.show_selection_view(params);
+                self.request_redraw();
             }
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
@@ -1450,15 +1477,13 @@ impl ChatWidget {
                     self.on_user_message_event(ev);
                 }
             }
-            EventMsg::ConversationPath(ev) => {
-                self.app_event_tx
-                    .send(crate::app_event::AppEvent::ConversationHistory(ev));
-            }
             EventMsg::EnteredReviewMode(review_request) => {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::ItemStarted(_) | EventMsg::ItemCompleted(_) => {}
+            EventMsg::RawResponseItem(_)
+            | EventMsg::ItemStarted(_)
+            | EventMsg::ItemCompleted(_) => {}
         }
     }
 
@@ -1592,6 +1617,7 @@ impl ChatWidget {
             context_usage,
             &self.conversation_id,
             self.rate_limit_snapshot.as_ref(),
+            Local::now(),
         ));
     }
 
@@ -2179,6 +2205,10 @@ impl ChatWidget {
 
     pub(crate) fn conversation_id(&self) -> Option<ConversationId> {
         self.conversation_id
+    }
+
+    pub(crate) fn rollout_path(&self) -> Option<PathBuf> {
+        self.current_rollout_path.clone()
     }
 
     /// Return a reference to the widget's current config (includes any

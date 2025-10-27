@@ -154,7 +154,8 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
                 "instructions": "be nice",
                 "cwd": ".",
                 "originator": "test_originator",
-                "cli_version": "test_version"
+                "cli_version": "test_version",
+                "model_provider": "test-provider"
             }
         })
     )

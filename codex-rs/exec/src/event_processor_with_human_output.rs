@@ -499,7 +499,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::GetHistoryEntryResponse(_)
             | EventMsg::McpListToolsResponse(_)
             | EventMsg::ListCustomPromptsResponse(_)
-            | EventMsg::ConversationPath(_)
+            | EventMsg::RawResponseItem(_)
             | EventMsg::UserMessage(_)
             | EventMsg::EnteredReviewMode(_)
             | EventMsg::ExitedReviewMode(_)

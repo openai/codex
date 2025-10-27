@@ -49,6 +49,7 @@ struct PageLoadRequest {
     cursor: Option<Cursor>,
     request_token: usize,
     search_token: Option<usize>,
+    default_provider: String,
 }
 
 type PageLoader = Arc<dyn Fn(PageLoadRequest) + Send + Sync>;
@@ -64,19 +65,28 @@ enum BackgroundEvent {
 /// Interactive session picker that lists recorded rollout files with simple
 /// search and pagination. Shows the first user input as the preview, relative
 /// time (e.g., "5 seconds ago"), and the absolute path.
-pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<ResumeSelection> {
+pub async fn run_resume_picker(
+    tui: &mut Tui,
+    codex_home: &Path,
+    default_provider: &str,
+) -> Result<ResumeSelection> {
     let alt = AltScreenGuard::enter(tui);
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
+
+    let default_provider = default_provider.to_string();
 
     let loader_tx = bg_tx.clone();
     let page_loader: PageLoader = Arc::new(move |request: PageLoadRequest| {
         let tx = loader_tx.clone();
         tokio::spawn(async move {
+            let provider_filter = vec![request.default_provider.clone()];
             let page = RolloutRecorder::list_conversations(
                 &request.codex_home,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
                 INTERACTIVE_SESSION_SOURCES,
+                Some(provider_filter.as_slice()),
+                request.default_provider.as_str(),
             )
             .await;
             let _ = tx.send(BackgroundEvent::PageLoaded {
@@ -91,6 +101,7 @@ pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<Resum
         codex_home.to_path_buf(),
         alt.tui.frame_requester(),
         page_loader,
+        default_provider.clone(),
     );
     state.load_initial_page().await?;
     state.request_frame();
@@ -165,6 +176,7 @@ struct PickerState {
     next_search_token: usize,
     page_loader: PageLoader,
     view_rows: Option<usize>,
+    default_provider: String,
 }
 
 struct PaginationState {
@@ -225,7 +237,12 @@ struct Row {
 }
 
 impl PickerState {
-    fn new(codex_home: PathBuf, requester: FrameRequester, page_loader: PageLoader) -> Self {
+    fn new(
+        codex_home: PathBuf,
+        requester: FrameRequester,
+        page_loader: PageLoader,
+        default_provider: String,
+    ) -> Self {
         Self {
             codex_home,
             requester,
@@ -246,6 +263,7 @@ impl PickerState {
             next_search_token: 0,
             page_loader,
             view_rows: None,
+            default_provider,
         }
     }
 
@@ -324,11 +342,14 @@ impl PickerState {
     }
 
     async fn load_initial_page(&mut self) -> Result<()> {
+        let provider_filter = vec![self.default_provider.clone()];
         let page = RolloutRecorder::list_conversations(
             &self.codex_home,
             PAGE_SIZE,
             None,
             INTERACTIVE_SESSION_SOURCES,
+            Some(provider_filter.as_slice()),
+            self.default_provider.as_str(),
         )
         .await?;
         self.reset_pagination();
@@ -552,6 +573,7 @@ impl PickerState {
             cursor: Some(cursor),
             request_token,
             search_token,
+            default_provider: self.default_provider.clone(),
         });
     }
 
@@ -1061,8 +1083,12 @@ mod tests {
         use ratatui::layout::Layout;
 
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state =
-            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+        );
 
         let now = Utc::now();
         let rows = vec![
@@ -1117,8 +1143,12 @@ mod tests {
     #[test]
     fn pageless_scrolling_deduplicates_and_keeps_order() {
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state =
-            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+        );
 
         state.reset_pagination();
         state.ingest_page(page(
@@ -1179,8 +1209,12 @@ mod tests {
             request_sink.lock().unwrap().push(req);
         });
 
-        let mut state =
-            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+        );
         state.reset_pagination();
         state.ingest_page(page(
             vec![
@@ -1204,8 +1238,12 @@ mod tests {
     #[test]
     fn page_navigation_uses_view_rows() {
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state =
-            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+        );
 
         let mut items = Vec::new();
         for idx in 0..20 {
@@ -1248,8 +1286,12 @@ mod tests {
     #[test]
     fn up_at_bottom_does_not_scroll_when_visible() {
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state =
-            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+        );
 
         let mut items = Vec::new();
         for idx in 0..10 {
@@ -1288,8 +1330,12 @@ mod tests {
             request_sink.lock().unwrap().push(req);
         });
 
-        let mut state =
-            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+        );
         state.reset_pagination();
         state.ingest_page(page(
             vec![make_item(

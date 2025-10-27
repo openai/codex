@@ -50,7 +50,7 @@ impl SessionTask for GhostSnapshotTask {
                             info!("ghost snapshot blocking task finished");
                             session
                                 .session
-                                .record_conversation_items(&[ResponseItem::GhostSnapshot {
+                                .record_conversation_items(&ctx, &[ResponseItem::GhostSnapshot {
                                     ghost_commit: ghost_commit.clone(),
                                 }])
                                 .await;
