@@ -51,7 +51,7 @@ impl SessionTask for GhostSnapshotTask {
                             info!("ghost snapshot blocking task finished");
                             session
                                 .session
-                                .record_conversation_items(&[ResponseItem::GhostSnapshot {
+                                .record_conversation_items(&ctx, &[ResponseItem::GhostSnapshot {
                                     commit_id: ghost_commit.id().to_string(),
                                     parent: ghost_commit.parent().map(ToOwned::to_owned),
                                 }])
