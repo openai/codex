@@ -187,6 +187,6 @@ pub fn derive_default_model_family(model: &str) -> ModelFamily {
         base_instructions: BASE_INSTRUCTIONS.to_string(),
         experimental_supported_tools: Vec::new(),
         effective_context_window_percent: 95,
-        support_verbosity: false
+        support_verbosity: false,
     }
 }

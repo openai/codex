@@ -233,8 +233,6 @@ impl ModelClient {
             None
         };
 
-
-
         // Only include `text.verbosity` for GPT-5 family models
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
 
