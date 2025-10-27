@@ -38,7 +38,7 @@ npx @modelcontextprotocol/inspector codex mcp-server
 
 Send a `tools/list` request and you will see that there are two tools available:
 
-**`codex`** – Run a Codex session. Accepts configuration parameters matching the Codex Config struct. The `codex` tool takes the following properties:
+**`codex`** - Run a Codex session. Accepts configuration parameters matching the Codex Config struct. The `codex` tool takes the following properties:
 
 | Property                | Type   | Description                                                                                                                                            |
 | ----------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
