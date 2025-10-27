@@ -10,7 +10,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::Token;
-use std::borrow::ToOwned;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
