@@ -4,6 +4,7 @@ use crate::ModelProviderInfo;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
+use crate::default_client::CodexHttpClient;
 use crate::error::CodexErr;
 use crate::error::ConnectionFailedError;
 use crate::error::ResponseStreamFailed;
@@ -11,7 +12,7 @@ use crate::error::Result;
 use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
 use crate::model_family::ModelFamily;
-use crate::openai_tools::create_tools_json_for_chat_completions_api;
+use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::util::backoff;
 use bytes::Bytes;
 use codex_otel::otel_event_manager::OtelEventManager;
@@ -36,7 +37,7 @@ use tracing::trace;
 pub(crate) async fn stream_chat_completions(
     prompt: &Prompt,
     model_family: &ModelFamily,
-    client: &reqwest::Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     otel_event_manager: &OtelEventManager,
 ) -> Result<ResponseStream> {
@@ -104,10 +105,10 @@ pub(crate) async fn stream_chat_completions(
             } = item
             {
                 let mut text = String::new();
-                for c in items {
-                    match c {
-                        ReasoningItemContent::ReasoningText { text: t }
-                        | ReasoningItemContent::Text { text: t } => text.push_str(t),
+                for entry in items {
+                    match entry {
+                        ReasoningItemContent::ReasoningText { text: segment }
+                        | ReasoningItemContent::Text { text: segment } => text.push_str(segment),
                     }
                 }
                 if text.trim().is_empty() {

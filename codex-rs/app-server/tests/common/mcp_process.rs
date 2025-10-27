@@ -21,6 +21,7 @@ use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::ListConversationsParams;
+use codex_app_server_protocol::ListModelsParams;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::RemoveConversationListenerParams;
@@ -236,6 +237,11 @@ impl McpProcess {
         self.send_request("getUserAgent", None).await
     }
 
+    /// Send an `account/rateLimits/read` JSON-RPC request.
+    pub async fn send_get_account_rate_limits_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("account/rateLimits/read", None).await
+    }
+
     /// Send a `userInfo` JSON-RPC request.
     pub async fn send_user_info_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("userInfo", None).await
@@ -257,6 +263,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("listConversations", params).await
+    }
+
+    /// Send a `model/list` JSON-RPC request.
+    pub async fn send_list_models_request(
+        &mut self,
+        params: ListModelsParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("model/list", params).await
     }
 
     /// Send a `resumeConversation` JSON-RPC request.

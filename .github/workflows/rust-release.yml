@@ -58,9 +58,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14
+          - runner: macos-15-xlarge
             target: aarch64-apple-darwin
-          - runner: macos-14
+          - runner: macos-15-xlarge
             target: x86_64-apple-darwin
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
@@ -100,7 +100,7 @@ jobs:
       - name: Cargo build
         run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
 
-      - if: ${{ matrix.runner == 'macos-14' }}
+      - if: ${{ matrix.runner == 'macos-15-xlarge' }}
         name: Configure Apple code signing
         shell: bash
         env:
@@ -185,7 +185,7 @@ jobs:
           echo "APPLE_CODESIGN_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
           echo "::add-mask::$APPLE_CODESIGN_IDENTITY"
 
-      - if: ${{ matrix.runner == 'macos-14' }}
+      - if: ${{ matrix.runner == 'macos-15-xlarge' }}
         name: Sign macOS binaries
         shell: bash
         run: |
@@ -206,7 +206,7 @@ jobs:
             codesign --force --options runtime --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$path"
           done
 
-      - if: ${{ matrix.runner == 'macos-14' }}
+      - if: ${{ matrix.runner == 'macos-15-xlarge' }}
         name: Notarize macOS binaries
         shell: bash
         env:
@@ -328,7 +328,7 @@ jobs:
           done
 
       - name: Remove signing keychain
-        if: ${{ always() && matrix.runner == 'macos-14' }}
+        if: ${{ always() && matrix.runner == 'macos-15-xlarge' }}
         shell: bash
         env:
           APPLE_CODESIGN_KEYCHAIN: ${{ env.APPLE_CODESIGN_KEYCHAIN }}

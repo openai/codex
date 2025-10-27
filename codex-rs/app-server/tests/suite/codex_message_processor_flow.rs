@@ -30,7 +30,6 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::InputMessageKind;
 use pretty_assertions::assert_eq;
 use std::env;
 use tempfile::TempDir;
@@ -104,7 +103,10 @@ async fn test_codex_jsonrpc_conversation_flow() {
 
     // 2) addConversationListener
     let add_listener_id = mcp
-        .send_add_conversation_listener_request(AddConversationListenerParams { conversation_id })
+        .send_add_conversation_listener_request(AddConversationListenerParams {
+            conversation_id,
+            experimental_raw_events: false,
+        })
         .await
         .expect("send addConversationListener");
     let add_listener_resp: JSONRPCResponse = timeout(
@@ -253,7 +255,10 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
 
     // 2) addConversationListener
     let add_listener_id = mcp
-        .send_add_conversation_listener_request(AddConversationListenerParams { conversation_id })
+        .send_add_conversation_listener_request(AddConversationListenerParams {
+            conversation_id,
+            experimental_raw_events: false,
+        })
         .await
         .expect("send addConversationListener");
     let _: AddConversationSubscriptionResponse =
@@ -312,6 +317,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
             ],
             cwd: working_directory.clone(),
             reason: None,
+            risk: None,
             parsed_cmd: vec![ParsedCommand::Unknown {
                 cmd: "python3 -c 'print(42)'".to_string()
             }],
@@ -459,7 +465,10 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() {
         .expect("deserialize newConversation response");
 
     let add_listener_id = mcp
-        .send_add_conversation_listener_request(AddConversationListenerParams { conversation_id })
+        .send_add_conversation_listener_request(AddConversationListenerParams {
+            conversation_id,
+            experimental_raw_events: false,
+        })
         .await
         .expect("send addConversationListener");
     timeout(
@@ -527,43 +536,6 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() {
     .await
     .expect("sendUserTurn 2 timeout")
     .expect("sendUserTurn 2 resp");
-
-    let mut env_message: Option<String> = None;
-    let second_cwd_str = second_cwd.to_string_lossy().into_owned();
-    for _ in 0..10 {
-        let notification = timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("codex/event/user_message"),
-        )
-        .await
-        .expect("user_message timeout")
-        .expect("user_message notification");
-        let params = notification
-            .params
-            .clone()
-            .expect("user_message should include params");
-        let event: Event = serde_json::from_value(params).expect("deserialize user_message event");
-        if let EventMsg::UserMessage(user) = event.msg
-            && matches!(user.kind, Some(InputMessageKind::EnvironmentContext))
-            && user.message.contains(&second_cwd_str)
-        {
-            env_message = Some(user.message);
-            break;
-        }
-    }
-    let env_message = env_message.expect("expected environment context update");
-    assert!(
-        env_message.contains("<sandbox_mode>danger-full-access</sandbox_mode>"),
-        "env context should reflect new sandbox mode: {env_message}"
-    );
-    assert!(
-        env_message.contains("<network_access>enabled</network_access>"),
-        "env context should enable network access for danger-full-access policy: {env_message}"
-    );
-    assert!(
-        env_message.contains(&second_cwd_str),
-        "env context should include updated cwd: {env_message}"
-    );
 
     let exec_begin_notification = timeout(
         DEFAULT_READ_TIMEOUT,

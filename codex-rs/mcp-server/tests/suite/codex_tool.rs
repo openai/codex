@@ -196,6 +196,7 @@ fn create_expected_elicitation_request(
             codex_cwd: workdir.to_path_buf(),
             codex_call_id: "call1234".to_string(),
             codex_parsed_cmd,
+            codex_risk: None,
         })?),
     })
 }
@@ -445,7 +446,7 @@ fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()
             r#"
 model = "mock-model"
 approval_policy = "untrusted"
-sandbox_policy = "read-only"
+sandbox_policy = "workspace-write"
 
 model_provider = "mock_provider"
 

@@ -64,8 +64,7 @@ pub(crate) enum AppEvent {
 
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
-        model: String,
-        presets: Vec<ModelPreset>,
+        model: ModelPreset,
     },
 
     /// Open the confirmation prompt before enabling full access mode.
@@ -102,4 +101,23 @@ pub(crate) enum AppEvent {
 
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
+
+    /// Open the feedback note entry overlay after the user selects a category.
+    OpenFeedbackNote {
+        category: FeedbackCategory,
+        include_logs: bool,
+    },
+
+    /// Open the upload consent popup for feedback after selecting a category.
+    OpenFeedbackConsent {
+        category: FeedbackCategory,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FeedbackCategory {
+    BadResult,
+    GoodResult,
+    Bug,
+    Other,
 }

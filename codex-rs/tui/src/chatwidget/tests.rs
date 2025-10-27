@@ -23,8 +23,6 @@ use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
-use codex_core::protocol::InputItem;
-use codex_core::protocol::InputMessageKind;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
@@ -41,6 +39,7 @@ use codex_protocol::ConversationId;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -73,18 +72,26 @@ fn upgrade_event_payload_for_tests(mut payload: serde_json::Value) -> serde_json
         && let Some(m) = msg.as_object_mut()
     {
         let ty = m.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if ty == "exec_command_end" && !m.contains_key("formatted_output") {
+        if ty == "exec_command_end" {
             let stdout = m.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
             let stderr = m.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
-            let formatted = if stderr.is_empty() {
+            let aggregated = if stderr.is_empty() {
                 stdout.to_string()
             } else {
                 format!("{stdout}{stderr}")
             };
-            m.insert(
-                "formatted_output".to_string(),
-                serde_json::Value::String(formatted),
-            );
+            if !m.contains_key("formatted_output") {
+                m.insert(
+                    "formatted_output".to_string(),
+                    serde_json::Value::String(aggregated.clone()),
+                );
+            }
+            if !m.contains_key("aggregated_output") {
+                m.insert(
+                    "aggregated_output".to_string(),
+                    serde_json::Value::String(aggregated),
+                );
+            }
         }
     }
     payload
@@ -105,7 +112,6 @@ fn resumed_initial_messages_render_history() {
         initial_messages: Some(vec![
             EventMsg::UserMessage(UserMessageEvent {
                 message: "hello from user".to_string(),
-                kind: Some(InputMessageKind::Plain),
                 images: None,
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
@@ -360,6 +366,7 @@ fn make_chatwidget_manual() -> (
         next_auto_prompt: None,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
+        current_rollout_path: None,
     };
     (widget, rx, op_rx)
 }
@@ -403,7 +410,7 @@ fn expect_auto_prompt(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> S
                 "auto prompts should emit exactly one input item"
             );
             match &items[0] {
-                InputItem::Text { text } => text.clone(),
+                UserInput::Text { text } => text.clone(),
                 other => panic!("expected text input item, got {other:?}"),
             }
         }
@@ -498,6 +505,7 @@ fn exec_approval_emits_proposed_command_and_decision_history() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        risk: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -540,6 +548,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        risk: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -588,6 +597,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
         command: vec!["bash".into(), "-lc".into(), long],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
+        risk: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -792,6 +802,40 @@ fn ctrl_c_shutdown_ignores_caps_lock() {
         Ok(Op::Shutdown) => {}
         other => panic!("expected Op::Shutdown, got {other:?}"),
     }
+}
+
+#[test]
+fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.bottom_pane.insert_str("draft message ");
+    chat.bottom_pane
+        .attach_image(PathBuf::from("/tmp/preview.png"), 24, 42, "png");
+    let placeholder = "[preview.png 24x42]";
+    assert!(
+        chat.bottom_pane.composer_text().ends_with(placeholder),
+        "expected placeholder {placeholder:?} in composer text"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(chat.bottom_pane.composer_text().is_empty());
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert!(chat.bottom_pane.ctrl_c_quit_hint_visible());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    let restored_text = chat.bottom_pane.composer_text();
+    assert!(
+        restored_text.ends_with(placeholder),
+        "expected placeholder {placeholder:?} after history recall"
+    );
+    assert!(restored_text.starts_with("draft message "));
+    assert!(!chat.bottom_pane.ctrl_c_quit_hint_visible());
+
+    let images = chat.bottom_pane.take_recent_submission_images();
+    assert!(
+        images.is_empty(),
+        "attachments are not preserved in history recall"
+    );
 }
 
 #[test]
@@ -1057,6 +1101,37 @@ fn interrupt_exec_marks_failed_snapshot() {
     assert_snapshot!("interrupt_exec_marks_failed", exec_blob);
 }
 
+// Snapshot test: after an interrupted turn, a gentle error message is inserted
+// suggesting the user to tell the model what to do differently and to use /feedback.
+#[test]
+fn interrupted_turn_error_message_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    // Simulate an in-progress task so the widget is in a running state.
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }),
+    });
+
+    // Abort the turn (like pressing Esc) and drain inserted history.
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        !cells.is_empty(),
+        "expected error message to be inserted after interruption"
+    );
+    let last = lines_to_single_string(cells.last().unwrap());
+    assert_snapshot!("interrupted_turn_error_message", last);
+}
+
 /// Opening custom prompt from the review popup, pressing Esc returns to the
 /// parent popup, pressing Esc again dismisses all panels (back to normal mode).
 #[test]
@@ -1224,14 +1299,36 @@ fn model_reasoning_selection_popup_snapshot() {
     chat.config.model = "gpt-5-codex".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
 
-    let presets = builtin_model_presets(None)
+    let preset = builtin_model_presets(None)
         .into_iter()
-        .filter(|preset| preset.model == "gpt-5-codex")
-        .collect::<Vec<_>>();
-    chat.open_reasoning_popup("gpt-5-codex".to_string(), presets);
+        .find(|preset| preset.model == "gpt-5-codex")
+        .expect("gpt-5-codex preset");
+    chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_reasoning_selection_popup", popup);
+}
+
+#[test]
+fn feedback_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Open the feedback category selection popup via slash command.
+    chat.dispatch_command(SlashCommand::Feedback);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("feedback_selection_popup", popup);
+}
+
+#[test]
+fn feedback_upload_consent_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Open the consent popup directly for a chosen category.
+    chat.open_feedback_consent(crate::app_event::FeedbackCategory::Bug);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("feedback_upload_consent_popup", popup);
 }
 
 #[test]
@@ -1243,9 +1340,9 @@ fn reasoning_popup_escape_returns_to_model_popup() {
 
     let presets = builtin_model_presets(None)
         .into_iter()
-        .filter(|preset| preset.model == "gpt-5-codex")
-        .collect::<Vec<_>>();
-    chat.open_reasoning_popup("gpt-5-codex".to_string(), presets);
+        .find(|preset| preset.model == "gpt-5-codex")
+        .expect("gpt-5-codex preset");
+    chat.open_reasoning_popup(presets);
 
     let before_escape = render_bottom_popup(&chat, 80);
     assert!(before_escape.contains("Select Reasoning Level"));
@@ -1483,6 +1580,7 @@ fn approval_modal_exec_snapshot() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        risk: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -1527,6 +1625,7 @@ fn approval_modal_exec_without_reason_snapshot() {
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
+        risk: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -1737,6 +1836,7 @@ fn status_widget_and_approval_modal_snapshot() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        risk: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
