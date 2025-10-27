@@ -19,3 +19,6 @@ codex-rs/core/tests/
 codex-rs/execpolicy/tests/
 codex-rs/rmcp-client/tests/
 codex-rs/tui/tests/
+
+# Generated OpenAPI models
+codex-rs/codex-backend-openapi-models/src/models/
