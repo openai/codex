@@ -148,6 +148,7 @@ pub async fn run_main(
         include_view_image_tool: None,
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: cli.web_search.then_some(true),
+        experimental_sandbox_command_assessment: None,
         additional_writable_roots: additional_dirs,
     };
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
@@ -390,11 +391,14 @@ async fn run_ratatui_app(
             }
         }
     } else if cli.resume_last {
+        let provider_filter = vec![config.model_provider_id.clone()];
         match RolloutRecorder::list_conversations(
             &config.codex_home,
             1,
             None,
             INTERACTIVE_SESSION_SOURCES,
+            Some(provider_filter.as_slice()),
+            &config.model_provider_id,
         )
         .await
         {
@@ -406,7 +410,13 @@ async fn run_ratatui_app(
             Err(_) => resume_picker::ResumeSelection::StartFresh,
         }
     } else if cli.resume_picker {
-        match resume_picker::run_resume_picker(&mut tui, &config.codex_home).await? {
+        match resume_picker::run_resume_picker(
+            &mut tui,
+            &config.codex_home,
+            &config.model_provider_id,
+        )
+        .await?
+        {
             resume_picker::ResumeSelection::Exit => {
                 restore();
                 session_log::log_session_end();

@@ -52,6 +52,8 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
+use codex_app_server_protocol::UploadFeedbackParams;
+use codex_app_server_protocol::UploadFeedbackResponse;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_backend_client::Client as BackendClient;
@@ -85,6 +87,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
@@ -136,6 +139,7 @@ pub(crate) struct CodexMessageProcessor {
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<RequestId>>>>,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    feedback: CodexFeedback,
 }
 
 impl CodexMessageProcessor {
@@ -145,6 +149,7 @@ impl CodexMessageProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         codex_linux_sandbox_exe: Option<PathBuf>,
         config: Arc<Config>,
+        feedback: CodexFeedback,
     ) -> Self {
         Self {
             auth_manager,
@@ -156,6 +161,7 @@ impl CodexMessageProcessor {
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
+            feedback,
         }
     }
 
@@ -274,6 +280,9 @@ impl CodexMessageProcessor {
                 params: _,
             } => {
                 self.get_account_rate_limits(request_id).await;
+            }
+            ClientRequest::UploadFeedback { request_id, params } => {
+                self.upload_feedback(request_id, params).await;
             }
         }
     }
@@ -818,19 +827,38 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: ListConversationsParams,
     ) {
-        let page_size = params.page_size.unwrap_or(25);
+        let ListConversationsParams {
+            page_size,
+            cursor,
+            model_providers: model_provider,
+        } = params;
+        let page_size = page_size.unwrap_or(25);
         // Decode the optional cursor string to a Cursor via serde (Cursor implements Deserialize from string)
-        let cursor_obj: Option<RolloutCursor> = match params.cursor {
+        let cursor_obj: Option<RolloutCursor> = match cursor {
             Some(s) => serde_json::from_str::<RolloutCursor>(&format!("\"{s}\"")).ok(),
             None => None,
         };
         let cursor_ref = cursor_obj.as_ref();
+        let model_provider_filter = match model_provider {
+            Some(providers) => {
+                if providers.is_empty() {
+                    None
+                } else {
+                    Some(providers)
+                }
+            }
+            None => Some(vec![self.config.model_provider_id.clone()]),
+        };
+        let model_provider_slice = model_provider_filter.as_deref();
+        let fallback_provider = self.config.model_provider_id.clone();
 
         let page = match RolloutRecorder::list_conversations(
             &self.config.codex_home,
             page_size,
             cursor_ref,
             INTERACTIVE_SESSION_SOURCES,
+            model_provider_slice,
+            fallback_provider.as_str(),
         )
         .await
         {
@@ -849,7 +877,7 @@ impl CodexMessageProcessor {
         let items = page
             .items
             .into_iter()
-            .filter_map(|it| extract_conversation_summary(it.path, &it.head))
+            .filter_map(|it| extract_conversation_summary(it.path, &it.head, &fallback_provider))
             .collect();
 
         // Encode next_cursor as a plain string
@@ -1256,7 +1284,10 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: AddConversationListenerParams,
     ) {
-        let AddConversationListenerParams { conversation_id } = params;
+        let AddConversationListenerParams {
+            conversation_id,
+            experimental_raw_events,
+        } = params;
         let Ok(conversation) = self
             .conversation_manager
             .get_conversation(conversation_id)
@@ -1292,6 +1323,11 @@ impl CodexMessageProcessor {
                                 break;
                             }
                         };
+
+                        if let EventMsg::RawResponseItem(_) = &event.msg
+                            && !experimental_raw_events {
+                                continue;
+                            }
 
                         // For now, we send a notification for every event,
                         // JSON-serializing the `Event` as-is, but these should
@@ -1410,6 +1446,77 @@ impl CodexMessageProcessor {
         let response = FuzzyFileSearchResponse { files: results };
         self.outgoing.send_response(request_id, response).await;
     }
+
+    async fn upload_feedback(&self, request_id: RequestId, params: UploadFeedbackParams) {
+        let UploadFeedbackParams {
+            classification,
+            reason,
+            conversation_id,
+            include_logs,
+        } = params;
+
+        let snapshot = self.feedback.snapshot(conversation_id);
+        let thread_id = snapshot.thread_id.clone();
+
+        let validated_rollout_path = if include_logs {
+            match conversation_id {
+                Some(conv_id) => self.resolve_rollout_path(conv_id).await,
+                None => None,
+            }
+        } else {
+            None
+        };
+
+        let upload_result = tokio::task::spawn_blocking(move || {
+            let rollout_path_ref = validated_rollout_path.as_deref();
+            snapshot.upload_feedback(
+                &classification,
+                reason.as_deref(),
+                include_logs,
+                rollout_path_ref,
+            )
+        })
+        .await;
+
+        let upload_result = match upload_result {
+            Ok(result) => result,
+            Err(join_err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to upload feedback: {join_err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match upload_result {
+            Ok(()) => {
+                let response = UploadFeedbackResponse { thread_id };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to upload feedback: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn resolve_rollout_path(&self, conversation_id: ConversationId) -> Option<PathBuf> {
+        match self
+            .conversation_manager
+            .get_conversation(conversation_id)
+            .await
+        {
+            Ok(conv) => Some(conv.rollout_path()),
+            Err(_) => None,
+        }
+    }
 }
 
 async fn apply_bespoke_event_handling(
@@ -1447,6 +1554,7 @@ async fn apply_bespoke_event_handling(
             command,
             cwd,
             reason,
+            risk,
             parsed_cmd,
         }) => {
             let params = ExecCommandApprovalParams {
@@ -1455,6 +1563,7 @@ async fn apply_bespoke_event_handling(
                 command,
                 cwd,
                 reason,
+                risk,
                 parsed_cmd,
             };
             let rx = outgoing
@@ -1501,6 +1610,7 @@ async fn derive_config_from_params(
 ) -> std::io::Result<Config> {
     let NewConversationParams {
         model,
+        model_provider,
         profile,
         cwd,
         approval_policy,
@@ -1516,13 +1626,14 @@ async fn derive_config_from_params(
         cwd: cwd.map(PathBuf::from),
         approval_policy,
         sandbox_mode,
-        model_provider: None,
+        model_provider,
         codex_linux_sandbox_exe,
         base_instructions,
         include_apply_patch_tool,
         include_view_image_tool: None,
         show_raw_agent_reasoning: None,
         tools_web_search_request: None,
+        experimental_sandbox_command_assessment: None,
         additional_writable_roots: Vec::new(),
     };
 
@@ -1616,6 +1727,7 @@ async fn on_exec_approval_response(
 fn extract_conversation_summary(
     path: PathBuf,
     head: &[serde_json::Value],
+    fallback_provider: &str,
 ) -> Option<ConversationSummary> {
     let session_meta = match head.first() {
         Some(first_line) => serde_json::from_value::<SessionMeta>(first_line.clone()).ok()?,
@@ -1640,12 +1752,17 @@ fn extract_conversation_summary(
     } else {
         Some(session_meta.timestamp.clone())
     };
+    let conversation_id = session_meta.id;
+    let model_provider = session_meta
+        .model_provider
+        .unwrap_or_else(|| fallback_provider.to_string());
 
     Some(ConversationSummary {
-        conversation_id: session_meta.id,
+        conversation_id,
         timestamp,
         path,
         preview: preview.to_string(),
+        model_provider,
     })
 }
 
@@ -1669,7 +1786,8 @@ mod tests {
                 "cwd": "/",
                 "originator": "codex",
                 "cli_version": "0.0.0",
-                "instructions": null
+                "instructions": null,
+                "model_provider": "test-provider"
             }),
             json!({
                 "type": "message",
@@ -1689,7 +1807,8 @@ mod tests {
             }),
         ];
 
-        let summary = extract_conversation_summary(path.clone(), &head).expect("summary");
+        let summary =
+            extract_conversation_summary(path.clone(), &head, "test-provider").expect("summary");
 
         assert_eq!(summary.conversation_id, conversation_id);
         assert_eq!(
@@ -1698,6 +1817,7 @@ mod tests {
         );
         assert_eq!(summary.path, path);
         assert_eq!(summary.preview, "Count to 5");
+        assert_eq!(summary.model_provider, "test-provider");
         Ok(())
     }
 }

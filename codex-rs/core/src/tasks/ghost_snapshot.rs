@@ -10,6 +10,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::Token;
+use std::borrow::ToOwned;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -50,7 +51,7 @@ impl SessionTask for GhostSnapshotTask {
                             info!("ghost snapshot blocking task finished");
                             session
                                 .session
-                                .record_conversation_items(&[ResponseItem::GhostSnapshot {
+                                .record_conversation_items(&ctx, &[ResponseItem::GhostSnapshot {
                                     ghost_commit: ghost_commit.clone(),
                                 }])
                                 .await;

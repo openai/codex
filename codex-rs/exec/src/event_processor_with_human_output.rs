@@ -508,6 +508,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::AgentReasoningRawContentDelta(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::ItemCompleted(_)
+            | EventMsg::RawResponseItem(_)
             | EventMsg::UndoCompleted(_)
             | EventMsg::UndoStarted(_) => {}
         }
