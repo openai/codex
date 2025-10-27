@@ -172,7 +172,6 @@ impl CodexLogSnapshot {
         &self,
         classification: &str,
         reason: Option<&str>,
-        cli_version: &str,
         include_logs: bool,
         rollout_path: Option<&std::path::Path>,
     ) -> Result<()> {
@@ -198,6 +197,7 @@ impl CodexLogSnapshot {
             ..Default::default()
         });
 
+        let cli_version = env!("CARGO_PKG_VERSION");
         let mut tags = BTreeMap::from([
             (String::from("thread_id"), self.thread_id.to_string()),
             (String::from("classification"), classification.to_string()),

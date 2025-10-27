@@ -315,6 +315,11 @@ impl BottomPane {
         self.ctrl_c_quit_hint
     }
 
+    #[cfg(test)]
+    pub(crate) fn status_indicator_visible(&self) -> bool {
+        self.status.is_some()
+    }
+
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
         self.esc_backtrack_hint = true;
         self.composer.set_esc_backtrack_hint(true);
@@ -355,6 +360,16 @@ impl BottomPane {
     /// Hide the status indicator while leaving task-running state untouched.
     pub(crate) fn hide_status_indicator(&mut self) {
         if self.status.take().is_some() {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn ensure_status_indicator(&mut self) {
+        if self.status.is_none() {
+            self.status = Some(StatusIndicatorWidget::new(
+                self.app_event_tx.clone(),
+                self.frame_requester.clone(),
+            ));
             self.request_redraw();
         }
     }

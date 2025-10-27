@@ -124,6 +124,13 @@ client_request_definitions! {
         response: GetAccountRateLimitsResponse,
     },
 
+    #[serde(rename = "feedback/upload")]
+    #[ts(rename = "feedback/upload")]
+    UploadFeedback {
+        params: UploadFeedbackParams,
+        response: UploadFeedbackResponse,
+    },
+
     #[serde(rename = "account/read")]
     #[ts(rename = "account/read")]
     GetAccount {
@@ -225,6 +232,12 @@ client_request_definitions! {
     },
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAccountResponse {
+    pub account: Account,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeParams {
@@ -252,6 +265,10 @@ pub struct NewConversationParams {
     /// Optional override for the model name (e.g. "o3", "o4-mini").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+
+    /// Override the model provider to use for this session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
 
     /// Configuration profile from config.toml to specify default options.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -314,6 +331,12 @@ pub struct ListConversationsParams {
     /// Opaque pagination cursor returned by a previous call.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
+    /// Optional model provider filter (matches against session metadata).
+    /// - None => filter by the server's default model provider
+    /// - Some([]) => no filtering, include all providers
+    /// - Some([...]) => only include sessions with one of the specified providers
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_providers: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -325,6 +348,8 @@ pub struct ConversationSummary {
     /// RFC3339 timestamp string for the session start, if available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
+    /// Model provider recorded for the session (resolved when absent in metadata).
+    pub model_provider: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -376,6 +401,23 @@ pub struct ListModelsResponse {
     /// if None, there are no more items to return.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadFeedbackParams {
+    pub classification: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<ConversationId>,
+    pub include_logs: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadFeedbackResponse {
+    pub thread_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -534,12 +576,6 @@ pub struct ExecOneOffCommandResponse {
 pub struct GetAccountRateLimitsResponse {
     pub rate_limits: RateLimitSnapshot,
 }
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(transparent)]
-#[ts(export)]
-#[ts(type = "Account | null")]
-pub struct GetAccountResponse(#[ts(type = "Account | null")] pub Option<Account>);
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1000,6 +1036,7 @@ mod tests {
             request_id: RequestId::Integer(42),
             params: NewConversationParams {
                 model: Some("gpt-5-codex".to_string()),
+                model_provider: None,
                 profile: None,
                 cwd: None,
                 approval_policy: Some(AskForApproval::OnRequest),

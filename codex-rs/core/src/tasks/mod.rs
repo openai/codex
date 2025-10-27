@@ -1,6 +1,8 @@
 mod compact;
+mod ghost_snapshot;
 mod regular;
 mod review;
+mod undo;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,8 +27,10 @@ use crate::state::TaskKind;
 use codex_protocol::user_input::UserInput;
 
 pub(crate) use compact::CompactTask;
+pub(crate) use ghost_snapshot::GhostSnapshotTask;
 pub(crate) use regular::RegularTask;
 pub(crate) use review::ReviewTask;
+pub(crate) use undo::UndoTask;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 
