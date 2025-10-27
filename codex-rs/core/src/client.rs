@@ -389,9 +389,14 @@ impl ModelClient {
 
                 if status == StatusCode::UNAUTHORIZED
                     && let Some(manager) = auth_manager.as_ref()
-                    && manager.auth().is_some()
+                    && let Some(auth) = auth.as_ref()
+                    && auth.mode == AuthMode::ChatGPT
                 {
-                    let _ = manager.refresh_token().await;
+                    manager.refresh_token().await.map_err(|err| {
+                        StreamAttemptError::Fatal(CodexErr::Fatal(format!(
+                            "Failed to refresh ChatGPT credentials: {err}"
+                        )))
+                    })?;
                 }
 
                 // The OpenAI Responses endpoint returns structured JSON bodies even for 4xx/5xx

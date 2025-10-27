@@ -933,6 +933,25 @@ fn undo_failure_events_render_error_message() {
     );
 }
 
+#[test]
+fn undo_started_hides_interrupt_hint() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "turn-hint".to_string(),
+        msg: EventMsg::UndoStarted(UndoStartedEvent { message: None }),
+    });
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be active");
+    assert!(
+        !status.interrupt_hint_visible(),
+        "undo should hide the interrupt hint because the operation cannot be cancelled"
+    );
+}
+
 /// The commit picker shows only commit subjects (no timestamps).
 #[test]
 fn review_commit_picker_shows_subjects_without_timestamps() {
@@ -2306,7 +2325,7 @@ fn plan_update_renders_history_cell() {
 fn stream_error_updates_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
     chat.bottom_pane.set_task_running(true);
-    let msg = "Re-connecting... 2/5";
+    let msg = "Reconnecting... 2/5";
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
         msg: EventMsg::StreamError(StreamErrorEvent {

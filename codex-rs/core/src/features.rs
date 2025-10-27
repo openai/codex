@@ -191,6 +191,11 @@ fn feature_for_key(key: &str) -> Option<Feature> {
     legacy::feature_for_key(key)
 }
 
+/// Returns `true` if the provided string matches a known feature toggle key.
+pub fn is_known_feature_key(key: &str) -> bool {
+    feature_for_key(key).is_some()
+}
+
 /// Deserializable features table for TOML.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct FeaturesToml {

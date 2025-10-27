@@ -451,6 +451,13 @@ async fn read_head_and_tail(
     Ok(summary)
 }
 
+/// Read up to `HEAD_RECORD_LIMIT` records from the start of the rollout file at `path`.
+/// This should be enough to produce a summary including the session meta line.
+pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Value>> {
+    let summary = read_head_and_tail(path, HEAD_RECORD_LIMIT, 0).await?;
+    Ok(summary.head)
+}
+
 async fn read_tail_records(
     path: &Path,
     max_records: usize,

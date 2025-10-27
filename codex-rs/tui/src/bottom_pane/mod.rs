@@ -348,6 +348,7 @@ impl BottomPane {
                 ));
             }
             if let Some(status) = self.status.as_mut() {
+                status.set_interrupt_hint_visible(true);
                 status.set_queued_messages(self.queued_user_messages.clone());
             }
             self.request_redraw();
@@ -370,6 +371,13 @@ impl BottomPane {
                 self.app_event_tx.clone(),
                 self.frame_requester.clone(),
             ));
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
+        if let Some(status) = self.status.as_mut() {
+            status.set_interrupt_hint_visible(visible);
             self.request_redraw();
         }
     }
