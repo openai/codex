@@ -53,7 +53,7 @@ impl SessionTaskContext {
 /// Implementations encapsulate a specific Codex workflow (regular chat,
 /// reviews, ghost snapshots, etc.). Each task instance is owned by a
 /// [`Session`] and executed on a background Tokio task. The trait is
-/// intentionally small: implementors identify themselves via
+/// intentionally small: implementers identify themselves via
 /// [`SessionTask::kind`], perform their work in [`SessionTask::run`], and may
 /// release resources in [`SessionTask::abort`].
 #[async_trait]
@@ -67,7 +67,7 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     /// Implementations typically stream protocol events using `session` and
     /// `ctx`, returning an optional final agent message when finished. The
     /// provided `cancellation_token` is cancelled when the session requests an
-    /// abort; implementors should watch for it and terminate quickly once it
+    /// abort; implementers should watch for it and terminate quickly once it
     /// fires. Returning [`Some`] yields a final message that
     /// [`Session::on_task_finished`] will emit to the client.
     async fn run(
