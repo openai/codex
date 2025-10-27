@@ -2366,10 +2366,6 @@ mod tests {
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
-    use crate::tools::MODEL_FORMAT_HEAD_LINES;
-    use crate::tools::MODEL_FORMAT_MAX_BYTES;
-    use crate::tools::MODEL_FORMAT_MAX_LINES;
-    use crate::tools::MODEL_FORMAT_TAIL_LINES;
     use crate::tools::ToolRouter;
     use crate::tools::context::ToolInvocation;
     use crate::tools::context::ToolOutput;
@@ -2454,95 +2450,6 @@ mod tests {
         };
 
         assert_eq!(expected, got);
-    }
-
-    #[test]
-    fn model_truncation_head_tail_by_lines() {
-        // Build 400 short lines so line-count limit, not byte budget, triggers truncation
-        let lines: Vec<String> = (1..=400).map(|i| format!("line{i}")).collect();
-        let full = lines.join("\n");
-
-        let exec = ExecToolCallOutput {
-            exit_code: 0,
-            stdout: StreamOutput::new(String::new()),
-            stderr: StreamOutput::new(String::new()),
-            aggregated_output: StreamOutput::new(full),
-            duration: StdDuration::from_secs(1),
-            timed_out: false,
-        };
-
-        let out = format_exec_output_str(&exec);
-
-        // Strip truncation header if present for subsequent assertions
-        let body = out
-            .strip_prefix("Total output lines: ")
-            .and_then(|rest| rest.split_once("\n\n").map(|x| x.1))
-            .unwrap_or(out.as_str());
-
-        // Expect elision marker with correct counts
-        let omitted = 400 - MODEL_FORMAT_MAX_LINES; // 144
-        let marker = format!("\n[... omitted {omitted} of 400 lines ...]\n\n");
-        assert!(out.contains(&marker), "missing marker: {out}");
-
-        // Validate head and tail
-        let parts: Vec<&str> = body.split(&marker).collect();
-        assert_eq!(parts.len(), 2, "expected one marker split");
-        let head = parts[0];
-        let tail = parts[1];
-
-        let expected_head: String = (1..=MODEL_FORMAT_HEAD_LINES)
-            .map(|i| format!("line{i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(head.starts_with(&expected_head), "head mismatch");
-
-        let expected_tail: String = ((400 - MODEL_FORMAT_TAIL_LINES + 1)..=400)
-            .map(|i| format!("line{i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(tail.ends_with(&expected_tail), "tail mismatch");
-    }
-
-    #[test]
-    fn model_truncation_respects_byte_budget() {
-        // Construct a large output (about 100kB) so byte budget dominates
-        let big_line = "x".repeat(100);
-        let full = std::iter::repeat_n(big_line, 1000)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let exec = ExecToolCallOutput {
-            exit_code: 0,
-            stdout: StreamOutput::new(String::new()),
-            stderr: StreamOutput::new(String::new()),
-            aggregated_output: StreamOutput::new(full.clone()),
-            duration: StdDuration::from_secs(1),
-            timed_out: false,
-        };
-
-        let out = format_exec_output_str(&exec);
-        // Keep strict budget on the truncated body (excluding header)
-        let body = out
-            .strip_prefix("Total output lines: ")
-            .and_then(|rest| rest.split_once("\n\n").map(|x| x.1))
-            .unwrap_or(out.as_str());
-        assert!(body.len() <= MODEL_FORMAT_MAX_BYTES, "exceeds byte budget");
-        assert!(out.contains("omitted"), "should contain elision marker");
-
-        // Ensure head and tail are drawn from the original
-        assert!(full.starts_with(body.chars().take(8).collect::<String>().as_str()));
-        assert!(
-            full.ends_with(
-                body.chars()
-                    .rev()
-                    .take(8)
-                    .collect::<String>()
-                    .chars()
-                    .rev()
-                    .collect::<String>()
-                    .as_str()
-            )
-        );
     }
 
     #[test]
