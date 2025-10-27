@@ -1,3 +1,4 @@
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
@@ -352,10 +353,28 @@ impl ConversationHistory {
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
                 let truncated = format_output_for_model_body(output.content.as_str());
+                let truncated_items = output.content_items.as_ref().map(|items| {
+                    items
+                        .iter()
+                        .map(|it| match it {
+                            FunctionCallOutputContentItem::InputText { text } => {
+                                FunctionCallOutputContentItem::InputText {
+                                    text: format_output_for_model_body(text),
+                                }
+                            }
+                            FunctionCallOutputContentItem::InputImage { image_url } => {
+                                FunctionCallOutputContentItem::InputImage {
+                                    image_url: image_url.clone(),
+                                }
+                            }
+                        })
+                        .collect()
+                });
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
                         content: truncated,
+                        content_items: truncated_items,
                         success: output.success,
                     },
                 }
@@ -654,6 +673,7 @@ mod tests {
             output: FunctionCallOutputPayload {
                 content: long_output.clone(),
                 success: Some(true),
+                ..Default::default()
             },
         };
 
