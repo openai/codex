@@ -141,7 +141,6 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             experimental_supported_tools: vec![
                 "grep_files".to_string(),
                 "list_dir".to_string(),
-                "read_file".to_string(),
             ],
             supports_parallel_tool_calls: true,
         )
