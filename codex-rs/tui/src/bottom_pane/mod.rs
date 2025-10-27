@@ -28,12 +28,14 @@ mod list_selection_view;
 mod prompt_args;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
+pub(crate) use feedback_view::feedback_selection_params;
+pub(crate) use feedback_view::feedback_upload_consent_params;
 mod paste_burst;
 pub mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
-pub(crate) use feedback_view::FeedbackView;
+pub(crate) use feedback_view::FeedbackNoteView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
@@ -313,6 +315,11 @@ impl BottomPane {
         self.ctrl_c_quit_hint
     }
 
+    #[cfg(test)]
+    pub(crate) fn status_indicator_visible(&self) -> bool {
+        self.status.is_some()
+    }
+
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
         self.esc_backtrack_hint = true;
         self.composer.set_esc_backtrack_hint(true);
@@ -341,6 +348,7 @@ impl BottomPane {
                 ));
             }
             if let Some(status) = self.status.as_mut() {
+                status.set_interrupt_hint_visible(true);
                 status.set_queued_messages(self.queued_user_messages.clone());
             }
             self.request_redraw();
@@ -353,6 +361,23 @@ impl BottomPane {
     /// Hide the status indicator while leaving task-running state untouched.
     pub(crate) fn hide_status_indicator(&mut self) {
         if self.status.take().is_some() {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn ensure_status_indicator(&mut self) {
+        if self.status.is_none() {
+            self.status = Some(StatusIndicatorWidget::new(
+                self.app_event_tx.clone(),
+                self.frame_requester.clone(),
+            ));
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
+        if let Some(status) = self.status.as_mut() {
+            status.set_interrupt_hint_visible(visible);
             self.request_redraw();
         }
     }
@@ -557,6 +582,7 @@ mod tests {
             id: "1".to_string(),
             command: vec!["echo".into(), "ok".into()],
             reason: None,
+            risk: None,
         }
     }
 

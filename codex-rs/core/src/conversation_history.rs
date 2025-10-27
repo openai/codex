@@ -1,5 +1,8 @@
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
+use std::ops::Deref;
 use tracing::error;
 
 /// Transcript of conversation history
@@ -7,11 +10,28 @@ use tracing::error;
 pub(crate) struct ConversationHistory {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
+    token_info: Option<TokenUsageInfo>,
 }
 
 impl ConversationHistory {
     pub(crate) fn new() -> Self {
-        Self { items: Vec::new() }
+        Self {
+            items: Vec::new(),
+            token_info: TokenUsageInfo::new_or_append(&None, &None, None),
+        }
+    }
+
+    pub(crate) fn token_info(&self) -> Option<TokenUsageInfo> {
+        self.token_info.clone()
+    }
+
+    pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
+        match &mut self.token_info {
+            Some(info) => info.fill_to_context_window(context_window),
+            None => {
+                self.token_info = Some(TokenUsageInfo::full_context_window(context_window));
+            }
+        }
     }
 
     /// `items` is ordered from oldest to newest.
@@ -21,7 +41,9 @@ impl ConversationHistory {
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
         for item in items {
-            if !is_api_message(&item) {
+            let item_ref = item.deref();
+            let is_ghost_snapshot = matches!(item_ref, ResponseItem::GhostSnapshot { .. });
+            if !is_api_message(item_ref) && !is_ghost_snapshot {
                 continue;
             }
 
@@ -146,6 +168,7 @@ impl ConversationHistory {
                 | ResponseItem::WebSearchCall { .. }
                 | ResponseItem::FunctionCallOutput { .. }
                 | ResponseItem::CustomToolCallOutput { .. }
+                | ResponseItem::GhostSnapshot { .. }
                 | ResponseItem::Other
                 | ResponseItem::Message { .. } => {
                     // nothing to do for these variants
@@ -212,6 +235,7 @@ impl ConversationHistory {
                 | ResponseItem::LocalShellCall { .. }
                 | ResponseItem::Reasoning { .. }
                 | ResponseItem::WebSearchCall { .. }
+                | ResponseItem::GhostSnapshot { .. }
                 | ResponseItem::Other
                 | ResponseItem::Message { .. } => {
                     // nothing to do for these variants
@@ -301,6 +325,18 @@ impl ConversationHistory {
             self.items.remove(pos);
         }
     }
+
+    pub(crate) fn update_token_info(
+        &mut self,
+        usage: &TokenUsage,
+        model_context_window: Option<i64>,
+    ) {
+        self.token_info = TokenUsageInfo::new_or_append(
+            &self.token_info,
+            &Some(usage.clone()),
+            model_context_window,
+        );
+    }
 }
 
 #[inline]
@@ -324,6 +360,7 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::WebSearchCall { .. } => true,
+        ResponseItem::GhostSnapshot { .. } => false,
         ResponseItem::Other => false,
     }
 }

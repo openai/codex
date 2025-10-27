@@ -8,6 +8,7 @@ use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
 use crate::function_tool::FunctionCallError;
 use crate::mcp::auth::McpAuthStatusEntry;
+use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::response_processing::process_items;
@@ -19,7 +20,6 @@ use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
 use codex_protocol::ConversationId;
 use codex_protocol::items::TurnItem;
-use codex_protocol::protocol::ConversationPathResponseEvent;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
@@ -87,6 +87,7 @@ use crate::protocol::Op;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReviewDecision;
 use crate::protocol::ReviewOutputEvent;
+use crate::protocol::SandboxCommandAssessment;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
@@ -103,8 +104,12 @@ use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state::TaskKind;
 use crate::tasks::CompactTask;
+use crate::tasks::GhostSnapshotTask;
 use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
+use crate::tasks::SessionTask;
+use crate::tasks::SessionTaskContext;
+use crate::tasks::UndoTask;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
@@ -127,6 +132,8 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
+use codex_utils_readiness::Readiness;
+use codex_utils_readiness::ReadinessFlag;
 
 pub mod compact;
 use self::compact::build_compacted_history;
@@ -177,6 +184,7 @@ impl Codex {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
+            features: config.features.clone(),
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -270,6 +278,7 @@ pub(crate) struct TurnContext {
     pub(crate) is_review_mode: bool,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
+    pub(crate) tool_call_gate: Arc<ReadinessFlag>,
 }
 
 impl TurnContext {
@@ -310,6 +319,9 @@ pub(crate) struct SessionConfiguration {
     /// `ConfigureSession` operation so that the business-logic layer can
     /// operate deterministically.
     cwd: PathBuf,
+
+    /// Set of feature flags for this session
+    features: Features,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -405,6 +417,7 @@ impl Session {
             is_review_mode: false,
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+            tool_call_gate: Arc::new(ReadinessFlag::new()),
         }
     }
 
@@ -568,7 +581,6 @@ impl Session {
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = initial_history.get_event_msgs();
-        sess.record_initial_history(initial_history).await;
 
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
@@ -587,6 +599,9 @@ impl Session {
             sess.send_event_raw(event).await;
         }
 
+        // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
+        sess.record_initial_history(initial_history).await;
+
         Ok(sess)
     }
 
@@ -596,6 +611,19 @@ impl Session {
 
     pub(crate) fn conversation_id(&self) -> ConversationId {
         self.conversation_id
+    }
+
+    /// Ensure all rollout writes are durably flushed.
+    pub(crate) async fn flush_rollout(&self) {
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
+        if let Some(rec) = recorder
+            && let Err(e) = rec.flush().await
+        {
+            warn!("failed to flush rollout recorder: {e}");
+        }
     }
 
     fn next_internal_sub_id(&self) -> String {
@@ -611,7 +639,9 @@ impl Session {
             InitialHistory::New => {
                 // Build and record initial items (user instructions + environment context)
                 let items = self.build_initial_context(&turn_context);
-                self.record_conversation_items(&items).await;
+                self.record_conversation_items(&turn_context, &items).await;
+                // Ensure initial items are visible to immediate readers (e.g., tests, forks).
+                self.flush_rollout().await;
             }
             InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
                 let rollout_items = conversation_history.get_rollout_items();
@@ -628,6 +658,8 @@ impl Session {
                 if persist && !rollout_items.is_empty() {
                     self.persist_rollout_items(&rollout_items).await;
                 }
+                // Flush after seeding history and any persisted rollout copy.
+                self.flush_rollout().await;
             }
         }
     }
@@ -758,6 +790,32 @@ impl Session {
         }
     }
 
+    pub(crate) async fn assess_sandbox_command(
+        &self,
+        turn_context: &TurnContext,
+        call_id: &str,
+        command: &[String],
+        failure_message: Option<&str>,
+    ) -> Option<SandboxCommandAssessment> {
+        let config = turn_context.client.config();
+        let provider = turn_context.client.provider().clone();
+        let auth_manager = Arc::clone(&self.services.auth_manager);
+        let otel = self.services.otel_event_manager.clone();
+        crate::sandboxing::assessment::assess_command(
+            config,
+            provider,
+            auth_manager,
+            &otel,
+            self.conversation_id,
+            call_id,
+            command,
+            &turn_context.sandbox_policy,
+            &turn_context.cwd,
+            failure_message,
+        )
+        .await
+    }
+
     /// Emit an exec approval request event and await the user's decision.
     ///
     /// The request is keyed by `sub_id`/`call_id` so matching responses are delivered
@@ -770,6 +828,7 @@ impl Session {
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
+        risk: Option<SandboxCommandAssessment>,
     ) -> ReviewDecision {
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
@@ -795,6 +854,7 @@ impl Session {
             command,
             cwd,
             reason,
+            risk,
             parsed_cmd,
         });
         self.send_event(turn_context, event).await;
@@ -860,9 +920,14 @@ impl Session {
 
     /// Records input items: always append to conversation history and
     /// persist these response items to rollout.
-    pub(crate) async fn record_conversation_items(&self, items: &[ResponseItem]) {
+    pub(crate) async fn record_conversation_items(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+    ) {
         self.record_into_history(items).await;
         self.persist_rollout_response_items(items).await;
+        self.send_raw_response_items(turn_context, items).await;
     }
 
     fn reconstruct_history_from_rollout(
@@ -898,7 +963,7 @@ impl Session {
         state.record_items(items.iter());
     }
 
-    async fn replace_history(&self, items: Vec<ResponseItem>) {
+    pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
         let mut state = self.state.lock().await;
         state.replace_history(items);
     }
@@ -910,6 +975,13 @@ impl Session {
             .map(RolloutItem::ResponseItem)
             .collect();
         self.persist_rollout_items(&rollout_items).await;
+    }
+
+    async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
+        for item in items {
+            self.send_event(turn_context, EventMsg::RawResponseItem(item.clone()))
+                .await;
+        }
     }
 
     pub(crate) fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
@@ -1007,7 +1079,7 @@ impl Session {
     ) {
         let response_item: ResponseItem = response_input.clone().into();
         // Add to conversation history and persist response item to rollout
-        self.record_conversation_items(std::slice::from_ref(&response_item))
+        self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
 
         // Derive user message events and persist only UserMessage to rollout
@@ -1038,6 +1110,43 @@ impl Session {
             message: message.into(),
         });
         self.send_event(turn_context, event).await;
+    }
+
+    async fn maybe_start_ghost_snapshot(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
+    ) {
+        if turn_context.is_review_mode
+            || !self
+                .state
+                .lock()
+                .await
+                .session_configuration
+                .features
+                .enabled(Feature::GhostCommit)
+        {
+            return;
+        }
+
+        let token = match turn_context.tool_call_gate.subscribe().await {
+            Ok(token) => token,
+            Err(err) => {
+                warn!("failed to subscribe to ghost snapshot readiness: {err}");
+                return;
+            }
+        };
+
+        info!("spawning ghost snapshot task");
+        let task = GhostSnapshotTask::new(token);
+        Arc::new(task)
+            .run(
+                Arc::new(SessionTaskContext::new(self.clone())),
+                turn_context.clone(),
+                Vec::new(),
+                cancellation_token,
+            )
+            .await;
     }
 
     /// Returns the input if there was no task running to inject into
@@ -1198,8 +1307,11 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     if let Some(env_item) = sess
                         .build_environment_update_item(previous_context.as_ref(), &current_context)
                     {
-                        sess.record_conversation_items(std::slice::from_ref(&env_item))
-                            .await;
+                        sess.record_conversation_items(
+                            &current_context,
+                            std::slice::from_ref(&env_item),
+                        )
+                        .await;
                     }
 
                     sess.spawn_task(Arc::clone(&current_context), items, RegularTask)
@@ -1313,6 +1425,13 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 };
                 sess.send_event_raw(event).await;
             }
+            Op::Undo => {
+                let turn_context = sess
+                    .new_turn_with_sub_id(sub.id.clone(), SessionSettingsUpdate::default())
+                    .await;
+                sess.spawn_task(turn_context, Vec::new(), UndoTask::new())
+                    .await;
+            }
             Op::Compact => {
                 let turn_context = sess
                     .new_turn_with_sub_id(sub.id.clone(), SessionSettingsUpdate::default())
@@ -1358,33 +1477,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 sess.send_event_raw(event).await;
                 break;
             }
-            Op::GetPath => {
-                let sub_id = sub.id.clone();
-                // Flush rollout writes before returning the path so readers observe a consistent file.
-                let (path, rec_opt) = {
-                    let guard = sess.services.rollout.lock().await;
-                    match guard.as_ref() {
-                        Some(rec) => (rec.get_rollout_path(), Some(rec.clone())),
-                        None => {
-                            error!("rollout recorder not found");
-                            continue;
-                        }
-                    }
-                };
-                if let Some(rec) = rec_opt
-                    && let Err(e) = rec.flush().await
-                {
-                    warn!("failed to flush rollout recorder before GetHistory: {e}");
-                }
-                let event = Event {
-                    id: sub_id.clone(),
-                    msg: EventMsg::ConversationPath(ConversationPathResponseEvent {
-                        conversation_id: sess.conversation_id,
-                        path,
-                    }),
-                };
-                sess.send_event_raw(event).await;
-            }
+
             Op::Review { review_request } => {
                 let turn_context = sess
                     .new_turn_with_sub_id(sub.id.clone(), SessionSettingsUpdate::default())
@@ -1475,6 +1568,7 @@ async fn spawn_review_thread(
         is_review_mode: true,
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
+        tool_call_gate: Arc::new(ReadinessFlag::new()),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -1538,6 +1632,8 @@ pub(crate) async fn run_task(
             .await;
     }
 
+    sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
+        .await;
     let mut last_agent_message: Option<String> = None;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
@@ -1571,7 +1667,8 @@ pub(crate) async fn run_task(
             }
             review_thread_history.get_history()
         } else {
-            sess.record_conversation_items(&pending_input).await;
+            sess.record_conversation_items(&turn_context, &pending_input)
+                .await;
             sess.history_snapshot().await
         };
 
@@ -1618,6 +1715,7 @@ pub(crate) async fn run_task(
                     is_review_mode,
                     &mut review_thread_history,
                     &sess,
+                    &turn_context,
                 )
                 .await;
 
@@ -1666,6 +1764,7 @@ pub(crate) async fn run_task(
                     is_review_mode,
                     &mut review_thread_history,
                     &sess,
+                    &turn_context,
                 )
                 .await;
                 // Aborted turn is reported via a different event.
@@ -1727,6 +1826,13 @@ fn parse_review_output_event(text: &str) -> ReviewOutputEvent {
     }
 }
 
+fn filter_model_visible_history(input: Vec<ResponseItem>) -> Vec<ResponseItem> {
+    input
+        .into_iter()
+        .filter(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }))
+        .collect()
+}
+
 async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -1747,7 +1853,7 @@ async fn run_turn(
         .supports_parallel_tool_calls;
     let parallel_tool_calls = model_supports_parallel;
     let prompt = Prompt {
-        input,
+        input: filter_model_visible_history(input),
         tools: router.specs(),
         parallel_tool_calls,
         base_instructions_override: turn_context.base_instructions.clone(),
@@ -1809,7 +1915,7 @@ async fn run_turn(
                     // at a seemingly frozen screen.
                     sess.notify_stream_error(
                         turn_context.as_ref(),
-                        format!("Re-connecting... {retries}/{max_retries}"),
+                        format!("Reconnecting... {retries}/{max_retries}"),
                     )
                     .await;
 
@@ -2176,12 +2282,17 @@ pub(crate) async fn exit_review_mode(
     }
 
     session
-        .record_conversation_items(&[ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText { text: user_message }],
-        }])
+        .record_conversation_items(
+            &turn_context,
+            &[ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText { text: user_message }],
+            }],
+        )
         .await;
+    // Make the recorded review note visible immediately for readers.
+    session.flush_rollout().await;
 }
 
 fn mcp_init_error_display(
@@ -2203,11 +2314,23 @@ fn mcp_init_error_display(
         // That means that the user has to specify a personal access token either via bearer_token_env_var or http_headers.
         // https://github.com/github/github-mcp-server/issues/921#issuecomment-3221026448
         format!(
-            "GitHub MCP does not support OAuth. Log in by adding `bearer_token_env_var = CODEX_GITHUB_PAT` in the `mcp_servers.{server_name}` section of your config.toml"
+            "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
         )
     } else if is_mcp_client_auth_required_error(err) {
         format!(
             "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
+        )
+    } else if is_mcp_client_startup_timeout_error(err) {
+        let startup_timeout_secs = match entry {
+            Some(entry) => match entry.config.startup_timeout_sec {
+                Some(timeout) => timeout,
+                None => DEFAULT_STARTUP_TIMEOUT,
+            },
+            None => DEFAULT_STARTUP_TIMEOUT,
+        }
+        .as_secs();
+        format!(
+            "MCP client for `{server_name}` timed out after {startup_timeout_secs} seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.{server_name}]\nstartup_timeout_sec = XX"
         )
     } else {
         format!("MCP client for `{server_name}` failed to start: {err:#}")
@@ -2219,6 +2342,14 @@ fn is_mcp_client_auth_required_error(error: &anyhow::Error) -> bool {
     error.to_string().contains("Auth required")
 }
 
+fn is_mcp_client_startup_timeout_error(error: &anyhow::Error) -> bool {
+    let error_message = error.to_string();
+    error_message.contains("request timed out")
+        || error_message.contains("timed out handshaking with MCP server")
+}
+
+use crate::features::Feature;
+use crate::features::Features;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
@@ -2535,6 +2666,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
+            features: Features::default(),
         };
 
         let state = SessionState::new(session_configuration.clone());
@@ -2603,6 +2735,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
+            features: Features::default(),
         };
 
         let state = SessionState::new(session_configuration.clone());
@@ -2757,13 +2890,19 @@ mod tests {
             EventMsg::ExitedReviewMode(ev) => assert!(ev.review_output.is_none()),
             other => panic!("unexpected first event: {other:?}"),
         }
-        let second = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-            .await
-            .expect("timeout waiting for second event")
-            .expect("second event");
-        match second.msg {
-            EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
-            other => panic!("unexpected second event: {other:?}"),
+        loop {
+            let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+                .await
+                .expect("timeout waiting for next event")
+                .expect("event");
+            match evt.msg {
+                EventMsg::RawResponseItem(_) => continue,
+                EventMsg::TurnAborted(e) => {
+                    assert_eq!(TurnAbortReason::Interrupted, e.reason);
+                    break;
+                }
+                other => panic!("unexpected second event: {other:?}"),
+            }
         }
 
         let history = sess.history_snapshot().await;
@@ -3076,7 +3215,7 @@ mod tests {
         let display = mcp_init_error_display(server_name, Some(&entry), &err);
 
         let expected = format!(
-            "GitHub MCP does not support OAuth. Log in by adding `bearer_token_env_var = CODEX_GITHUB_PAT` in the `mcp_servers.{server_name}` section of your config.toml"
+            "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
         );
 
         assert_eq!(expected, display);
@@ -3122,5 +3261,18 @@ mod tests {
         let expected = format!("MCP client for `{server_name}` failed to start: {err:#}");
 
         assert_eq!(expected, display);
+    }
+
+    #[test]
+    fn mcp_init_error_display_includes_startup_timeout_hint() {
+        let server_name = "slow";
+        let err = anyhow::anyhow!("request timed out");
+
+        let display = mcp_init_error_display(server_name, None, &err);
+
+        assert_eq!(
+            "MCP client for `slow` timed out after 10 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",
+            display
+        );
     }
 }

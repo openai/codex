@@ -21,6 +21,7 @@ use codex_app_server_protocol::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 
 use crate::config::Config;
+use crate::default_client::CodexHttpClient;
 use crate::token_data::PlanType;
 use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;
@@ -32,7 +33,7 @@ pub struct CodexAuth {
     pub(crate) api_key: Option<String>,
     pub(crate) auth_dot_json: Arc<Mutex<Option<AuthDotJson>>>,
     pub(crate) auth_file: PathBuf,
-    pub(crate) client: reqwest::Client,
+    pub(crate) client: CodexHttpClient,
 }
 
 impl PartialEq for CodexAuth {
@@ -43,6 +44,8 @@ impl PartialEq for CodexAuth {
 
 impl CodexAuth {
     pub async fn refresh_token(&self) -> Result<String, std::io::Error> {
+        tracing::info!("Refreshing token");
+
         let token_data = self
             .get_current_token_data()
             .ok_or(std::io::Error::other("Token data is not available."))?;
@@ -180,7 +183,7 @@ impl CodexAuth {
         }
     }
 
-    fn from_api_key_with_client(api_key: &str, client: reqwest::Client) -> Self {
+    fn from_api_key_with_client(api_key: &str, client: CodexHttpClient) -> Self {
         Self {
             api_key: Some(api_key.to_owned()),
             mode: AuthMode::ApiKey,
@@ -379,14 +382,16 @@ pub fn write_auth_json(auth_file: &Path, auth_dot_json: &AuthDotJson) -> std::io
 
 async fn update_tokens(
     auth_file: &Path,
-    id_token: String,
+    id_token: Option<String>,
     access_token: Option<String>,
     refresh_token: Option<String>,
 ) -> std::io::Result<AuthDotJson> {
     let mut auth_dot_json = try_read_auth_json(auth_file)?;
 
     let tokens = auth_dot_json.tokens.get_or_insert_with(TokenData::default);
-    tokens.id_token = parse_id_token(&id_token).map_err(std::io::Error::other)?;
+    if let Some(id_token) = id_token {
+        tokens.id_token = parse_id_token(&id_token).map_err(std::io::Error::other)?;
+    }
     if let Some(access_token) = access_token {
         tokens.access_token = access_token;
     }
@@ -400,7 +405,7 @@ async fn update_tokens(
 
 async fn try_refresh_token(
     refresh_token: String,
-    client: &reqwest::Client,
+    client: &CodexHttpClient,
 ) -> std::io::Result<RefreshResponse> {
     let refresh_request = RefreshRequest {
         client_id: CLIENT_ID,
@@ -442,7 +447,7 @@ struct RefreshRequest {
 
 #[derive(Deserialize, Clone)]
 struct RefreshResponse {
-    id_token: String,
+    id_token: Option<String>,
     access_token: Option<String>,
     refresh_token: Option<String>,
 }
@@ -506,6 +511,35 @@ mod tests {
 
         let same_auth_dot_json = try_read_auth_json(&file).unwrap();
         assert_eq!(auth_dot_json, same_auth_dot_json);
+    }
+
+    #[tokio::test]
+    async fn refresh_without_id_token() {
+        let codex_home = tempdir().unwrap();
+        let fake_jwt = write_auth_file(
+            AuthFileParams {
+                openai_api_key: None,
+                chatgpt_plan_type: "pro".to_string(),
+                chatgpt_account_id: None,
+            },
+            codex_home.path(),
+        )
+        .expect("failed to write auth file");
+
+        let auth_file = super::get_auth_file(codex_home.path());
+        let updated = super::update_tokens(
+            auth_file.as_path(),
+            None,
+            Some("new-access-token".to_string()),
+            Some("new-refresh-token".to_string()),
+        )
+        .await
+        .expect("update_tokens should succeed");
+
+        let tokens = updated.tokens.expect("tokens should exist");
+        assert_eq!(tokens.id_token.raw_jwt, fake_jwt);
+        assert_eq!(tokens.access_token, "new-access-token");
+        assert_eq!(tokens.refresh_token, "new-refresh-token");
     }
 
     #[test]
@@ -916,7 +950,10 @@ impl AuthManager {
                 self.reload();
                 Ok(Some(token))
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                tracing::error!("Failed to refresh token: {}", e);
+                Err(e)
+            }
         }
     }
 

@@ -37,6 +37,8 @@ use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
+use codex_core::protocol::UndoCompletedEvent;
+use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WebSearchBeginEvent;
@@ -113,15 +115,8 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
-use codex_git_tooling::CreateGhostCommitOptions;
-use codex_git_tooling::GhostCommit;
-use codex_git_tooling::GitToolingError;
-use codex_git_tooling::create_ghost_commit;
-use codex_git_tooling::restore_ghost_commit;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
-
-const MAX_TRACKED_GHOST_COMMITS: usize = 20;
 
 // Track information about an in-flight exec command.
 struct RunningCommand {
@@ -267,15 +262,14 @@ pub(crate) struct ChatWidget {
     pending_notification: Option<Notification>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
-    // List of ghost commits corresponding to each turn.
-    ghost_snapshots: Vec<GhostCommit>,
-    ghost_snapshots_disabled: bool,
     // Whether to add a final message separator after the last message
     needs_final_message_separator: bool,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
+    // Current session rollout path (if known)
+    current_rollout_path: Option<PathBuf>,
 }
 
 struct UserMessage {
@@ -310,9 +304,6 @@ impl ChatWidget {
     }
 
     fn set_status_header(&mut self, header: String) {
-        if self.current_status_header == header {
-            return;
-        }
         self.current_status_header = header.clone();
         self.bottom_pane.update_status_header(header);
     }
@@ -322,6 +313,7 @@ impl ChatWidget {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.conversation_id = Some(event.session_id);
+        self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
@@ -341,6 +333,39 @@ impl ChatWidget {
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn open_feedback_note(
+        &mut self,
+        category: crate::app_event::FeedbackCategory,
+        include_logs: bool,
+    ) {
+        // Build a fresh snapshot at the time of opening the note overlay.
+        let snapshot = self.feedback.snapshot(self.conversation_id);
+        let rollout = if include_logs {
+            self.current_rollout_path.clone()
+        } else {
+            None
+        };
+        let view = crate::bottom_pane::FeedbackNoteView::new(
+            category,
+            snapshot,
+            rollout,
+            self.app_event_tx.clone(),
+            include_logs,
+        );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn open_feedback_consent(&mut self, category: crate::app_event::FeedbackCategory) {
+        let params = crate::bottom_pane::feedback_upload_consent_params(
+            self.app_event_tx.clone(),
+            category,
+            self.current_rollout_path.clone(),
+        );
+        self.bottom_pane.show_selection_view(params);
+        self.request_redraw();
     }
 
     fn on_agent_message(&mut self, message: String) {
@@ -401,6 +426,7 @@ impl ChatWidget {
         self.bottom_pane.clear_ctrl_c_quit_hint();
         self.bottom_pane.set_task_running(true);
         self.retry_status_header = None;
+        self.bottom_pane.set_interrupt_hint_visible(true);
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
@@ -496,7 +522,7 @@ impl ChatWidget {
 
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
-                "Conversation interrupted - tell the model what to do differently".to_owned(),
+                "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_owned(),
             ));
         }
 
@@ -634,6 +660,32 @@ impl ChatWidget {
 
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
+    }
+
+    fn on_undo_started(&mut self, event: UndoStartedEvent) {
+        self.bottom_pane.ensure_status_indicator();
+        self.bottom_pane.set_interrupt_hint_visible(false);
+        let message = event
+            .message
+            .unwrap_or_else(|| "Undo in progress...".to_string());
+        self.set_status_header(message);
+    }
+
+    fn on_undo_completed(&mut self, event: UndoCompletedEvent) {
+        let UndoCompletedEvent { success, message } = event;
+        self.bottom_pane.hide_status_indicator();
+        let message = message.unwrap_or_else(|| {
+            if success {
+                "Undo completed successfully.".to_string()
+            } else {
+                "Undo failed.".to_string()
+            }
+        });
+        if success {
+            self.add_info_message(message, None);
+        } else {
+            self.add_error_message(message);
+        }
     }
 
     fn on_stream_error(&mut self, message: String) {
@@ -777,6 +829,7 @@ impl ChatWidget {
             id,
             command: ev.command,
             reason: ev.reason,
+            risk: ev.risk,
         };
         self.bottom_pane.push_approval_request(request);
         self.request_redraw();
@@ -952,11 +1005,10 @@ impl ChatWidget {
             suppress_session_configured_redraw: false,
             pending_notification: None,
             is_review_mode: false,
-            ghost_snapshots: Vec::new(),
-            ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
+            current_rollout_path: None,
         }
     }
 
@@ -1019,11 +1071,10 @@ impl ChatWidget {
             suppress_session_configured_redraw: true,
             pending_notification: None,
             is_review_mode: false,
-            ghost_snapshots: Vec::new(),
-            ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
+            current_rollout_path: None,
         }
     }
 
@@ -1128,23 +1179,11 @@ impl ChatWidget {
         }
         match cmd {
             SlashCommand::Feedback => {
-                let snapshot = self.feedback.snapshot(self.conversation_id);
-                match snapshot.save_to_temp_file() {
-                    Ok(path) => {
-                        crate::bottom_pane::FeedbackView::show(
-                            &mut self.bottom_pane,
-                            path,
-                            snapshot,
-                        );
-                        self.request_redraw();
-                    }
-                    Err(e) => {
-                        self.add_to_history(history_cell::new_error_event(format!(
-                            "Failed to save feedback logs: {e}"
-                        )));
-                        self.request_redraw();
-                    }
-                }
+                // Step 1: pick a category (UI built in feedback_view)
+                let params =
+                    crate::bottom_pane::feedback_selection_params(self.app_event_tx.clone());
+                self.bottom_pane.show_selection_view(params);
+                self.request_redraw();
             }
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
@@ -1184,7 +1223,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
             SlashCommand::Undo => {
-                self.undo_last_snapshot();
+                self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
             }
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
@@ -1301,8 +1340,6 @@ impl ChatWidget {
             return;
         }
 
-        self.capture_ghost_snapshot();
-
         let mut items: Vec<UserInput> = Vec::new();
 
         if !text.is_empty() {
@@ -1333,57 +1370,6 @@ impl ChatWidget {
             self.add_to_history(history_cell::new_user_prompt(text));
         }
         self.needs_final_message_separator = false;
-    }
-
-    fn capture_ghost_snapshot(&mut self) {
-        if self.ghost_snapshots_disabled {
-            return;
-        }
-
-        let options = CreateGhostCommitOptions::new(&self.config.cwd);
-        match create_ghost_commit(&options) {
-            Ok(commit) => {
-                self.ghost_snapshots.push(commit);
-                if self.ghost_snapshots.len() > MAX_TRACKED_GHOST_COMMITS {
-                    self.ghost_snapshots.remove(0);
-                }
-            }
-            Err(err) => {
-                self.ghost_snapshots_disabled = true;
-                let (message, hint) = match &err {
-                    GitToolingError::NotAGitRepository { .. } => (
-                        "Snapshots disabled: current directory is not a Git repository."
-                            .to_string(),
-                        None,
-                    ),
-                    _ => (
-                        format!("Snapshots disabled after error: {err}"),
-                        Some(
-                            "Restart Codex after resolving the issue to re-enable snapshots."
-                                .to_string(),
-                        ),
-                    ),
-                };
-                self.add_info_message(message, hint);
-                tracing::warn!("failed to create ghost snapshot: {err}");
-            }
-        }
-    }
-
-    fn undo_last_snapshot(&mut self) {
-        let Some(commit) = self.ghost_snapshots.pop() else {
-            self.add_info_message("No snapshot available to undo.".to_string(), None);
-            return;
-        };
-
-        if let Err(err) = restore_ghost_commit(&self.config.cwd, &commit) {
-            self.add_error_message(format!("Failed to restore snapshot: {err}"));
-            self.ghost_snapshots.push(commit);
-            return;
-        }
-
-        let short_id: String = commit.id().chars().take(8).collect();
-        self.add_info_message(format!("Restored workspace to snapshot {short_id}"), None);
     }
 
     /// Replay a subset of initial events into the UI to seed the transcript when
@@ -1483,21 +1469,21 @@ impl ChatWidget {
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 self.on_background_event(message)
             }
+            EventMsg::UndoStarted(ev) => self.on_undo_started(ev),
+            EventMsg::UndoCompleted(ev) => self.on_undo_completed(ev),
             EventMsg::StreamError(StreamErrorEvent { message }) => self.on_stream_error(message),
             EventMsg::UserMessage(ev) => {
                 if from_replay {
                     self.on_user_message_event(ev);
                 }
             }
-            EventMsg::ConversationPath(ev) => {
-                self.app_event_tx
-                    .send(crate::app_event::AppEvent::ConversationHistory(ev));
-            }
             EventMsg::EnteredReviewMode(review_request) => {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::ItemStarted(_) | EventMsg::ItemCompleted(_) => {}
+            EventMsg::RawResponseItem(_)
+            | EventMsg::ItemStarted(_)
+            | EventMsg::ItemCompleted(_) => {}
         }
     }
 
@@ -1631,6 +1617,7 @@ impl ChatWidget {
             context_usage,
             &self.conversation_id,
             self.rate_limit_snapshot.as_ref(),
+            Local::now(),
         ));
     }
 
@@ -2218,6 +2205,10 @@ impl ChatWidget {
 
     pub(crate) fn conversation_id(&self) -> Option<ConversationId> {
         self.conversation_id
+    }
+
+    pub(crate) fn rollout_path(&self) -> Option<PathBuf> {
+        self.current_rollout_path.clone()
     }
 
     /// Return a reference to the widget's current config (includes any

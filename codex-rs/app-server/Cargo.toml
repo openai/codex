@@ -24,6 +24,7 @@ codex-file-search = { workspace = true }
 codex-login = { workspace = true }
 codex-protocol = { workspace = true }
 codex-app-server-protocol = { workspace = true }
+codex-feedback = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -47,6 +48,7 @@ base64 = { workspace = true }
 core_test_support = { workspace = true }
 os_info = { workspace = true }
 pretty_assertions = { workspace = true }
+serial_test = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }
 wiremock = { workspace = true }
