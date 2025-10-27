@@ -20,7 +20,6 @@ use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
 use codex_protocol::ConversationId;
 use codex_protocol::items::TurnItem;
-use codex_protocol::protocol::ConversationPathResponseEvent;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
@@ -105,8 +104,12 @@ use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state::TaskKind;
 use crate::tasks::CompactTask;
+use crate::tasks::GhostSnapshotTask;
 use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
+use crate::tasks::SessionTask;
+use crate::tasks::SessionTaskContext;
+use crate::tasks::UndoTask;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
@@ -129,6 +132,8 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
+use codex_utils_readiness::Readiness;
+use codex_utils_readiness::ReadinessFlag;
 
 pub mod compact;
 use self::compact::build_compacted_history;
@@ -179,6 +184,7 @@ impl Codex {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
+            features: config.features.clone(),
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -272,6 +278,7 @@ pub(crate) struct TurnContext {
     pub(crate) is_review_mode: bool,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
+    pub(crate) tool_call_gate: Arc<ReadinessFlag>,
 }
 
 impl TurnContext {
@@ -312,6 +319,9 @@ pub(crate) struct SessionConfiguration {
     /// `ConfigureSession` operation so that the business-logic layer can
     /// operate deterministically.
     cwd: PathBuf,
+
+    /// Set of feature flags for this session
+    features: Features,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -407,6 +417,7 @@ impl Session {
             is_review_mode: false,
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+            tool_call_gate: Arc::new(ReadinessFlag::new()),
         }
     }
 
@@ -598,6 +609,19 @@ impl Session {
         self.tx_event.clone()
     }
 
+    /// Ensure all rollout writes are durably flushed.
+    pub(crate) async fn flush_rollout(&self) {
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
+        if let Some(rec) = recorder
+            && let Err(e) = rec.flush().await
+        {
+            warn!("failed to flush rollout recorder: {e}");
+        }
+    }
+
     fn next_internal_sub_id(&self) -> String {
         let id = self
             .next_internal_sub_id
@@ -612,6 +636,8 @@ impl Session {
                 // Build and record initial items (user instructions + environment context)
                 let items = self.build_initial_context(&turn_context);
                 self.record_conversation_items(&turn_context, &items).await;
+                // Ensure initial items are visible to immediate readers (e.g., tests, forks).
+                self.flush_rollout().await;
             }
             InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
                 let rollout_items = conversation_history.get_rollout_items();
@@ -628,6 +654,8 @@ impl Session {
                 if persist && !rollout_items.is_empty() {
                     self.persist_rollout_items(&rollout_items).await;
                 }
+                // Flush after seeding history and any persisted rollout copy.
+                self.flush_rollout().await;
             }
         }
     }
@@ -931,7 +959,7 @@ impl Session {
         state.record_items(items.iter());
     }
 
-    async fn replace_history(&self, items: Vec<ResponseItem>) {
+    pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
         let mut state = self.state.lock().await;
         state.replace_history(items);
     }
@@ -1083,6 +1111,43 @@ impl Session {
             message: message.into(),
         });
         self.send_event(turn_context, event).await;
+    }
+
+    async fn maybe_start_ghost_snapshot(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
+    ) {
+        if turn_context.is_review_mode
+            || !self
+                .state
+                .lock()
+                .await
+                .session_configuration
+                .features
+                .enabled(Feature::GhostCommit)
+        {
+            return;
+        }
+
+        let token = match turn_context.tool_call_gate.subscribe().await {
+            Ok(token) => token,
+            Err(err) => {
+                warn!("failed to subscribe to ghost snapshot readiness: {err}");
+                return;
+            }
+        };
+
+        info!("spawning ghost snapshot task");
+        let task = GhostSnapshotTask::new(token);
+        Arc::new(task)
+            .run(
+                Arc::new(SessionTaskContext::new(self.clone())),
+                turn_context.clone(),
+                Vec::new(),
+                cancellation_token,
+            )
+            .await;
     }
 
     /// Returns the input if there was no task running to inject into
@@ -1361,6 +1426,13 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 };
                 sess.send_event_raw(event).await;
             }
+            Op::Undo => {
+                let turn_context = sess
+                    .new_turn_with_sub_id(sub.id.clone(), SessionSettingsUpdate::default())
+                    .await;
+                sess.spawn_task(turn_context, Vec::new(), UndoTask::new())
+                    .await;
+            }
             Op::Compact => {
                 let turn_context = sess
                     .new_turn_with_sub_id(sub.id.clone(), SessionSettingsUpdate::default())
@@ -1406,33 +1478,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 sess.send_event_raw(event).await;
                 break;
             }
-            Op::GetPath => {
-                let sub_id = sub.id.clone();
-                // Flush rollout writes before returning the path so readers observe a consistent file.
-                let (path, rec_opt) = {
-                    let guard = sess.services.rollout.lock().await;
-                    match guard.as_ref() {
-                        Some(rec) => (rec.get_rollout_path(), Some(rec.clone())),
-                        None => {
-                            error!("rollout recorder not found");
-                            continue;
-                        }
-                    }
-                };
-                if let Some(rec) = rec_opt
-                    && let Err(e) = rec.flush().await
-                {
-                    warn!("failed to flush rollout recorder before GetHistory: {e}");
-                }
-                let event = Event {
-                    id: sub_id.clone(),
-                    msg: EventMsg::ConversationPath(ConversationPathResponseEvent {
-                        conversation_id: sess.conversation_id,
-                        path,
-                    }),
-                };
-                sess.send_event_raw(event).await;
-            }
+
             Op::Review { review_request } => {
                 let turn_context = sess
                     .new_turn_with_sub_id(sub.id.clone(), SessionSettingsUpdate::default())
@@ -1523,6 +1569,7 @@ async fn spawn_review_thread(
         is_review_mode: true,
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
+        tool_call_gate: Arc::new(ReadinessFlag::new()),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -1586,6 +1633,8 @@ pub(crate) async fn run_task(
             .await;
     }
 
+    sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
+        .await;
     let mut last_agent_message: Option<String> = None;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
@@ -1778,6 +1827,13 @@ fn parse_review_output_event(text: &str) -> ReviewOutputEvent {
     }
 }
 
+fn filter_model_visible_history(input: Vec<ResponseItem>) -> Vec<ResponseItem> {
+    input
+        .into_iter()
+        .filter(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }))
+        .collect()
+}
+
 async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -1798,7 +1854,7 @@ async fn run_turn(
         .supports_parallel_tool_calls;
     let parallel_tool_calls = model_supports_parallel;
     let prompt = Prompt {
-        input,
+        input: filter_model_visible_history(input),
         tools: router.specs(),
         parallel_tool_calls,
         base_instructions_override: turn_context.base_instructions.clone(),
@@ -2236,6 +2292,8 @@ pub(crate) async fn exit_review_mode(
             }],
         )
         .await;
+    // Make the recorded review note visible immediately for readers.
+    session.flush_rollout().await;
 }
 
 fn mcp_init_error_display(
@@ -2291,6 +2349,8 @@ fn is_mcp_client_startup_timeout_error(error: &anyhow::Error) -> bool {
         || error_message.contains("timed out handshaking with MCP server")
 }
 
+use crate::features::Feature;
+use crate::features::Features;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
@@ -2607,6 +2667,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
+            features: Features::default(),
         };
 
         let state = SessionState::new(session_configuration.clone());
@@ -2675,6 +2736,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
+            features: Features::default(),
         };
 
         let state = SessionState::new(session_configuration.clone());

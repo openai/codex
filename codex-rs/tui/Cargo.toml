@@ -35,7 +35,6 @@ codex-common = { workspace = true, features = [
 ] }
 codex-core = { workspace = true }
 codex-file-search = { workspace = true }
-codex-git-tooling = { workspace = true }
 codex-login = { workspace = true }
 codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
