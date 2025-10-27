@@ -13,6 +13,7 @@ use codex_app_server_protocol::LoginChatGptResponse;
 use codex_app_server_protocol::LogoutChatGptResponse;
 use codex_app_server_protocol::RequestId;
 use codex_login::login_with_api_key;
+use serial_test::serial;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -94,6 +95,8 @@ async fn logout_chatgpt_removes_auth() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch the login server since it binds to a fixed port.
+#[serial(login_port)]
 async fn login_and_cancel_chatgpt() {
     let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
     create_config_toml(codex_home.path()).unwrap_or_else(|err| panic!("write config.toml: {err}"));
@@ -208,6 +211,8 @@ async fn login_chatgpt_rejected_when_forced_api() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch the login server since it binds to a fixed port.
+#[serial(login_port)]
 async fn login_chatgpt_includes_forced_workspace_query_param() {
     let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
     create_config_toml_forced_workspace(codex_home.path(), "ws-forced")
