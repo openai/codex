@@ -1,4 +1,5 @@
 import http from "node:http";
+import type { Socket } from "node:net";
 
 const DEFAULT_RESPONSE_ID = "resp_mock";
 const DEFAULT_MESSAGE_ID = "msg_mock";
@@ -86,6 +87,8 @@ export async function startResponsesTestProxy(
 
   let responseIndex = 0;
 
+  const sockets = new Set<Socket>();
+
   const server = http.createServer((req, res) => {
     async function handle(): Promise<void> {
       if (req.method === "POST" && req.url === "/responses") {
@@ -116,6 +119,13 @@ export async function startResponsesTestProxy(
     });
   });
 
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => {
+      sockets.delete(socket);
+    });
+  });
+
   const url = await new Promise<string>((resolve, reject) => {
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
@@ -131,6 +141,10 @@ export async function startResponsesTestProxy(
   });
 
   async function close(): Promise<void> {
+    for (const socket of Array.from(sockets)) {
+      socket.destroy();
+    }
+
     await new Promise<void>((resolve, reject) => {
       server.close((err) => {
         if (err) {
