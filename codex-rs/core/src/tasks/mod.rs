@@ -50,10 +50,28 @@ impl SessionTaskContext {
     }
 }
 
+/// Async task that drives a [`Session`] turn.
+///
+/// Implementations encapsulate a specific Codex workflow (regular chat,
+/// reviews, ghost snapshots, etc.). Each task instance is owned by a
+/// [`Session`] and executed on a background Tokio task. The trait is
+/// intentionally small: implementers identify themselves via
+/// [`SessionTask::kind`], perform their work in [`SessionTask::run`], and may
+/// release resources in [`SessionTask::abort`].
 #[async_trait]
 pub(crate) trait SessionTask: Send + Sync + 'static {
+    /// Describes the type of work the task performs so the session can
+    /// surface it in telemetry and UI.
     fn kind(&self) -> TaskKind;
 
+    /// Executes the task until completion or cancellation.
+    ///
+    /// Implementations typically stream protocol events using `session` and
+    /// `ctx`, returning an optional final agent message when finished. The
+    /// provided `cancellation_token` is cancelled when the session requests an
+    /// abort; implementers should watch for it and terminate quickly once it
+    /// fires. Returning [`Some`] yields a final message that
+    /// [`Session::on_task_finished`] will emit to the client.
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
@@ -62,6 +80,11 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
         cancellation_token: CancellationToken,
     ) -> Option<String>;
 
+    /// Gives the task a chance to perform cleanup after an abort.
+    ///
+    /// The default implementation is a no-op; override this if additional
+    /// teardown or notifications are required once
+    /// [`Session::abort_all_tasks`] cancels the task.
     async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
         let _ = (session, ctx);
     }
