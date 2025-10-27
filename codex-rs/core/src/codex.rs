@@ -460,7 +460,7 @@ impl Session {
         };
 
         // Error messages to dispatch after SessionConfigured is sent.
-        let mut post_session_configured_error_events = Vec::<Event>::new();
+        let mut post_session_configured_events = Vec::<Event>::new();
 
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
@@ -508,7 +508,7 @@ impl Session {
             Err(e) => {
                 let message = format!("Failed to create MCP connection manager: {e:#}");
                 error!("{message}");
-                post_session_configured_error_events.push(Event {
+                post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
                     msg: EventMsg::Error(ErrorEvent { message }),
                 });
@@ -522,13 +522,27 @@ impl Session {
                 let auth_entry = auth_statuses.get(&server_name);
                 let display_message = mcp_init_error_display(&server_name, auth_entry, &err);
                 warn!("MCP client for `{server_name}` failed to start: {err:#}");
-                post_session_configured_error_events.push(Event {
+                post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
                     msg: EventMsg::Error(ErrorEvent {
                         message: display_message,
                     }),
                 });
             }
+        }
+
+        for (alias, feature) in session_configuration.features.legacy_feature_usages() {
+            let summary = format!("Config key `{alias}` is deprecated.");
+            let canonical = feature.key();
+            let details = if alias == canonical {
+                None
+            } else {
+                Some(format!("Use `--enable {canonical}` instead."))
+            };
+            post_session_configured_events.push(Event {
+                id: INITIAL_SUBMIT_ID.to_owned(),
+                msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent { summary, details }),
+            });
         }
 
         let otel_event_manager = OtelEventManager::new(
@@ -595,7 +609,7 @@ impl Session {
                 rollout_path,
             }),
         })
-        .chain(post_session_configured_error_events.into_iter());
+        .chain(post_session_configured_events.into_iter());
         for event in events {
             sess.send_event_raw(event).await;
         }
