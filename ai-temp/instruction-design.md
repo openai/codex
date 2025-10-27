@@ -13,13 +13,9 @@
   3. **Custom path** – point at a specific project directory (frontend/backend split, microservice repos, etc.).
 - `AgentContext` records the chosen path so downstream code (project-doc discovery, logging) operates with consistent scope.
 
-## Instruction Inheritance
-- Default behaviour: the agent’s `AGENTS.md` replaces inherited docs for a clean slate.
-- Optional override: agent `config.toml` may set `inherit_repo_instructions = true` (name TBD) to append repository-level documents after the agent-specific instructions.
-- Implementation outline:
-  - During load, the config layer reads the inheritance flag.
-  - If disabled, set `Config::base_instructions` to the agent file and skip repo traversal.
-  - If enabled, rely on `codex_core::project_doc::read_project_docs` so instructions are merged root-to-leaf with the agent doc prepended.
+## Instruction Inheritance (current vs. future)
+- **Today:** loading an agent replaces inherited docs; only the agent’s own `AGENTS.md` is applied.
+- **Future idea:** introduce an opt-in `inherit_repo_instructions` flag so agents can append repo-level documents after their own guidance. This flag is not implemented yet; the section remains here as a backlog note.
 
 ## UI Exposure
 - The TUI status helpers (`codex-rs/tui/src/status/helpers.rs`) will detect the updated `Config` and display whichever instruction set is active.

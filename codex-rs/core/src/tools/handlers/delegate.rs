@@ -88,6 +88,15 @@ pub static DELEGATE_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         },
     );
     properties.insert(
+        "conversation_id".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Existing delegate conversation identifier to resume; when provided, `agent_id` may be omitted"
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
         "prompt".to_string(),
         JsonSchema::String {
             description: Some("Instructions passed to the sub-agent".to_string()),
@@ -151,6 +160,8 @@ struct DelegateToolArgs {
     context: Option<DelegateToolArgsContext>,
     #[serde(default)]
     mode: Option<DelegateInvocationMode>,
+    #[serde(default)]
+    conversation_id: Option<String>,
     #[serde(default)]
     batch: Vec<DelegateToolBatchArgs>,
 }
@@ -252,12 +263,22 @@ impl ToolHandler for DelegateToolHandler {
         })?;
 
         let mut events = adapter.subscribe().await;
-        let conversation_id = session.conversation_id();
+        let root_conversation_id = session.conversation_id();
+
+        if !args.batch.is_empty() && args.conversation_id.is_some() {
+            return Err(FunctionCallError::RespondToModel(
+                "`conversation_id` cannot be combined with `batch`".into(),
+            ));
+        }
 
         if !args.batch.is_empty() {
-            let runs =
-                handle_batch_entries(adapter.as_ref(), &mut events, &conversation_id, args.batch)
-                    .await?;
+            let runs = handle_batch_entries(
+                adapter.as_ref(),
+                &mut events,
+                &root_conversation_id,
+                args.batch,
+            )
+            .await?;
 
             let response = DelegateToolBatchResponse { status: "ok", runs };
             let content = serde_json::to_string(&response).map_err(|e| {
@@ -270,9 +291,16 @@ impl ToolHandler for DelegateToolHandler {
             });
         }
 
-        let agent_id = args.agent_id.ok_or_else(|| {
-            FunctionCallError::RespondToModel("missing `agent_id` for delegate_agent call".into())
-        })?;
+        let resume_conversation_id = args.conversation_id;
+        let agent_id = match (&resume_conversation_id, args.agent_id) {
+            (Some(_), maybe_agent) => maybe_agent,
+            (None, Some(agent)) => Some(agent),
+            (None, None) => {
+                return Err(FunctionCallError::RespondToModel(
+                    "missing `agent_id` for delegate_agent call".into(),
+                ));
+            }
+        };
         let prompt = args.prompt.ok_or_else(|| {
             FunctionCallError::RespondToModel("missing `prompt` for delegate_agent call".into())
         })?;
@@ -280,11 +308,12 @@ impl ToolHandler for DelegateToolHandler {
         let mode = args.mode.unwrap_or_default();
 
         let request = DelegateToolRequest {
-            agent_id: agent_id.clone(),
+            agent_id,
             prompt: prompt.clone(),
             context: args.context.unwrap_or_default().into(),
-            caller_conversation_id: Some(conversation_id.to_string()),
+            caller_conversation_id: Some(root_conversation_id.to_string()),
             mode,
+            conversation_id: resume_conversation_id,
             batch: Vec::new(),
         };
 
@@ -406,11 +435,12 @@ async fn handle_batch_entries(
         }
 
         let request = DelegateToolRequest {
-            agent_id: entry.agent_id.clone(),
+            agent_id: Some(entry.agent_id.clone()),
             prompt: entry.prompt.clone(),
             context: entry.context.unwrap_or_default().into(),
             caller_conversation_id: Some(conversation_id.clone()),
             mode,
+            conversation_id: None,
             batch: Vec::new(),
         };
 
@@ -494,6 +524,23 @@ fn map_adapter_error(err: DelegateToolError) -> FunctionCallError {
         DelegateToolError::SetupFailed(reason) => {
             FunctionCallError::RespondToModel(format!("failed to start delegate: {reason}"))
         }
+        DelegateToolError::SessionNotFound(conversation_id) => {
+            FunctionCallError::RespondToModel(format!(
+                "delegate session `{conversation_id}` is not available"
+            ))
+        }
+        DelegateToolError::AgentBusy => FunctionCallError::RespondToModel(
+            "delegate session is still running; wait for it to finish before sending a follow-up"
+                .to_string(),
+        ),
+        DelegateToolError::InvalidCursor => {
+            FunctionCallError::RespondToModel("invalid delegate pagination cursor".to_string())
+        }
+        DelegateToolError::HistoryUnavailable(conversation_id) => {
+            FunctionCallError::RespondToModel(format!(
+                "delegate history is unavailable for session `{conversation_id}`"
+            ))
+        }
     }
 }
 
@@ -565,6 +612,8 @@ async fn monitor_detached_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::delegate_tool::DelegateSessionMessages;
+    use crate::delegate_tool::DelegateSessionsList;
     use std::sync::Arc;
     use tokio::sync::Mutex;
     use tokio::sync::mpsc;
@@ -596,19 +645,47 @@ mod tests {
             request: DelegateToolRequest,
         ) -> Result<DelegateToolRun, DelegateToolError> {
             self.requests.lock().await.push(request.clone());
-            let run_id = format!("run-{}", request.agent_id);
+            let agent_id = request
+                .agent_id
+                .clone()
+                .expect("mock delegate expects agent id");
+            let run_id = format!("run-{agent_id}");
             if let Some(sender) = self.sender.lock().await.as_ref() {
                 let _ = sender.send(DelegateToolEvent::Completed {
                     run_id: run_id.clone(),
-                    agent_id: request.agent_id.clone(),
+                    agent_id: agent_id.clone(),
                     output: Some(format!("summary: {}", request.prompt)),
                     duration: Duration::from_millis(5),
                 });
             }
-            Ok(DelegateToolRun {
-                run_id,
-                agent_id: request.agent_id,
-            })
+            Ok(DelegateToolRun { run_id, agent_id })
+        }
+
+        async fn list_sessions(
+            &self,
+            _cursor: Option<String>,
+            _limit: usize,
+        ) -> Result<DelegateSessionsList, DelegateToolError> {
+            Err(DelegateToolError::SetupFailed(
+                "list_sessions not implemented in mock".to_string(),
+            ))
+        }
+
+        async fn session_messages(
+            &self,
+            conversation_id: &str,
+            _cursor: Option<String>,
+            _limit: usize,
+        ) -> Result<DelegateSessionMessages, DelegateToolError> {
+            Err(DelegateToolError::HistoryUnavailable(
+                conversation_id.to_string(),
+            ))
+        }
+
+        async fn dismiss_session(&self, conversation_id: &str) -> Result<(), DelegateToolError> {
+            Err(DelegateToolError::SessionNotFound(
+                conversation_id.to_string(),
+            ))
         }
     }
 
@@ -639,8 +716,8 @@ mod tests {
 
         let requests = adapter.requests.lock().await.clone();
         assert_eq!(requests.len(), 2);
-        assert_eq!(requests[0].agent_id, "alpha");
-        assert_eq!(requests[1].agent_id, "bravo");
+        assert_eq!(requests[0].agent_id.as_deref(), Some("alpha"));
+        assert_eq!(requests[1].agent_id.as_deref(), Some("bravo"));
 
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].agent_id, "alpha");

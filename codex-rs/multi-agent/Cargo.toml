@@ -17,6 +17,7 @@ serde_json.workspace = true
 flate2 = { workspace = true }
 tracing.workspace = true
 bincode.workspace = true
+time = { version = "0.3", features = ["formatting"] }
 
 [dev-dependencies]
 serde_json.workspace = true

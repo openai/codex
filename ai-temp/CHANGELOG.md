@@ -2,13 +2,21 @@
 
 > Keep this file current; it documents the evolution of the multi-agent design work. An outdated changelog breaks the orchestrator timeline.
 
+## 2025-10-27
+
+- Added follow-up delegation support: orchestrator can resume saved sessions, shadow-backed previews power the TUI picker, and the `delegate_sessions` tool exposes list/messages/dismiss operations.
+- Documented the shipped behaviour inside `ai-temp/` (AGENTS overview, orchestration integration, UI/UX notes); public docs remain untouched until release.
+- Implemented dismissal plumbing so stale sessions and their shadow caches can be removed safely from both the CLI and coordinating prompts.
+
 ## 2025-10-19
+
 - Reworked delegate event fan-in so each conversation feeds a dedicated `spawn_event_forwarder` and surfaces updates through `AppEvent::CodexEvent { conversation_id, event }`, keeping history rendering scoped to the active session.
 - Added shadow-session plumbing to the orchestrator (`ShadowManager`, per-session metrics, user/agent capture forwarding) and exposed the new telemetry through the TUI status panel.
 - Expanded the delegate app events (`DelegateShadow*`, `InsertHistoryCell { conversation_id, ... }`) and updated the TUI’s `SessionHandle` storage to hydrate from snapshots instead of replaying global history.
 - Refreshed `ai-temp/agents-shadow-client.md`, `ai-temp/orchestration-integration.md`, and the sample Codex home (`example-codex-home/AGENTS.md`) to describe per-session streams, `DelegateEvent::{Started,Delta,Completed,Failed}`, and the tightened coordinator instructions.
 
 ## 2025-10-16
+
 - Added batched delegate execution: the core handler now accepts `batch` payloads, launches every child run concurrently (respecting the orchestrator’s concurrency cap), and returns per-agent summaries in a single response.
 - Updated the TUI delegate tree to indent siblings (two spaces per depth) and keep the status banner aligned while multiple children stream at once; adjusted snapshot/unit coverage accordingly.
 - Refreshed documentation and sample instructions (`ai-temp/parallel-delegation.md`, `ai-temp/tool-implementation-patterns.md`, example Codex home agents) to describe the batched call flow and new presentation.
@@ -20,6 +28,7 @@
 - Added focused unit tests covering the new config flag behaviour and UI indentation to prevent regressions.
 
 ## 2025-10-14
+
 - Captured the baseline design artifacts (`AGENTS.md`, `config-design.md`, `instruction-design.md`, `persistence-design.md`, `error-handling.md`) compiled during the planning phase.
 - Reiterated the requirement that this changelog must stay up to date as the multi-agent feature evolves.
 - Scaffolded the `codex-multi-agent` crate with `AgentId`, `AgentRegistry`, and async config loading that merges global/agent/CLI overrides into an `AgentContext`.

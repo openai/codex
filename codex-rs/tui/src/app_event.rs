@@ -131,6 +131,12 @@ pub(crate) enum AppEvent {
     /// Dismiss a detached delegate run from the registry.
     DismissDetachedRun(String),
 
+    /// Show a snapshot of recent messages for a delegate session.
+    PreviewDelegateSession(String),
+
+    /// Remove a reusable delegate session (and its shadow cache).
+    DismissDelegateSession(String),
+
     /// Inject text into the main composer as if the user typed it.
     InsertUserTextMessage(String),
 

@@ -61,6 +61,6 @@ By isolating the orchestration-specific logic in this crate, other crates only n
 - A dedicated crate provides a single place to evolve agent-related behaviour (validation, migrations, metadata) without scattering knowledge of `~/.codex/agents` across the repo.
 
 ## Open Points to Finalise
-- Exact CLI UX for selecting an agent (flag vs. config profile vs. interactive picker).
+- Decide whether to add a dedicated CLI flag/selector for agent profiles or continue relying on config overrides and the `/agent` picker.
 - Whether agent directories can fall back to the global `auth.json` or require their own credentials.
 - Error reporting strategy when an agent directory exists but is misconfigured.

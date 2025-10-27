@@ -30,6 +30,7 @@ use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_multi_agent::ActiveDelegateSession;
 use codex_multi_agent::AgentId;
 use codex_multi_agent::AgentOrchestrator;
 use codex_multi_agent::DelegateEvent;
@@ -48,7 +49,10 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use std::collections::{HashMap, HashSet, VecDeque, hash_map::Entry};
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::collections::VecDeque;
+use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -912,6 +916,59 @@ impl App {
                     Err(err) => self.active_widget_mut().add_error_message(err),
                 }
             }
+            AppEvent::PreviewDelegateSession(conversation_id) => {
+                match self
+                    .delegate_orchestrator
+                    .session_summary(&conversation_id)
+                    .await
+                {
+                    Some(summary) => {
+                        match self
+                            .delegate_orchestrator
+                            .recent_messages(&conversation_id, None, 3)
+                            .await
+                        {
+                            Ok(messages) => {
+                                self.active_widget_mut()
+                                    .show_delegate_preview(&summary, &messages);
+                            }
+                            Err(err) => {
+                                self.active_widget_mut().add_error_message(format!(
+                                    "Failed to load session preview: {err}"
+                                ));
+                            }
+                        }
+                    }
+                    None => {
+                        self.active_widget_mut().add_error_message(format!(
+                            "Unknown delegate session {conversation_id}"
+                        ));
+                    }
+                }
+            }
+            AppEvent::DismissDelegateSession(conversation_id) => {
+                let label = self
+                    .delegate_orchestrator
+                    .session_summary(&conversation_id)
+                    .await
+                    .map(|summary| format!("#{}", summary.agent_id.as_str()))
+                    .unwrap_or_else(|| conversation_id.clone());
+
+                match self
+                    .delegate_orchestrator
+                    .dismiss_session(&conversation_id)
+                    .await
+                {
+                    Ok(()) => {
+                        self.active_widget_mut()
+                            .add_info_message(format!("Dismissed delegate session {label}"), None);
+                    }
+                    Err(err) => {
+                        self.active_widget_mut()
+                            .add_error_message(format!("Failed to dismiss {label}: {err}"));
+                    }
+                }
+            }
             AppEvent::InsertUserTextMessage(text) => {
                 self.active_widget_mut().submit_text_message(text);
             }
@@ -1210,35 +1267,70 @@ impl App {
             .await
             .map_err(|err| format!("{err}"))?;
 
+        self.activate_delegate_session_from_active(Some(tui), conversation_id, active)
+            .await
+    }
+
+    async fn activate_delegate_session_from_active(
+        &mut self,
+        mut tui: Option<&mut tui::Tui>,
+        conversation_id: String,
+        active: ActiveDelegateSession,
+    ) -> Result<(), String> {
+        let ActiveDelegateSession {
+            summary,
+            conversation,
+            session_configured,
+            config,
+            event_rx,
+            shadow_snapshot,
+            shadow_summary,
+        } = active;
+
+        let mut event_rx = Some(event_rx);
+
         use Entry::*;
         match self.sessions.entry(conversation_id.clone()) {
             Occupied(mut occ) => {
                 let handle = occ.get_mut();
                 handle.widget.ensure_conversation_id(&conversation_id);
-                handle.set_summary(Some(active.summary.clone()));
-                handle.set_mode(active.summary.mode);
-                handle.set_shadow_summary(active.shadow_summary.clone());
-                handle
-                    .widget
-                    .set_delegate_context(Some(active.summary.clone()));
-                if handle.history().is_empty() {
-                    if let Some(snapshot) = active.shadow_snapshot.as_ref() {
-                        handle.widget.hydrate_from_shadow(snapshot);
-                    } else {
-                        handle.widget.clear_shadow_capture();
-                        handle.widget.add_info_message(
-                            "Shadow cache unavailable; replaying from rollout.".to_string(),
-                            None,
-                        );
-                    }
+                handle.set_summary(Some(summary.clone()));
+                handle.set_mode(summary.mode);
+                handle.set_shadow_summary(shadow_summary.clone());
+                handle.widget.set_delegate_context(Some(summary.clone()));
+                if let Some(snapshot) = shadow_snapshot.as_ref() {
+                    handle.set_history(Vec::new());
+                    handle.widget.hydrate_from_shadow(snapshot);
+                } else {
+                    handle.widget.clear_shadow_capture();
+                    handle.widget.add_info_message(
+                        "Shadow cache unavailable; replaying from rollout.".to_string(),
+                        None,
+                    );
                 }
                 drop(occ);
-                drop(active.event_rx);
+                if let Some(rx) = event_rx.take() {
+                    drop(rx);
+                }
             }
             Vacant(vacant) => {
+                #[allow(unused_mut)]
+                let frame_requester = match tui.as_mut() {
+                    Some(tui_ref) => tui_ref.frame_requester(),
+                    None => {
+                        #[cfg(test)]
+                        {
+                            crate::tui::FrameRequester::test_dummy()
+                        }
+                        #[cfg(not(test))]
+                        {
+                            unreachable!("delegate session activation requires tui");
+                        }
+                    }
+                };
                 let init = ChatWidgetInit {
-                    config: active.config.clone(),
-                    frame_requester: tui.frame_requester(),
+                    config: config.clone(),
+                    frame_requester,
                     app_event_tx: self.app_event_tx.scoped(),
                     initial_prompt: None,
                     initial_images: Vec::new(),
@@ -1248,15 +1340,15 @@ impl App {
                 };
                 let mut session = ChatWidget::new_session_from_existing_with_events(
                     init,
-                    active.conversation.clone(),
-                    active.session_configured.clone(),
-                    active.event_rx,
+                    conversation.clone(),
+                    session_configured.clone(),
+                    event_rx
+                        .take()
+                        .expect("delegate session event receiver consumed"),
                 );
                 session.widget.ensure_conversation_id(&conversation_id);
-                session
-                    .widget
-                    .set_delegate_context(Some(active.summary.clone()));
-                if let Some(snapshot) = active.shadow_snapshot.as_ref() {
+                session.widget.set_delegate_context(Some(summary.clone()));
+                if let Some(snapshot) = shadow_snapshot.as_ref() {
                     session.widget.hydrate_from_shadow(snapshot);
                 } else {
                     session.widget.clear_shadow_capture();
@@ -1272,9 +1364,9 @@ impl App {
                 );
                 vacant.insert(SessionHandle::new(
                     session.widget,
-                    Some(active.summary.clone()),
-                    active.summary.mode,
-                    active.shadow_summary.clone(),
+                    Some(summary.clone()),
+                    summary.mode,
+                    shadow_summary.clone(),
                 ));
             }
         }
@@ -1307,13 +1399,33 @@ impl App {
             handle.widget.set_delegate_context(Some(summary));
         }
         self.apply_active_history_from_handle();
-        self.replay_active_session_from_last_user(tui);
+        if let Some(tui_ref) = tui.as_mut() {
+            self.replay_active_session_from_last_user(tui_ref);
+        }
         self.sync_active_handle_history();
         self.delegate_orchestrator
             .touch_session(&conversation_id)
             .await;
-        tui.frame_requester().schedule_frame();
+        if let Some(tui_ref) = tui {
+            tui_ref.frame_requester().schedule_frame();
+        }
         Ok(())
+    }
+
+    #[cfg(test)]
+    async fn activate_delegate_session_with_active(
+        &mut self,
+        conversation_id: String,
+        active: ActiveDelegateSession,
+    ) -> Result<(), String> {
+        if self.active_session_id == conversation_id {
+            return Ok(());
+        }
+
+        self.sync_active_handle_history();
+        self.active_widget_mut().set_delegate_context(None);
+        self.activate_delegate_session_from_active(None, conversation_id, active)
+            .await
     }
 
     fn agent_id_for_conversation(&self, conversation_id: &str) -> Option<&AgentId> {
@@ -1589,8 +1701,10 @@ mod tests {
     use super::*;
     use crate::app_backtrack::BacktrackState;
     use crate::app_backtrack::user_count;
+    use crate::app_event::AppEvent;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::file_search::FileSearchManager;
+    use crate::history_cell;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
     use crate::history_cell::UserHistoryCell;
@@ -1605,14 +1719,25 @@ mod tests {
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_core::protocol::SessionSource;
 
+    use codex_core::protocol::Event;
+    use codex_core::protocol::EventMsg;
+    use codex_core::protocol::InputItem;
+    use codex_core::protocol::InputMessageKind;
+    use codex_core::protocol::UserMessageEvent;
     use codex_protocol::ConversationId;
     use ratatui::prelude::Line;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+    use std::time::SystemTime;
 
     fn make_test_app() -> App {
-        let (mut chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender();
+        let (app, _rx) = make_test_app_with_receiver();
+        app
+    }
+
+    fn make_test_app_with_receiver() -> (App, tokio::sync::mpsc::UnboundedReceiver<AppEvent>) {
+        let (mut chat_widget, app_event_tx, rx, _op_rx) = make_chatwidget_manual_with_sender();
         let config = chat_widget.config_ref().clone();
         let session_id = ConversationId::new().to_string();
         chat_widget.ensure_conversation_id(&session_id);
@@ -1656,28 +1781,31 @@ mod tests {
             SessionHandle::new(chat_widget, None, DelegateSessionMode::Standard, None),
         );
 
-        App {
-            server,
-            app_event_tx,
-            sessions,
-            active_session_id: session_id.clone(),
-            primary_session_id: session_id,
-            auth_manager,
-            delegate_orchestrator,
-            config,
-            active_profile: None,
-            file_search,
-            transcript_cells: Vec::new(),
-            overlay: None,
-            deferred_history_lines: Vec::new(),
-            has_emitted_history_lines: false,
-            enhanced_keys_supported: false,
-            commit_anim_running: Arc::new(AtomicBool::new(false)),
-            backtrack: BacktrackState::default(),
-            feedback: codex_feedback::CodexFeedback::new(),
-            pending_update_action: None,
-            run_parent_map: HashMap::new(),
-        }
+        (
+            App {
+                server,
+                app_event_tx,
+                sessions,
+                active_session_id: session_id.clone(),
+                primary_session_id: session_id,
+                auth_manager,
+                delegate_orchestrator,
+                config,
+                active_profile: None,
+                file_search,
+                transcript_cells: Vec::new(),
+                overlay: None,
+                deferred_history_lines: Vec::new(),
+                has_emitted_history_lines: false,
+                enhanced_keys_supported: false,
+                commit_anim_running: Arc::new(AtomicBool::new(false)),
+                backtrack: BacktrackState::default(),
+                feedback: codex_feedback::CodexFeedback::new(),
+                pending_update_action: None,
+                run_parent_map: HashMap::new(),
+            },
+            rx,
+        )
     }
 
     #[test]
@@ -1797,6 +1925,169 @@ mod tests {
                 .is_empty()
         );
         assert!(app.run_parent_map.is_empty());
+    }
+
+    #[tokio::test]
+    async fn follow_up_session_should_apply_shadow_even_with_existing_history() {
+        use crate::tui::FrameRequester;
+        use codex_multi_agent::shadow::ShadowHistoryEntry;
+        use codex_multi_agent::shadow::ShadowHistoryKind;
+        use codex_multi_agent::shadow::ShadowMetrics;
+        use codex_multi_agent::shadow::ShadowSnapshot;
+        use codex_multi_agent::shadow::ShadowTranscriptCapture;
+
+        let (mut app, mut app_events) = make_test_app_with_receiver();
+
+        let new_conversation = app
+            .server
+            .new_conversation(app.config.clone())
+            .await
+            .expect("new conversation");
+        let conversation_id = new_conversation.conversation_id.to_string();
+        let agent_id = AgentId::parse("critic").unwrap();
+
+        let summary = DelegateSessionSummary {
+            conversation_id: conversation_id.clone(),
+            agent_id: agent_id.clone(),
+            last_interacted_at: SystemTime::now(),
+            cwd: app.config.cwd.clone(),
+            mode: DelegateSessionMode::Standard,
+        };
+
+        let initial_prompt = "How should I carry a box of apples safely?".to_string();
+        let follow_up_prompt = "Follow-up: The box weighs 50 kg.".to_string();
+
+        let make_user_event = |id: &str, message: &str| Event {
+            id: id.to_string(),
+            msg: EventMsg::UserMessage(UserMessageEvent {
+                message: message.to_string(),
+                kind: Some(InputMessageKind::Plain),
+                images: None,
+            }),
+        };
+        let events = vec![
+            make_user_event("event-initial", &initial_prompt),
+            make_user_event("event-follow-up", &follow_up_prompt),
+        ];
+        let events_len = events.len();
+
+        let shadow_snapshot = ShadowSnapshot {
+            conversation_id: conversation_id.clone(),
+            agent_id: agent_id.clone(),
+            history: vec![
+                ShadowHistoryEntry {
+                    kind: ShadowHistoryKind::User,
+                    lines: vec![initial_prompt.clone()],
+                    is_stream_continuation: false,
+                },
+                ShadowHistoryEntry {
+                    kind: ShadowHistoryKind::User,
+                    lines: vec![follow_up_prompt.clone()],
+                    is_stream_continuation: false,
+                },
+            ],
+            capture: ShadowTranscriptCapture {
+                user_inputs: vec![
+                    InputItem::Text {
+                        text: initial_prompt.clone(),
+                    },
+                    InputItem::Text {
+                        text: follow_up_prompt.clone(),
+                    },
+                ],
+                agent_outputs: Vec::new(),
+            },
+            metrics: ShadowMetrics {
+                session_count: 1,
+                events: events_len,
+                user_inputs: 2,
+                ..ShadowMetrics::default()
+            },
+            events,
+            recorded_at: SystemTime::now(),
+        };
+
+        let init = ChatWidgetInit {
+            config: app.config.clone(),
+            frame_requester: FrameRequester::test_dummy(),
+            app_event_tx: app.app_event_tx.scoped(),
+            initial_prompt: None,
+            initial_images: Vec::new(),
+            enhanced_keys_supported: app.enhanced_keys_supported,
+            auth_manager: app.auth_manager.clone(),
+            feedback: app.feedback.clone(),
+        };
+        let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+        drop(event_tx);
+        let mut widget_session = ChatWidget::new_session_from_existing_with_events(
+            init,
+            new_conversation.conversation.clone(),
+            Arc::new(new_conversation.session_configured.clone()),
+            event_rx,
+        );
+        widget_session
+            .widget
+            .ensure_conversation_id(&conversation_id);
+
+        let mut handle = SessionHandle::new(
+            widget_session.widget,
+            Some(summary.clone()),
+            summary.mode,
+            None,
+        );
+        handle.push_history(
+            Arc::new(history_cell::new_user_prompt("earlier history".to_string()))
+                as Arc<dyn HistoryCell>,
+        );
+        handle.widget.set_delegate_context(Some(summary.clone()));
+
+        app.sessions.insert(conversation_id.clone(), handle);
+
+        let (shadow_event_tx, shadow_event_rx) = tokio::sync::mpsc::unbounded_channel();
+        drop(shadow_event_tx);
+
+        let active = ActiveDelegateSession {
+            summary: summary.clone(),
+            conversation: new_conversation.conversation.clone(),
+            session_configured: Arc::new(new_conversation.session_configured.clone()),
+            config: app.config.clone(),
+            event_rx: shadow_event_rx,
+            shadow_snapshot: Some(shadow_snapshot),
+            shadow_summary: None,
+        };
+
+        app.activate_delegate_session_with_active(conversation_id.clone(), active)
+            .await
+            .expect("activate delegate session");
+
+        while let Ok(event) = app_events.try_recv() {
+            if let AppEvent::InsertHistoryCell {
+                conversation_id: Some(target_id),
+                cell,
+            } = event
+            {
+                let cell: Arc<dyn HistoryCell> = cell.into();
+                if let Some(handle) = app.sessions.get_mut(&target_id) {
+                    handle.push_history(cell);
+                }
+            }
+        }
+
+        let transcript: String = app
+            .sessions
+            .get(&conversation_id)
+            .unwrap()
+            .history()
+            .iter()
+            .flat_map(|cell| cell.display_lines(120))
+            .flat_map(|line| line.spans.into_iter())
+            .map(|span| span.content.to_string())
+            .collect();
+
+        assert!(
+            transcript.contains(&follow_up_prompt),
+            "transcript missing follow-up prompt: {transcript}"
+        );
     }
 
     #[test]

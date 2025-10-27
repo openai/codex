@@ -12,6 +12,8 @@ use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::delegate_tool::DelegateEventReceiver;
+use codex_core::delegate_tool::DelegateSessionMessages;
+use codex_core::delegate_tool::DelegateSessionsList;
 use codex_core::delegate_tool::DelegateToolAdapter;
 use codex_core::delegate_tool::DelegateToolError;
 use codex_core::delegate_tool::DelegateToolEvent;
@@ -43,6 +45,10 @@ impl DelegateToolAdapter for TestDelegateAdapter {
         &self,
         request: DelegateToolRequest,
     ) -> Result<DelegateToolRun, DelegateToolError> {
+        let agent_id = request
+            .agent_id
+            .clone()
+            .unwrap_or_else(|| "test-agent".to_string());
         let idx = self
             .counter
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -50,15 +56,39 @@ impl DelegateToolAdapter for TestDelegateAdapter {
         if let Some(sender) = self.sender.lock().await.as_ref() {
             let _ = sender.send(DelegateToolEvent::Completed {
                 run_id: run_id.clone(),
-                agent_id: request.agent_id.clone(),
+                agent_id: agent_id.clone(),
                 output: Some(request.prompt.clone()),
                 duration: std::time::Duration::from_millis(1),
             });
         }
-        Ok(DelegateToolRun {
-            run_id,
-            agent_id: request.agent_id,
-        })
+        Ok(DelegateToolRun { run_id, agent_id })
+    }
+
+    async fn list_sessions(
+        &self,
+        _cursor: Option<String>,
+        _limit: usize,
+    ) -> Result<DelegateSessionsList, DelegateToolError> {
+        Err(DelegateToolError::SetupFailed(
+            "list_sessions not implemented in TestDelegateAdapter".to_string(),
+        ))
+    }
+
+    async fn session_messages(
+        &self,
+        _conversation_id: &str,
+        _cursor: Option<String>,
+        _limit: usize,
+    ) -> Result<DelegateSessionMessages, DelegateToolError> {
+        Err(DelegateToolError::HistoryUnavailable(
+            "test-conversation".to_string(),
+        ))
+    }
+
+    async fn dismiss_session(&self, _conversation_id: &str) -> Result<(), DelegateToolError> {
+        Err(DelegateToolError::SessionNotFound(
+            "test-conversation".to_string(),
+        ))
     }
 }
 

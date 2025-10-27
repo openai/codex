@@ -47,7 +47,7 @@ pub struct DelegateToolBatchEntry {
 /// Payload sent by the primary agent when invoking the delegate tool.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DelegateToolRequest {
-    pub agent_id: String,
+    pub agent_id: Option<String>,
     pub prompt: String,
     #[serde(default)]
     pub context: DelegateToolContext,
@@ -55,6 +55,8 @@ pub struct DelegateToolRequest {
     pub caller_conversation_id: Option<String>,
     #[serde(default)]
     pub mode: DelegateInvocationMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub batch: Vec<DelegateToolBatchEntry>,
 }
@@ -98,6 +100,59 @@ pub struct DelegateToolRun {
     pub agent_id: String,
 }
 
+/// Indicates whether a delegate session originated from a synchronous or detached run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DelegateSessionMode {
+    Standard,
+    Detached,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegateSessionShadowSummary {
+    pub events: usize,
+    pub user_inputs: usize,
+    pub agent_outputs: usize,
+    pub turns: usize,
+    pub raw_bytes: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compressed_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegateSessionListEntry {
+    pub conversation_id: String,
+    pub agent_id: String,
+    pub mode: DelegateSessionMode,
+    pub cwd: String,
+    pub last_interacted_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<DelegateSessionShadowSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegateSessionsList {
+    pub sessions: Vec<DelegateSessionListEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegateSessionMessageEntry {
+    pub id: String,
+    pub role: String,
+    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegateSessionMessages {
+    pub messages: Vec<DelegateSessionMessageEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum DelegateToolError {
     #[error("another delegate is already running")]
@@ -108,6 +163,14 @@ pub enum DelegateToolError {
     AgentNotFound(String),
     #[error("delegate setup failed: {0}")]
     SetupFailed(String),
+    #[error("delegate session `{0}` not found")]
+    SessionNotFound(String),
+    #[error("delegate session is busy")]
+    AgentBusy,
+    #[error("invalid delegate pagination cursor")]
+    InvalidCursor,
+    #[error("delegate history unavailable for session `{0}`")]
+    HistoryUnavailable(String),
 }
 
 pub type DelegateEventReceiver = UnboundedReceiver<DelegateToolEvent>;
@@ -121,4 +184,19 @@ pub trait DelegateToolAdapter: Send + Sync {
         &self,
         request: DelegateToolRequest,
     ) -> Result<DelegateToolRun, DelegateToolError>;
+
+    async fn list_sessions(
+        &self,
+        cursor: Option<String>,
+        limit: usize,
+    ) -> Result<DelegateSessionsList, DelegateToolError>;
+
+    async fn session_messages(
+        &self,
+        conversation_id: &str,
+        cursor: Option<String>,
+        limit: usize,
+    ) -> Result<DelegateSessionMessages, DelegateToolError>;
+
+    async fn dismiss_session(&self, conversation_id: &str) -> Result<(), DelegateToolError>;
 }

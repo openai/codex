@@ -24,6 +24,7 @@ use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
 use codex_core::config_types::McpServerTransportConfig;
 use codex_core::config_types::ReasoningSummaryFormat;
+use codex_core::delegate_tool::DelegateSessionMessageEntry;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
@@ -270,6 +271,54 @@ impl PlainHistoryCell {
 impl HistoryCell for PlainHistoryCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         self.lines.clone()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct DelegatePreviewCell {
+    header: String,
+    conversation_id: String,
+    entries: Vec<DelegatePreviewEntry>,
+    has_more: bool,
+}
+
+#[derive(Debug)]
+struct DelegatePreviewEntry {
+    role: String,
+    content: String,
+}
+
+impl HistoryCell for DelegatePreviewCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(line_to_static(&Line::from(self.header.clone()).bold()));
+        lines.push(line_to_static(
+            &Line::from(format!("Session {}", self.conversation_id)).dim(),
+        ));
+
+        for (idx, entry) in self.entries.iter().enumerate() {
+            lines.push(line_to_static(
+                &Line::from(format!("{}:", entry.role)).dim(),
+            ));
+            let wrapped = word_wrap_lines(
+                &[Line::from(entry.content.clone())],
+                RtOptions::new(width as usize)
+                    .initial_indent("  ".into())
+                    .subsequent_indent("  ".into()),
+            );
+            lines.extend(wrapped);
+            if idx + 1 < self.entries.len() {
+                lines.push(Line::default());
+            }
+        }
+
+        if self.has_more {
+            lines.push(line_to_static(
+                &Line::from("…older messages available").dim(),
+            ));
+        }
+
+        lines
     }
 }
 
@@ -1158,6 +1207,27 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
+pub(crate) fn new_delegate_preview(
+    agent_label: &str,
+    conversation_id: &str,
+    entries: &[DelegateSessionMessageEntry],
+    has_more: bool,
+) -> Box<dyn HistoryCell> {
+    let preview_entries = entries
+        .iter()
+        .map(|entry| DelegatePreviewEntry {
+            role: entry.role.clone(),
+            content: entry.content.clone(),
+        })
+        .collect();
+    Box::new(DelegatePreviewCell {
+        header: format!("Preview of {agent_label}"),
+        conversation_id: conversation_id.to_string(),
+        entries: preview_entries,
+        has_more,
+    })
+}
+
 /// Render a user‑friendly plan update styled like a checkbox todo list.
 pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     let UpdatePlanArgs { explanation, plan } = update;
@@ -1911,6 +1981,39 @@ mod tests {
         let lines = cell.display_lines(24);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn delegate_preview_displays_recent_messages() {
+        let entries = vec![
+            DelegateSessionMessageEntry {
+                id: "sess:2".into(),
+                role: "assistant".into(),
+                content: "Final summary".into(),
+                timestamp: None,
+            },
+            DelegateSessionMessageEntry {
+                id: "sess:1".into(),
+                role: "user".into(),
+                content: "Follow up with tests".into(),
+                timestamp: None,
+            },
+        ];
+
+        let cell = new_delegate_preview("#critic", "sess", &entries, true);
+        let lines = cell.display_lines(40);
+        let rendered = render_lines(&lines).join("\n");
+
+        insta::assert_snapshot!(rendered, @r###"
+Preview of #critic
+Session sess
+assistant:
+  Final summary
+
+user:
+  Follow up with tests
+…older messages available
+"###);
     }
 
     #[test]

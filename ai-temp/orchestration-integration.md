@@ -1,177 +1,86 @@
-# Multi-Agent Orchestration Integration Plan
+# Orchestration Integration Overview
 
-This document describes how to wire true sub-agent orchestration into the Codex CLI so the primary agent can delegate work to agent profiles living under `~/.codex/agents/<agent_id>/`. It focuses on runtime control-flow, UI/UX, and minimal-coupling integration points in the existing codebase.
-
----
-
-## 1. Runtime Architecture
-
-### 1.1 Components
-
-- **`codex-multi-agent` crate (`codex-rs/multi-agent/src/lib.rs`)**  
-  Already exposes `AgentId`, `AgentRegistry`, and async loaders that return `AgentContext` values (merged `ConfigToml` + `Config`). We extend this crate with an orchestration module to keep agent resolution and config cloning isolated from the rest of the app. Each `AgentContext` now captures its own `multi_agent.agents` list so child delegates inherit the correct allowlist automatically.
-
-- **Orchestrator core (new)**  
-  Proposed module `codex-rs/multi-agent/src/orchestrator.rs` exporting:
-  - `AgentHandle`: carries `AgentContext`, active `ConversationId`, and bookkeeping (start/end timestamps, status).
-  - `DelegateRequest`: SPA-style struct describing who/what to run (`agent_id`, prompt payload, optional working directory override).
-  - `AgentOrchestrator`: stateful controller that owns:
-    - A primary `AgentHandle` (mirrors currently running conversation).
-    - A per-agent `ConversationManager` + `UnboundedSender<Op>` pair created via `ConversationManager::with_delegate` so child runs can spawn their own delegates.
-    - Result channels to stream `Event` values back to the primary UI after post-processing.
-    - A stack of active run ids so nested delegates can execute concurrently.
-
-- **`ConversationManager` reuse**  
-  Sub-agent sessions use the same `ConversationManager` entry points. The orchestrator calls `ConversationManager::new_conversation` with the agent-specific `Config` so all persistence automatically lands in `~/.codex/agents/<id>/` (per §2.2).
-
-- **Primary session**  
-  Unchanged: `tui::App` (`codex-rs/tui/src/app.rs`) continues to own a `ConversationManager` for the main agent. The orchestrator is injected so it can spawn additional conversations on demand while keeping each conversation’s event stream isolated.
-
-### 1.2 Execution Flow
-
-1. **Delegate trigger**  
-   - User explicitly requests delegation (see UI plan below), or the primary agent emits a structured tool call.
-   - We normalize the intent into `DelegateRequest`.
-
-2. **Agent resolution**  
-   - `AgentOrchestrator::resolve_agent` calls `AgentConfigLoader::load` with the requested `AgentId`.
-   - On success, the orchestrator instantiates / reuses a `ConversationManager` scoped to that agent. Authentication stays shared (`AuthManager` from the primary session) per current design docs. The returned `AgentContext` also defines which downstream agents this delegate is allowed to call.
-
-3. **Conversation bootstrap**  
-   - Call `ConversationManager::new_conversation` with the agent `Config`.
-   - The orchestrator captures the new `UnboundedSender<Op>` from `spawn_agent` (`codex-rs/tui/src/chatwidget/agent.rs:16`) or an equivalent helper in the orchestrator crate.
-
-4. **Task execution**  
-   - The orchestrator forwards the translated prompt into the sub-agent conversation (`conversation.submit`).  
-   - Streamed `Event` values are intercepted before they reach the UI. For every event:
-     - Persist to the sub-agent transcript as normal (handled by core).
-     - Convert to orchestrator messages (`DelegateEvent::Started` / `Delta` / `Completed` / `Failed`) that always carry the owning conversation id. The TUI routes those updates to the matching session regardless of which tab the user is viewing. Nested runs emit additional `Started` events with increasing depth.
-
-5. **Completion and summary**  
-   - When `EventMsg::TaskComplete` fires, the orchestrator emits `DelegateEvent::Completed` with the owning conversation id. The TUI enqueues the child’s summary for its parent session, then renders it when the parent becomes active so siblings never see each other’s output.
-   - Store a compact record (duration, exit status) for `/status` display and optional audit logging (`~/.codex/log/multi-agent.log` per `ai-temp/persistence-design.md`).
-
-6. **Cleanup**  
-   - Keep the sub-agent conversation alive if the profile supports follow-up chat, otherwise call `ConversationManager::remove_conversation`.
+This note documents how the multi-agent runtime is currently wired into the Codex CLI/TUI stack. It replaces the older speculative design and mirrors the implementation that shipped on 2025‑10‑20.
 
 ---
 
-## 2. Control-Flow Integration
+## 1. Component Map
 
-### 2.1 Entry Points
-
-| Concern | File | Hook |
+| Layer | File(s) | Responsibility |
 | --- | --- | --- |
-| Orchestrator instantiation | `codex-rs/tui/src/app.rs:82` | Inject an `AgentOrchestrator` alongside the existing `ConversationManager`. |
-| Slash-command parsing | `codex-rs/tui/src/slash_command.rs` & `codex-rs/tui/src/chatwidget.rs:1126` | Add `/delegate` (or `/agent`) command to open a delegate picker or dispatch a delegate request. |
-| App event handling | `codex-rs/tui/src/app.rs:600` (`while let Some(event)`) | Match on `AppEvent::DelegateUpdate` / `AppEvent::DelegateShadow*` and push updates into the session identified by `conversation_id`. |
-| Event fan-in | `codex-rs/tui/src/app.rs:600` | Handle `AppEvent::CodexEvent` and `AppEvent::InsertHistoryCell` so each session only consumes its own stream. |
-| Status card | `codex-rs/tui/src/status/card.rs:68` | Pull orchestrator metrics (active agents, last run) to display in `/status`. |
-
-### 2.2 Persistence
-
-- Sub-agent sessions reuse existing persistence automatically because `Config::codex_home` already points at `~/.codex/agents/<id>` once we load through `AgentConfigLoader`.
-- For the primary history: emit `DelegateEvent::Completed` / `Failed` with the owning conversation id and let the TUI enqueue summaries for the parent session. No changes needed in core rollout recording.
-
-### 2.3 Error Handling
-
-- Map orchestration errors to `DelegateEvent::Failed`; the TUI turns those into error cells for the parent session.
-- Log details with `tracing::error!` inside the orchestrator, aligning with the `ai-temp/error-handling.md` guidance.
+| **Loader** | `codex-rs/multi-agent/src/lib.rs` | `AgentConfigLoader` merges global + agent config, exposes `AgentContext`, and re-exports the orchestrator API. |
+| **Orchestrator runtime** | `codex-rs/multi-agent/src/orchestrator.rs` | Owns session registry, shadow manager hooks, detached-run registry, follow-up handling, and the `SessionEventBroadcaster`. |
+| **Tool handlers** | `codex-rs/core/src/tools/handlers/delegate.rs`, `delegate_sessions.rs` | Translate tool payloads into orchestrator calls, serialize responses/errors, and enforce schema constraints. |
+| **Shared types** | `codex-rs/core/src/delegate_tool.rs` | Defines `DelegateToolRequest`, `DelegateSessionsList`, `DelegateToolError`, etc. |
+| **TUI integration** | `codex-rs/tui/src/app.rs`, `app_event.rs`, `chatwidget.rs`, `history_cell.rs` | Renders delegate events, maintains per-session handles, offers preview/dismiss actions, and updates history. |
 
 ---
 
-## 3. UI & UX Plan
+## 2. Orchestrator Responsibilities
 
-### 3.1 Invocation
+### Session lifecycle
+1. **Creation** – `AgentOrchestrator::delegate` (or `delegate_follow_up`) loads the agent config, spawns a conversation, and registers the run via `register_run_conversation`.
+2. **Streaming** – Every conversation gets a `SessionEventBroadcaster`. Event tasks forward individual `Event` values into delegate events scoped to the owning conversation.
+3. **Shadow capture** – Recorder hooks record user/agent events into `ShadowManager`. `recent_messages` serves previews from this cache.
+4. **Follow-up** – `parent_run_for_follow_up` captures the existing parent id before re-registering the conversation; `delegate_follow_up` reuses the stored `CodexConversation` and emits a fresh `DelegateEvent::Started`.
+5. **Detached runs** – `delegate()` records detached runs in `detached_runs`. Completions update status and feed notifications.
+6. **Session storage** – `store_session` refreshes `StoredDelegateSession` with the new handle and restarts the event forwarder if needed.
 
-- **Slash command**: `/delegate <agent_id> [prompt...]`  
-  - Add `SlashCommand::Delegate` in `codex-rs/tui/src/slash_command.rs`.  
-  - In `ChatWidget::dispatch_command` (`codex-rs/tui/src/chatwidget.rs:1126`), call a new method `open_delegate_dialog()` that lists available agents via `AgentRegistry::list_agent_ids`.
-
-
-### 3.2 Transcript Presentation
-
-- Introduce a specialized history cell (e.g., `DelegationSummaryCell`) under `codex-rs/tui/src/history_cell.rs`.  
-  - Show a header `↳ rust_test_writer (success in 23s)` and embed the sub-agent's final answer.  
-  - Link to the sub-agent session path using the existing `SessionHeader` styling helpers (`codex-rs/tui/src/chatwidget/session_header.rs`).
-
-- While the sub-agent runs, insert a “progress” cell (spinner) similar to exec command cells (`codex-rs/tui/src/exec_cell/render.rs:157`). Update via `DelegateEvent::Delta` messages.
-
-### 3.3 Status View
-
-- Extend `compose_agents_summary` (`codex-rs/tui/src/status/helpers.rs:14`) to append active sub-agent counts and last-run statuses by querying the orchestrator handle cache.
-
-### 3.4 Keyboard & UX
-
-- Shortcut: `Ctrl+D` opens the delegate picker when the composer is empty.
-- For task isolation, disable `/delegate` while another sub-agent call is running unless the selected agent supports concurrent runs (metadata flag in agent config).
+### APIs exposed
+- `delegate(...) -> DelegateRunId`
+- `list_sessions_paginated(cursor, limit) -> DelegateSessionsList`
+- `recent_messages(conversation_id, cursor, limit) -> DelegateSessionMessages`
+- `dismiss_session(conversation_id)`
+- `subscribe() -> mpsc::UnboundedReceiver<DelegateEvent>`
+- Helpers for detached summary, parent lookups, shadow metrics/statistics.
 
 ---
 
-## 4. Minimal Coupling Strategy
+## 3. Tool / Model Contract
 
-1. **Keep core unaware**  
-   - No changes to `codex-rs/core/src/codex.rs` or the protocol. The orchestrator consumes the existing `Op`/`Event` API via `CodexConversation`.
+- **`delegate_agent`**  
+  - Requires `prompt`. `agent_id` optional when resuming with `conversation_id`.  
+  - Mutually exclusive with `batch`. Batch entries trigger concurrent runs.  
+  - Handler subscribes to orchestrator events, waits for completion unless `mode: "detached"`, and returns `{"status":"ok","run_id":...}` or `{"status":"accepted"}` for detached calls.
 
-2. **Orchestrator as a library**  
-   - Implement orchestration in `codex-multi-agent` (new module) so the CLI/TUI crates depend only on a slim API:
-     ```rust
-     pub struct AgentOrchestrator { /* … */ }
-     impl AgentOrchestrator {
-        pub async fn available_agents(&self) -> Result<Vec<AgentId>>;
-        pub async fn delegate(&self, request: DelegateRequest) -> Result<DelegateRunId>;
-        pub fn subscribe(&self) -> mpsc::UnboundedReceiver<DelegateEvent>;
-     }
-     ```
-   - This keeps the TUI glue thin and defers heavy logic to the crate that already knows how to load configs.
+- **`delegate_sessions`**  
+  - `operation: "list"` – paginated session summaries (newest first).  
+  - `operation: "messages"` – newest-first message preview with cursor support.  
+  - `operation: "dismiss"` – removes the session and cleans up shadow resources.  
+  - Responses are serialized as `{ "status": "ok", ... }` with `sessions`, `messages`, and `next_cursor` as appropriate.
 
-3. **UI changes confined to `tui/`**  
-   - Avoid threading orchestration state through unrelated widgets. Only `ChatWidget`, `App`, and the status card interact with the orchestrator.
-
-4. **CLI parity**  
-   - Other frontends (`codex exec`, `codex cloud`) can opt-in later because orchestration lives behind a library boundary. No changes required now.
+Errors map to `DelegateToolError` variants (`AgentBusy`, `SessionNotFound`, `InvalidCursor`, etc.) so the model receives actionable messages.
 
 ---
 
-## 5. Implementation Phases
+## 4. TUI Flow
 
-1. **Library groundwork**
-   - Extend `codex-multi-agent` with orchestrator types and helper methods.
-   - Add unit tests verifying `delegate()` spawns conversations and streams events (mock `ConversationManager`).
+1. `App::run` constructs an `AgentOrchestrator` and subscribes to its events via `AppEvent::DelegateUpdate`.
+2. `/agent` picker (`ChatWidget::open_delegate_picker`) pulls summaries from `delegate_sessions list`, including detached runs and follow-up sessions.
+3. Preview action uses `delegate_sessions messages` and renders the result with `new_delegate_preview` history cells.
+4. Dismiss action calls `dismiss_session` through the orchestrator.
+5. Delegate events update the active `SessionHandle`:
+   - `Started` inserts a running status entry and updates the delegate tree.
+   - `Delta` streams through the existing `StreamController`.
+   - `Completed`/`Failed` produce history cells, clear status owners, and enqueue `ChildSummary` for the parent conversation.
+6. Shadow snapshots hydrate when the user opens a saved session; fallbacks replay from rollout and inform the user.
 
-2. **TUI integration**
-   - Instantiate orchestrator in `App::run` (`codex-rs/tui/src/app.rs:84`).
-   - Add new `AppEvent` variants (`codex-rs/tui/src/app_event.rs:15`).
-   - Update `ChatWidget` to emit delegate requests and render updates.
-
-3. **UI polish**
-   - Add history cell types and status indicators.
-   - Expose keyboard shortcuts and help text.
-
-4. **Testing**
-   - Snapshot tests for `/delegate` output in `tui/src/chatwidget/tests.rs`.
-   - Integration test creating a fake agent directory and verifying the orchestrator selects the correct `Config`.
-   - Manual smoke test using the sample Codex home in `ai-temp/example-codex-home/`.
+Detached run notifications surface via the notification system; dismissing them removes the run from the registry.
 
 ---
 
-## 6. Decisions & Open Questions
+## 5. Follow-Up Handling
 
-- **Concurrent delegates**: The orchestrator now maintains a stack of active runs so delegates can invoke their own delegates; the UI surfaces the stack depth with indented history entries.
-- **Prompt hand-off semantics**: The primary agent composes the sub-agent prompt with all relevant context before invoking `delegate()`. The orchestrator forwards the prompt verbatim without trimming history.
-- **Return payload**: Still open. Default plan remains to summarize results in the primary transcript while exposing a “view details” action to open the sub-agent session.
-- **Auth isolation**: Shared. All agents continue to use the primary `AuthManager`; per-agent credentials are out of scope unless a future requirement emerges.
+- When `delegate_agent` receives `conversation_id`, the handler omits `agent_id` (optional) and sets `caller_conversation_id` so the orchestrator knows which primary conversation owns the request.
+- `delegate_follow_up` touches the shadow manager, ensures the conversation is idle, reuses existing `CodexConversation`, and emits a `DelegateEvent::Started` with the original parent id.
+- Regression tests (`follow_up_shadow_events_do_not_duplicate`, `follow_up_should_preserve_parent_before_registration`) ensure shadow logging does not double-count and lineage stays intact.
 
 ---
 
-## 7. References
+## 6. Pending Work / Notes
 
-- Agent loader implementation – `codex-rs/multi-agent/src/lib.rs`
-- Conversation bootstrap – `codex-rs/core/src/conversation_manager.rs:57`
-- TUI spawn helpers – `codex-rs/tui/src/chatwidget/agent.rs:16`
-- Slash command dispatch – `codex-rs/tui/src/chatwidget.rs:1126`
-- History cell construction – `codex-rs/tui/src/history_cell.rs`
-- Status card summary – `codex-rs/tui/src/status/helpers.rs:14`
-- App event wiring – `codex-rs/tui/src/app.rs:212` & `codex-rs/tui/src/app_event.rs:15`
+- **Agent switching** – interactive entry/exit of delegate sessions is implemented; further UX polish is tracked in `ai-temp/agent-switching.md`.
+- **docs/** – We intentionally rolled back edits to `docs/advanced.md`. All public documentation will be refreshed once the feature is production-ready.
+- **Additional tests** – CLI integration tests and further UX polish (breadcrumbs, status chips) are still on the roadmap.
 
-These anchors will guide the low-impact code changes required to hook orchestration into the existing CLI.
+For subsystem details (shadow cache, error handling, parallel orchestration, persistence), refer to the respective docs in `ai-temp/`.

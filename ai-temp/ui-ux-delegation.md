@@ -6,10 +6,17 @@
 - Delegation events from the orchestrator reach `App::handle_delegate_update` (`codex-rs/tui/src/app.rs:446`). `DelegateEvent::Delta` now streams sub-agent output through the same `StreamController` pipeline, while start/completion still use `add_info_message`/`add_delegate_completion` for context. Incoming events carry run depth so the chat history can render indented entries for nested delegates.
 - `DelegateEvent::Started` activates the bottom-pane status indicator with a “Delegating to #<agent>` header and hides it once the run finishes (`codex-rs/tui/src/chatwidget.rs:2165-2196`), reducing ambiguity about who is currently working.
 
-## Observed Gaps
-- No transcript linking: once the delegate finishes, the TUI shows the final answer but lacks a quick way to drill into the delegate’s own session (the path is only available in logs).
-- Duration is implicit: the status header flips back to “Working” when delegation ends, but we still do not surface elapsed time or a final summary chip in the transcript.
-- Nested runs only show progress via indented info messages; we may still want richer breadcrumbs or timers in the status widget.
+## What’s shipped (2025‑10‑20)
+- `/agent` picker lists reusable sessions (including detached runs) with preview/dismiss actions.
+- Preview pulls from the shadow cache and renders a dedicated history cell (`new_delegate_preview`), so users can recall recent turns before issuing a follow-up.
+- Delegate tree view shows indentation per depth, status ownership, and completion summaries.
+- Notifications fire when detached runs finish, and dismissal clears them from the picker.
+
+## Remaining Gaps
+- No inline breadcrumb linking in the main transcript—returning summaries are plain text cells without clickable actions.
+- Duration is only visible in completion summaries; the status banner still resets to “Working” without showing elapsed time.
+- Nested runs rely on indentation; we may still want richer breadcrumbs/timers or a stack view in `/status`.
+- Agent switching (temporarily entering a delegate session) is still future work; tracked in `ai-temp/agent-switching.md`.
 
 ## UX Goals
 1. **Live streaming** – continue to reuse `StreamController`, but add safeguards against duplicate completions (covered by the new test) and consider showing a collapsed summary once the stream ends.

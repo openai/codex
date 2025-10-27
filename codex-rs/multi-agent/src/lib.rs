@@ -522,9 +522,10 @@ agents = ["ideas_provider", "critic"]
     #[tokio::test]
     async fn delegate_started_event_carries_owner() {
         use crate::shadow::ShadowConfig;
+        use codex_core::AuthManager;
+        use codex_core::CodexAuth;
         use codex_core::delegate_tool::DelegateInvocationMode;
         use codex_core::protocol::SessionSource;
-        use codex_core::{AuthManager, CodexAuth};
         use std::sync::Arc;
 
         let temp_home = tempdir().expect("tempdir");
@@ -553,6 +554,7 @@ agents = ["ideas_provider", "critic"]
             parent_run_id: None,
             mode: DelegateInvocationMode::Immediate,
             caller_conversation_id: Some(owner_id.clone()),
+            conversation_id: None,
         };
 
         let mut events = orchestrator.subscribe().await;

@@ -68,6 +68,6 @@ approaches for synchronous, parallel, and detached (fire-and-forget) sub-agent r
   `error` field rather than using a distinct type).
 
 ## 4. Next Decisions
-1. Pick a parallelization strategy (simple flag + UI refactor vs. dedicated helper).
-2. Specify UX for background runs before adding async variant (notifications, manual join, audit).
-3. Extend documentation/prompts once the capabilities land so models know when to choose each path.
+1. Refresh model-facing prompts/instructions so agents understand when to batch delegates versus running them sequentially.
+2. Decide whether to surface richer runtime telemetry (per-run timers, progress chips) for concurrent delegates in the TUI.
+3. Document detached-session management and batching behaviour in the public docs (`docs/`) once the feature exits WIP.

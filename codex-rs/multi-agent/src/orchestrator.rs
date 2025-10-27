@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,6 +14,12 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::delegate_tool::DelegateEventReceiver as CoreDelegateEventReceiver;
 use codex_core::delegate_tool::DelegateInvocationMode;
+use codex_core::delegate_tool::DelegateSessionListEntry;
+use codex_core::delegate_tool::DelegateSessionMessageEntry;
+use codex_core::delegate_tool::DelegateSessionMessages;
+use codex_core::delegate_tool::DelegateSessionMode as CoreDelegateSessionMode;
+use codex_core::delegate_tool::DelegateSessionShadowSummary;
+use codex_core::delegate_tool::DelegateSessionsList;
 use codex_core::delegate_tool::DelegateToolAdapter;
 use codex_core::delegate_tool::DelegateToolError;
 use codex_core::delegate_tool::DelegateToolEvent as CoreDelegateToolEvent;
@@ -25,6 +32,8 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::SessionSource;
 use std::time::Duration;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -37,6 +46,8 @@ use uuid::Uuid;
 use crate::AgentConfigLoader;
 use crate::AgentId;
 use crate::shadow::ShadowConfig;
+use crate::shadow::ShadowHistoryEntry;
+use crate::shadow::ShadowHistoryKind;
 use crate::shadow::ShadowManager;
 use crate::shadow::ShadowMetrics;
 use crate::shadow::ShadowSessionSummary;
@@ -52,6 +63,35 @@ fn prompt_preview(text: &str) -> Option<String> {
     Some(preview)
 }
 
+fn system_time_to_unix_nanos(time: SystemTime) -> i128 {
+    let dt: OffsetDateTime = time.into();
+    dt.unix_timestamp_nanos()
+}
+
+fn format_system_time(time: SystemTime) -> String {
+    let dt: OffsetDateTime = time.into();
+    dt.format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+}
+
+fn encode_session_cursor(summary: &DelegateSessionSummary) -> String {
+    let nanos = system_time_to_unix_nanos(summary.last_interacted_at);
+    format!("{nanos}:{}", summary.conversation_id)
+}
+
+fn parse_session_cursor(cursor: &str) -> Result<(i128, String), OrchestratorError> {
+    let (ts, id) = cursor
+        .split_once(':')
+        .ok_or(OrchestratorError::InvalidCursor)?;
+    let nanos = ts
+        .parse::<i128>()
+        .map_err(|_| OrchestratorError::InvalidCursor)?;
+    if id.is_empty() {
+        return Err(OrchestratorError::InvalidCursor);
+    }
+    Ok((nanos, id.to_string()))
+}
+
 /// Identifier used to correlate delegate runs.
 pub type DelegateRunId = String;
 
@@ -64,6 +104,7 @@ pub struct DelegateRequest {
     pub parent_run_id: Option<DelegateRunId>,
     pub mode: DelegateInvocationMode,
     pub caller_conversation_id: Option<String>,
+    pub conversation_id: Option<String>,
 }
 
 /// The prompt content forwarded to the sub-agent.
@@ -80,6 +121,12 @@ impl DelegatePrompt {
 
 struct SessionEventBroadcaster {
     subscribers: Mutex<Vec<UnboundedSender<Event>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShadowRecordMode {
+    Normal,
+    FollowUp,
 }
 
 impl SessionEventBroadcaster {
@@ -157,6 +204,12 @@ pub enum OrchestratorError {
     DelegateSetupFailed(String),
     #[error("delegate session `{0}` not found")]
     SessionNotFound(String),
+    #[error("delegate session `{0}` is busy")]
+    AgentBusy(String),
+    #[error("invalid delegate pagination cursor")]
+    InvalidCursor,
+    #[error("delegate history unavailable for session `{0}`")]
+    HistoryUnavailable(String),
 }
 
 /// High-level metadata describing a delegate session available for switching.
@@ -226,6 +279,137 @@ pub struct AgentOrchestrator {
 }
 
 impl AgentOrchestrator {
+    async fn delegate_follow_up(
+        self: &Arc<Self>,
+        run_id: DelegateRunId,
+        request: DelegateRequest,
+        conversation_id: String,
+    ) -> std::result::Result<DelegateRunId, OrchestratorError> {
+        let (summary, conversation, session_configured, config, events) = {
+            let mut sessions = self.sessions.lock().await;
+            let entry = sessions
+                .get_mut(&conversation_id)
+                .ok_or_else(|| OrchestratorError::SessionNotFound(conversation_id.clone()))?;
+            entry.summary.last_interacted_at = SystemTime::now();
+            (
+                entry.summary.clone(),
+                entry.conversation.clone(),
+                entry.session_configured.clone(),
+                entry.config.clone(),
+                Arc::clone(&entry.events),
+            )
+        };
+
+        if self
+            .conversation_runs
+            .lock()
+            .await
+            .contains_key(&conversation_id)
+        {
+            return Err(OrchestratorError::AgentBusy(conversation_id));
+        }
+
+        {
+            let mut active = self.active_runs.lock().await;
+            if active.len() >= self.max_concurrent_runs {
+                return Err(OrchestratorError::QueueFull);
+            }
+            active.push(run_id.clone());
+        }
+
+        let parent_run_id = self
+            .parent_run_for_follow_up(&conversation_id, request.parent_run_id.clone())
+            .await;
+
+        self.register_run_conversation(&run_id, &conversation_id)
+            .await;
+
+        self.shadow_manager.touch(&conversation_id).await;
+
+        let owner_conversation = if let Some(owner) = request.caller_conversation_id.clone() {
+            Some(owner)
+        } else if let Some(parent) = parent_run_id.as_ref() {
+            let guard = self.run_owner_conversations.lock().await;
+            guard.get(parent).cloned()
+        } else {
+            None
+        };
+        if let Some(owner) = owner_conversation.clone() {
+            self.run_owner_conversations
+                .lock()
+                .await
+                .insert(run_id.clone(), owner);
+        }
+        let owner_conversation_id = owner_conversation.unwrap_or_default();
+
+        let prompt_preview_text = request.prompt.text.clone();
+        self.emit(DelegateEvent::Started {
+            run_id: run_id.clone(),
+            agent_id: summary.agent_id.clone(),
+            owner_conversation_id: owner_conversation_id.clone(),
+            prompt: prompt_preview_text,
+            started_at: SystemTime::now(),
+            parent_run_id: parent_run_id.clone(),
+            mode: summary.mode,
+        })
+        .await;
+
+        let events_rx = events.subscribe(None).await;
+
+        let orchestrator = Arc::clone(self);
+        let run_id_clone = run_id.clone();
+        tokio::spawn(async move {
+            let orchestrator_task = Arc::clone(&orchestrator);
+            let result = orchestrator_task
+                .run_follow_up_task(
+                    run_id_clone.clone(),
+                    request,
+                    conversation_id.clone(),
+                    summary.clone(),
+                    conversation.clone(),
+                    session_configured.clone(),
+                    config.clone(),
+                    events_rx,
+                    owner_conversation_id.clone(),
+                )
+                .await;
+
+            match result {
+                Ok(output) => {
+                    orchestrator.store_session(&output).await;
+                    orchestrator
+                        .emit(DelegateEvent::Completed {
+                            run_id: run_id_clone.clone(),
+                            agent_id: output.agent_id.clone(),
+                            owner_conversation_id: owner_conversation_id.clone(),
+                            output: output.message.clone(),
+                            duration: output.duration,
+                            mode: output.mode,
+                        })
+                        .await;
+                }
+                Err(err) => {
+                    orchestrator
+                        .emit(DelegateEvent::Failed {
+                            run_id: run_id_clone.clone(),
+                            agent_id: err.agent_id,
+                            owner_conversation_id: owner_conversation_id.clone(),
+                            error: err.error,
+                            mode: err.mode,
+                        })
+                        .await;
+                }
+            }
+
+            orchestrator.clear_run_conversation(&run_id_clone).await;
+            let mut active = orchestrator.active_runs.lock().await;
+            if let Some(pos) = active.iter().rposition(|id| id == &run_id_clone) {
+                active.remove(pos);
+            }
+        });
+
+        Ok(run_id)
+    }
     pub fn new(
         global_codex_home: impl Into<std::path::PathBuf>,
         auth_manager: Arc<AuthManager>,
@@ -302,6 +486,11 @@ impl AgentOrchestrator {
             DelegateInvocationMode::Detached => DelegateSessionMode::Detached,
             _ => DelegateSessionMode::Standard,
         };
+        if let Some(conversation_id) = request.conversation_id.clone() {
+            return self
+                .delegate_follow_up(run_id, request, conversation_id)
+                .await;
+        }
         {
             let mut active = self.active_runs.lock().await;
             if active.len() >= self.max_concurrent_runs {
@@ -455,12 +644,16 @@ impl AgentOrchestrator {
         }
     }
 
-    async fn record_shadow_event(
+    async fn record_shadow_event_internal(
         &self,
         agent_id: Option<&AgentId>,
         conversation_id: &str,
         event: &Event,
+        mode: ShadowRecordMode,
     ) {
+        if matches!(mode, ShadowRecordMode::FollowUp) {
+            return;
+        }
         let Some(agent_id) = agent_id else { return };
         if let Err(err) = self
             .shadow_manager
@@ -469,6 +662,21 @@ impl AgentOrchestrator {
         {
             error!(error = %err, conversation_id, "failed to record shadow event");
         }
+    }
+
+    async fn record_shadow_event(
+        &self,
+        agent_id: Option<&AgentId>,
+        conversation_id: &str,
+        event: &Event,
+    ) {
+        self.record_shadow_event_internal(
+            agent_id,
+            conversation_id,
+            event,
+            ShadowRecordMode::Normal,
+        )
+        .await;
     }
 
     async fn record_shadow_agent_outputs(
@@ -502,14 +710,217 @@ impl AgentOrchestrator {
             .values()
             .map(|entry| entry.summary.clone())
             .collect();
-        summaries.sort_by(|a, b| b.last_interacted_at.cmp(&a.last_interacted_at));
+        summaries.sort_by(
+            |a, b| match b.last_interacted_at.cmp(&a.last_interacted_at) {
+                Ordering::Equal => a.conversation_id.cmp(&b.conversation_id),
+                other => other,
+            },
+        );
         summaries
+    }
+
+    pub async fn session_summary(&self, conversation_id: &str) -> Option<DelegateSessionSummary> {
+        let sessions = self.sessions.lock().await;
+        sessions
+            .get(conversation_id)
+            .map(|entry| entry.summary.clone())
+    }
+
+    pub async fn dismiss_session(&self, conversation_id: &str) -> Result<(), OrchestratorError> {
+        if self
+            .conversation_runs
+            .lock()
+            .await
+            .contains_key(conversation_id)
+        {
+            return Err(OrchestratorError::AgentBusy(conversation_id.to_string()));
+        }
+
+        {
+            let sessions = self.sessions.lock().await;
+            if !sessions.contains_key(conversation_id) {
+                return Err(OrchestratorError::SessionNotFound(
+                    conversation_id.to_string(),
+                ));
+            }
+        }
+
+        self.remove_session(conversation_id).await;
+
+        let mut detached = self.detached_runs.lock().await;
+        detached.retain(|_, record| match &record.status {
+            DetachedRunStatus::Ready {
+                conversation_id: ready_id,
+                ..
+            } => ready_id != conversation_id,
+            _ => true,
+        });
+
+        Ok(())
+    }
+
+    pub async fn list_sessions_paginated(
+        &self,
+        cursor: Option<String>,
+        limit: usize,
+    ) -> Result<DelegateSessionsList, OrchestratorError> {
+        let summaries = self.active_sessions().await;
+
+        let (page, next_cursor) = paginate_session_summaries(&summaries, cursor, limit)?;
+
+        let mut sessions_vec = Vec::new();
+        for summary in page {
+            let shadow = self
+                .shadow_manager
+                .session_summary(&summary.conversation_id)
+                .await
+                .map(|s| DelegateSessionShadowSummary {
+                    events: s.metrics.events,
+                    user_inputs: s.metrics.user_inputs,
+                    agent_outputs: s.metrics.agent_outputs,
+                    turns: s.metrics.turns,
+                    raw_bytes: s.raw_bytes,
+                    compressed_bytes: s.compressed_bytes,
+                });
+
+            let mode = match summary.mode {
+                DelegateSessionMode::Standard => CoreDelegateSessionMode::Standard,
+                DelegateSessionMode::Detached => CoreDelegateSessionMode::Detached,
+            };
+
+            sessions_vec.push(DelegateSessionListEntry {
+                conversation_id: summary.conversation_id.clone(),
+                agent_id: summary.agent_id.as_str().to_string(),
+                mode,
+                cwd: summary.cwd.to_string_lossy().into_owned(),
+                last_interacted_at: format_system_time(summary.last_interacted_at),
+                shadow,
+            });
+        }
+
+        Ok(DelegateSessionsList {
+            sessions: sessions_vec,
+            next_cursor,
+        })
+    }
+
+    pub async fn recent_messages(
+        &self,
+        conversation_id: &str,
+        cursor: Option<String>,
+        limit: usize,
+    ) -> Result<DelegateSessionMessages, OrchestratorError> {
+        {
+            let sessions = self.sessions.lock().await;
+            if !sessions.contains_key(conversation_id) {
+                return Err(OrchestratorError::SessionNotFound(
+                    conversation_id.to_string(),
+                ));
+            }
+        }
+
+        let snapshot = self.shadow_manager.snapshot(conversation_id).await;
+        let snapshot = snapshot
+            .ok_or_else(|| OrchestratorError::HistoryUnavailable(conversation_id.to_string()))?;
+
+        let entries = snapshot.history;
+        let total = entries.len();
+        let start_index = if let Some(cursor) = cursor {
+            let idx = cursor
+                .parse::<usize>()
+                .map_err(|_| OrchestratorError::InvalidCursor)?;
+            if idx > total {
+                return Err(OrchestratorError::InvalidCursor);
+            }
+            idx
+        } else {
+            total
+        };
+
+        let mut index = start_index;
+        let mut messages = Vec::new();
+        while index > 0 && messages.len() < limit {
+            index -= 1;
+            if let Some(entry) = history_entry_to_message(&entries[index], conversation_id, index) {
+                messages.push(entry);
+            }
+        }
+
+        let next_cursor = if index > 0 {
+            Some(index.to_string())
+        } else {
+            None
+        };
+
+        Ok(DelegateSessionMessages {
+            messages,
+            next_cursor,
+        })
     }
 
     pub async fn shadow_snapshot(&self, conversation_id: &str) -> Option<ShadowSnapshot> {
         self.shadow_manager.snapshot(conversation_id).await
     }
 
+    async fn parent_run_for_follow_up(
+        &self,
+        conversation_id: &str,
+        request_parent: Option<DelegateRunId>,
+    ) -> Option<DelegateRunId> {
+        if let Some(parent) = request_parent {
+            Some(parent)
+        } else {
+            self.conversation_runs
+                .lock()
+                .await
+                .get(conversation_id)
+                .cloned()
+        }
+    }
+}
+
+fn paginate_session_summaries<'a>(
+    summaries: &'a [DelegateSessionSummary],
+    cursor: Option<String>,
+    limit: usize,
+) -> Result<(Vec<&'a DelegateSessionSummary>, Option<String>), OrchestratorError> {
+    let limit = limit.max(1);
+
+    let start_index = if let Some(cursor) = cursor {
+        let (cursor_ts, cursor_id) = parse_session_cursor(&cursor)?;
+        let mut idx = None;
+        for (i, summary) in summaries.iter().enumerate() {
+            let ts = system_time_to_unix_nanos(summary.last_interacted_at);
+            if ts == cursor_ts && summary.conversation_id == cursor_id {
+                idx = Some(i + 1);
+                break;
+            }
+        }
+        idx.ok_or(OrchestratorError::InvalidCursor)?
+    } else {
+        0
+    };
+
+    let mut page = Vec::new();
+    for summary in summaries.iter().skip(start_index).take(limit) {
+        page.push(summary);
+    }
+
+    let consumed = page.len();
+    let next_cursor = if consumed == 0 {
+        None
+    } else if start_index + consumed < summaries.len() {
+        Some(encode_session_cursor(
+            &summaries[start_index + consumed - 1],
+        ))
+    } else {
+        None
+    };
+
+    Ok((page, next_cursor))
+}
+
+impl AgentOrchestrator {
     pub async fn shadow_metrics(&self) -> ShadowMetrics {
         self.shadow_manager.metrics().await
     }
@@ -951,6 +1362,169 @@ impl AgentOrchestrator {
             mode: session_mode,
         })
     }
+
+    async fn run_follow_up_task(
+        self: Arc<Self>,
+        run_id: DelegateRunId,
+        request: DelegateRequest,
+        conversation_id: String,
+        summary: DelegateSessionSummary,
+        conversation: Arc<CodexConversation>,
+        session_configured: Arc<SessionConfiguredEvent>,
+        config: Config,
+        mut events_rx: UnboundedReceiver<Event>,
+        owner_conversation_id: String,
+    ) -> std::result::Result<DelegateSuccess, DelegateFailure> {
+        let start = SystemTime::now();
+        let agent_id = summary.agent_id.clone();
+        let session_mode = summary.mode;
+
+        let mut items = request.user_initial.clone();
+        let prompt_text = request.prompt.text.clone();
+        if !prompt_text.trim().is_empty() {
+            items.push(InputItem::Text {
+                text: prompt_text.clone(),
+            });
+        }
+
+        conversation
+            .submit(Op::UserInput { items })
+            .await
+            .map_err(|err| DelegateFailure {
+                agent_id: agent_id.clone(),
+                error: format!("failed to submit delegate prompt: {err:#}"),
+                mode: session_mode,
+            })?;
+
+        self.record_shadow_user_inputs(Some(&agent_id), &conversation_id, &request.user_initial)
+            .await;
+        if !prompt_text.trim().is_empty() {
+            self.record_shadow_user_inputs(
+                Some(&agent_id),
+                &conversation_id,
+                &[InputItem::Text {
+                    text: prompt_text.clone(),
+                }],
+            )
+            .await;
+        }
+
+        let mut collected = String::new();
+        while let Some(event) = events_rx.recv().await {
+            match &event.msg {
+                EventMsg::AgentMessage(msg) => {
+                    collected = msg.message.clone();
+                    self.record_shadow_event_internal(
+                        Some(&agent_id),
+                        &conversation_id,
+                        &event,
+                        ShadowRecordMode::FollowUp,
+                    )
+                    .await;
+                    self.emit(DelegateEvent::Delta {
+                        run_id: run_id.clone(),
+                        agent_id: agent_id.clone(),
+                        owner_conversation_id: owner_conversation_id.clone(),
+                        chunk: msg.message.clone(),
+                    })
+                    .await;
+                }
+                EventMsg::AgentMessageDelta(delta) => {
+                    collected.push_str(&delta.delta);
+                    self.record_shadow_event_internal(
+                        Some(&agent_id),
+                        &conversation_id,
+                        &event,
+                        ShadowRecordMode::FollowUp,
+                    )
+                    .await;
+                    self.emit(DelegateEvent::Delta {
+                        run_id: run_id.clone(),
+                        agent_id: agent_id.clone(),
+                        owner_conversation_id: owner_conversation_id.clone(),
+                        chunk: delta.delta.clone(),
+                    })
+                    .await;
+                }
+                EventMsg::TaskComplete(task_complete) => {
+                    self.record_shadow_event_internal(
+                        Some(&agent_id),
+                        &conversation_id,
+                        &event,
+                        ShadowRecordMode::FollowUp,
+                    )
+                    .await;
+                    let duration = start.elapsed().unwrap_or_else(|_| Duration::from_secs(0));
+                    let message = task_complete.last_agent_message.clone().or_else(|| {
+                        if collected.trim().is_empty() {
+                            None
+                        } else {
+                            Some(collected.clone())
+                        }
+                    });
+
+                    if let Some(output) = message.as_ref() {
+                        self.record_shadow_agent_outputs(
+                            Some(&agent_id),
+                            &conversation_id,
+                            &[output.clone()],
+                        )
+                        .await;
+                    }
+
+                    return Ok(DelegateSuccess {
+                        agent_id,
+                        conversation_id,
+                        conversation,
+                        session_configured,
+                        cwd: summary.cwd.clone(),
+                        config,
+                        message,
+                        duration,
+                        mode: session_mode,
+                    });
+                }
+                EventMsg::Error(err) => {
+                    self.record_shadow_event(Some(&agent_id), &conversation_id, &event)
+                        .await;
+                    return Err(DelegateFailure {
+                        agent_id: agent_id.clone(),
+                        error: err.message.clone(),
+                        mode: session_mode,
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        Err(DelegateFailure {
+            agent_id,
+            error: "delegate run ended unexpectedly".to_string(),
+            mode: session_mode,
+        })
+    }
+}
+
+fn history_entry_to_message(
+    entry: &ShadowHistoryEntry,
+    conversation_id: &str,
+    index: usize,
+) -> Option<DelegateSessionMessageEntry> {
+    let role = match entry.kind {
+        ShadowHistoryKind::Agent => "assistant",
+        ShadowHistoryKind::User => "user",
+        ShadowHistoryKind::Info => "info",
+        ShadowHistoryKind::Warning => "warning",
+        ShadowHistoryKind::Error => "error",
+        ShadowHistoryKind::System => "system",
+    };
+    let content = entry.lines.join("\n");
+    Some(DelegateSessionMessageEntry {
+        id: format!("{conversation_id}:{index}"),
+        role: role.to_string(),
+        content,
+        timestamp: None,
+    })
 }
 
 struct DelegateSuccess {
@@ -1082,7 +1656,12 @@ impl MultiAgentDelegateAdapter {
                 DelegateToolError::SetupFailed(reason)
             }
             OrchestratorError::SessionNotFound(session_id) => {
-                DelegateToolError::SetupFailed(format!("session not found: {session_id}"))
+                DelegateToolError::SessionNotFound(session_id)
+            }
+            OrchestratorError::AgentBusy(_) => DelegateToolError::AgentBusy,
+            OrchestratorError::InvalidCursor => DelegateToolError::InvalidCursor,
+            OrchestratorError::HistoryUnavailable(session_id) => {
+                DelegateToolError::HistoryUnavailable(session_id)
             }
         }
     }
@@ -1108,13 +1687,30 @@ impl DelegateToolAdapter for MultiAgentDelegateAdapter {
         request: DelegateToolRequest,
     ) -> Result<DelegateToolRun, DelegateToolError> {
         let DelegateToolRequest {
-            agent_id: agent_id_str,
+            agent_id,
             prompt,
             context: _,
             caller_conversation_id,
             mode,
+            conversation_id,
             ..
         } = request;
+
+        let agent_id_str = match agent_id {
+            Some(id) => id,
+            None => {
+                if let Some(conv_id) = conversation_id.as_ref() {
+                    let summary = self
+                        .orchestrator
+                        .session_summary(conv_id)
+                        .await
+                        .ok_or_else(|| DelegateToolError::SessionNotFound(conv_id.clone()))?;
+                    summary.agent_id.as_str().to_string()
+                } else {
+                    return Err(DelegateToolError::AgentNotFound("".to_string()));
+                }
+            }
+        };
 
         let agent_id = AgentId::parse(agent_id_str.as_str())
             .map_err(|_| DelegateToolError::AgentNotFound(agent_id_str.clone()))?;
@@ -1136,6 +1732,7 @@ impl DelegateToolAdapter for MultiAgentDelegateAdapter {
                 parent_run_id,
                 mode,
                 caller_conversation_id,
+                conversation_id,
             })
             .await
             .map_err(Self::map_error)?;
@@ -1145,4 +1742,37 @@ impl DelegateToolAdapter for MultiAgentDelegateAdapter {
             agent_id: agent_id_str,
         })
     }
+
+    async fn list_sessions(
+        &self,
+        cursor: Option<String>,
+        limit: usize,
+    ) -> Result<DelegateSessionsList, DelegateToolError> {
+        self.orchestrator
+            .list_sessions_paginated(cursor, limit)
+            .await
+            .map_err(Self::map_error)
+    }
+
+    async fn session_messages(
+        &self,
+        conversation_id: &str,
+        cursor: Option<String>,
+        limit: usize,
+    ) -> Result<DelegateSessionMessages, DelegateToolError> {
+        self.orchestrator
+            .recent_messages(conversation_id, cursor, limit)
+            .await
+            .map_err(Self::map_error)
+    }
+
+    async fn dismiss_session(&self, conversation_id: &str) -> Result<(), DelegateToolError> {
+        self.orchestrator
+            .dismiss_session(conversation_id)
+            .await
+            .map_err(Self::map_error)
+    }
 }
+
+#[cfg(test)]
+mod tests;

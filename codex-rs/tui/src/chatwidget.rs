@@ -7,6 +7,7 @@ use std::sync::Arc;
 use codex_core::CodexConversation;
 use codex_core::config::Config;
 use codex_core::config_types::Notifications;
+use codex_core::delegate_tool::DelegateSessionMessages;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
@@ -2216,6 +2217,39 @@ impl ChatWidget {
                 ..Default::default()
             });
 
+            let preview_id = conversation_id.clone();
+            let preview_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::PreviewDelegateSession(preview_id.clone()));
+            })];
+            items.push(SelectionItem {
+                name: format!(
+                    "  Preview recent messages for #{}",
+                    summary.agent_id.as_str()
+                ),
+                description: Some("Shows the latest shadow-cached turns.".to_string()),
+                is_current: false,
+                actions: preview_actions,
+                dismiss_on_select: false,
+                ..Default::default()
+            });
+
+            if !is_current {
+                let dismiss_id = conversation_id.clone();
+                let dismiss_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::DismissDelegateSession(dismiss_id.clone()));
+                })];
+                items.push(SelectionItem {
+                    name: format!("  Dismiss session for #{}", summary.agent_id.as_str()),
+                    description: Some(
+                        "Remove this session (and its shadow cache) from the list.".to_string(),
+                    ),
+                    is_current: false,
+                    actions: dismiss_actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                });
+            }
+
             if summary.mode == DelegateSessionMode::Detached
                 && let Some(run_id) = run_id.clone()
             {
@@ -2749,6 +2783,33 @@ impl ChatWidget {
         append_markdown(text, None, &mut lines, &self.config);
         let cell = AgentMessageCell::new(lines, true);
         self.add_to_history(cell);
+        self.request_redraw();
+    }
+
+    pub(crate) fn show_delegate_preview(
+        &mut self,
+        summary: &DelegateSessionSummary,
+        messages: &DelegateSessionMessages,
+    ) {
+        if messages.messages.is_empty() {
+            self.add_info_message(
+                format!(
+                    "No recent messages recorded for #{}",
+                    summary.agent_id.as_str()
+                ),
+                None,
+            );
+            return;
+        }
+
+        let label = format!("#{}", summary.agent_id.as_str());
+        let cell = history_cell::new_delegate_preview(
+            &label,
+            summary.conversation_id.as_str(),
+            &messages.messages,
+            messages.next_cursor.is_some(),
+        );
+        self.add_boxed_history(cell);
         self.request_redraw();
     }
 

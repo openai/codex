@@ -822,7 +822,9 @@ pub(crate) fn build_specs(
     use crate::exec_command::create_exec_command_tool_for_responses_api;
     use crate::exec_command::create_write_stdin_tool_for_responses_api;
     use crate::tools::handlers::ApplyPatchHandler;
+    use crate::tools::handlers::DELEGATE_SESSIONS_TOOL;
     use crate::tools::handlers::DELEGATE_TOOL;
+    use crate::tools::handlers::DelegateSessionsHandler;
     use crate::tools::handlers::DelegateToolHandler;
     use crate::tools::handlers::ExecStreamHandler;
     use crate::tools::handlers::GrepFilesHandler;
@@ -844,6 +846,7 @@ pub(crate) fn build_specs(
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
     let delegate_handler = Arc::new(DelegateToolHandler);
+    let delegate_sessions_handler = Arc::new(DelegateSessionsHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
@@ -893,6 +896,8 @@ pub(crate) fn build_specs(
     if config.delegate_tool {
         builder.push_spec_with_parallel_support(DELEGATE_TOOL.clone(), true);
         builder.register_handler("delegate_agent", delegate_handler);
+        builder.push_spec_with_parallel_support(DELEGATE_SESSIONS_TOOL.clone(), true);
+        builder.register_handler("delegate_sessions", delegate_sessions_handler);
     }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
