@@ -52,6 +52,8 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
+use codex_app_server_protocol::UploadFeedbackParams;
+use codex_app_server_protocol::UploadFeedbackResponse;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_backend_client::Client as BackendClient;
@@ -85,6 +87,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
@@ -136,6 +139,7 @@ pub(crate) struct CodexMessageProcessor {
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<RequestId>>>>,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    feedback: CodexFeedback,
 }
 
 impl CodexMessageProcessor {
@@ -145,6 +149,7 @@ impl CodexMessageProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         codex_linux_sandbox_exe: Option<PathBuf>,
         config: Arc<Config>,
+        feedback: CodexFeedback,
     ) -> Self {
         Self {
             auth_manager,
@@ -156,6 +161,7 @@ impl CodexMessageProcessor {
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
+            feedback,
         }
     }
 
@@ -274,6 +280,9 @@ impl CodexMessageProcessor {
                 params: _,
             } => {
                 self.get_account_rate_limits(request_id).await;
+            }
+            ClientRequest::UploadFeedback { request_id, params } => {
+                self.upload_feedback(request_id, params).await;
             }
         }
     }
@@ -1417,6 +1426,77 @@ impl CodexMessageProcessor {
 
         let response = FuzzyFileSearchResponse { files: results };
         self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn upload_feedback(&self, request_id: RequestId, params: UploadFeedbackParams) {
+        let UploadFeedbackParams {
+            classification,
+            reason,
+            conversation_id,
+            include_logs,
+        } = params;
+
+        let snapshot = self.feedback.snapshot(conversation_id);
+        let thread_id = snapshot.thread_id.clone();
+
+        let validated_rollout_path = if include_logs {
+            match conversation_id {
+                Some(conv_id) => self.resolve_rollout_path(conv_id).await,
+                None => None,
+            }
+        } else {
+            None
+        };
+
+        let upload_result = tokio::task::spawn_blocking(move || {
+            let rollout_path_ref = validated_rollout_path.as_deref();
+            snapshot.upload_feedback(
+                &classification,
+                reason.as_deref(),
+                include_logs,
+                rollout_path_ref,
+            )
+        })
+        .await;
+
+        let upload_result = match upload_result {
+            Ok(result) => result,
+            Err(join_err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to upload feedback: {join_err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match upload_result {
+            Ok(()) => {
+                let response = UploadFeedbackResponse { thread_id };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to upload feedback: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn resolve_rollout_path(&self, conversation_id: ConversationId) -> Option<PathBuf> {
+        match self
+            .conversation_manager
+            .get_conversation(conversation_id)
+            .await
+        {
+            Ok(conv) => Some(conv.rollout_path()),
+            Err(_) => None,
+        }
     }
 }
 

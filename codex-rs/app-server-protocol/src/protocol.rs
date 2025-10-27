@@ -124,6 +124,13 @@ client_request_definitions! {
         response: GetAccountRateLimitsResponse,
     },
 
+    #[serde(rename = "feedback/upload")]
+    #[ts(rename = "feedback/upload")]
+    UploadFeedback {
+        params: UploadFeedbackParams,
+        response: UploadFeedbackResponse,
+    },
+
     #[serde(rename = "account/read")]
     #[ts(rename = "account/read")]
     GetAccount {
@@ -382,6 +389,23 @@ pub struct ListModelsResponse {
     /// if None, there are no more items to return.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadFeedbackParams {
+    pub classification: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<ConversationId>,
+    pub include_logs: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadFeedbackResponse {
+    pub thread_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
