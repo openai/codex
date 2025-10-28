@@ -228,7 +228,6 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
 /// - shell-escaped single paths (via `shlex`)
 pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
     let pasted = pasted.trim();
-    // Normalize pasted text that may represent a filesystem path.
 
     // file:// URL → filesystem path
     if let Ok(url) = url::Url::parse(pasted)
