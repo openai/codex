@@ -17,17 +17,21 @@ impl EnvBackup {
         let mut entries = Vec::with_capacity(keys.len());
         for key in keys {
             entries.push((*key, std::env::var(key).ok()));
-            std::env::remove_var(key);
+            // SAFETY: all test cases grab `ENV_MUTEX`, so env mutations stay
+            // serialized within this process and satisfy Rust 1.90's
+            // unsafety contract for environment updates.
+            unsafe { std::env::remove_var(key) };
         }
         Self { entries }
     }
 
     fn set_path(&self, key: &'static str, path: &Path) {
-        std::env::set_var(key, path);
+        // SAFETY: guarded by `ENV_MUTEX`; see comment in `new`.
+        unsafe { std::env::set_var(key, path) };
     }
 
     fn remove(&self, key: &'static str) {
-        std::env::remove_var(key);
+        unsafe { std::env::remove_var(key) };
     }
 }
 
@@ -35,8 +39,8 @@ impl Drop for EnvBackup {
     fn drop(&mut self) {
         for (key, value) in self.entries.drain(..) {
             match value {
-                Some(v) => std::env::set_var(key, v),
-                None => std::env::remove_var(key),
+                Some(v) => unsafe { std::env::set_var(key, v) },
+                None => unsafe { std::env::remove_var(key) },
             }
         }
     }
