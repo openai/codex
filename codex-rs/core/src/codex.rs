@@ -1319,18 +1319,31 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
     debug!("Agent loop exited");
 }
 
-
 /// Operation handlers
 mod handlers {
-    use std::sync::Arc;
-    use tracing::{info, warn};
-    use codex_protocol::custom_prompts::CustomPrompt;
-    use codex_protocol::protocol::{ErrorEvent, Event, EventMsg, ListCustomPromptsResponseEvent, Op, ReviewDecision, ReviewRequest, TurnAbortReason};
-    use codex_protocol::user_input::UserInput;
-    use crate::codex::{compact, spawn_review_thread, Session, SessionSettingsUpdate, TurnContext};
+    use crate::codex::Session;
+    use crate::codex::SessionSettingsUpdate;
+    use crate::codex::TurnContext;
+    use crate::codex::compact;
+    use crate::codex::spawn_review_thread;
     use crate::config::Config;
     use crate::mcp::auth::compute_auth_statuses;
-    use crate::tasks::{CompactTask, RegularTask, UndoTask};
+    use crate::tasks::CompactTask;
+    use crate::tasks::RegularTask;
+    use crate::tasks::UndoTask;
+    use codex_protocol::custom_prompts::CustomPrompt;
+    use codex_protocol::protocol::ErrorEvent;
+    use codex_protocol::protocol::Event;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::ListCustomPromptsResponseEvent;
+    use codex_protocol::protocol::Op;
+    use codex_protocol::protocol::ReviewDecision;
+    use codex_protocol::protocol::ReviewRequest;
+    use codex_protocol::protocol::TurnAbortReason;
+    use codex_protocol::user_input::UserInput;
+    use std::sync::Arc;
+    use tracing::info;
+    use tracing::warn;
 
     pub async fn interrupt(sess: &Arc<Session>) {
         sess.interrupt_task().await;
@@ -1436,20 +1449,22 @@ mod handlers {
             let entry_opt = tokio::task::spawn_blocking(move || {
                 crate::message_history::lookup(log_id, offset, &config)
             })
-                .await
-                .unwrap_or(None);
+            .await
+            .unwrap_or(None);
 
             let event = Event {
                 id: sub_id,
-                msg: EventMsg::GetHistoryEntryResponse(crate::protocol::GetHistoryEntryResponseEvent {
-                    offset,
-                    log_id,
-                    entry: entry_opt.map(|e| codex_protocol::message_history::HistoryEntry {
-                        conversation_id: e.session_id,
-                        ts: e.ts,
-                        text: e.text,
-                    }),
-                }),
+                msg: EventMsg::GetHistoryEntryResponse(
+                    crate::protocol::GetHistoryEntryResponseEvent {
+                        offset,
+                        log_id,
+                        entry: entry_opt.map(|e| codex_protocol::message_history::HistoryEntry {
+                            conversation_id: e.session_id,
+                            ts: e.ts,
+                            text: e.text,
+                        }),
+                    },
+                ),
             };
 
             sess_clone.send_event_raw(event).await;
@@ -1460,15 +1475,15 @@ mod handlers {
         // This is a cheap lookup from the connection manager's cache.
         let tools = sess.services.mcp_connection_manager.list_all_tools();
         let (auth_status_entries, resources, resource_templates) = tokio::join!(
-        compute_auth_statuses(
-            config.mcp_servers.iter(),
-            config.mcp_oauth_credentials_store_mode,
-        ),
-        sess.services.mcp_connection_manager.list_all_resources(),
-        sess.services
-            .mcp_connection_manager
-            .list_all_resource_templates()
-    );
+            compute_auth_statuses(
+                config.mcp_servers.iter(),
+                config.mcp_oauth_credentials_store_mode,
+            ),
+            sess.services.mcp_connection_manager.list_all_resources(),
+            sess.services
+                .mcp_connection_manager
+                .list_all_resource_templates()
+        );
         let auth_statuses = auth_status_entries
             .iter()
             .map(|(name, entry)| (name.clone(), entry.auth_status))
@@ -1495,7 +1510,9 @@ mod handlers {
 
         let event = Event {
             id: sub_id,
-            msg: EventMsg::ListCustomPromptsResponse(ListCustomPromptsResponseEvent { custom_prompts }),
+            msg: EventMsg::ListCustomPromptsResponse(ListCustomPromptsResponseEvent {
+                custom_prompts,
+            }),
         };
         sess.send_event_raw(event).await;
     }
@@ -1571,9 +1588,8 @@ mod handlers {
             sub_id,
             review_request,
         )
-            .await;
+        .await;
     }
-
 }
 
 /// Spawn a review thread using the given prompt.
