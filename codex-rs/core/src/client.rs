@@ -223,18 +223,14 @@ impl ModelClient {
 
         let input_with_instructions = prompt.get_formatted_input();
 
-        let verbosity = match &self.config.model_family.family {
-            family if family == "gpt-5" => self.config.model_verbosity,
-            _ => {
-                if self.config.model_verbosity.is_some() {
-                    warn!(
-                        "model_verbosity is set but ignored for non-gpt-5 model family: {}",
-                        self.config.model_family.family
-                    );
-                }
-
-                None
-            }
+        let verbosity = if self.config.model_family.support_verbosity {
+            self.config.model_verbosity
+        } else {
+            warn!(
+                "model_verbosity is set but ignored as the model does not support verbosity: {}",
+                self.config.model_family.family
+            );
+            None
         };
 
         // Only include `text.verbosity` for GPT-5 family models

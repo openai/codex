@@ -127,11 +127,7 @@ impl HistoryCell for UserHistoryCell {
         let style = user_message_style();
 
         let wrapped = word_wrap_lines(
-            &self
-                .message
-                .lines()
-                .map(|l| Line::from(l).style(style))
-                .collect::<Vec<_>>(),
+            self.message.lines().map(|l| Line::from(l).style(style)),
             // Wrap algorithm matches textarea.rs.
             RtOptions::new(usize::from(wrap_width))
                 .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
@@ -465,7 +461,7 @@ struct CompletedMcpToolCallWithImageOutput {
 }
 impl HistoryCell for CompletedMcpToolCallWithImageOutput {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        vec!["tool result (image output omitted)".into()]
+        vec!["tool result (image output)".into()]
     }
 }
 
