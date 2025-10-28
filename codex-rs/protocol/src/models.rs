@@ -645,4 +645,37 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn local_image_non_image_adds_placeholder() -> Result<()> {
+        let dir = tempdir()?;
+        let json_path = dir.path().join("example.json");
+        std::fs::write(&json_path, br#"{"hello":"world"}"#)?;
+
+        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+            path: json_path.clone(),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert_eq!(content.len(), 1);
+                match &content[0] {
+                    ContentItem::InputText { text } => {
+                        assert!(
+                            text.contains("unsupported MIME type `application/json`"),
+                            "placeholder should mention unsupported MIME: {text}"
+                        );
+                        assert!(
+                            text.contains(&json_path.display().to_string()),
+                            "placeholder should mention path: {text}"
+                        );
+                    }
+                    other => panic!("expected placeholder text but found {other:?}"),
+                }
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+
+        Ok(())
+    }
 }
