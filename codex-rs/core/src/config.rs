@@ -200,6 +200,11 @@ pub struct Config {
     /// Defaults to `~/.agents` (sibling to `~/.codex`) unless overridden.
     pub agents_home: PathBuf,
 
+    /// Optional project-scoped agents directory discovered in the workspace.
+    /// When present, entries from this path augment or override the global
+    /// [`agents_home`].
+    pub project_agents_home: Option<PathBuf>,
+
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
 
@@ -1242,6 +1247,7 @@ impl Config {
             &resolved_cwd,
             &codex_home,
         )?;
+        let project_agents_home = find_project_agents_home(&resolved_cwd);
         let additional_writable_roots: Vec<PathBuf> = additional_writable_roots
             .into_iter()
             .map(|path| {
@@ -1381,7 +1387,8 @@ impl Config {
             .or(cfg.review_model)
             .unwrap_or_else(default_review_model);
 
-        let mut mcp_servers = load_agents_mcp_servers(&agents_home)?;
+        let mut mcp_servers =
+            load_agents_mcp_servers(&agents_home, project_agents_home.as_deref())?;
         if !cfg.mcp_servers.is_empty() {
             for (key, server) in cfg.mcp_servers.iter() {
                 mcp_servers.insert(key.clone(), server.clone());
@@ -1430,6 +1437,7 @@ impl Config {
                 .collect(),
             codex_home,
             agents_home,
+            project_agents_home,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
@@ -1605,6 +1613,21 @@ fn compute_agents_home(
     Ok(candidate)
 }
 
+fn find_project_agents_home(cwd: &Path) -> Option<PathBuf> {
+    let mut cursor = cwd.to_path_buf();
+    loop {
+        let candidate = cursor.join(".agents");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+
+        if cursor.join(".git").exists() || !cursor.pop() {
+            break;
+        }
+    }
+    None
+}
+
 fn normalize_agents_home_candidate(candidate: PathBuf, cwd: &Path) -> PathBuf {
     if let Some(raw) = candidate.to_str() {
         if raw == "~" {
@@ -1646,10 +1669,68 @@ fn ensure_agents_home_layout(base: &Path) -> std::io::Result<()> {
 }
 
 fn load_agents_mcp_servers(
-    agents_home: &Path,
+    global_agents_home: &Path,
+    project_agents_home: Option<&Path>,
 ) -> std::io::Result<HashMap<String, McpServerConfig>> {
+    let mut combined = load_agents_mcp_from_dir(global_agents_home, true)?;
+    if let Some(local_home) = project_agents_home {
+        let local_entries = load_agents_mcp_from_dir(local_home, false)?;
+        combined.extend(local_entries);
+    }
+    Ok(combined)
+}
+
+fn parse_agents_mcp_toml(
+    contents: &str,
+    path: &Path,
+) -> std::io::Result<HashMap<String, McpServerConfig>> {
+    let value: TomlValue = toml::from_str(contents).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("failed to parse {} as TOML: {err}", path.display()),
+        )
+    })?;
+    let parsed: BTreeMap<String, McpServerConfig> = value.try_into().map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("invalid MCP configuration in {}: {err}", path.display()),
+        )
+    })?;
+    Ok(parsed.into_iter().collect())
+}
+
+fn parse_agents_mcp_json(
+    contents: &str,
+    path: &Path,
+) -> std::io::Result<HashMap<String, McpServerConfig>> {
+    let value: JsonValue = serde_json::from_str(contents).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("failed to parse {} as JSON: {err}", path.display()),
+        )
+    })?;
+    serde_json::from_value::<HashMap<String, McpServerConfig>>(value).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("invalid MCP configuration in {}: {err}", path.display()),
+        )
+    })
+}
+
+fn load_agents_mcp_from_dir(
+    agents_home: &Path,
+    ensure_structure: bool,
+) -> std::io::Result<HashMap<String, McpServerConfig>> {
+    if ensure_structure {
+        ensure_agents_home_layout(agents_home)?;
+    } else if !agents_home.exists() {
+        return Ok(HashMap::new());
+    }
+
     let config_dir = agents_home.join("mcp");
-    if !config_dir.exists() {
+    if ensure_structure {
+        fs::create_dir_all(&config_dir)?;
+    } else if !config_dir.exists() {
         return Ok(HashMap::new());
     }
 
@@ -1691,43 +1772,6 @@ fn load_agents_mcp_servers(
             },
         }
     }
-}
-
-fn parse_agents_mcp_toml(
-    contents: &str,
-    path: &Path,
-) -> std::io::Result<HashMap<String, McpServerConfig>> {
-    let value: TomlValue = toml::from_str(contents).map_err(|err| {
-        std::io::Error::new(
-            ErrorKind::InvalidData,
-            format!("failed to parse {} as TOML: {err}", path.display()),
-        )
-    })?;
-    let parsed: BTreeMap<String, McpServerConfig> = value.try_into().map_err(|err| {
-        std::io::Error::new(
-            ErrorKind::InvalidData,
-            format!("invalid MCP configuration in {}: {err}", path.display()),
-        )
-    })?;
-    Ok(parsed.into_iter().collect())
-}
-
-fn parse_agents_mcp_json(
-    contents: &str,
-    path: &Path,
-) -> std::io::Result<HashMap<String, McpServerConfig>> {
-    let value: JsonValue = serde_json::from_str(contents).map_err(|err| {
-        std::io::Error::new(
-            ErrorKind::InvalidData,
-            format!("failed to parse {} as JSON: {err}", path.display()),
-        )
-    })?;
-    serde_json::from_value::<HashMap<String, McpServerConfig>>(value).map_err(|err| {
-        std::io::Error::new(
-            ErrorKind::InvalidData,
-            format!("invalid MCP configuration in {}: {err}", path.display()),
-        )
-    })
 }
 
 /// Returns the path to the folder where Codex logs are stored. Does not verify
@@ -3131,6 +3175,98 @@ model = "gpt-5-codex"
     }
 
     #[test]
+    fn project_agents_home_detected_when_present() -> std::io::Result<()> {
+        let project = TempDir::new().expect("project temp dir");
+        std::fs::create_dir_all(project.path().join(".git"))?;
+        std::fs::create_dir_all(project.path().join(".agents"))?;
+
+        let codex_home = TempDir::new().expect("codex home");
+
+        let overrides = ConfigOverrides {
+            cwd: Some(project.path().to_path_buf()),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            overrides,
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.project_agents_home,
+            Some(project.path().join(".agents"))
+        );
+        assert!(
+            !project.path().join(".agents").join("mcp").exists(),
+            "local agents directory should not be auto-initialized"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn project_agents_home_overrides_global_mcp_entries() -> std::io::Result<()> {
+        let codex_home = TempDir::new().expect("codex home");
+        let global_agents = codex_home.path().join(".agents").join("mcp");
+        std::fs::create_dir_all(&global_agents)?;
+        std::fs::write(
+            global_agents.join("mcp.json"),
+            r#"{
+  "global": { "command": "global-docs" },
+  "docs": { "command": "global-docs" }
+}"#,
+        )?;
+
+        let project = TempDir::new().expect("project temp dir");
+        std::fs::create_dir_all(project.path().join(".git"))?;
+        let local_agents = project.path().join(".agents").join("mcp");
+        std::fs::create_dir_all(&local_agents)?;
+        std::fs::write(
+            local_agents.join("mcp.config"),
+            "[docs]\ncommand = \"local-docs\"\n",
+        )?;
+
+        let overrides = ConfigOverrides {
+            cwd: Some(project.path().to_path_buf()),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            overrides,
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.project_agents_home,
+            Some(project.path().join(".agents"))
+        );
+
+        let docs = config
+            .mcp_servers
+            .get("docs")
+            .expect("docs entry should be present");
+        if let McpServerTransportConfig::Stdio { command, .. } = &docs.transport {
+            assert_eq!(command, "local-docs");
+        } else {
+            panic!("expected stdio transport for docs");
+        }
+
+        let global = config
+            .mcp_servers
+            .get("global")
+            .expect("global entry should be present");
+        if let McpServerTransportConfig::Stdio { command, .. } = &global.transport {
+            assert_eq!(command, "global-docs");
+        } else {
+            panic!("expected stdio transport for global");
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn agents_home_toml_mcp_config_loaded() -> std::io::Result<()> {
         let parent = TempDir::new().expect("temp parent");
         let codex_home = parent.path().join(".codex");
@@ -3370,6 +3506,7 @@ model_verbosity = "high"
                 project_doc_fallback_filenames: Vec::new(),
                 codex_home: fixture.codex_home(),
                 agents_home: expected_agents_home,
+                project_agents_home: None,
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
                 codex_linux_sandbox_exe: None,
@@ -3443,6 +3580,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             codex_home: fixture.codex_home(),
             agents_home: expected_agents_home.clone(),
+            project_agents_home: None,
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
@@ -3531,6 +3669,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             codex_home: fixture.codex_home(),
             agents_home: expected_agents_home,
+            project_agents_home: None,
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
@@ -3605,6 +3744,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             codex_home: fixture.codex_home(),
             agents_home: expected_agents_home,
+            project_agents_home: None,
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
