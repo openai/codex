@@ -143,7 +143,8 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
             // the Windows clipboard), attempt a WSL fallback that calls PowerShell on the
             // Windows side to write the clipboard image to a temporary file, then return
             // the corresponding WSL path.
-            use PasteImageError::{ClipboardUnavailable, NoImage};
+            use PasteImageError::ClipboardUnavailable;
+            use PasteImageError::NoImage;
 
             if is_running_under_wsl() && matches!(&e, ClipboardUnavailable(_) | NoImage(_)) {
                 tracing::debug!("attempting Windows PowerShell clipboard fallback");
