@@ -267,7 +267,7 @@ mod windows_impl {
             .join(" ");
         let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
         let env_block = make_env_block(&env_map);
-        let desktop = to_wide("Winsta0\\\\Default");
+        let desktop = to_wide("Winsta0\\Default");
         si.lpDesktop = desktop.as_ptr() as *mut u16;
         let spawn_res = unsafe {
             CreateProcessAsUserW(
