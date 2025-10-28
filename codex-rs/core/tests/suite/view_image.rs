@@ -374,7 +374,8 @@ async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()>
         "non-image file should not produce an input_image message"
     );
 
-    let placeholder = request.inputs_of_type("message")
+    let placeholder = request
+        .inputs_of_type("message")
         .iter()
         .find_map(|item| {
             let content = item.get("content").and_then(Value::as_array)?;
