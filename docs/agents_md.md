@@ -9,6 +9,16 @@ Codex uses [`AGENTS.md`](https://agents.md/) files to gather helpful guidance be
 - Only the first non-empty file is used. Other filenames, such as `instructions.md`, have no effect unless Codex is specifically instructed to use them.
 - Whatever Codex finds here stays active for the whole session, and Codex combines it with any project-specific instructions it discovers.
 
+## Shared Agents Workspace (`~/.agents`)
+
+Codex also creates a companion `.agents` directory alongside `.codex`. Use this space to keep durable resources that multiple projects or agents should reuse:
+
+- `context/` for structured notes, runbooks, and decision logs that complement your `AGENTS.md` guidance.
+- `tools/` for small scripts or binaries that agents can launch (for example, calculators, code generators, or health-check scripts).
+- `mcp/` for Model Context Protocol server manifests and credential material you want available everywhere.
+
+The CLI makes sure these directories exist on startup. Set `agents_home` in your config or the `AGENTS_HOME` environment variable if you want to relocate them.
+
 ## Project Instructions (per-repository)
 
 When you work inside a project, Codex builds on those global instructions by collecting project docs:

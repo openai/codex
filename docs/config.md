@@ -310,6 +310,19 @@ This is reasonable to use if Codex is running in an environment that provides it
 
 Though using this option may also be necessary if you try to use Codex in environments where its native sandboxing mechanisms are unsupported, such as older Linux kernels or on Windows.
 
+### agents_home
+
+Codex keeps reusable memories, helper scripts, and MCP manifests inside a shared `.agents` directory. By default this folder lives next to `.codex` in your home directory and Codex creates the `context/`, `tools/`, and `mcp/` subdirectories automatically.
+
+Override the location if you want to place those resources somewhere else (for example on a synced drive):
+
+```toml
+# store shared artifacts under ~/.workspace/agents/
+agents_home = "~/.workspace/agents"
+```
+
+Alternatively, set the `AGENTS_HOME` environment variable before launching Codex. Relative paths are resolved against the current working directory, and leading `~` expands to your home directory.
+
 ### tools.\*
 
 Use the optional `[tools]` table to toggle built-in tools that the agent may call. Both keys default to `false` (tools stay disabled) unless you opt in:
