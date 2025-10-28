@@ -3,6 +3,7 @@
 use anyhow::Context;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::load_auth_dot_json;
 use codex_login::ServerOptions;
 use codex_login::run_device_code_login;
@@ -96,11 +97,16 @@ async fn mock_oauth_token_single(server: &MockServer, jwt: String) {
         .await;
 }
 
-fn server_opts(codex_home: &tempfile::TempDir, issuer: String) -> ServerOptions {
+fn server_opts(
+    codex_home: &tempfile::TempDir,
+    issuer: String,
+    cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> ServerOptions {
     let mut opts = ServerOptions::new(
         codex_home.path().to_path_buf(),
         "client-id".to_string(),
         None,
+        cli_auth_credentials_store_mode,
     );
     opts.issuer = issuer;
     opts.open_browser = false;
@@ -127,13 +133,13 @@ async fn device_code_login_integration_succeeds() -> anyhow::Result<()> {
     mock_oauth_token_single(&mock_server, jwt.clone()).await;
 
     let issuer = mock_server.uri();
-    let opts = server_opts(&codex_home, issuer);
+    let opts = server_opts(&codex_home, issuer, AuthCredentialsStoreMode::File);
 
     run_device_code_login(opts)
         .await
         .expect("device code login integration should succeed");
 
-    let auth = load_auth_dot_json(codex_home.path())
+    let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
         .context("auth.json should load after login succeeds")?
         .context("auth.json written")?;
     // assert_eq!(auth.openai_api_key.as_deref(), Some("api-key-321"));
@@ -166,7 +172,7 @@ async fn device_code_login_rejects_workspace_mismatch() -> anyhow::Result<()> {
     mock_oauth_token_single(&mock_server, jwt).await;
 
     let issuer = mock_server.uri();
-    let mut opts = server_opts(&codex_home, issuer);
+    let mut opts = server_opts(&codex_home, issuer, AuthCredentialsStoreMode::File);
     opts.forced_chatgpt_workspace_id = Some("org-required".to_string());
 
     let err = run_device_code_login(opts)
@@ -174,8 +180,8 @@ async fn device_code_login_rejects_workspace_mismatch() -> anyhow::Result<()> {
         .expect_err("device code login should fail when workspace mismatches");
     assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
 
-    let auth =
-        load_auth_dot_json(codex_home.path()).context("auth.json should load after login fails")?;
+    let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
+        .context("auth.json should load after login fails")?;
     assert!(
         auth.is_none(),
         "auth.json should not be created when workspace validation fails"
@@ -194,7 +200,7 @@ async fn device_code_login_integration_handles_usercode_http_failure() -> anyhow
 
     let issuer = mock_server.uri();
 
-    let opts = server_opts(&codex_home, issuer);
+    let opts = server_opts(&codex_home, issuer, AuthCredentialsStoreMode::File);
 
     let err = run_device_code_login(opts)
         .await
@@ -205,8 +211,8 @@ async fn device_code_login_integration_handles_usercode_http_failure() -> anyhow
         "unexpected error: {err:?}"
     );
 
-    let auth =
-        load_auth_dot_json(codex_home.path()).context("auth.json should load after login fails")?;
+    let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
+        .context("auth.json should load after login fails")?;
     assert!(
         auth.is_none(),
         "auth.json should not be created when login fails"
@@ -237,6 +243,7 @@ async fn device_code_login_integration_persists_without_api_key_on_exchange_fail
         codex_home.path().to_path_buf(),
         "client-id".to_string(),
         None,
+        AuthCredentialsStoreMode::File,
     );
     opts.issuer = issuer;
     opts.open_browser = false;
@@ -245,7 +252,7 @@ async fn device_code_login_integration_persists_without_api_key_on_exchange_fail
         .await
         .expect("device login should succeed without API key exchange");
 
-    let auth = load_auth_dot_json(codex_home.path())
+    let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
         .context("auth.json should load after login succeeds")?
         .context("auth.json written")?;
     assert!(auth.openai_api_key.is_none());
@@ -286,6 +293,7 @@ async fn device_code_login_integration_handles_error_payload() -> anyhow::Result
         codex_home.path().to_path_buf(),
         "client-id".to_string(),
         None,
+        AuthCredentialsStoreMode::File,
     );
     opts.issuer = issuer;
     opts.open_browser = false;
@@ -300,8 +308,8 @@ async fn device_code_login_integration_handles_error_payload() -> anyhow::Result
         "Expected an authorization_declined / 400 / 404 error, got {err:?}"
     );
 
-    let auth =
-        load_auth_dot_json(codex_home.path()).context("auth.json should load after login fails")?;
+    let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
+        .context("auth.json should load after login fails")?;
     assert!(
         auth.is_none(),
         "auth.json should not be created when device auth fails"

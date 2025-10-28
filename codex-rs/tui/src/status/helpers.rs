@@ -83,7 +83,8 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
 }
 
 pub(crate) fn compose_account_display(config: &Config) -> Option<StatusAccountDisplay> {
-    let auth = load_auth_dot_json(&config.codex_home).ok()??;
+    let auth =
+        load_auth_dot_json(&config.codex_home, config.cli_auth_credentials_store_mode).ok()??;
 
     if let Some(tokens) = auth.tokens.as_ref() {
         let info = &tokens.id_token;
