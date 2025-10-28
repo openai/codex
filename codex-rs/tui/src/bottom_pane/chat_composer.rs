@@ -2769,23 +2769,19 @@ mod tests {
             false,
         );
 
-        let paste = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 4);
-        let placeholder = format!("[Pasted Content {} chars]", paste.chars().count());
-
-        // Type and flush once to create the placeholder
-        composer.handle_paste(paste);
-        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
-        composer.flush_paste_burst_if_due();
-
         // Define test cases: (cursor_position_from_end, expected_pending_count)
         let test_cases = [
             5, // Delete from middle - should clear tracking
             0, // Delete from end - should clear tracking
         ];
 
+        let paste = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 4);
+        let placeholder = format!("[Pasted Content {} chars]", paste.chars().count());
+
         let states: Vec<_> = test_cases
             .into_iter()
             .map(|pos_from_end| {
+                composer.handle_paste(paste.clone());
                 composer
                     .textarea
                     .set_cursor(placeholder.len() - pos_from_end);
