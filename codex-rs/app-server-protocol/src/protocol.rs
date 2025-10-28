@@ -5,7 +5,7 @@ use crate::JSONRPCNotification;
 use crate::JSONRPCRequest;
 use crate::RequestId;
 use codex_protocol::ConversationId;
-use codex_protocol::account::Account;
+use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
@@ -233,6 +233,22 @@ client_request_definitions! {
     ExecOneOffCommand {
         params: ExecOneOffCommandParams,
         response: ExecOneOffCommandResponse,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+pub enum Account {
+    #[serde(rename = "apiKey", rename_all = "camelCase")]
+    #[ts(rename = "apiKey", rename_all = "camelCase")]
+    ApiKey { api_key: String },
+
+    #[serde(rename = "chatgpt", rename_all = "camelCase")]
+    #[ts(rename = "chatgpt", rename_all = "camelCase")]
+    ChatGpt {
+        email: Option<String>,
+        plan_type: PlanType,
     },
 }
 
@@ -1243,6 +1259,35 @@ mod tests {
             }),
             serde_json::to_value(&request)?,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn account_serializes_fields_in_camel_case() -> Result<()> {
+        let api_key = Account::ApiKey {
+            api_key: "secret".to_string(),
+        };
+        assert_eq!(
+            json!({
+                "type": "apiKey",
+                "apiKey": "secret",
+            }),
+            serde_json::to_value(&api_key)?,
+        );
+
+        let chatgpt = Account::ChatGpt {
+            email: Some("user@example.com".to_string()),
+            plan_type: PlanType::Plus,
+        };
+        assert_eq!(
+            json!({
+                "type": "chatgpt",
+                "email": "user@example.com",
+                "planType": "plus",
+            }),
+            serde_json::to_value(&chatgpt)?,
+        );
+
         Ok(())
     }
 
