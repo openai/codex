@@ -4,6 +4,7 @@ use crate::history_cell::HistoryCell;
 use chrono::Duration as ChronoDuration;
 use chrono::TimeZone;
 use chrono::Utc;
+use codex_core::WireApi;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
@@ -387,6 +388,7 @@ fn status_snapshot_shows_stale_limits_message() {
 fn status_context_window_uses_last_usage() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home);
+    config.model_provider.wire_api = WireApi::Responses;
     config.model_context_window = Some(272_000);
 
     let total_usage = TokenUsage {
@@ -423,5 +425,85 @@ fn status_context_window_uses_last_usage() {
     assert!(
         !context_line.contains("102K"),
         "context line should not use total aggregated tokens, got: {context_line}"
+    );
+}
+
+#[test]
+fn status_context_window_for_chat_provider_shows_window_only() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home);
+    config.model_provider.wire_api = WireApi::Chat;
+    config.model_context_window = Some(272_000);
+    config.cwd = PathBuf::from("/workspace/tests");
+
+    let usage = TokenUsage {
+        input_tokens: 900,
+        cached_input_tokens: 0,
+        output_tokens: 400,
+        reasoning_output_tokens: 0,
+        total_tokens: 1_300,
+    };
+
+    let now = chrono::Local
+        .with_ymd_and_hms(2024, 7, 1, 0, 0, 0)
+        .single()
+        .expect("timestamp");
+
+    let composite = new_status_output(&config, &usage, None, &None, None, now);
+    let rendered = render_lines(&composite.display_lines(80));
+    let context_line = rendered
+        .iter()
+        .find(|line| line.contains("Context window"))
+        .expect("context line");
+
+    assert!(
+        context_line.contains("272K tokens"),
+        "expected context line to show window length only, got: {context_line}"
+    );
+    assert!(
+        !context_line.contains("used /"),
+        "context line should not include context usage breakdown, got: {context_line}"
+    );
+    assert!(
+        rendered.iter().all(|line| !line.contains("Limits")),
+        "rate limits should be hidden for chat providers: {rendered:?}"
+    );
+}
+
+#[test]
+fn status_context_window_for_chat_provider_unknown_window() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home);
+    config.model_provider.wire_api = WireApi::Chat;
+    config.model_context_window = None;
+    config.cwd = PathBuf::from("/workspace/tests");
+
+    let usage = TokenUsage {
+        input_tokens: 900,
+        cached_input_tokens: 0,
+        output_tokens: 400,
+        reasoning_output_tokens: 0,
+        total_tokens: 1_300,
+    };
+
+    let now = chrono::Local
+        .with_ymd_and_hms(2024, 7, 2, 0, 0, 0)
+        .single()
+        .expect("timestamp");
+
+    let composite = new_status_output(&config, &usage, None, &None, None, now);
+    let rendered = render_lines(&composite.display_lines(80));
+    let context_line = rendered
+        .iter()
+        .find(|line| line.contains("Context window"))
+        .expect("context line");
+
+    assert!(
+        context_line.contains("unknown"),
+        "expected context line to show unknown when window is unset, got: {context_line}"
+    );
+    assert!(
+        rendered.iter().all(|line| !line.contains("Limits")),
+        "rate limits should be hidden for chat providers: {rendered:?}"
     );
 }

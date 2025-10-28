@@ -6,6 +6,7 @@ use crate::version::CODEX_CLI_VERSION;
 use chrono::DateTime;
 use chrono::Local;
 use codex_common::create_config_summary_entries;
+use codex_core::WireApi;
 use codex_core::config::Config;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
@@ -34,9 +35,9 @@ use super::rate_limits::render_status_limit_progress_bar;
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
-    percent_remaining: i64,
-    tokens_in_context: i64,
     window: i64,
+    percent_remaining: Option<i64>,
+    tokens_in_context: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +60,7 @@ struct StatusHistoryCell {
     session_id: Option<String>,
     token_usage: StatusTokenUsageData,
     rate_limits: StatusRateLimitData,
+    wire_api: WireApi,
 }
 
 pub(crate) fn new_status_output(
@@ -93,6 +95,7 @@ impl StatusHistoryCell {
     ) -> Self {
         let config_entries = create_config_summary_entries(config);
         let (model_name, model_details) = compose_model_display(config, &config_entries);
+        let wire_api = config.model_provider.wire_api;
         let approval = config_entries
             .iter()
             .find(|(k, _)| *k == "approval")
@@ -106,13 +109,21 @@ impl StatusHistoryCell {
         let agents_summary = compose_agents_summary(config);
         let account = compose_account_display(config);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
-        let context_window = config.model_context_window.and_then(|window| {
-            context_usage.map(|usage| StatusContextWindowData {
-                percent_remaining: usage.percent_of_context_window_remaining(window),
-                tokens_in_context: usage.tokens_in_context_window(),
+        let context_window = match (wire_api, config.model_context_window) {
+            (WireApi::Responses, Some(window)) => {
+                context_usage.map(|usage| StatusContextWindowData {
+                    window,
+                    percent_remaining: Some(usage.percent_of_context_window_remaining(window)),
+                    tokens_in_context: Some(usage.tokens_in_context_window()),
+                })
+            }
+            (WireApi::Chat, Some(window)) => Some(StatusContextWindowData {
                 window,
-            })
-        });
+                percent_remaining: None,
+                tokens_in_context: None,
+            }),
+            _ => None,
+        };
 
         let token_usage = StatusTokenUsageData {
             total: total_usage.blended_total(),
@@ -133,6 +144,7 @@ impl StatusHistoryCell {
             session_id,
             token_usage,
             rate_limits,
+            wire_api,
         }
     }
 
@@ -155,26 +167,42 @@ impl StatusHistoryCell {
     }
 
     fn context_window_spans(&self) -> Option<Vec<Span<'static>>> {
-        let context = self.token_usage.context_window.as_ref()?;
-        let percent = context.percent_remaining;
-        let used_fmt = format_tokens_compact(context.tokens_in_context);
-        let window_fmt = format_tokens_compact(context.window);
+        match self.wire_api {
+            WireApi::Responses => {
+                let context = self.token_usage.context_window.as_ref()?;
+                let percent = context.percent_remaining?;
+                let tokens_in_context = context.tokens_in_context?;
+                let window = context.window;
+                let used_fmt = format_tokens_compact(tokens_in_context);
+                let window_fmt = format_tokens_compact(window);
 
-        Some(vec![
-            Span::from(format!("{percent}% left")),
-            Span::from(" (").dim(),
-            Span::from(used_fmt).dim(),
-            Span::from(" used / ").dim(),
-            Span::from(window_fmt).dim(),
-            Span::from(")").dim(),
-        ])
+                Some(vec![
+                    Span::from(format!("{percent}% left")),
+                    Span::from(" (").dim(),
+                    Span::from(used_fmt).dim(),
+                    Span::from(" used / ").dim(),
+                    Span::from(window_fmt).dim(),
+                    Span::from(")").dim(),
+                ])
+            }
+            WireApi::Chat => match self.token_usage.context_window.as_ref() {
+                Some(context) => {
+                    let window_fmt = format_tokens_compact(context.window);
+                    Some(vec![Span::from(format!("{window_fmt} tokens"))])
+                }
+                None => Some(vec!["unknown".dim()]),
+            },
+        }
     }
-
     fn rate_limit_lines(
         &self,
         available_inner_width: usize,
         formatter: &FieldFormatter,
     ) -> Vec<Line<'static>> {
+        if self.wire_api != WireApi::Responses {
+            return Vec::new();
+        }
+
         match &self.rate_limits {
             StatusRateLimitData::Available(rows_data) => {
                 if rows_data.is_empty() {
@@ -244,6 +272,10 @@ impl StatusHistoryCell {
     }
 
     fn collect_rate_limit_labels(&self, seen: &mut BTreeSet<String>, labels: &mut Vec<String>) {
+        if self.wire_api != WireApi::Responses {
+            return;
+        }
+
         match &self.rate_limits {
             StatusRateLimitData::Available(rows) => {
                 if rows.is_empty() {
@@ -299,6 +331,7 @@ impl HistoryCell for StatusHistoryCell {
                 .map(str::to_string)
                 .collect();
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
+        let context_spans = self.context_window_spans();
 
         if account_value.is_some() {
             push_label(&mut labels, &mut seen, "Account");
@@ -307,7 +340,7 @@ impl HistoryCell for StatusHistoryCell {
             push_label(&mut labels, &mut seen, "Session");
         }
         push_label(&mut labels, &mut seen, "Token usage");
-        if self.token_usage.context_window.is_some() {
+        if context_spans.is_some() {
             push_label(&mut labels, &mut seen, "Context window");
         }
         self.collect_rate_limit_labels(&mut seen, &mut labels);
@@ -344,7 +377,7 @@ impl HistoryCell for StatusHistoryCell {
             lines.push(formatter.line("Token usage", self.token_usage_spans()));
         }
 
-        if let Some(spans) = self.context_window_spans() {
+        if let Some(spans) = context_spans {
             lines.push(formatter.line("Context window", spans));
         }
 
