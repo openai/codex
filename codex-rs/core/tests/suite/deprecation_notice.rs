@@ -37,11 +37,14 @@ async fn emits_deprecation_notice_for_legacy_feature_flag() -> anyhow::Result<()
     let DeprecationNoticeEvent { summary, details } = notice;
     assert_eq!(
         summary,
-        "Config key `experimental_use_exec_command_tool` is deprecated.".to_string(),
+        "`experimental_use_exec_command_tool` is deprecated. Use `streamable_shell` instead."
+            .to_string(),
     );
     assert_eq!(
         details.as_deref(),
-        Some("Use `--enable streamable_shell` instead."),
+        Some(
+            "You can either enable it using the CLI with `--enable streamable_shell` or through the config.toml file with `[features].streamable_shell`"
+        ),
     );
 
     Ok(())

@@ -2291,8 +2291,8 @@ mod tests {
         assert_eq!(
             rendered,
             vec![
-                "⚠ Deprecated: Feature flag `foo`".to_string(),
-                "  • Use flag `bar` instead.".to_string(),
+                "Feature flag `foo`".to_string(),
+                "Use flag `bar` instead.".to_string(),
             ]
         );
     }
