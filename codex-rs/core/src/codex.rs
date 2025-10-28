@@ -2652,13 +2652,21 @@ mod tests {
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
-        let first = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-            .await
-            .expect("timeout waiting for first event")
-            .expect("first event");
-        match first.msg {
-            EventMsg::ExitedReviewMode(ev) => assert!(ev.review_output.is_none()),
-            other => panic!("unexpected first event: {other:?}"),
+        // Drain events until we observe ExitedReviewMode; earlier
+        // RawResponseItem entries (e.g., environment context) may arrive first.
+        loop {
+            let evt = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+                .await
+                .expect("timeout waiting for first event")
+                .expect("first event");
+            match evt.msg {
+                EventMsg::ExitedReviewMode(ev) => {
+                    assert!(ev.review_output.is_none());
+                    break;
+                }
+                // Ignore any non-critical events before exit.
+                _ => continue,
+            }
         }
         loop {
             let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
