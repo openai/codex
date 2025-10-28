@@ -128,7 +128,7 @@ pub unsafe fn create_process_as_user(
         CREATE_UNICODE_ENVIRONMENT,
         env_block.as_ptr() as *mut c_void,
         to_wide(cwd).as_ptr(),
-        &mut si,
+        &si,
         &mut pi,
     );
     if ok == 0 {
