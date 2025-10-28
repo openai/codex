@@ -23,6 +23,7 @@ use crate::logging::log_success;
 use crate::policy::SandboxMode;
 use crate::policy::SandboxPolicy;
 use crate::token::convert_string_sid_to_sid;
+use crate::winutil::format_last_error;
 use crate::winutil::to_wide;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -30,6 +31,7 @@ use std::ffi::c_void;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 use std::ptr;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
@@ -70,6 +72,50 @@ fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
     }
     w.push(0);
     w
+}
+
+// Quote a single Windows command-line argument following the rules used by
+// CommandLineToArgvW/CRT so that spaces, quotes, and backslashes are preserved.
+// Reference behavior matches Rust std::process::Command on Windows.
+fn quote_windows_arg(arg: &str) -> String {
+    // Empty or contains special characters: must quote
+    let needs_quotes = arg.is_empty()
+        || arg
+            .chars()
+            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '"'));
+    if !needs_quotes {
+        return arg.to_string();
+    }
+
+    let mut quoted = String::with_capacity(arg.len() + 2);
+    quoted.push('"');
+    let mut backslashes = 0;
+    for ch in arg.chars() {
+        match ch {
+            '\\' => {
+                backslashes += 1;
+            }
+            '"' => {
+                // Escape all backslashes before a quote
+                quoted.extend(std::iter::repeat('\\').take(backslashes * 2 + 1));
+                quoted.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                if backslashes > 0 {
+                    quoted.extend(std::iter::repeat('\\').take(backslashes));
+                    backslashes = 0;
+                }
+                quoted.push(ch);
+            }
+        }
+    }
+    // Escape trailing backslashes
+    if backslashes > 0 {
+        quoted.extend(std::iter::repeat('\\').take(backslashes * 2));
+    }
+    quoted.push('"');
+    quoted
 }
 
 unsafe fn setup_stdio_pipes() -> io::Result<((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE))>
@@ -162,9 +208,49 @@ pub fn run_windows_sandbox_capture(
         }
     };
 
-    // Configure write ACLs using shared computation
+    // Configure write/exec ACLs using shared computation
     let persist = matches!(policy.0, SandboxMode::WorkspaceWrite);
-    let allow_paths = compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
+    let mut allow_paths = compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
+
+    // Create-time: locate apply_patch(.bat/.cmd) shim inserted by arg0 into PATH (Temp dir)
+    // and include it (and its parent) in allow paths so the capability SID can execute it.
+    fn find_apply_patch_in_path(env_map: &HashMap<String, String>) -> Option<PathBuf> {
+        let path_val = env_map.get("PATH").cloned().unwrap_or_default();
+        if path_val.is_empty() {
+            return None;
+        }
+        let entries: Vec<String> = path_val.split(';').map(|s| s.trim().to_string()).collect();
+        let candidates = [
+            "apply_patch.bat",
+            "applypatch.bat",
+            "apply_patch.cmd",
+            "applypatch.cmd",
+        ];
+        for dir in entries {
+            if dir.is_empty() {
+                continue;
+            }
+            let base = PathBuf::from(&dir);
+            for name in &candidates {
+                let cand = base.join(name);
+                if cand.exists() {
+                    return Some(cand);
+                }
+            }
+        }
+        None
+    }
+
+    if let Some(shim) = find_apply_patch_in_path(&env_map) {
+        /*logging::debug_log(&format!(
+            "apply_patch shim detected in PATH; granting allow ACEs: {}",
+            shim.display()
+        ));*/
+        allow_paths.push(shim.clone());
+        if let Some(parent) = shim.parent() {
+            allow_paths.push(parent.to_path_buf());
+        }
+    }
     unsafe {
         for p in &allow_paths {
             let _ = add_allow_ace(p, psid_to_use);
@@ -185,10 +271,20 @@ pub fn run_windows_sandbox_capture(
     si.hStdInput = in_r;
     si.hStdOutput = out_w;
     si.hStdError = err_w;
+    // Ensure a valid interactive desktop when launching with a restricted token
+    let desktop = to_wide("Winsta0\\Default");
+    si.lpDesktop = desktop.as_ptr() as *mut u16;
 
-    let cmdline_str = command.join(" ");
+    // Build a properly quoted Windows command line so the patch argument is not split.
+    let cmdline_str = command
+        .iter()
+        .map(|s| quote_windows_arg(s))
+        .collect::<Vec<_>>()
+        .join(" ");
     let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
     let env_block = make_env_block(&env_map);
+
+    // Pre-spawn Temp grant removed; create-time PATH scan handles apply_patch shim.
     let ok = unsafe {
         CreateProcessAsUserW(
             h_token,
@@ -206,10 +302,18 @@ pub fn run_windows_sandbox_capture(
     };
     if ok == 0 {
         // Spawn failed: log and clean up
-        log_failure(
-            &command,
-            &format!("CreateProcessAsUserW failed: {}", unsafe { GetLastError() }),
+        let err = unsafe { GetLastError() } as i32;
+        log_failure(&command, &format!("CreateProcessAsUserW failed: {}", err));
+        let dbg = format!(
+            "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={}",
+            err,
+            format_last_error(err),
+            current_dir.display(),
+            cmdline_str,
+            env_block.len(),
+            si.dwFlags,
         );
+        logging::debug_log(&dbg);
         unsafe {
             CloseHandle(in_r);
             CloseHandle(out_r);
@@ -218,9 +322,7 @@ pub fn run_windows_sandbox_capture(
             CloseHandle(err_w);
             CloseHandle(h_token);
         }
-        return Err(anyhow::anyhow!("CreateProcessAsUserW failed: {}", unsafe {
-            GetLastError()
-        }));
+        return Err(anyhow::anyhow!("CreateProcessAsUserW failed: {}", err));
     }
     // Parent: close child-ends we don't need
     unsafe {

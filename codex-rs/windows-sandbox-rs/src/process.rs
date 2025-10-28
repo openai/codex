@@ -1,3 +1,5 @@
+use crate::logging;
+use crate::winutil::format_last_error;
 use crate::winutil::to_wide;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -130,7 +132,18 @@ pub unsafe fn create_process_as_user(
         &mut pi,
     );
     if ok == 0 {
-        return Err(anyhow!("CreateProcessAsUserW failed: {}", GetLastError()));
+        let err = GetLastError() as i32;
+        let msg = format!(
+            "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={}",
+            err,
+            format_last_error(err),
+            cwd.display(),
+            cmdline_str,
+            env_block.len(),
+            si.dwFlags,
+        );
+        logging::debug_log(&msg);
+        return Err(anyhow!("CreateProcessAsUserW failed: {}", err));
     }
     Ok((pi, si))
 }

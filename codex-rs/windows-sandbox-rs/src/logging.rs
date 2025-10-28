@@ -37,3 +37,11 @@ pub fn log_failure(command: &[String], detail: &str) {
     let p = preview(command);
     append_line(&format!("FAILURE: {} ({})", p, detail));
 }
+
+// Debug logging helper. Emits only when SBX_DEBUG=1 to avoid noisy logs.
+pub fn debug_log(msg: &str) {
+    if std::env::var("SBX_DEBUG").ok().as_deref() == Some("1") {
+        append_line(&format!("DEBUG: {}", msg));
+        eprintln!("{}", msg);
+    }
+}
