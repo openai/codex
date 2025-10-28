@@ -248,17 +248,18 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             // 1) If it's a read error, first try the WSL Windows-path mapping.
                             // 2) If that fails (or not a read error), try reading the original path as-is.
                             // 3) If everything fails, return a placeholder item.
-                            let try_build_data_url = |bytes: Vec<u8>, mime_path: &std::path::Path| {
-                                let mime = mime_guess::from_path(mime_path)
-                                    .first()
-                                    .map(|m| m.essence_str().to_owned())
-                                    .unwrap_or_else(|| "image".to_string());
-                                let encoded =
-                                    base64::engine::general_purpose::STANDARD.encode(bytes);
-                                ContentItem::InputImage {
-                                    image_url: format!("data:{mime};base64,{encoded}"),
-                                }
-                            };
+                            let try_build_data_url =
+                                |bytes: Vec<u8>, mime_path: &std::path::Path| {
+                                    let mime = mime_guess::from_path(mime_path)
+                                        .first()
+                                        .map(|m| m.essence_str().to_owned())
+                                        .unwrap_or_else(|| "image".to_string());
+                                    let encoded =
+                                        base64::engine::general_purpose::STANDARD.encode(bytes);
+                                    ContentItem::InputImage {
+                                        image_url: format!("data:{mime};base64,{encoded}"),
+                                    }
+                                };
 
                             // Attempt WSL drive mapping only when relevant.
                             if matches!(&err, ImageProcessingError::Read { .. })
@@ -268,7 +269,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
 
                                 if let Some(mapped) =
                                     platform::try_map_windows_drive_to_wsl_path(&win_path_str)
-                                        && let Ok(bytes2) = std::fs::read(&mapped)
+                                    && let Ok(bytes2) = std::fs::read(&mapped)
                                 {
                                     return try_build_data_url(
                                         bytes2,
