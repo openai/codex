@@ -1,3 +1,4 @@
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
@@ -136,7 +137,7 @@ impl ConversationHistory {
                                 call_id: call_id.clone(),
                                 output: FunctionCallOutputPayload {
                                     content: "aborted".to_string(),
-                                    success: None,
+                                    ..Default::default()
                                 },
                             },
                         ));
@@ -183,7 +184,7 @@ impl ConversationHistory {
                                     call_id: call_id.clone(),
                                     output: FunctionCallOutputPayload {
                                         content: "aborted".to_string(),
-                                        success: None,
+                                        ..Default::default()
                                     },
                                 },
                             ));
@@ -352,10 +353,28 @@ impl ConversationHistory {
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
                 let truncated = format_output_for_model_body(output.content.as_str());
+                let truncated_items = output.content_items.as_ref().map(|items| {
+                    items
+                        .iter()
+                        .map(|it| match it {
+                            FunctionCallOutputContentItem::InputText { text } => {
+                                FunctionCallOutputContentItem::InputText {
+                                    text: format_output_for_model_body(text),
+                                }
+                            }
+                            FunctionCallOutputContentItem::InputImage { image_url } => {
+                                FunctionCallOutputContentItem::InputImage {
+                                    image_url: image_url.clone(),
+                                }
+                            }
+                        })
+                        .collect()
+                });
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
                         content: truncated,
+                        content_items: truncated_items,
                         success: output.success,
                     },
                 }
@@ -565,7 +584,7 @@ mod tests {
                 call_id: "call-1".to_string(),
                 output: FunctionCallOutputPayload {
                     content: "ok".to_string(),
-                    success: None,
+                    ..Default::default()
                 },
             },
         ];
@@ -581,7 +600,7 @@ mod tests {
                 call_id: "call-2".to_string(),
                 output: FunctionCallOutputPayload {
                     content: "ok".to_string(),
-                    success: None,
+                    ..Default::default()
                 },
             },
             ResponseItem::FunctionCall {
@@ -615,7 +634,7 @@ mod tests {
                 call_id: "call-3".to_string(),
                 output: FunctionCallOutputPayload {
                     content: "ok".to_string(),
-                    success: None,
+                    ..Default::default()
                 },
             },
         ];
@@ -654,6 +673,7 @@ mod tests {
             output: FunctionCallOutputPayload {
                 content: long_output.clone(),
                 success: Some(true),
+                ..Default::default()
             },
         };
 
@@ -848,7 +868,7 @@ mod tests {
                     call_id: "call-x".to_string(),
                     output: FunctionCallOutputPayload {
                         content: "aborted".to_string(),
-                        success: None,
+                        ..Default::default()
                     },
                 },
             ]
@@ -925,7 +945,7 @@ mod tests {
                     call_id: "shell-1".to_string(),
                     output: FunctionCallOutputPayload {
                         content: "aborted".to_string(),
-                        success: None,
+                        ..Default::default()
                     },
                 },
             ]
@@ -939,7 +959,7 @@ mod tests {
             call_id: "orphan-1".to_string(),
             output: FunctionCallOutputPayload {
                 content: "ok".to_string(),
-                success: None,
+                ..Default::default()
             },
         }];
         let mut h = create_history_with_items(items);
@@ -979,7 +999,7 @@ mod tests {
                 call_id: "c2".to_string(),
                 output: FunctionCallOutputPayload {
                     content: "ok".to_string(),
-                    success: None,
+                    ..Default::default()
                 },
             },
             // Will get an inserted custom tool output
@@ -1021,7 +1041,7 @@ mod tests {
                     call_id: "c1".to_string(),
                     output: FunctionCallOutputPayload {
                         content: "aborted".to_string(),
-                        success: None,
+                        ..Default::default()
                     },
                 },
                 ResponseItem::CustomToolCall {
@@ -1051,7 +1071,7 @@ mod tests {
                     call_id: "s1".to_string(),
                     output: FunctionCallOutputPayload {
                         content: "aborted".to_string(),
-                        success: None,
+                        ..Default::default()
                     },
                 },
             ]
@@ -1116,7 +1136,7 @@ mod tests {
             call_id: "orphan-1".to_string(),
             output: FunctionCallOutputPayload {
                 content: "ok".to_string(),
-                success: None,
+                ..Default::default()
             },
         }];
         let mut h = create_history_with_items(items);
@@ -1150,7 +1170,7 @@ mod tests {
                 call_id: "c2".to_string(),
                 output: FunctionCallOutputPayload {
                     content: "ok".to_string(),
-                    success: None,
+                    ..Default::default()
                 },
             },
             ResponseItem::CustomToolCall {

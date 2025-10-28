@@ -2047,7 +2047,7 @@ async fn try_run_turn(
                             call_id: String::new(),
                             output: FunctionCallOutputPayload {
                                 content: msg.to_string(),
-                                success: None,
+                                ..Default::default()
                             },
                         };
                         add_completed(ProcessedResponseItem {
@@ -2061,7 +2061,7 @@ async fn try_run_turn(
                             call_id: String::new(),
                             output: FunctionCallOutputPayload {
                                 content: message,
-                                success: None,
+                                ..Default::default()
                             },
                         };
                         add_completed(ProcessedResponseItem {
@@ -2199,41 +2199,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
         }
     })
 }
-pub(crate) fn convert_call_tool_result_to_function_call_output_payload(
-    call_tool_result: &CallToolResult,
-) -> FunctionCallOutputPayload {
-    let CallToolResult {
-        content,
-        is_error,
-        structured_content,
-    } = call_tool_result;
-
-    // In terms of what to send back to the model, we prefer structured_content,
-    // if available, and fallback to content, otherwise.
-    let mut is_success = is_error != &Some(true);
-    let content = if let Some(structured_content) = structured_content
-        && structured_content != &serde_json::Value::Null
-        && let Ok(serialized_structured_content) = serde_json::to_string(&structured_content)
-    {
-        serialized_structured_content
-    } else {
-        match serde_json::to_string(&content) {
-            Ok(serialized_content) => serialized_content,
-            Err(err) => {
-                // If we could not serialize either content or structured_content to
-                // JSON, flag this as an error.
-                is_success = false;
-                err.to_string()
-            }
-        }
-    };
-
-    FunctionCallOutputPayload {
-        content,
-        success: Some(is_success),
-    }
-}
-
 /// Emits an ExitedReviewMode Event with optional ReviewOutput,
 /// and records a developer message with the review output.
 pub(crate) async fn exit_review_mode(
@@ -2439,7 +2404,7 @@ mod tests {
             })),
         };
 
-        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&json!({
                 "ok": true,
@@ -2447,6 +2412,7 @@ mod tests {
             }))
             .unwrap(),
             success: Some(true),
+            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -2479,11 +2445,12 @@ mod tests {
             structured_content: Some(serde_json::Value::Null),
         };
 
-        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&vec![text_block("hello"), text_block("world")])
                 .unwrap(),
             success: Some(true),
+            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -2497,10 +2464,11 @@ mod tests {
             structured_content: Some(json!({ "message": "bad" })),
         };
 
-        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&json!({ "message": "bad" })).unwrap(),
             success: Some(false),
+            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -2514,10 +2482,11 @@ mod tests {
             structured_content: None,
         };
 
-        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&vec![text_block("alpha")]).unwrap(),
             success: Some(true),
+            ..Default::default()
         };
 
         assert_eq!(expected, got);
