@@ -1769,7 +1769,7 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn config_honors_explicit_file_auth_store_mode() -> std::io::Result<()> {
+    fn config_honors_explicit_keyring_auth_store_mode() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml {
             cli_auth_credentials_store: Some(AuthCredentialsStoreMode::Keyring),
