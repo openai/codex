@@ -1653,9 +1653,6 @@ async fn spawn_review_thread(
 /// - If the model sends only an assistant message, we record it in the
 ///   conversation history and consider the task complete.
 ///
-/// Review mode: when `turn_context.is_review_mode` is true, the turn runs in an
-/// isolated in-memory thread without the parent session's prior history or
-/// user_instructions. Emits ExitedReviewMode upon final review message.
 pub(crate) async fn run_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -1695,15 +1692,6 @@ pub(crate) async fn run_task(
             .collect::<Vec<ResponseItem>>();
 
         // Construct the input that we will send to the model.
-        //
-        // - For review threads, use the isolated in-memory history so the
-        //   model sees a fresh conversation (no parent history/user_instructions).
-        //
-        // - For normal turns, use the session's full history. When using the
-        //   chat completions API (or ZDR clients), the model needs the full
-        //   conversation history on each turn. The rollout file, however, should
-        //   only record the new items that originated in this turn so that it
-        //   represents an append-only log without duplicates.
         let turn_input: Vec<ResponseItem> = {
             sess.record_conversation_items(&turn_context, &pending_input)
                 .await;
@@ -2094,8 +2082,6 @@ async fn try_run_turn(
                 return Ok(result);
             }
             ResponseEvent::OutputTextDelta(delta) => {
-                // In review child threads, suppress assistant text deltas; the
-                // UI will show a selection popup from the final ReviewOutput.
                 let event = EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta });
                 sess.send_event(&turn_context, event).await;
             }
