@@ -1912,10 +1912,16 @@ trust_level = "trusted"
             codex_home.path().to_path_buf(),
         )?;
 
-        assert!(matches!(
-            config.sandbox_policy,
-            SandboxPolicy::WorkspaceWrite { .. }
-        ));
+        if cfg!(target_os = "windows") {
+            assert!(matches!(config.sandbox_policy, SandboxPolicy::ReadOnly));
+            assert!(config.forced_auto_mode_downgraded_on_windows);
+        } else {
+            assert!(matches!(
+                config.sandbox_policy,
+                SandboxPolicy::WorkspaceWrite { .. }
+            ));
+            assert!(!config.forced_auto_mode_downgraded_on_windows);
+        }
 
         Ok(())
     }
