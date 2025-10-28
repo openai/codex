@@ -251,8 +251,7 @@ mod windows_impl {
         }
 
         let (stdin_pair, stdout_pair, stderr_pair) = unsafe { setup_stdio_pipes()? };
-        let ((in_r, _in_w), (out_r, out_w), (err_r, err_w)) =
-            (stdin_pair, stdout_pair, stderr_pair);
+        let ((in_r, in_w), (out_r, out_w), (err_r, err_w)) = (stdin_pair, stdout_pair, stderr_pair);
         let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
         si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
         si.dwFlags |= STARTF_USESTDHANDLES;
@@ -299,6 +298,7 @@ mod windows_impl {
             debug_log(&dbg);
             unsafe {
                 CloseHandle(in_r);
+                CloseHandle(in_w);
                 CloseHandle(out_r);
                 CloseHandle(out_w);
                 CloseHandle(err_r);
@@ -310,6 +310,8 @@ mod windows_impl {
 
         unsafe {
             CloseHandle(in_r);
+            // Close the parent's stdin write end so the child sees EOF immediately.
+            CloseHandle(in_w);
             CloseHandle(out_w);
             CloseHandle(err_w);
         }

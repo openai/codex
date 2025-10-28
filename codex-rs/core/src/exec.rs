@@ -602,8 +602,9 @@ fn synthetic_exit_status(code: i32) -> ExitStatus {
 #[cfg(windows)]
 fn synthetic_exit_status(code: i32) -> ExitStatus {
     use std::os::windows::process::ExitStatusExt;
-    #[expect(clippy::unwrap_used)]
-    std::process::ExitStatus::from_raw(code.try_into().unwrap())
+    // On Windows the raw status is a u32. Use a direct cast to avoid
+    // panicking on negative i32 values produced by prior narrowing casts.
+    std::process::ExitStatus::from_raw(code as u32)
 }
 
 #[cfg(test)]
