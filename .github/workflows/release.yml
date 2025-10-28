@@ -18,24 +18,16 @@ on:
       - 'codex-cli/package.json'
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
   contents: write
-  actions: read
   packages: write
   id-token: write
-  deployments: write
   issues: write
   pull-requests: write
-  discussions: write
   statuses: write
-  attestations: write
-  checks: read
-  security-events: write
-  pages: read
-  repository-projects: read
 
 jobs:
   preflight-tests:
@@ -54,13 +46,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TOOLCHAIN=$(python3 - <<'PY'
-import tomllib
-from pathlib import Path
-data = tomllib.loads(Path('code-rs/rust-toolchain.toml').read_text())
-print(data['toolchain']['channel'])
-PY
-)
+          TOOLCHAIN=$(python3 -c "import pathlib, tomllib; print(tomllib.loads(pathlib.Path('code-rs/rust-toolchain.toml').read_text())['toolchain']['channel'])")
           echo "channel=$TOOLCHAIN" >> "$GITHUB_OUTPUT"
           echo "RUST_TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
 
@@ -68,7 +54,6 @@ PY
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ steps.rust_toolchain.outputs.channel }}
-          profile: minimal
 
       - name: Setup Rust Cache
         uses: Swatinem/rust-cache@v2
@@ -214,13 +199,7 @@ PY
         shell: bash
         run: |
           set -euo pipefail
-          TOOLCHAIN=$(python3 - <<'PY'
-import tomllib
-from pathlib import Path
-data = tomllib.loads(Path('code-rs/rust-toolchain.toml').read_text())
-print(data['toolchain']['channel'])
-PY
-)
+          TOOLCHAIN=$(python3 -c "import pathlib, tomllib; print(tomllib.loads(pathlib.Path('code-rs/rust-toolchain.toml').read_text())['toolchain']['channel'])")
           echo "channel=$TOOLCHAIN" >> "$GITHUB_OUTPUT"
           echo "RUST_TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
 
@@ -228,7 +207,6 @@ PY
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ steps.rust_toolchain.outputs.channel }}
-          profile: minimal
           targets: ${{ matrix.target }}
 
       # Keep target/ across runs so Cargo can no-op when code hasn't changed
