@@ -46,6 +46,7 @@ use codex_rmcp_client::OAuthCredentialsStoreMode;
 use dirs::home_dir;
 use dunce::canonicalize;
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -1395,6 +1396,13 @@ impl Config {
             .or(cfg.review_model)
             .unwrap_or_else(default_review_model);
 
+        let mut mcp_servers = load_agents_mcp_servers(&agents_home)?;
+        if !cfg.mcp_servers.is_empty() {
+            for (key, server) in cfg.mcp_servers.iter() {
+                mcp_servers.insert(key.clone(), server.clone());
+            }
+        }
+
         let config = Self {
             model,
             review_model,
@@ -1416,7 +1424,7 @@ impl Config {
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
-            mcp_servers: cfg.mcp_servers,
+            mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: cfg.mcp_oauth_credentials_store.unwrap_or_default(),
@@ -1652,6 +1660,113 @@ fn ensure_agents_home_layout(base: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+fn load_agents_mcp_servers(
+    agents_home: &Path,
+) -> std::io::Result<HashMap<String, McpServerConfig>> {
+    let config_dir = agents_home.join("mcp");
+    if !config_dir.exists() {
+        return Ok(HashMap::new());
+    }
+
+    let candidate = ["mcp.config", "mcp.toml", "mcp.json"]
+        .into_iter()
+        .map(|name| config_dir.join(name))
+        .find(|path| path.is_file());
+
+    let Some(path) = candidate else {
+        return Ok(HashMap::new());
+    };
+
+    let contents = fs::read_to_string(&path)?;
+    if contents.trim().is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase());
+
+    if matches!(extension.as_deref(), Some("json")) {
+        parse_agents_mcp_json(&contents, &path)
+    } else if matches!(extension.as_deref(), Some("toml")) {
+        parse_agents_mcp_toml(&contents, &path)
+    } else {
+        match parse_agents_mcp_toml(&contents, &path) {
+            Ok(value) => Ok(value),
+            Err(toml_err) => match parse_agents_mcp_json(&contents, &path) {
+                Ok(value) => Ok(value),
+                Err(json_err) => Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "failed to parse {} as TOML ({toml_err}) or JSON ({json_err})",
+                        path.display()
+                    ),
+                )),
+            },
+        }
+    }
+}
+
+fn parse_agents_mcp_toml(
+    contents: &str,
+    path: &Path,
+) -> std::io::Result<HashMap<String, McpServerConfig>> {
+    let value: TomlValue = toml::from_str(contents).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("failed to parse {} as TOML: {err}", path.display()),
+        )
+    })?;
+    ensure_no_inline_bearer_tokens(&value)?;
+    let parsed: BTreeMap<String, McpServerConfig> = value.try_into().map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("invalid MCP configuration in {}: {err}", path.display()),
+        )
+    })?;
+    Ok(parsed.into_iter().collect())
+}
+
+fn parse_agents_mcp_json(
+    contents: &str,
+    path: &Path,
+) -> std::io::Result<HashMap<String, McpServerConfig>> {
+    let value: JsonValue = serde_json::from_str(contents).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("failed to parse {} as JSON: {err}", path.display()),
+        )
+    })?;
+    ensure_no_inline_bearer_tokens_json(&value, path)?;
+    serde_json::from_value::<HashMap<String, McpServerConfig>>(value).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("invalid MCP configuration in {}: {err}", path.display()),
+        )
+    })
+}
+
+fn ensure_no_inline_bearer_tokens_json(value: &JsonValue, path: &Path) -> std::io::Result<()> {
+    let Some(table) = value.as_object() else {
+        return Ok(());
+    };
+
+    for (server_name, server_value) in table {
+        if let Some(obj) = server_value.as_object()
+            && obj.contains_key("bearer_token")
+        {
+            let message = format!(
+                "{} defines `bearer_token` for MCP server `{server_name}`; use `bearer_token_env_var` instead.",
+                path.display()
+            );
+            return Err(std::io::Error::new(ErrorKind::InvalidData, message));
+        }
+    }
+
+    Ok(())
+}
+
 /// Returns the path to the folder where Codex logs are stored. Does not verify
 /// that the directory exists.
 pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
@@ -1663,6 +1778,8 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use crate::config_types::HistoryPersistence;
+    use crate::config_types::McpServerConfig;
+    use crate::config_types::McpServerTransportConfig;
     use crate::config_types::Notifications;
     use crate::features::Feature;
 
@@ -3070,6 +3187,99 @@ model = "gpt-5-codex"
         assert_eq!(expected_agents, config.agents_home);
         for child in AGENTS_HOME_DEFAULT_SUBDIRS {
             assert!(config.agents_home.join(child).is_dir());
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn agents_home_toml_mcp_config_loaded() -> std::io::Result<()> {
+        let parent = TempDir::new().expect("temp parent");
+        let codex_home = parent.path().join(".codex");
+        fs::create_dir_all(&codex_home)?;
+        let mcp_dir = parent.path().join(".agents").join("mcp");
+        fs::create_dir_all(&mcp_dir)?;
+        fs::write(
+            mcp_dir.join("mcp.config"),
+            r#"[docs]
+command = "docs-server"
+"#,
+        )?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home,
+        )?;
+
+        let expected = McpServerConfig {
+            transport: McpServerTransportConfig::Stdio {
+                command: "docs-server".to_string(),
+                args: Vec::new(),
+                env: None,
+                env_vars: Vec::new(),
+                cwd: None,
+            },
+            enabled: true,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            enabled_tools: None,
+            disabled_tools: None,
+        };
+        assert_eq!(
+            config.mcp_servers.get("docs"),
+            Some(&expected),
+            "expected docs server from agents_home"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn agents_home_json_mcp_config_respects_config_overrides() -> std::io::Result<()> {
+        let parent = TempDir::new().expect("temp parent");
+        let codex_home = parent.path().join(".codex");
+        fs::create_dir_all(&codex_home)?;
+        let mcp_dir = parent.path().join(".agents").join("mcp");
+        fs::create_dir_all(&mcp_dir)?;
+        fs::write(
+            mcp_dir.join("mcp.json"),
+            r#"{ "docs": { "command": "json-docs" } }"#,
+        )?;
+
+        let mut toml_cfg = ConfigToml::default();
+        toml_cfg.mcp_servers.insert(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "toml-docs".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+        );
+
+        let config = Config::load_from_base_config_with_overrides(
+            toml_cfg,
+            ConfigOverrides::default(),
+            codex_home,
+        )?;
+
+        let server = config
+            .mcp_servers
+            .get("docs")
+            .expect("docs server should exist");
+        if let McpServerTransportConfig::Stdio { command, .. } = &server.transport {
+            assert_eq!(command, "toml-docs");
+        } else {
+            panic!("expected stdio transport for docs");
         }
 
         Ok(())
