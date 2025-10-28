@@ -64,7 +64,9 @@ impl ConversationHistory {
 
     pub(crate) fn get_history(&mut self) -> Vec<ResponseItem> {
         self.normalize_history();
-        self.contents()
+        let mut history = self.contents();
+        Self::remove_reasoning_before_last_user(&mut history);
+        history
     }
 
     pub(crate) fn remove_first_item(&mut self) {
@@ -109,6 +111,21 @@ impl ConversationHistory {
     /// Returns a clone of the contents in the transcript.
     fn contents(&self) -> Vec<ResponseItem> {
         self.items.clone()
+    }
+
+    fn remove_reasoning_before_last_user(items: &mut Vec<ResponseItem>) {
+        let Some(last_user_index) = items
+            .iter()
+            .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
+        else {
+            return;
+        };
+        let mut index = 0usize;
+        items.retain(|item| {
+            let keep = index >= last_user_index || !matches!(item, ResponseItem::Reasoning { .. });
+            index += 1;
+            keep
+        });
     }
 
     fn ensure_call_outputs_present(&mut self) {
@@ -515,6 +532,15 @@ mod tests {
         }
     }
 
+    fn reasoning(id: &str) -> ResponseItem {
+        ResponseItem::Reasoning {
+            id: id.to_string(),
+            summary: Vec::new(),
+            content: None,
+            encrypted_content: None,
+        }
+    }
+
     fn create_history_with_items(items: Vec<ResponseItem>) -> ConversationHistory {
         let mut h = ConversationHistory::new();
         h.record_items(items.iter());
@@ -569,6 +595,40 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn get_history_drops_reasoning_before_last_user_message() {
+        let mut history = ConversationHistory::new();
+        let items = vec![
+            user_msg("initial"),
+            reasoning("first"),
+            assistant_msg("ack"),
+            user_msg("latest"),
+            reasoning("second"),
+            assistant_msg("ack"),
+            reasoning("third"),
+        ];
+        history.record_items(items.iter());
+
+        let filtered = history.get_history();
+        assert_eq!(
+            filtered,
+            vec![
+                user_msg("initial"),
+                assistant_msg("ack"),
+                user_msg("latest"),
+                reasoning("second"),
+                assistant_msg("ack"),
+                reasoning("third"),
+            ]
+        );
+        let reasoning_count = history
+            .contents()
+            .iter()
+            .filter(|item| matches!(item, ResponseItem::Reasoning { .. }))
+            .count();
+        assert_eq!(reasoning_count, 2);
     }
 
     #[test]
