@@ -323,6 +323,29 @@ agents_home = "~/.workspace/agents"
 
 Alternatively, set the `AGENTS_HOME` environment variable before launching Codex. Relative paths are resolved against the current working directory, and leading `~` expands to your home directory.
 
+#### MCP configuration file
+
+Inside `agents_home`, Codex checks `mcp/mcp.config`, `mcp/mcp.toml`, or `mcp/mcp.json`. If present, the file is parsed (TOML or JSON) and merged with the `mcp_servers` section from `config.toml`. Entries defined in `config.toml` take precedence when the same server id appears in both places.
+
+Example `mcp.config`:
+
+```toml
+[docs]
+command = "docs-server"
+```
+
+Example `mcp.json`:
+
+```json
+{
+  "docs": {
+    "command": "docs-server"
+  }
+}
+```
+
+This lets you keep shared MCP server definitions alongside other reusable agent assets without editing `config.toml` on every machine.
+
 ### tools.\*
 
 Use the optional `[tools]` table to toggle built-in tools that the agent may call. Both keys default to `false` (tools stay disabled) unless you opt in:

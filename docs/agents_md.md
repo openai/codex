@@ -15,7 +15,7 @@ Codex also creates a companion `.agents` directory alongside `.codex`. Use this 
 
 - `context/` for structured notes, runbooks, and decision logs that complement your `AGENTS.md` guidance.
 - `tools/` for small scripts or binaries that agents can launch (for example, calculators, code generators, or health-check scripts).
-- `mcp/` for Model Context Protocol server manifests and credential material you want available everywhere.
+- `mcp/` for Model Context Protocol server manifests and credential material you want available everywhere. Place a `mcp.config` (TOML or JSON) file here to declare shared MCP servers.
 
 The CLI makes sure these directories exist on startup. Set `agents_home` in your config or the `AGENTS_HOME` environment variable if you want to relocate them.
 
