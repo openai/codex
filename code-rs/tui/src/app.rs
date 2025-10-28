@@ -1222,6 +1222,24 @@ impl App<'_> {
                 }
                 AppEvent::KeyEvent(mut key_event) => {
                     if self.timing_enabled { self.timing.on_key(); }
+                    #[cfg(windows)]
+                    {
+                        use crossterm::event::KeyCode;
+                        use crossterm::event::KeyEventKind;
+                        if matches!(key_event.kind, KeyEventKind::Repeat) {
+                            match key_event.code {
+                                KeyCode::Left
+                                | KeyCode::Right
+                                | KeyCode::Up
+                                | KeyCode::Down
+                                | KeyCode::Home
+                                | KeyCode::End
+                                | KeyCode::Backspace
+                                | KeyCode::Delete => {}
+                                _ => continue,
+                            }
+                        }
+                    }
                     // On terminals without keyboard enhancement flags (notably some Windows
                     // Git Bash/mintty setups), crossterm may emit duplicate key-up events or
                     // only report releases. Track which keys were seen as pressed so matching

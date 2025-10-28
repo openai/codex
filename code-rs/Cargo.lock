@@ -1240,6 +1240,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "tracing-subscriber",
+ "unicode-segmentation",
  "unicode-width 0.1.14",
 ]
 

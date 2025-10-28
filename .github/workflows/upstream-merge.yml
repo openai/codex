@@ -254,7 +254,7 @@ jobs:
         if: steps.check_upstream.outputs.skip != 'true'
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.89.0
+          toolchain: 1.90.0
 
       - name: Add local bin to PATH
         if: steps.check_upstream.outputs.skip != 'true'

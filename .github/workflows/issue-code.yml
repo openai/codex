@@ -148,10 +148,10 @@ jobs:
           install -m 0755 "$HOME/.local/tools/jq-1.7.1/jq" "$HOME/.local/bin/jq"
           jq --version
 
-      - name: Setup Rust toolchain (1.89)
+      - name: Setup Rust toolchain (1.90)
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.89.0
+          toolchain: 1.90.0
 
       - name: Cache Rust build (cargo + target)
         uses: Swatinem/rust-cache@v2
