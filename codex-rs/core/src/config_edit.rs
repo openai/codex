@@ -509,6 +509,7 @@ impl ConfigEditsBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config_types::McpServerTransportConfig;
     use codex_protocol::config_types::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
