@@ -343,9 +343,20 @@ pub struct ResumeConversationResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct GetConversationSummaryParams {
-    pub rollout_path: PathBuf,
+#[serde(untagged)]
+pub enum GetConversationSummaryParams {
+    /// Provide the absolute or CODEX_HOME‑relative rollout path directly.
+    RolloutPath {
+        #[serde(rename = "rolloutPath")]
+        rollout_path: PathBuf,
+    },
+    /// Provide a conversation id; the server will locate the rollout using the
+    /// same logic as `resumeConversation`. There will be extra latency compared to using the rollout path,
+    /// as the server needs to locate the rollout path first.
+    ConversationId {
+        #[serde(rename = "conversationId")]
+        conversation_id: ConversationId,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]

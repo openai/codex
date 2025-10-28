@@ -834,12 +834,37 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: GetConversationSummaryParams,
     ) {
-        let GetConversationSummaryParams { rollout_path } = params;
-        let path = if rollout_path.is_relative() {
-            self.config.codex_home.join(&rollout_path)
-        } else {
-            rollout_path.clone()
+        let path = match params {
+            GetConversationSummaryParams::RolloutPath { rollout_path } => {
+                if rollout_path.is_relative() {
+                    self.config.codex_home.join(&rollout_path)
+                } else {
+                    rollout_path
+                }
+            }
+            GetConversationSummaryParams::ConversationId { conversation_id } => {
+                match codex_core::find_conversation_path_by_id_str(
+                    &self.config.codex_home,
+                    &conversation_id.to_string(),
+                )
+                .await
+                {
+                    Ok(Some(p)) => p,
+                    _ => {
+                        let error = JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!(
+                                "no rollout found for conversation id {conversation_id}"
+                            ),
+                            data: None,
+                        };
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                }
+            }
         };
+
         let fallback_provider = self.config.model_provider_id.as_str();
 
         match read_summary_from_rollout(&path, fallback_provider).await {
