@@ -351,6 +351,12 @@ pub struct Tui {
     pub notifications: Notifications,
 }
 
+/// Review-specific settings loaded from config.toml.
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct ReviewToml {
+    pub user_instructions: Option<String>,
+}
+
 /// Settings for notices we display to users via the tui and app-server clients
 /// (primarily the Codex IDE extension). NOTE: these are different from
 /// notifications - notices are warnings, NUX screens, acknowledgements, etc.

@@ -14,6 +14,7 @@ use crate::config_types::OtelConfig;
 use crate::config_types::OtelConfigToml;
 use crate::config_types::OtelExporterKind;
 use crate::config_types::ReasoningSummaryFormat;
+use crate::config_types::ReviewToml;
 use crate::config_types::SandboxWorkspaceWrite;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
@@ -129,6 +130,9 @@ pub struct Config {
 
     /// Base instructions override.
     pub base_instructions: Option<String>,
+
+    /// Review-specific user instructions (narrowly scoped; not inherited from AGENTS.md).
+    pub review_user_instructions: Option<String>,
 
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
@@ -927,6 +931,9 @@ pub struct ConfigToml {
     /// Collection of settings that are specific to the TUI.
     pub tui: Option<Tui>,
 
+    /// Review-specific settings.
+    pub review: Option<ReviewToml>,
+
     /// When set to `true`, `AgentReasoning` events will be hidden from the
     /// UI/output. Defaults to `false`.
     pub hide_agent_reasoning: Option<bool>,
@@ -1395,6 +1402,10 @@ impl Config {
             notify: cfg.notify,
             user_instructions,
             base_instructions,
+            review_user_instructions: cfg
+                .review
+                .as_ref()
+                .and_then(|r| r.user_instructions.clone()),
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
@@ -3100,6 +3111,7 @@ model_verbosity = "high"
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
+                review_user_instructions: None,
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
@@ -3171,6 +3183,7 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            review_user_instructions: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -3257,6 +3270,7 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            review_user_instructions: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -3329,6 +3343,7 @@ model_verbosity = "high"
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            review_user_instructions: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,

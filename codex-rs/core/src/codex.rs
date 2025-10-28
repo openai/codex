@@ -1555,7 +1555,7 @@ async fn spawn_review_thread(
         sub_id: sub_id.to_string(),
         client,
         tools_config,
-        user_instructions: None,
+        user_instructions: config.review_user_instructions.clone(),
         base_instructions: Some(base_instructions.clone()),
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
@@ -1594,8 +1594,9 @@ async fn spawn_review_thread(
 ///   conversation history and consider the task complete.
 ///
 /// Review mode: when `turn_context.is_review_mode` is true, the turn runs in an
-/// isolated in-memory thread without the parent session's prior history or
-/// user_instructions. Emits ExitedReviewMode upon final review message.
+/// isolated in-memory thread without the parent session's prior history. Review
+/// threads include `config.review_user_instructions` when set, and are otherwise
+/// neutral. Emits ExitedReviewMode upon final review message.
 pub(crate) async fn run_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
