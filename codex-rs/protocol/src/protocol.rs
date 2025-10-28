@@ -166,10 +166,6 @@ pub enum Op {
     /// Request a single history entry identified by `log_id` + `offset`.
     GetHistoryEntryRequest { offset: usize, log_id: u64 },
 
-    /// Request the full in-memory conversation transcript for the current session.
-    /// Reply is delivered via `EventMsg::ConversationHistory`.
-    GetPath,
-
     /// Request the list of MCP tools available across all configured servers.
     /// Reply is delivered via `EventMsg::McpListToolsResponse`.
     ListMcpTools,
@@ -181,6 +177,9 @@ pub enum Op {
     /// The agent will use its existing context (either conversation history or previous response id)
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
+
+    /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
+    Undo,
 
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
@@ -490,6 +489,10 @@ pub enum EventMsg {
 
     BackgroundEvent(BackgroundEventEvent),
 
+    UndoStarted(UndoStartedEvent),
+
+    UndoCompleted(UndoCompletedEvent),
+
     /// Notification that a model stream experienced an error or disconnect
     /// and the system is handling it (e.g., retrying with backoff).
     StreamError(StreamErrorEvent),
@@ -518,8 +521,6 @@ pub enum EventMsg {
 
     /// Notification that the agent is shutting down.
     ShutdownComplete,
-
-    ConversationPath(ConversationPathResponseEvent),
 
     /// Entered review mode.
     EnteredReviewMode(ReviewRequest),
@@ -813,7 +814,7 @@ pub struct AgentReasoningDeltaEvent {
     pub delta: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
 pub struct McpInvocation {
     /// Name of the MCP server as defined in the config.
     pub server: String,
@@ -823,14 +824,14 @@ pub struct McpInvocation {
     pub arguments: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
 pub struct McpToolCallBeginEvent {
     /// Identifier so this can be paired with the McpToolCallEnd event.
     pub call_id: String,
     pub invocation: McpInvocation,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
 pub struct McpToolCallEndEvent {
     /// Identifier for the corresponding McpToolCallBegin that finished.
     pub call_id: String,
@@ -941,6 +942,7 @@ pub struct SessionMeta {
     pub instructions: Option<String>,
     #[serde(default)]
     pub source: SessionSource,
+    pub model_provider: Option<String>,
 }
 
 impl Default for SessionMeta {
@@ -953,6 +955,7 @@ impl Default for SessionMeta {
             cli_version: String::new(),
             instructions: None,
             source: SessionSource::default(),
+            model_provider: None,
         }
     }
 }
@@ -1137,6 +1140,19 @@ pub struct ExecCommandOutputDeltaEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct BackgroundEventEvent {
     pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct UndoStartedEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct UndoCompletedEvent {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
