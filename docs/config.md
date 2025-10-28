@@ -314,6 +314,8 @@ Though using this option may also be necessary if you try to use Codex in enviro
 
 Codex keeps reusable memories, helper scripts, and MCP manifests inside a shared `.agents` directory. By default this folder lives next to `.codex` in your home directory and Codex creates the `context/`, `tools/`, and `mcp/` subdirectories automatically.
 
+Files in `context/` are merged into a single `<agents_context>` block that is prepended to every session. Codex reads UTF-8 files from the global directory first and then overlays any project-level `.agents/context/` directory; files with matching relative paths are replaced by the project copy. The combined block is limited to 32 KiB per file and 64 KiB total. When a file exceeds the per-file limit Codex adds `_Content truncated to 32 KiB._` so you can split or reorganize it. Scripts dropped into `tools/` are listed in the same block with their absolute paths (derived from your configured `agents_home`), giving the agent a canonical place to discover helper binaries or small CLI utilities. Global context entries are printed with the same absolute paths so the agent never relies on the default `~/.agents` location.
+
 Override the location if you want to place those resources somewhere else (for example on a synced drive):
 
 ```toml

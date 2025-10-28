@@ -11,10 +11,10 @@ Codex uses [`AGENTS.md`](https://agents.md/) files to gather helpful guidance be
 
 ## Shared Agents Workspace (`~/.agents`)
 
-Codex also creates a companion `.agents` directory alongside `.codex`. Use this space to keep durable resources that multiple projects or agents should reuse:
+Codex also creates a companion `.agents` directory alongside `.codex` (or at whatever path you set via `agents_home`/`AGENTS_HOME`). Use this space to keep durable resources that multiple projects or agents should reuse:
 
-- `context/` for structured notes, runbooks, and decision logs that complement your `AGENTS.md` guidance.
-- `tools/` for small scripts or binaries that agents can launch (for example, calculators, code generators, or health-check scripts).
+- `context/` for structured notes, runbooks, and decision logs that complement your `AGENTS.md` guidance. Codex reads UTF-8 files from this folder and emits them in an `<agents_context>` block at the start of every session (32 KiB per file, 64 KiB total). Project-level `.agents/context/` folders override conflicting files from the global store, and the CLI reports global entries with their actual absolute paths so agents never rely on the default `~/.agents` prefix.
+- `tools/` for small scripts or binaries that agents can launch (for example, calculators, code generators, or health-check scripts). Paths discovered here are listed in the same `<agents_context>` block using their true locations, so the agent knows exactly how to invoke them.
 - `mcp/` for Model Context Protocol server manifests and credential material you want available everywhere. Place one `mcp.config`, `mcp.toml`, or `mcp.json` file here (first match wins) to declare shared MCP servers.
 
 The CLI makes sure these directories exist on startup. Set `agents_home` in your config or the `AGENTS_HOME` environment variable if you want to relocate them.

@@ -68,15 +68,16 @@ You can give Codex extra instructions and guidance using `AGENTS.md` files. Code
 
 For more information on how to use AGENTS.md, see the [official AGENTS.md documentation](https://agents.md/).
 
-### Agents Home (`~/.agents`)
+### Agents Home (`~/.agents` by default)
 
-Codex also provisions a shared `.agents` directory next to your `.codex` folder. It is created automatically with a predictable layout so multiple agents and sessions can reuse the same resources:
+Codex also provisions a shared `.agents` directory next to your `.codex` folder (or at the path you configure via `agents_home` or `AGENTS_HOME`). It is created automatically with a predictable layout so multiple agents and sessions can reuse the same resources. When a global file is referenced in the `<agents_context>` block, Codex now prints its real absolute path so the agent can execute it without guessing at the default location.
 
-- `~/.agents/context/` – long-term notes, project briefs, and other durable context that you want every session to recall.
-- `~/.agents/tools/` – reusable helper programs (for example, a calculator script or project-specific linters) that Codex can invoke instead of reimplementing logic at runtime.
-- `~/.agents/mcp/` – Model Context Protocol server definitions and credentials that you want to keep ready for any project.
-- Drop exactly one of `mcp.config`, `mcp.toml`, or `mcp.json` into `~/.agents/mcp/` (Codex uses the first one it finds in that order) to declare shared MCP servers; Codex merges it with any `mcp_servers` defined in `~/.codex/config.toml`.
-- If your repository contains a `.agents/` folder, Codex merges its contents with the global workspace so you can keep project-specific memories and tools alongside the codebase.
+- `context/` – UTF-8 text files that Codex injects at the start of every session inside an `<agents_context>` block. Entries from project-level `.agents/context/` directories override files with the same relative path from the global store.
+- `tools/` – reusable helper programs (for example, a calculator script or project-specific linters). Codex lists these paths in the same `<agents_context>` block so the agent can call them directly via the shell.
+- `mcp/` – Model Context Protocol server definitions and credentials that you want to keep ready for any project.
+- Drop exactly one of `mcp.config`, `mcp.toml`, or `mcp.json` into the `mcp/` directory (Codex uses the first one it finds in that order) to declare shared MCP servers; Codex merges it with any `mcp_servers` defined in `~/.codex/config.toml`.
+- If your repository contains a `.agents/` folder, Codex merges its contents with the global workspace so you can keep project-specific memories and tools alongside the codebase. Project-specific entries override global ones when they share the same relative path.
+- Context is truncated to 32 KiB per file and 64 KiB total per session. Codex inserts a `_Content truncated to 32 KiB._` note next to shortened files so you can adjust the source material if needed.
 
 You can relocate the directory with the `agents_home` config setting or the `AGENTS_HOME` environment variable if you prefer to store it somewhere else.
 
