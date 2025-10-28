@@ -358,14 +358,20 @@ pub async fn load_global_mcp_servers(
     codex_home: &Path,
 ) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
     let root_value = load_config_as_toml(codex_home).await?;
-    let Some(servers_value) = root_value.get("mcp_servers") else {
-        return Ok(BTreeMap::new());
-    };
+    let config_toml: ConfigToml = root_value.clone().try_into().map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("failed to deserialize config.toml: {err}"),
+        )
+    })?;
 
-    servers_value
-        .clone()
-        .try_into()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.to_path_buf(),
+    )?;
+
+    Ok(config.mcp_servers.into_iter().collect())
 }
 
 /// We briefly allowed plain text bearer_token fields in MCP server configs.
