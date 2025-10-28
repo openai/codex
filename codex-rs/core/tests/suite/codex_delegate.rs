@@ -29,6 +29,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     let args = serde_json::json!({
         "command": ["bash", "-lc", "rm -rf delegated"],
         "timeout_ms": 1000,
+        "with_escalated_permissions": true,
     })
     .to_string();
     let sse1 = sse(vec![
@@ -58,7 +59,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     // routes ExecApprovalRequest via the parent.
     let mut builder = test_codex().with_config(|config| {
         config.approval_policy = AskForApproval::OnRequest;
-        config.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        config.sandbox_policy = SandboxPolicy::ReadOnly;
     });
     let test = builder.build(&server).await.expect("build test codex");
 
@@ -88,7 +89,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     // Approve via parent; id "0" is the active sub_id in tests.
     test.codex
         .submit(Op::ExecApproval {
-            id: "auto-compact-0".into(),
+            id: "0".into(),
             decision: ReviewDecision::Approved,
         })
         .await
@@ -160,7 +161,7 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     // Deny via parent so delegate can continue; id "0" is the active sub_id in tests.
     test.codex
         .submit(Op::PatchApproval {
-            id: "auto-compact-0".into(),
+            id: "0".into(),
             decision: ReviewDecision::Denied,
         })
         .await
