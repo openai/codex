@@ -64,6 +64,8 @@ mod windows_impl {
     use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
     use windows_sys::Win32::System::Threading::STARTUPINFOW;
 
+    type PipeHandles = ((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE));
+
     fn ensure_dir(p: &Path) -> Result<()> {
         if let Some(d) = p.parent() {
             std::fs::create_dir_all(d)?;
@@ -111,13 +113,13 @@ mod windows_impl {
                     backslashes += 1;
                 }
                 '"' => {
-                    quoted.extend(std::iter::repeat('\\').take(backslashes * 2 + 1));
+                    quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
                     quoted.push('"');
                     backslashes = 0;
                 }
                 _ => {
                     if backslashes > 0 {
-                        quoted.extend(std::iter::repeat('\\').take(backslashes));
+                        quoted.push_str(&"\\".repeat(backslashes));
                         backslashes = 0;
                     }
                     quoted.push(ch);
@@ -125,14 +127,13 @@ mod windows_impl {
             }
         }
         if backslashes > 0 {
-            quoted.extend(std::iter::repeat('\\').take(backslashes * 2));
+            quoted.push_str(&"\\".repeat(backslashes * 2));
         }
         quoted.push('"');
         quoted
     }
 
-    unsafe fn setup_stdio_pipes(
-    ) -> io::Result<((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE))> {
+    unsafe fn setup_stdio_pipes() -> io::Result<PipeHandles> {
         let mut in_r: HANDLE = 0;
         let mut in_w: HANDLE = 0;
         let mut out_r: HANDLE = 0;
@@ -249,7 +250,8 @@ mod windows_impl {
         }
 
         let (stdin_pair, stdout_pair, stderr_pair) = unsafe { setup_stdio_pipes()? };
-        let ((in_r, in_w), (out_r, out_w), (err_r, err_w)) = (stdin_pair, stdout_pair, stderr_pair);
+        let ((in_r, _in_w), (out_r, out_w), (err_r, err_w)) =
+            (stdin_pair, stdout_pair, stderr_pair);
         let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
         si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
         si.dwFlags |= STARTF_USESTDHANDLES;
@@ -278,7 +280,7 @@ mod windows_impl {
                 CREATE_UNICODE_ENVIRONMENT,
                 env_block.as_ptr() as *mut c_void,
                 to_wide(cwd).as_ptr(),
-                &mut si,
+                &si,
                 &mut pi,
             )
         };

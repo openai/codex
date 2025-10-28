@@ -97,7 +97,7 @@ pub unsafe fn dacl_effective_allows_write(p_dacl: *mut ACL, psid: *mut c_void) -
         ptstrName: psid as *mut u16,
     };
     let mut access: u32 = 0;
-    let ok = GetEffectiveRightsFromAclW(p_dacl, &mut trustee, &mut access);
+    let ok = GetEffectiveRightsFromAclW(p_dacl, &trustee, &mut access);
     if ok != 0 {
         // Check for generic or specific write bits
         let write_bits = FILE_GENERIC_WRITE
