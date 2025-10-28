@@ -9,7 +9,7 @@ on:
 # CI builds in debug (dev) for faster signal.
 
 jobs:
-  # --- Detect what changed (always runs) -------------------------------------
+  # --- Detect what changed to detect which tests to run (always runs) -------------------------------------
   changed:
     name: Detect changed areas
     runs-on: ubuntu-24.04
