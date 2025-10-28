@@ -146,6 +146,7 @@ async fn forward_events(
                         event.command.clone(),
                         event.cwd.clone(),
                         event.reason.clone(),
+                        event.risk,
                     )
                     .await;
                 let _ = codex.submit(Op::ExecApproval { id, decision }).await;

@@ -64,7 +64,7 @@ async fn start_review_conversation(
     input: Vec<UserInput>,
     cancellation_token: CancellationToken,
 ) -> Option<async_channel::Receiver<EventMsg>> {
-    let config = ctx.client.get_config().await;
+    let config = ctx.client.config();
     let mut sub_agent_config = config.as_ref().clone();
     // Run with only reviewer rubric — drop outer user_instructions
     sub_agent_config.user_instructions = None;
@@ -168,11 +168,14 @@ pub(crate) async fn exit_review_mode(
     };
 
     session
-        .record_conversation_items(&[ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText { text: user_message }],
-        }])
+        .record_conversation_items(
+            &ctx,
+            &[ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText { text: user_message }],
+            }],
+        )
         .await;
     session
         .send_event(
