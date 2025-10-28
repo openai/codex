@@ -362,8 +362,6 @@ pub async fn load_global_mcp_servers(
         return Ok(BTreeMap::new());
     };
 
-    ensure_no_inline_bearer_tokens(servers_value)?;
-
     servers_value
         .clone()
         .try_into()
@@ -372,25 +370,6 @@ pub async fn load_global_mcp_servers(
 
 /// We briefly allowed plain text bearer_token fields in MCP server configs.
 /// We want to warn people who recently added these fields but can remove this after a few months.
-fn ensure_no_inline_bearer_tokens(value: &TomlValue) -> std::io::Result<()> {
-    let Some(servers_table) = value.as_table() else {
-        return Ok(());
-    };
-
-    for (server_name, server_value) in servers_table {
-        if let Some(server_table) = server_value.as_table()
-            && server_table.contains_key("bearer_token")
-        {
-            let message = format!(
-                "mcp_servers.{server_name} uses unsupported `bearer_token`; set `bearer_token_env_var`."
-            );
-            return Err(std::io::Error::new(ErrorKind::InvalidData, message));
-        }
-    }
-
-    Ok(())
-}
-
 pub fn write_global_mcp_servers(
     codex_home: &Path,
     servers: &BTreeMap<String, McpServerConfig>,
@@ -1718,7 +1697,6 @@ fn parse_agents_mcp_toml(
             format!("failed to parse {} as TOML: {err}", path.display()),
         )
     })?;
-    ensure_no_inline_bearer_tokens(&value)?;
     let parsed: BTreeMap<String, McpServerConfig> = value.try_into().map_err(|err| {
         std::io::Error::new(
             ErrorKind::InvalidData,
@@ -1738,33 +1716,12 @@ fn parse_agents_mcp_json(
             format!("failed to parse {} as JSON: {err}", path.display()),
         )
     })?;
-    ensure_no_inline_bearer_tokens_json(&value, path)?;
     serde_json::from_value::<HashMap<String, McpServerConfig>>(value).map_err(|err| {
         std::io::Error::new(
             ErrorKind::InvalidData,
             format!("invalid MCP configuration in {}: {err}", path.display()),
         )
     })
-}
-
-fn ensure_no_inline_bearer_tokens_json(value: &JsonValue, path: &Path) -> std::io::Result<()> {
-    let Some(table) = value.as_object() else {
-        return Ok(());
-    };
-
-    for (server_name, server_value) in table {
-        if let Some(obj) = server_value.as_object()
-            && obj.contains_key("bearer_token")
-        {
-            let message = format!(
-                "{} defines `bearer_token` for MCP server `{server_name}`; use `bearer_token_env_var` instead.",
-                path.display()
-            );
-            return Err(std::io::Error::new(ErrorKind::InvalidData, message));
-        }
-    }
-
-    Ok(())
 }
 
 /// Returns the path to the folder where Codex logs are stored. Does not verify
@@ -1786,7 +1743,6 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    use std::io::ErrorKind;
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -2414,31 +2370,6 @@ startup_timeout_ms = 2500
         let servers = load_global_mcp_servers(codex_home.path()).await?;
         let docs = servers.get("docs").expect("docs entry");
         assert_eq!(docs.startup_timeout_sec, Some(Duration::from_millis(2500)));
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn load_global_mcp_servers_rejects_inline_bearer_token() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
-
-        std::fs::write(
-            &config_path,
-            r#"
-[mcp_servers.docs]
-url = "https://example.com/mcp"
-bearer_token = "secret"
-"#,
-        )?;
-
-        let err = load_global_mcp_servers(codex_home.path())
-            .await
-            .expect_err("bearer_token entries should be rejected");
-
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-        assert!(err.to_string().contains("bearer_token"));
-        assert!(err.to_string().contains("bearer_token_env_var"));
 
         Ok(())
     }
@@ -3232,38 +3163,6 @@ command = "docs-server"
             Some(&expected),
             "expected docs server from agents_home"
         );
-
-        Ok(())
-    }
-
-    #[test]
-    fn agents_home_json_mcp_config_rejects_inline_bearer_token() -> std::io::Result<()> {
-        let parent = TempDir::new().expect("temp parent");
-        let codex_home = parent.path().join(".codex");
-        fs::create_dir_all(&codex_home)?;
-        let mcp_dir = parent.path().join(".agents").join("mcp");
-        fs::create_dir_all(&mcp_dir)?;
-        fs::write(
-            mcp_dir.join("mcp.json"),
-            r#"{ "docs": { "command": "json-docs", "bearer_token": "secret" } }"#,
-        )?;
-
-        let result = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home,
-        );
-
-        match result {
-            Ok(_) => panic!("expected inline bearer_token to be rejected"),
-            Err(err) => {
-                assert_eq!(err.kind(), ErrorKind::InvalidData);
-                assert!(
-                    err.to_string().contains("bearer_token"),
-                    "error should mention bearer_token, got {err}"
-                );
-            }
-        }
 
         Ok(())
     }
