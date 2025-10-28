@@ -24,6 +24,7 @@ pub fn set_windows_sandbox_enabled(enabled: bool) {
 }
 
 #[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
 pub fn set_windows_sandbox_enabled(_enabled: bool) {}
 
 #[derive(Debug, PartialEq)]
@@ -101,11 +102,13 @@ pub fn get_platform_sandbox() -> Option<SandboxType> {
     } else if cfg!(target_os = "linux") {
         Some(SandboxType::LinuxSeccomp)
     } else if cfg!(target_os = "windows") {
-        if WINDOWS_SANDBOX_ENABLED.load(Ordering::Relaxed) {
-            Some(SandboxType::WindowsRestrictedToken)
-        } else {
-            None
+        #[cfg(target_os = "windows")]
+        {
+            if WINDOWS_SANDBOX_ENABLED.load(Ordering::Relaxed) {
+                return Some(SandboxType::WindowsRestrictedToken);
+            }
         }
+        None
     } else {
         None
     }

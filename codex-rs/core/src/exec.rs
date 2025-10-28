@@ -28,8 +28,6 @@ use crate::sandboxing::ExecEnv;
 use crate::sandboxing::SandboxManager;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
-#[cfg(target_os = "windows")]
-// Windows sandbox runs in-process via codex-windows-sandbox crate
 
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
@@ -420,6 +418,7 @@ pub struct ExecToolCallOutput {
     pub timed_out: bool,
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
 async fn exec(
     params: ExecParams,
     sandbox: SandboxType,
