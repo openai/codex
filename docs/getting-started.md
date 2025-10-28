@@ -76,6 +76,7 @@ Codex also provisions a shared `.agents` directory next to your `.codex` folder.
 - `~/.agents/tools/` – reusable helper programs (for example, a calculator script or project-specific linters) that Codex can invoke instead of reimplementing logic at runtime.
 - `~/.agents/mcp/` – Model Context Protocol server definitions and credentials that you want to keep ready for any project.
 - Drop exactly one of `mcp.config`, `mcp.toml`, or `mcp.json` into `~/.agents/mcp/` (Codex uses the first one it finds in that order) to declare shared MCP servers; Codex merges it with any `mcp_servers` defined in `~/.codex/config.toml`.
+- If your repository contains a `.agents/` folder, Codex merges its contents with the global workspace so you can keep project-specific memories and tools alongside the codebase.
 
 You can relocate the directory with the `agents_home` config setting or the `AGENTS_HOME` environment variable if you prefer to store it somewhere else.
 

@@ -323,6 +323,8 @@ agents_home = "~/.workspace/agents"
 
 Alternatively, set the `AGENTS_HOME` environment variable before launching Codex. Relative paths are resolved against the current working directory, and leading `~` expands to your home directory.
 
+When a repository contains its own `.agents/` directory (for example `<project>/.agents`), Codex merges its `context/`, `tools/`, and `mcp/` subfolders on top of the global workspace. Project-level entries override global ones, letting each codebase define tailored memories and MCP servers without additional configuration.
+
 #### MCP configuration file
 
 Inside `agents_home`, Codex checks for `mcp/mcp.config`, `mcp/mcp.toml`, or `mcp/mcp.json` (in that order) and uses the first file it finds. The contents (TOML or JSON) are merged with the `mcp_servers` section from `config.toml`; entries defined in `config.toml` still take precedence when the same server id appears in both places.

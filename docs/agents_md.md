@@ -19,6 +19,8 @@ Codex also creates a companion `.agents` directory alongside `.codex`. Use this 
 
 The CLI makes sure these directories exist on startup. Set `agents_home` in your config or the `AGENTS_HOME` environment variable if you want to relocate them.
 
+If a repository contains its own `.agents/` folder (for example at `<repo>/.agents`), Codex will automatically merge its contents with the global workspace: project-specific entries augment or override the shared ones without requiring additional configuration.
+
 ## Project Instructions (per-repository)
 
 When you work inside a project, Codex builds on those global instructions by collecting project docs:
