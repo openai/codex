@@ -17,6 +17,7 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
+use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use std::sync::Arc;
 
@@ -33,9 +34,14 @@ impl MessageProcessor {
         outgoing: OutgoingMessageSender,
         codex_linux_sandbox_exe: Option<PathBuf>,
         config: Arc<Config>,
+        feedback: CodexFeedback,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
-        let auth_manager = AuthManager::shared(config.codex_home.clone(), false);
+        let auth_manager = AuthManager::shared(
+            config.codex_home.clone(),
+            false,
+            config.cli_auth_credentials_store_mode,
+        );
         let conversation_manager = Arc::new(ConversationManager::new(
             auth_manager.clone(),
             SessionSource::VSCode,
@@ -46,6 +52,7 @@ impl MessageProcessor {
             outgoing.clone(),
             codex_linux_sandbox_exe,
             config,
+            feedback,
         );
 
         Self {
