@@ -1023,15 +1023,15 @@ pub(crate) fn new_deprecation_notice(
 impl HistoryCell for DeprecationNoticeCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(
-            vec![self.summary.clone().into()]
-            .into(),
-        );
+        lines.push(vec![self.summary.clone().red()].into());
 
         let wrap_width = width.saturating_sub(4).max(1) as usize;
 
         if let Some(details) = &self.details {
-            let line = textwrap::wrap(details, wrap_width).into_iter().map(|s| s.to_string().dim().into()).collect::<Vec<_>>();
+            let line = textwrap::wrap(details, wrap_width)
+                .into_iter()
+                .map(|s| s.to_string().dim().into())
+                .collect::<Vec<_>>();
             lines.extend(line);
         }
 

@@ -532,12 +532,14 @@ impl Session {
         }
 
         for (alias, feature) in session_configuration.features.legacy_feature_usages() {
-            let summary = format!("Config key `{alias}` is deprecated.");
             let canonical = feature.key();
+            let summary = format!("`{alias}` is deprecated. Use `{canonical}` instead.");
             let details = if alias == canonical {
                 None
             } else {
-                Some(format!("Use `--enable {canonical}` instead."))
+                Some(format!(
+                    "You can either enable it using the CLI with `--enable {canonical}` or through the config.toml file with `[features].{canonical}`"
+                ))
             };
             post_session_configured_events.push(Event {
                 id: INITIAL_SUBMIT_ID.to_owned(),
