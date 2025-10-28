@@ -1766,12 +1766,17 @@ fn prompt_selection_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::ImageBuffer;
+    use image::Rgba;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+    use tempfile::tempdir;
 
     use crate::app_event::AppEvent;
     use crate::bottom_pane::AppEventSender;
     use crate::bottom_pane::ChatComposer;
     use crate::bottom_pane::InputResult;
+    use crate::bottom_pane::chat_composer::AttachedImage;
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
     use crate::bottom_pane::prompt_args::extract_positional_args_for_prompt_line;
     use crate::bottom_pane::textarea::TextArea;
