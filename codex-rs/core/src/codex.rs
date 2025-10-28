@@ -12,12 +12,10 @@ use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::response_processing::process_items;
-use crate::review_format::format_review_findings_block;
 use crate::terminal;
 use crate::user_notification::UserNotifier;
 use async_channel::Receiver;
 use async_channel::Sender;
-use codex_apply_patch::ApplyPatchAction;
 use codex_protocol::ConversationId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::ExitedReviewModeEvent;
@@ -47,11 +45,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
-use tracing::trace;
 use tracing::warn;
 
 use crate::ModelProviderInfo;
-use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
@@ -270,7 +266,6 @@ pub(crate) struct TurnContext {
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
-    pub(crate) is_review_mode: bool,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
@@ -409,7 +404,6 @@ impl Session {
             sandbox_policy: session_configuration.sandbox_policy.clone(),
             shell_environment_policy: config.shell_environment_policy.clone(),
             tools_config,
-            is_review_mode: false,
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
@@ -856,7 +850,7 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         call_id: String,
-        action: &ApplyPatchAction,
+        changes: HashMap<PathBuf, FileChange>,
         reason: Option<String>,
         grant_root: Option<PathBuf>,
     ) -> oneshot::Receiver<ReviewDecision> {
@@ -880,7 +874,7 @@ impl Session {
 
         let event = EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id,
-            changes: convert_apply_patch_to_protocol(action),
+            changes,
             reason,
             grant_root,
         });
@@ -1640,7 +1634,6 @@ async fn spawn_review_thread(
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
-        is_review_mode: true,
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
@@ -1691,21 +1684,8 @@ pub(crate) async fn run_task(
     sess.send_event(&turn_context, event).await;
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    // For review threads, keep an isolated in-memory history so the
-    // model sees a fresh conversation without the parent session's history.
-    // For normal turns, continue recording to the session history as before.
-    let is_review_mode = turn_context.is_review_mode;
-
-    let mut review_thread_history: ConversationHistory = ConversationHistory::new();
-    if is_review_mode {
-        // Seed review threads with environment context so the model knows the working directory.
-        review_thread_history
-            .record_items(sess.build_initial_context(turn_context.as_ref()).iter());
-        review_thread_history.record_items(std::iter::once(&initial_input_for_turn.into()));
-    } else {
-        sess.record_input_and_rollout_usermsg(turn_context.as_ref(), &initial_input_for_turn)
-            .await;
-    }
+    sess.record_input_and_rollout_usermsg(turn_context.as_ref(), &initial_input_for_turn)
+        .await;
 
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
         .await;
@@ -1857,48 +1837,7 @@ pub(crate) async fn run_task(
         }
     }
 
-    // If this was a review thread and we have a final assistant message,
-    // try to parse it as a ReviewOutput.
-    //
-    // If parsing fails, construct a minimal ReviewOutputEvent using the plain
-    // text as the overall explanation. Else, just exit review mode with None.
-    //
-    // Emits an ExitedReviewMode event with the parsed review output.
-    if turn_context.is_review_mode {
-        exit_review_mode(
-            sess.clone(),
-            Arc::clone(&turn_context),
-            last_agent_message.as_deref().map(parse_review_output_event),
-        )
-        .await;
-    }
-
     last_agent_message
-}
-
-/// Parse the review output; when not valid JSON, build a structured
-/// fallback that carries the plain text as the overall explanation.
-///
-/// Returns: a ReviewOutputEvent parsed from JSON or a fallback populated from text.
-fn parse_review_output_event(text: &str) -> ReviewOutputEvent {
-    // Try direct parse first
-    if let Ok(ev) = serde_json::from_str::<ReviewOutputEvent>(text) {
-        return ev;
-    }
-    // If wrapped in markdown fences or extra prose, attempt to extract the first JSON object
-    if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}'))
-        && start < end
-        && let Some(slice) = text.get(start..=end)
-        && let Ok(ev) = serde_json::from_str::<ReviewOutputEvent>(slice)
-    {
-        return ev;
-    }
-    // Not JSON – return a structured ReviewOutputEvent that carries
-    // the plain text as the overall explanation.
-    ReviewOutputEvent {
-        overall_explanation: text.to_string(),
-        ..Default::default()
-    }
 }
 
 async fn run_turn(
@@ -2187,12 +2126,8 @@ async fn try_run_turn(
             ResponseEvent::OutputTextDelta(delta) => {
                 // In review child threads, suppress assistant text deltas; the
                 // UI will show a selection popup from the final ReviewOutput.
-                if !turn_context.is_review_mode {
-                    let event = EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta });
-                    sess.send_event(&turn_context, event).await;
-                } else {
-                    trace!("suppressing OutputTextDelta in review mode");
-                }
+                let event = EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta });
+                sess.send_event(&turn_context, event).await;
             }
             ResponseEvent::ReasoningSummaryDelta(delta) => {
                 let event = EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta });
@@ -2227,13 +2162,7 @@ async fn handle_non_tool_response_item(
         ResponseItem::Message { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::WebSearchCall { .. } => {
-            let turn_item = match &item {
-                ResponseItem::Message { .. } if turn_context.is_review_mode => {
-                    trace!("suppressing assistant Message in review mode");
-                    None
-                }
-                _ => parse_turn_item(&item),
-            };
+            let turn_item = parse_turn_item(&item);
             if let Some(turn_item) = turn_item {
                 sess.emit_turn_item_started_completed(
                     turn_context.as_ref(),
@@ -2756,12 +2685,6 @@ mod tests {
                 sleep(Duration::from_secs(60)).await;
             }
         }
-
-        async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
-            if let TaskKind::Review = self.kind {
-                exit_review_mode(session.clone_session(), ctx, None).await;
-            }
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2826,15 +2749,7 @@ mod tests {
         let input = vec![UserInput::Text {
             text: "start review".to_string(),
         }];
-        sess.spawn_task(
-            Arc::clone(&tc),
-            input,
-            NeverEndingTask {
-                kind: TaskKind::Review,
-                listen_to_cancellation_token: false,
-            },
-        )
-        .await;
+        sess.spawn_task(Arc::clone(&tc), input, ReviewTask).await;
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 

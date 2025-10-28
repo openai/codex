@@ -928,6 +928,7 @@ pub enum SessionSource {
     VSCode,
     Exec,
     Mcp,
+    SubAgent,
     #[serde(other)]
     Unknown,
 }

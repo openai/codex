@@ -11,8 +11,6 @@ use tracing::warn;
 /// - `ResponseInputItem`s to send back to the model on the next turn.
 pub(crate) async fn process_items(
     processed_items: Vec<crate::codex::ProcessedResponseItem>,
-    is_review_mode: bool,
-    review_thread_history: &mut ConversationHistory,
     sess: &Session,
     turn_context: &TurnContext,
 ) -> (Vec<ResponseInputItem>, Vec<ResponseItem>) {
