@@ -136,6 +136,7 @@ impl ShellHandler {
                         let content = item?;
                         return Ok(ToolOutput::Function {
                             content,
+                            content_items: None,
                             success: Some(true),
                         });
                     }
@@ -179,6 +180,7 @@ impl ShellHandler {
                         let content = emitter.finish(event_ctx, out).await?;
                         return Ok(ToolOutput::Function {
                             content,
+                            content_items: None,
                             success: Some(true),
                         });
                     }
@@ -226,6 +228,7 @@ impl ShellHandler {
         let content = emitter.finish(event_ctx, out).await?;
         Ok(ToolOutput::Function {
             content,
+            content_items: None,
             success: Some(true),
         })
     }

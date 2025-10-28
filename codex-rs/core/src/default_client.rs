@@ -6,6 +6,7 @@ use reqwest::Response;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::LazyLock;
 use std::sync::Mutex;
@@ -115,20 +116,13 @@ impl CodexRequestBuilder {
     pub async fn send(self) -> Result<Response, reqwest::Error> {
         match self.builder.send().await {
             Ok(response) => {
-                let request_id = response
-                    .headers()
-                    .get("cf-ray")
-                    .map(|v| v.to_str().unwrap_or_default().to_string())
-                    .unwrap_or_default();
-
-                let version = format!("{:?}", response.version());
-
+                let request_ids = Self::extract_request_ids(&response);
                 tracing::debug!(
                     method = %self.method,
                     url = %self.url,
                     status = %response.status(),
-                    request_id = %request_id,
-                    version = %version,
+                    request_ids = ?request_ids,
+                    version = ?response.version(),
                     "Request completed"
                 );
 
@@ -146,6 +140,18 @@ impl CodexRequestBuilder {
                 Err(error)
             }
         }
+    }
+
+    fn extract_request_ids(response: &Response) -> HashMap<String, String> {
+        ["cf-ray", "x-request-id", "x-oai-request-id"]
+            .iter()
+            .filter_map(|&name| {
+                let header_name = HeaderName::from_static(name);
+                let value = response.headers().get(header_name)?;
+                let value = value.to_str().ok()?.to_owned();
+                Some((name.to_owned(), value))
+            })
+            .collect()
     }
 }
 #[derive(Debug, Clone)]

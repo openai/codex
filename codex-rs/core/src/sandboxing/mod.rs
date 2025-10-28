@@ -5,6 +5,9 @@ Build platform wrappers and produce ExecEnv for execution. Owns low‑level
 sandbox placement and transformation of portable CommandSpec into a
 ready‑to‑spawn environment.
 */
+
+pub mod assessment;
+
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;

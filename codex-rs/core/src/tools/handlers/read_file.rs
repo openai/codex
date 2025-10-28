@@ -149,6 +149,7 @@ impl ToolHandler for ReadFileHandler {
         };
         Ok(ToolOutput::Function {
             content: collected.join("\n"),
+            content_items: None,
             success: Some(true),
         })
     }

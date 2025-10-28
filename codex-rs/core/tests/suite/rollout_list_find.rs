@@ -28,7 +28,8 @@ fn write_minimal_rollout_with_id(codex_home: &Path, id: Uuid) -> PathBuf {
                 "instructions": null,
                 "cwd": ".",
                 "originator": "test",
-                "cli_version": "test"
+                "cli_version": "test",
+                "model_provider": "test-provider"
             }
         })
     )

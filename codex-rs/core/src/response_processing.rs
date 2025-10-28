@@ -1,4 +1,5 @@
 use crate::codex::Session;
+use crate::codex::TurnContext;
 use crate::conversation_history::ConversationHistory;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
@@ -13,6 +14,7 @@ pub(crate) async fn process_items(
     is_review_mode: bool,
     review_thread_history: &mut ConversationHistory,
     sess: &Session,
+    turn_context: &TurnContext,
 ) -> (Vec<ResponseInputItem>, Vec<ResponseItem>) {
     let mut items_to_record_in_conversation_history = Vec::<ResponseItem>::new();
     let mut responses = Vec::<ResponseInputItem>::new();
@@ -59,14 +61,11 @@ pub(crate) async fn process_items(
             ) => {
                 items_to_record_in_conversation_history.push(item);
                 let output = match result {
-                    Ok(call_tool_result) => {
-                        crate::codex::convert_call_tool_result_to_function_call_output_payload(
-                            call_tool_result,
-                        )
-                    }
+                    Ok(call_tool_result) => FunctionCallOutputPayload::from(call_tool_result),
                     Err(err) => FunctionCallOutputPayload {
                         content: err.clone(),
                         success: Some(false),
+                        ..Default::default()
                     },
                 };
                 items_to_record_in_conversation_history.push(ResponseItem::FunctionCallOutput {
@@ -104,7 +103,7 @@ pub(crate) async fn process_items(
         if is_review_mode {
             review_thread_history.record_items(items_to_record_in_conversation_history.iter());
         } else {
-            sess.record_conversation_items(&items_to_record_in_conversation_history)
+            sess.record_conversation_items(turn_context, &items_to_record_in_conversation_history)
                 .await;
         }
     }

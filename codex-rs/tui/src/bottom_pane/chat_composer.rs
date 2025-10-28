@@ -573,6 +573,16 @@ impl ChatComposer {
 
     #[inline]
     fn handle_non_ascii_char(&mut self, input: KeyEvent) -> (InputResult, bool) {
+        if let KeyEvent {
+            code: KeyCode::Char(ch),
+            ..
+        } = input
+        {
+            let now = Instant::now();
+            if self.paste_burst.try_append_char_if_active(ch, now) {
+                return (InputResult::None, true);
+            }
+        }
         if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
             self.handle_paste(pasted);
         }

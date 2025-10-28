@@ -12,7 +12,9 @@ use crate::sandboxing::execute_env;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
+use crate::tools::sandboxing::SandboxRetryData;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
@@ -31,6 +33,15 @@ pub struct ShellRequest {
     pub env: std::collections::HashMap<String, String>,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
+}
+
+impl ProvidesSandboxRetryData for ShellRequest {
+    fn sandbox_retry_data(&self) -> Option<SandboxRetryData> {
+        Some(SandboxRetryData {
+            command: self.command.clone(),
+            cwd: self.cwd.clone(),
+        })
+    }
 }
 
 #[derive(Default)]
@@ -214,17 +225,26 @@ impl Approvable<ShellRequest> for ShellRuntime {
             .retry_reason
             .clone()
             .or_else(|| req.justification.clone());
+        let risk = ctx.risk.clone();
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
             // Lookup in order: RAW → STRIPPED → CANONICAL. Persist all on approval.
-            if let Some(decision) = session.services.tool_approvals.lock().await.get_any(&keys) {
+            if let Some(decision) = session
+                .services
+                .tool_approvals
+                .lock()
+                .await
+                .get_any(&keys)
+            {
                 return decision;
             }
+
             let decision = session
-                .request_command_approval(turn, call_id, command, cwd, reason)
+                .request_command_approval(turn, call_id, command, cwd, reason, risk)
                 .await;
+
             if matches!(decision, ReviewDecision::ApprovedForSession) {
                 session
                     .services
@@ -233,6 +253,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                     .await
                     .put_all(&keys, ReviewDecision::ApprovedForSession);
             }
+
             decision
         })
     }
