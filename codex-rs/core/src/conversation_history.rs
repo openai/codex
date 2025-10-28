@@ -530,6 +530,7 @@ fn is_api_message(message: &ResponseItem) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_git_tooling::GhostCommit;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::models::LocalShellAction;
@@ -626,7 +627,7 @@ mod tests {
         ];
         history.record_items(items.iter());
 
-        let filtered = history.get_history();
+        let filtered = history.get_history_for_prompt();
         assert_eq!(
             filtered,
             vec![
@@ -644,6 +645,16 @@ mod tests {
             .filter(|item| matches!(item, ResponseItem::Reasoning { .. }))
             .count();
         assert_eq!(reasoning_count, 3);
+    }
+
+    #[test]
+    fn get_history_for_prompt_drops_ghost_commits() {
+        let items = vec![ResponseItem::GhostSnapshot {
+            ghost_commit: GhostCommit::new("ghost-1".to_string(), None, Vec::new(), Vec::new()),
+        }];
+        let mut history = create_history_with_items(items);
+        let filtered = history.get_history_for_prompt();
+        assert_eq!(filtered, vec![]);
     }
 
     #[test]
