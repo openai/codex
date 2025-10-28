@@ -254,6 +254,7 @@ pub(crate) fn is_likely_sandbox_denied(
     // 2: misuse of shell builtins
     // 126: permission denied
     // 127: command not found
+    const QUICK_REJECT_EXIT_CODES: [i32; 3] = [2, 126, 127];
     const SANDBOX_DENIED_KEYWORDS: [&str; 7] = [
         "operation not permitted",
         "permission denied",
@@ -281,7 +282,6 @@ pub(crate) fn is_likely_sandbox_denied(
         return true;
     }
 
-    const QUICK_REJECT_EXIT_CODES: [i32; 3] = [2, 126, 127];
     if QUICK_REJECT_EXIT_CODES.contains(&exec_output.exit_code) {
         return false;
     }
