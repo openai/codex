@@ -1,6 +1,5 @@
 use crate::config::CONFIG_TOML_FILE;
 use crate::config_types::McpServerConfig;
-use crate::config_types::McpServerTransportConfig;
 use crate::config_types::Notice;
 use anyhow::Context;
 use codex_protocol::config_types::ReasoningEffort;
@@ -9,7 +8,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use tokio::task;
-use toml_edit::Array as TomlArray;
 use toml_edit::DocumentMut;
 use toml_edit::Item as TomlItem;
 use toml_edit::Table as TomlTable;
