@@ -244,10 +244,20 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             } else {
                                 match std::fs::read(&path) {
                                     Ok(bytes) => {
-                                        let mime = mime_guess::from_path(&path)
-                                            .first()
-                                            .map(|m| m.essence_str().to_owned())
-                                            .unwrap_or_else(|| "image".to_string());
+                                        let Some(mime_guess) = mime_guess::from_path(&path).first()
+                                        else {
+                                            return local_image_error_placeholder(
+                                                &path,
+                                                "unsupported MIME type (unknown)",
+                                            );
+                                        };
+                                        let mime = mime_guess.essence_str().to_owned();
+                                        if !mime.starts_with("image/") {
+                                            return local_image_error_placeholder(
+                                                &path,
+                                                format!("unsupported MIME type `{mime}`"),
+                                            );
+                                        }
                                         let encoded =
                                             base64::engine::general_purpose::STANDARD.encode(bytes);
                                         ContentItem::InputImage {
