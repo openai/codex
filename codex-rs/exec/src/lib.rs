@@ -249,7 +249,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         std::process::exit(1);
     }
 
-    let auth_manager = AuthManager::shared(config.codex_home.clone(), true);
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        true,
+        config.cli_auth_credentials_store_mode,
+    );
     let conversation_manager = ConversationManager::new(auth_manager.clone(), SessionSource::Exec);
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.

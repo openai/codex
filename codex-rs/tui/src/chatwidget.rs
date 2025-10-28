@@ -1219,7 +1219,10 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
             SlashCommand::Logout => {
-                if let Err(e) = codex_core::auth::logout(&self.config.codex_home) {
+                if let Err(e) = codex_core::auth::logout(
+                    &self.config.codex_home,
+                    self.config.cli_auth_credentials_store_mode,
+                ) {
                     tracing::error!("failed to logout: {e}");
                 }
                 self.app_event_tx.send(AppEvent::ExitRequest);
