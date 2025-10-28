@@ -150,10 +150,10 @@ impl ApprovalOverlay {
         if let Some(variant) = self.current_variant.as_ref() {
             match (&variant, option.decision) {
                 (ApprovalVariant::Exec { id, command }, decision) => {
-                    self.handle_exec_decision(id, command, decision);
+                    self.handle_exec_decision(&id, &command, decision);
                 }
                 (ApprovalVariant::ApplyPatch { id, .. }, decision) => {
-                    self.handle_patch_decision(id, decision);
+                    self.handle_patch_decision(&id, decision);
                 }
             }
         }

@@ -497,7 +497,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 // Respect root-level `-c` overrides plus top-level flags like `--profile`.
                 let cli_kv_overrides = root_config_overrides
                     .parse_overrides()
-                    .map_err(|e| anyhow::anyhow!(e))?;
+                    .map_err(anyhow::Error::msg)?;
 
                 // Thread through relevant top-level flags (at minimum, `--profile`).
                 // Also honor `--search` since it maps to a feature toggle.

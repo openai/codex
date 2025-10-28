@@ -80,6 +80,7 @@ pub unsafe fn dacl_has_write_allow_for_sid(p_dacl: *mut ACL, psid: *mut c_void) 
 
 // Compute effective rights for a trustee SID against a DACL and decide if write is effectively allowed.
 // This accounts for deny ACEs and ordering; falls back to a conservative per-ACE scan if the API fails.
+#[allow(dead_code)]
 pub unsafe fn dacl_effective_allows_write(p_dacl: *mut ACL, psid: *mut c_void) -> bool {
     if p_dacl.is_null() {
         return false;
@@ -89,7 +90,7 @@ pub unsafe fn dacl_effective_allows_write(p_dacl: *mut ACL, psid: *mut c_void) -
     use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
     use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
 
-    let mut trustee = TRUSTEE_W {
+    let trustee = TRUSTEE_W {
         pMultipleTrustee: std::ptr::null_mut(),
         MultipleTrusteeOperation: 0,
         TrusteeForm: TRUSTEE_IS_SID,

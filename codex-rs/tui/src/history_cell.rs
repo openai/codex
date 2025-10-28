@@ -1424,7 +1424,7 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
     let args_str = invocation
         .arguments
         .as_ref()
-        .map(|v| {
+        .map(|v: &serde_json::Value| {
             // Use compact form to keep things short but readable.
             serde_json::to_string(v).unwrap_or_else(|_| v.to_string())
         })
