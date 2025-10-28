@@ -1661,7 +1661,7 @@ pub(crate) async fn run_task(
             if !pending_input.is_empty() {
                 review_thread_history.record_items(&pending_input);
             }
-            review_thread_history.get_history()
+            review_thread_history.get_history_for_prompt()
         } else {
             sess.record_conversation_items(&turn_context, &pending_input)
                 .await;
@@ -1820,13 +1820,6 @@ fn parse_review_output_event(text: &str) -> ReviewOutputEvent {
         overall_explanation: text.to_string(),
         ..Default::default()
     }
-}
-
-fn filter_model_visible_history(input: Vec<ResponseItem>) -> Vec<ResponseItem> {
-    input
-        .into_iter()
-        .filter(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }))
-        .collect()
 }
 
 async fn run_turn(

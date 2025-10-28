@@ -86,10 +86,9 @@ async fn run_compact_task_inner(
     sess.persist_rollout_items(&[rollout_item]).await;
 
     loop {
-        let turn_input = history.get_history();
-        let prompt_input = filter_model_visible_history(turn_input.clone());
+        let turn_input = history.get_history_for_prompt();
         let prompt = Prompt {
-            input: prompt_input.clone(),
+            input: turn_input,
             ..Default::default()
         };
         let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;

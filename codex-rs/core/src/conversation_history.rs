@@ -64,7 +64,14 @@ impl ConversationHistory {
 
     pub(crate) fn get_history(&mut self) -> Vec<ResponseItem> {
         self.normalize_history();
-        let mut history = self.contents();
+        self.contents()
+    }
+
+    // Returns the history prepared for sending to the model.
+    // With extra response items filtered out and GhostCommits removed.
+    pub(crate) fn get_history_for_prompt(&mut self) -> Vec<ResponseItem> {
+        let mut history = self.get_history();
+        Self::remove_ghost_snapshots(&mut history);
         Self::remove_reasoning_before_last_turn(&mut history);
         history
     }
@@ -111,6 +118,10 @@ impl ConversationHistory {
     /// Returns a clone of the contents in the transcript.
     fn contents(&self) -> Vec<ResponseItem> {
         self.items.clone()
+    }
+
+    fn remove_ghost_snapshots(items: &mut Vec<ResponseItem>) {
+        items.retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
     }
 
     fn remove_reasoning_before_last_turn(items: &mut Vec<ResponseItem>) {
