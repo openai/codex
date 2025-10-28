@@ -39,7 +39,6 @@ use crate::process::wait_process_and_exitcode;
 use crate::token::convert_string_sid_to_sid;
 use crate::token::create_readonly_token_with_cap;
 use crate::token::create_workspace_write_token_with_cap;
-use crate::token::create_write_restricted_token_compat;
 use crate::token::get_current_token_for_restriction;
 use crate::token::get_logon_sid_bytes;
 
@@ -100,12 +99,8 @@ fn main() -> Result<()> {
                 let caps = load_or_create_cap_sids(&policy_cwd);
                 ensure_dir(&cap_sid_file(&policy_cwd))?;
                 fs::write(cap_sid_file(&policy_cwd), serde_json::to_string(&caps)?)?;
-                if std::env::var("SBX_USE_COMPAT").ok().as_deref() == Some("1") {
-                    create_write_restricted_token_compat()?
-                } else {
-                    let psid = convert_string_sid_to_sid(&caps.workspace).unwrap();
-                    create_workspace_write_token_with_cap(psid)?
-                }
+                let psid = convert_string_sid_to_sid(&caps.workspace).unwrap();
+                create_workspace_write_token_with_cap(psid)?
             }
         }
     };
