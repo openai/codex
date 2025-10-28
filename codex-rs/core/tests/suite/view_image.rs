@@ -368,32 +368,26 @@ async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()>
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
-    let body = mock.single_request().body_json();
+    let request = mock.single_request();
     assert!(
-        find_image_message(&body).is_none(),
+        request.inputs_of_type("input_image").is_empty(),
         "non-image file should not produce an input_image message"
     );
 
-    let placeholder = body
-        .get("input")
-        .and_then(Value::as_array)
-        .and_then(|items| {
-            items.iter().find_map(|item| {
-                if item.get("type").and_then(Value::as_str) != Some("message") {
-                    return None;
-                }
-                let content = item.get("content").and_then(Value::as_array)?;
-                content.iter().find_map(|span| {
-                    if span.get("type").and_then(Value::as_str) == Some("input_text") {
-                        let text = span.get("text").and_then(Value::as_str)?;
-                        if text.contains("Codex could not read the local image at")
-                            && text.contains("unsupported MIME type `application/json`")
-                        {
-                            return Some(text);
-                        }
+    let placeholder = request.inputs_of_type("message")
+        .iter()
+        .find_map(|item| {
+            let content = item.get("content").and_then(Value::as_array)?;
+            content.iter().find_map(|span| {
+                if span.get("type").and_then(Value::as_str) == Some("input_text") {
+                    let text = span.get("text").and_then(Value::as_str)?;
+                    if text.contains("Codex could not read the local image at")
+                        && text.contains("unsupported MIME type `application/json`")
+                    {
+                        return Some(text.to_string());
                     }
-                    None
-                })
+                }
+                None
             })
         })
         .expect("placeholder text found");
