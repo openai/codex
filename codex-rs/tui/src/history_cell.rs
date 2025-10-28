@@ -1023,7 +1023,7 @@ pub(crate) fn new_deprecation_notice(
 impl HistoryCell for DeprecationNoticeCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(vec![self.summary.clone().red()].into());
+        lines.push(vec!["⚠ ".red().bold(), self.summary.clone().red()].into());
 
         let wrap_width = width.saturating_sub(4).max(1) as usize;
 
