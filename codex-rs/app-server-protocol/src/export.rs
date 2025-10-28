@@ -16,6 +16,7 @@ use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
@@ -177,24 +178,16 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
 
     for (name, schema) in bundle {
         let mut schema_value = serde_json::to_value(schema)?;
-        if let Value::Object(ref mut obj) = schema_value {
-            if let Some(defs) = obj.remove("definitions")
-                && let Value::Object(defs_obj) = defs
-            {
-                for (def_name, def_schema) in defs_obj {
-                    if !SPECIAL_DEFINITIONS.contains(&def_name.as_str()) {
-                        definitions.insert(def_name, def_schema);
-                    }
-                }
-            }
+        annotate_schema(&mut schema_value, Some(name.as_str()));
 
-            if let Some(Value::Array(one_of)) = obj.get_mut("oneOf") {
-                for variant in one_of.iter_mut() {
-                    if let Some(variant_name) = variant_definition_name(&name, variant)
-                        && let Value::Object(variant_obj) = variant
-                    {
-                        variant_obj.insert("title".into(), Value::String(variant_name));
-                    }
+        if let Value::Object(ref mut obj) = schema_value
+            && let Some(defs) = obj.remove("definitions")
+            && let Value::Object(defs_obj) = defs
+        {
+            for (def_name, mut def_schema) in defs_obj {
+                if !SPECIAL_DEFINITIONS.contains(&def_name.as_str()) {
+                    annotate_schema(&mut def_schema, Some(def_name.as_str()));
+                    definitions.insert(def_name, def_schema);
                 }
             }
         }
@@ -227,9 +220,12 @@ where
 {
     let file_stem = name.trim();
     let schema = schema_for!(T);
-    write_pretty_json(out_dir.join(format!("{file_stem}.json")), &schema)
+    let mut schema_value = serde_json::to_value(schema)?;
+    annotate_schema(&mut schema_value, Some(file_stem));
+    write_pretty_json(out_dir.join(format!("{file_stem}.json")), &schema_value)
         .with_context(|| format!("Failed to write JSON schema for {file_stem}"))?;
-    Ok(schema)
+    let annotated_schema = serde_json::from_value(schema_value)?;
+    Ok(annotated_schema)
 }
 
 pub(crate) fn write_json_schema<T>(out_dir: &Path, name: &str) -> Result<()>
@@ -301,11 +297,147 @@ fn variant_definition_name(base: &str, variant: &Value) -> Option<String> {
 }
 
 fn literal_from_property<'a>(props: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
-    props
-        .get(key)
-        .and_then(|value| value.get("enum"))
-        .and_then(Value::as_array)
-        .and_then(|arr| arr.first())
+    props.get(key).and_then(string_literal)
+}
+
+fn string_literal(value: &Value) -> Option<&str> {
+    value.get("const").and_then(Value::as_str).or_else(|| {
+        value
+            .get("enum")
+            .and_then(Value::as_array)
+            .and_then(|arr| arr.first())
+            .and_then(Value::as_str)
+    })
+}
+
+fn annotate_schema(value: &mut Value, base: Option<&str>) {
+    match value {
+        Value::Object(map) => annotate_object(map, base),
+        Value::Array(items) => {
+            for item in items {
+                annotate_schema(item, base);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn annotate_object(map: &mut Map<String, Value>, base: Option<&str>) {
+    let owner = map.get("title").and_then(Value::as_str).map(str::to_owned);
+    if let Some(owner) = owner.as_deref()
+        && let Some(Value::Object(props)) = map.get_mut("properties")
+    {
+        set_discriminator_titles(props, owner);
+    }
+
+    if let Some(Value::Array(variants)) = map.get_mut("oneOf") {
+        annotate_variant_list(variants, base);
+    }
+    if let Some(Value::Array(variants)) = map.get_mut("anyOf") {
+        annotate_variant_list(variants, base);
+    }
+
+    if let Some(Value::Object(defs)) = map.get_mut("definitions") {
+        for (name, schema) in defs.iter_mut() {
+            annotate_schema(schema, Some(name.as_str()));
+        }
+    }
+
+    if let Some(Value::Object(defs)) = map.get_mut("$defs") {
+        for (name, schema) in defs.iter_mut() {
+            annotate_schema(schema, Some(name.as_str()));
+        }
+    }
+
+    if let Some(Value::Object(props)) = map.get_mut("properties") {
+        for value in props.values_mut() {
+            annotate_schema(value, base);
+        }
+    }
+
+    if let Some(items) = map.get_mut("items") {
+        annotate_schema(items, base);
+    }
+
+    if let Some(additional) = map.get_mut("additionalProperties") {
+        annotate_schema(additional, base);
+    }
+
+    for (key, child) in map.iter_mut() {
+        match key.as_str() {
+            "oneOf"
+            | "anyOf"
+            | "definitions"
+            | "$defs"
+            | "properties"
+            | "items"
+            | "additionalProperties" => {}
+            _ => annotate_schema(child, base),
+        }
+    }
+}
+
+fn annotate_variant_list(variants: &mut [Value], base: Option<&str>) {
+    let mut seen = HashSet::new();
+
+    for variant in variants.iter() {
+        if let Some(name) = variant_title(variant) {
+            seen.insert(name.to_owned());
+        }
+    }
+
+    for variant in variants.iter_mut() {
+        let mut variant_name = variant_title(variant).map(str::to_owned);
+
+        if variant_name.is_none()
+            && let Some(base_name) = base
+            && let Some(name) = variant_definition_name(base_name, variant)
+        {
+            let mut candidate = name.clone();
+            let mut index = 2;
+            while seen.contains(&candidate) {
+                candidate = format!("{name}{index}");
+                index += 1;
+            }
+            if let Some(obj) = variant.as_object_mut() {
+                obj.insert("title".into(), Value::String(candidate.clone()));
+            }
+            seen.insert(candidate.clone());
+            variant_name = Some(candidate);
+        }
+
+        if let Some(name) = variant_name.as_deref()
+            && let Some(obj) = variant.as_object_mut()
+            && let Some(Value::Object(props)) = obj.get_mut("properties")
+        {
+            set_discriminator_titles(props, name);
+        }
+
+        annotate_schema(variant, base);
+    }
+}
+
+const DISCRIMINATOR_KEYS: &[&str] = &["type", "method", "mode", "status", "role", "reason"];
+
+fn set_discriminator_titles(props: &mut Map<String, Value>, owner: &str) {
+    for key in DISCRIMINATOR_KEYS {
+        if let Some(prop_schema) = props.get_mut(*key)
+            && string_literal(prop_schema).is_some()
+            && let Value::Object(prop_obj) = prop_schema
+        {
+            if prop_obj.contains_key("title") {
+                continue;
+            }
+            let suffix = to_pascal_case(key);
+            prop_obj.insert("title".into(), Value::String(format!("{owner}{suffix}")));
+        }
+    }
+}
+
+fn variant_title(value: &Value) -> Option<&str> {
+    value
+        .as_object()
+        .and_then(|obj| obj.get("title"))
         .and_then(Value::as_str)
 }
 
