@@ -39,6 +39,7 @@ use crate::client_common::ResponsesApiRequest;
 use crate::client_common::create_reasoning_param_for_request;
 use crate::client_common::create_text_param_for_request;
 use crate::config::Config;
+use crate::default_client::CodexHttpClient;
 use crate::default_client::create_client;
 use crate::error::CodexErr;
 use crate::error::ConnectionFailedError;
@@ -81,7 +82,7 @@ pub struct ModelClient {
     config: Arc<Config>,
     auth_manager: Option<Arc<AuthManager>>,
     otel_event_manager: OtelEventManager,
-    client: reqwest::Client,
+    client: CodexHttpClient,
     provider: ModelProviderInfo,
     conversation_id: ConversationId,
     effort: Option<ReasoningEffortConfig>,
@@ -131,6 +132,14 @@ impl ModelClient {
     /// specialised helpers are private to avoid accidental misuse.
     pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
         self.stream_with_task_kind(prompt, TaskKind::Regular).await
+    }
+
+    pub fn config(&self) -> Arc<Config> {
+        Arc::clone(&self.config)
+    }
+
+    pub fn provider(&self) -> &ModelProviderInfo {
+        &self.provider
     }
 
     pub(crate) async fn stream_with_task_kind(
@@ -214,18 +223,14 @@ impl ModelClient {
 
         let input_with_instructions = prompt.get_formatted_input();
 
-        let verbosity = match &self.config.model_family.family {
-            family if family == "gpt-5" => self.config.model_verbosity,
-            _ => {
-                if self.config.model_verbosity.is_some() {
-                    warn!(
-                        "model_verbosity is set but ignored for non-gpt-5 model family: {}",
-                        self.config.model_family.family
-                    );
-                }
-
-                None
-            }
+        let verbosity = if self.config.model_family.support_verbosity {
+            self.config.model_verbosity
+        } else {
+            warn!(
+                "model_verbosity is set but ignored as the model does not support verbosity: {}",
+                self.config.model_family.family
+            );
+            None
         };
 
         // Only include `text.verbosity` for GPT-5 family models
@@ -300,6 +305,7 @@ impl ModelClient {
             "POST to {}: {:?}",
             self.provider.get_full_url(&auth),
             serde_json::to_string(payload_json)
+                .unwrap_or("<unable to serialize payload>".to_string())
         );
 
         let mut req_builder = self
@@ -309,7 +315,6 @@ impl ModelClient {
             .map_err(StreamAttemptError::Fatal)?;
 
         req_builder = req_builder
-            .header("OpenAI-Beta", "responses=experimental")
             // Send session_id for compatibility.
             .header("conversation_id", self.conversation_id.to_string())
             .header("session_id", self.conversation_id.to_string())
@@ -335,13 +340,6 @@ impl ModelClient {
                 .headers()
                 .get("cf-ray")
                 .map(|v| v.to_str().unwrap_or_default().to_string());
-
-            debug!(
-                "Response status: {}, cf-ray: {:?}, version: {:?}",
-                resp.status(),
-                request_id,
-                resp.version()
-            );
         }
 
         match res {
@@ -386,9 +384,14 @@ impl ModelClient {
 
                 if status == StatusCode::UNAUTHORIZED
                     && let Some(manager) = auth_manager.as_ref()
-                    && manager.auth().is_some()
+                    && let Some(auth) = auth.as_ref()
+                    && auth.mode == AuthMode::ChatGPT
                 {
-                    let _ = manager.refresh_token().await;
+                    manager.refresh_token().await.map_err(|err| {
+                        StreamAttemptError::Fatal(CodexErr::Fatal(format!(
+                            "Failed to refresh ChatGPT credentials: {err}"
+                        )))
+                    })?;
                 }
 
                 // The OpenAI Responses endpoint returns structured JSON bodies even for 4xx/5xx

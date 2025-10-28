@@ -1,3 +1,4 @@
+use crate::auth::AuthCredentialsStoreMode;
 use crate::config_loader::LoadedConfigLayers;
 pub use crate::config_loader::load_config_as_toml;
 use crate::config_loader::load_config_layers_with_overrides;
@@ -108,6 +109,10 @@ pub struct Config {
     /// for either of approval_policy or sandbox_mode.
     pub did_user_set_custom_approval_policy_or_sandbox_mode: bool,
 
+    /// On Windows, indicates that a previously configured workspace-write sandbox
+    /// was coerced to read-only because native auto mode is unsupported.
+    pub forced_auto_mode_downgraded_on_windows: bool,
+
     pub shell_environment_policy: ShellEnvironmentPolicy,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
@@ -155,6 +160,12 @@ pub struct Config {
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
     pub cwd: PathBuf,
+
+    /// Preferred store for CLI auth credentials.
+    /// file (default): Use a file in the Codex home directory.
+    /// keyring: Use an OS-specific keyring service.
+    /// auto: Use the OS-specific keyring service if available, otherwise use a file.
+    pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     pub mcp_servers: HashMap<String, McpServerConfig>,
@@ -222,6 +233,9 @@ pub struct Config {
     pub include_apply_patch_tool: bool,
 
     pub tools_web_search_request: bool,
+
+    /// When `true`, run a model-based assessment for commands denied by the sandbox.
+    pub experimental_sandbox_command_assessment: bool,
 
     pub use_experimental_streamable_shell_tool: bool,
 
@@ -866,6 +880,13 @@ pub struct ConfigToml {
     #[serde(default)]
     pub forced_login_method: Option<ForcedLoginMethod>,
 
+    /// Preferred backend for storing CLI auth credentials.
+    /// file (default): Use a file in the Codex home directory.
+    /// keyring: Use an OS-specific keyring service.
+    /// auto: Use the keyring if available, otherwise use a file.
+    #[serde(default)]
+    pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
+
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     #[serde(default)]
     pub mcp_servers: HashMap<String, McpServerConfig>,
@@ -958,6 +979,7 @@ pub struct ConfigToml {
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
+    pub experimental_sandbox_command_assessment: Option<bool>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -1018,14 +1040,22 @@ impl From<ToolsToml> for Tools {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct SandboxPolicyResolution {
+    pub policy: SandboxPolicy,
+    pub forced_auto_mode_downgraded_on_windows: bool,
+}
+
 impl ConfigToml {
     /// Derive the effective sandbox policy from the configuration.
     fn derive_sandbox_policy(
         &self,
         sandbox_mode_override: Option<SandboxMode>,
+        profile_sandbox_mode: Option<SandboxMode>,
         resolved_cwd: &Path,
-    ) -> SandboxPolicy {
+    ) -> SandboxPolicyResolution {
         let resolved_sandbox_mode = sandbox_mode_override
+            .or(profile_sandbox_mode)
             .or(self.sandbox_mode)
             .or_else(|| {
                 // if no sandbox_mode is set, but user has marked directory as trusted, use WorkspaceWrite
@@ -1038,7 +1068,7 @@ impl ConfigToml {
                 })
             })
             .unwrap_or_default();
-        match resolved_sandbox_mode {
+        let mut sandbox_policy = match resolved_sandbox_mode {
             SandboxMode::ReadOnly => SandboxPolicy::new_read_only_policy(),
             SandboxMode::WorkspaceWrite => match self.sandbox_workspace_write.as_ref() {
                 Some(SandboxWorkspaceWrite {
@@ -1055,6 +1085,17 @@ impl ConfigToml {
                 None => SandboxPolicy::new_workspace_write_policy(),
             },
             SandboxMode::DangerFullAccess => SandboxPolicy::DangerFullAccess,
+        };
+        let mut forced_auto_mode_downgraded_on_windows = false;
+        if cfg!(target_os = "windows")
+            && matches!(resolved_sandbox_mode, SandboxMode::WorkspaceWrite)
+        {
+            sandbox_policy = SandboxPolicy::new_read_only_policy();
+            forced_auto_mode_downgraded_on_windows = true;
+        }
+        SandboxPolicyResolution {
+            policy: sandbox_policy,
+            forced_auto_mode_downgraded_on_windows,
         }
     }
 
@@ -1118,6 +1159,7 @@ pub struct ConfigOverrides {
     pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    pub experimental_sandbox_command_assessment: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -1147,6 +1189,7 @@ impl Config {
             include_view_image_tool: include_view_image_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            experimental_sandbox_command_assessment: sandbox_command_assessment_override,
             additional_writable_roots,
         } = overrides;
 
@@ -1172,6 +1215,7 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_override,
             include_view_image_tool: include_view_image_tool_override,
             web_search_request: override_tools_web_search_request,
+            experimental_sandbox_command_assessment: sandbox_command_assessment_override,
         };
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
@@ -1212,7 +1256,10 @@ impl Config {
             .get_active_project(&resolved_cwd)
             .unwrap_or(ProjectConfig { trust_level: None });
 
-        let mut sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode, &resolved_cwd);
+        let SandboxPolicyResolution {
+            policy: mut sandbox_policy,
+            forced_auto_mode_downgraded_on_windows,
+        } = cfg.derive_sandbox_policy(sandbox_mode, config_profile.sandbox_mode, &resolved_cwd);
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
             for path in additional_writable_roots {
                 if !writable_roots.iter().any(|existing| existing == &path) {
@@ -1235,8 +1282,8 @@ impl Config {
             .is_some()
             || config_profile.approval_policy.is_some()
             || cfg.approval_policy.is_some()
-            // TODO(#3034): profile.sandbox_mode is not implemented
             || sandbox_mode.is_some()
+            || config_profile.sandbox_mode.is_some()
             || cfg.sandbox_mode.is_some();
 
         let mut model_providers = built_in_model_providers();
@@ -1269,6 +1316,8 @@ impl Config {
         let use_experimental_streamable_shell_tool = features.enabled(Feature::StreamableShell);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
         let use_experimental_use_rmcp_client = features.enabled(Feature::RmcpClient);
+        let experimental_sandbox_command_assessment =
+            features.enabled(Feature::SandboxCommandAssessment);
 
         let forced_chatgpt_workspace_id =
             cfg.forced_chatgpt_workspace_id.as_ref().and_then(|value| {
@@ -1341,10 +1390,14 @@ impl Config {
             approval_policy,
             sandbox_policy,
             did_user_set_custom_approval_policy_or_sandbox_mode,
+            forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
             notify: cfg.notify,
             user_instructions,
             base_instructions,
+            // The config.toml omits "_mode" because it's a config file. However, "_mode"
+            // is important in code to differentiate the mode from the store implementation.
+            cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
             mcp_servers: cfg.mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
@@ -1390,6 +1443,7 @@ impl Config {
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             tools_web_search_request,
+            experimental_sandbox_command_assessment,
             use_experimental_streamable_shell_tool,
             use_experimental_unified_exec_tool,
             use_experimental_use_rmcp_client,
@@ -1591,10 +1645,17 @@ network_access = false  # This should be ignored.
         let sandbox_full_access_cfg = toml::from_str::<ConfigToml>(sandbox_full_access)
             .expect("TOML deserialization should succeed");
         let sandbox_mode_override = None;
+        let resolution = sandbox_full_access_cfg.derive_sandbox_policy(
+            sandbox_mode_override,
+            None,
+            &PathBuf::from("/tmp/test"),
+        );
         assert_eq!(
-            SandboxPolicy::DangerFullAccess,
-            sandbox_full_access_cfg
-                .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
+            resolution,
+            SandboxPolicyResolution {
+                policy: SandboxPolicy::DangerFullAccess,
+                forced_auto_mode_downgraded_on_windows: false,
+            }
         );
 
         let sandbox_read_only = r#"
@@ -1607,10 +1668,17 @@ network_access = true  # This should be ignored.
         let sandbox_read_only_cfg = toml::from_str::<ConfigToml>(sandbox_read_only)
             .expect("TOML deserialization should succeed");
         let sandbox_mode_override = None;
+        let resolution = sandbox_read_only_cfg.derive_sandbox_policy(
+            sandbox_mode_override,
+            None,
+            &PathBuf::from("/tmp/test"),
+        );
         assert_eq!(
-            SandboxPolicy::ReadOnly,
-            sandbox_read_only_cfg
-                .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
+            resolution,
+            SandboxPolicyResolution {
+                policy: SandboxPolicy::ReadOnly,
+                forced_auto_mode_downgraded_on_windows: false,
+            }
         );
 
         let sandbox_workspace_write = r#"
@@ -1627,16 +1695,33 @@ exclude_slash_tmp = true
         let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
             .expect("TOML deserialization should succeed");
         let sandbox_mode_override = None;
-        assert_eq!(
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![PathBuf::from("/my/workspace")],
-                network_access: false,
-                exclude_tmpdir_env_var: true,
-                exclude_slash_tmp: true,
-            },
-            sandbox_workspace_write_cfg
-                .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
+        let resolution = sandbox_workspace_write_cfg.derive_sandbox_policy(
+            sandbox_mode_override,
+            None,
+            &PathBuf::from("/tmp/test"),
         );
+        if cfg!(target_os = "windows") {
+            assert_eq!(
+                resolution,
+                SandboxPolicyResolution {
+                    policy: SandboxPolicy::ReadOnly,
+                    forced_auto_mode_downgraded_on_windows: true,
+                }
+            );
+        } else {
+            assert_eq!(
+                resolution,
+                SandboxPolicyResolution {
+                    policy: SandboxPolicy::WorkspaceWrite {
+                        writable_roots: vec![PathBuf::from("/my/workspace")],
+                        network_access: false,
+                        exclude_tmpdir_env_var: true,
+                        exclude_slash_tmp: true,
+                    },
+                    forced_auto_mode_downgraded_on_windows: false,
+                }
+            );
+        }
 
         let sandbox_workspace_write = r#"
 sandbox_mode = "workspace-write"
@@ -1655,16 +1740,33 @@ trust_level = "trusted"
         let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
             .expect("TOML deserialization should succeed");
         let sandbox_mode_override = None;
-        assert_eq!(
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![PathBuf::from("/my/workspace")],
-                network_access: false,
-                exclude_tmpdir_env_var: true,
-                exclude_slash_tmp: true,
-            },
-            sandbox_workspace_write_cfg
-                .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
+        let resolution = sandbox_workspace_write_cfg.derive_sandbox_policy(
+            sandbox_mode_override,
+            None,
+            &PathBuf::from("/tmp/test"),
         );
+        if cfg!(target_os = "windows") {
+            assert_eq!(
+                resolution,
+                SandboxPolicyResolution {
+                    policy: SandboxPolicy::ReadOnly,
+                    forced_auto_mode_downgraded_on_windows: true,
+                }
+            );
+        } else {
+            assert_eq!(
+                resolution,
+                SandboxPolicyResolution {
+                    policy: SandboxPolicy::WorkspaceWrite {
+                        writable_roots: vec![PathBuf::from("/my/workspace")],
+                        network_access: false,
+                        exclude_tmpdir_env_var: true,
+                        exclude_slash_tmp: true,
+                    },
+                    forced_auto_mode_downgraded_on_windows: false,
+                }
+            );
+        }
     }
 
     #[test]
@@ -1689,20 +1791,72 @@ trust_level = "trusted"
         )?;
 
         let expected_backend = canonicalize(&backend).expect("canonicalize backend directory");
-        match config.sandbox_policy {
-            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
-                assert_eq!(
-                    writable_roots
-                        .iter()
-                        .filter(|root| **root == expected_backend)
-                        .count(),
-                    1,
-                    "expected single writable root entry for {}",
-                    expected_backend.display()
-                );
+        if cfg!(target_os = "windows") {
+            assert!(
+                config.forced_auto_mode_downgraded_on_windows,
+                "expected workspace-write request to be downgraded on Windows"
+            );
+            match config.sandbox_policy {
+                SandboxPolicy::ReadOnly => {}
+                other => panic!("expected read-only policy on Windows, got {other:?}"),
             }
-            other => panic!("expected workspace-write policy, got {other:?}"),
+        } else {
+            match config.sandbox_policy {
+                SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                    assert_eq!(
+                        writable_roots
+                            .iter()
+                            .filter(|root| **root == expected_backend)
+                            .count(),
+                        1,
+                        "expected single writable root entry for {}",
+                        expected_backend.display()
+                    );
+                }
+                other => panic!("expected workspace-write policy, got {other:?}"),
+            }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn config_defaults_to_file_cli_auth_store_mode() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml::default();
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.cli_auth_credentials_store_mode,
+            AuthCredentialsStoreMode::File,
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn config_honors_explicit_keyring_auth_store_mode() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml {
+            cli_auth_credentials_store: Some(AuthCredentialsStoreMode::Keyring),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.cli_auth_credentials_store_mode,
+            AuthCredentialsStoreMode::Keyring,
+        );
 
         Ok(())
     }
@@ -1751,6 +1905,81 @@ trust_level = "trusted"
 
         assert!(!config.features.enabled(Feature::ViewImageTool));
         assert!(!config.include_view_image_tool);
+
+        Ok(())
+    }
+
+    #[test]
+    fn profile_sandbox_mode_overrides_base() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "work".to_string(),
+            ConfigProfile {
+                sandbox_mode: Some(SandboxMode::DangerFullAccess),
+                ..Default::default()
+            },
+        );
+        let cfg = ConfigToml {
+            profiles,
+            profile: Some("work".to_string()),
+            sandbox_mode: Some(SandboxMode::ReadOnly),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(matches!(
+            config.sandbox_policy,
+            SandboxPolicy::DangerFullAccess
+        ));
+        assert!(config.did_user_set_custom_approval_policy_or_sandbox_mode);
+
+        Ok(())
+    }
+
+    #[test]
+    fn cli_override_takes_precedence_over_profile_sandbox_mode() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "work".to_string(),
+            ConfigProfile {
+                sandbox_mode: Some(SandboxMode::DangerFullAccess),
+                ..Default::default()
+            },
+        );
+        let cfg = ConfigToml {
+            profiles,
+            profile: Some("work".to_string()),
+            ..Default::default()
+        };
+
+        let overrides = ConfigOverrides {
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            overrides,
+            codex_home.path().to_path_buf(),
+        )?;
+
+        if cfg!(target_os = "windows") {
+            assert!(matches!(config.sandbox_policy, SandboxPolicy::ReadOnly));
+            assert!(config.forced_auto_mode_downgraded_on_windows);
+        } else {
+            assert!(matches!(
+                config.sandbox_policy,
+                SandboxPolicy::WorkspaceWrite { .. }
+            ));
+            assert!(!config.forced_auto_mode_downgraded_on_windows);
+        }
 
         Ok(())
     }
@@ -2849,10 +3078,12 @@ model_verbosity = "high"
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
+                forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
+                cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: HashMap::new(),
                 mcp_oauth_credentials_store_mode: Default::default(),
                 model_providers: fixture.model_provider_map.clone(),
@@ -2873,6 +3104,7 @@ model_verbosity = "high"
                 forced_login_method: None,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
+                experimental_sandbox_command_assessment: false,
                 use_experimental_streamable_shell_tool: false,
                 use_experimental_unified_exec_tool: false,
                 use_experimental_use_rmcp_client: false,
@@ -2917,10 +3149,12 @@ model_verbosity = "high"
             approval_policy: AskForApproval::UnlessTrusted,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
+            forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
+            cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
             mcp_oauth_credentials_store_mode: Default::default(),
             model_providers: fixture.model_provider_map.clone(),
@@ -2941,6 +3175,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
+            experimental_sandbox_command_assessment: false,
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
@@ -3000,10 +3235,12 @@ model_verbosity = "high"
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
+            forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
+            cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
             mcp_oauth_credentials_store_mode: Default::default(),
             model_providers: fixture.model_provider_map.clone(),
@@ -3024,6 +3261,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
+            experimental_sandbox_command_assessment: false,
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
@@ -3069,10 +3307,12 @@ model_verbosity = "high"
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
+            forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
+            cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
             mcp_oauth_credentials_store_mode: Default::default(),
             model_providers: fixture.model_provider_map.clone(),
@@ -3093,6 +3333,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
+            experimental_sandbox_command_assessment: false,
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,

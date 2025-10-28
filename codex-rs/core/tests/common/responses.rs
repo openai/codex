@@ -68,6 +68,14 @@ impl ResponsesRequest {
             .clone()
     }
 
+    pub fn inputs_of_type(&self, ty: &str) -> Vec<Value> {
+        self.input()
+            .iter()
+            .filter(|item| item.get("type").and_then(Value::as_str) == Some(ty))
+            .cloned()
+            .collect()
+    }
+
     pub fn function_call_output(&self, call_id: &str) -> Value {
         self.call_output(call_id, "function_call_output")
     }
