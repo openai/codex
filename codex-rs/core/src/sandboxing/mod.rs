@@ -75,7 +75,7 @@ impl SandboxManager {
             SandboxablePreference::Forbid => SandboxType::None,
             SandboxablePreference::Require => {
                 // Require a platform sandbox when available; on Windows this
-                // respects the experimental enable_windows_sandbox feature.
+                // respects the experimental_enable_windows_sandbox feature.
                 crate::safety::get_platform_sandbox().unwrap_or(SandboxType::None)
             }
             SandboxablePreference::Auto => match policy {
