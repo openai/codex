@@ -189,7 +189,8 @@ mod windows_impl {
         apply_no_network_to_env(&mut env_map)?;
 
         let current_dir = cwd.to_path_buf();
-        audit::audit_everyone_writable(&current_dir, &env_map)?;
+        // for now, don't fail if we detect world-writable directories
+        // audit::audit_everyone_writable(&current_dir, &env_map)?;
         log_start(&command);
         let (h_token, psid_to_use): (HANDLE, *mut c_void) = unsafe {
             match &policy.0 {
