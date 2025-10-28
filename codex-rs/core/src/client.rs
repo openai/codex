@@ -315,7 +315,6 @@ impl ModelClient {
             .map_err(StreamAttemptError::Fatal)?;
 
         req_builder = req_builder
-            .header("OpenAI-Beta", "responses=experimental")
             // Send session_id for compatibility.
             .header("conversation_id", self.conversation_id.to_string())
             .header("session_id", self.conversation_id.to_string())
