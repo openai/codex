@@ -104,6 +104,7 @@ windows-sys = { version = "0.61.2", features = [
 [dev-dependencies]
 maplit = { workspace = true }
 once_cell = { workspace = true }
+serial_test = "3.2.0"
 pretty_assertions = { workspace = true }
 tokio-test = { workspace = true }
 wiremock = { workspace = true }
