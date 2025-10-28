@@ -7,5 +7,10 @@ version = { workspace = true }
 workspace = true
 
 [dependencies]
-keyring = { workspace = true }
+keyring = { workspace = true, features = [
+    "apple-native",
+    "crypto-rust",
+    "linux-native-async-persistent",
+    "windows-native",
+] }
 tracing = { workspace = true }

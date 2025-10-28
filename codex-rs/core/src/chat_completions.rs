@@ -17,6 +17,7 @@ use crate::util::backoff;
 use bytes::Bytes;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
 use eventsource_stream::Eventsource;
@@ -159,16 +160,26 @@ pub(crate) async fn stream_chat_completions(
     for (idx, item) in input.iter().enumerate() {
         match item {
             ResponseItem::Message { role, content, .. } => {
+                // Build content either as a plain string (typical for assistant text)
+                // or as an array of content items when images are present (user/tool multimodal).
                 let mut text = String::new();
+                let mut items: Vec<serde_json::Value> = Vec::new();
+                let mut saw_image = false;
+
                 for c in content {
                     match c {
                         ContentItem::InputText { text: t }
                         | ContentItem::OutputText { text: t } => {
                             text.push_str(t);
+                            items.push(json!({"type":"text","text": t}));
                         }
-                        _ => {}
+                        ContentItem::InputImage { image_url } => {
+                            saw_image = true;
+                            items.push(json!({"type":"image_url","image_url": {"url": image_url}}));
+                        }
                     }
                 }
+
                 // Skip exact-duplicate assistant messages.
                 if role == "assistant" {
                     if let Some(prev) = &last_assistant_text
@@ -179,7 +190,17 @@ pub(crate) async fn stream_chat_completions(
                     last_assistant_text = Some(text.clone());
                 }
 
-                let mut msg = json!({"role": role, "content": text});
+                // For assistant messages, always send a plain string for compatibility.
+                // For user messages, if an image is present, send an array of content items.
+                let content_value = if role == "assistant" {
+                    json!(text)
+                } else if saw_image {
+                    json!(items)
+                } else {
+                    json!(text)
+                };
+
+                let mut msg = json!({"role": role, "content": content_value});
                 if role == "assistant"
                     && let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
                     && let Some(obj) = msg.as_object_mut()
@@ -238,10 +259,29 @@ pub(crate) async fn stream_chat_completions(
                 messages.push(msg);
             }
             ResponseItem::FunctionCallOutput { call_id, output } => {
+                // Prefer structured content items when available (e.g., images)
+                // otherwise fall back to the legacy plain-string content.
+                let content_value = if let Some(items) = &output.content_items {
+                    let mapped: Vec<serde_json::Value> = items
+                        .iter()
+                        .map(|it| match it {
+                            FunctionCallOutputContentItem::InputText { text } => {
+                                json!({"type":"text","text": text})
+                            }
+                            FunctionCallOutputContentItem::InputImage { image_url } => {
+                                json!({"type":"image_url","image_url": {"url": image_url}})
+                            }
+                        })
+                        .collect();
+                    json!(mapped)
+                } else {
+                    json!(output.content)
+                };
+
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": call_id,
-                    "content": output.content,
+                    "content": content_value,
                 }));
             }
             ResponseItem::CustomToolCall {
