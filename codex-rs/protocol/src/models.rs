@@ -264,16 +264,15 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             };
 
                             // Attempt WSL drive mapping only when relevant.
-                            if matches!(&err, ImageProcessingError::Read { .. }) {
-                                if platform::is_running_under_wsl() {
-                                    let win_path_str = path.to_string_lossy();
-                                    if let Some(mapped) =
-                                        platform::try_map_windows_drive_to_wsl_path(&win_path_str)
-                                    {
-                                        if let Ok(bytes2) = std::fs::read(&mapped) {
-                                            return try_build_data_url(bytes2, std::path::Path::new(&mapped));
-                                        }
-                                    }
+                            if matches!(&err, ImageProcessingError::Read { .. })
+                                && platform::is_running_under_wsl()
+                            {
+                                let win_path_str = path.to_string_lossy();
+
+                                if let Some(mapped) = platform::try_map_windows_drive_to_wsl_path(&win_path_str)
+                                    && let Ok(bytes2) = std::fs::read(&mapped)
+                                {
+                                    return try_build_data_url(bytes2, std::path::Path::new(&mapped));
                                 }
                             }
 
