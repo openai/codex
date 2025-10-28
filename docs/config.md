@@ -325,7 +325,7 @@ Alternatively, set the `AGENTS_HOME` environment variable before launching Codex
 
 #### MCP configuration file
 
-Inside `agents_home`, Codex checks `mcp/mcp.config`, `mcp/mcp.toml`, or `mcp/mcp.json`. If present, the file is parsed (TOML or JSON) and merged with the `mcp_servers` section from `config.toml`. Entries defined in `config.toml` take precedence when the same server id appears in both places.
+Inside `agents_home`, Codex checks for `mcp/mcp.config`, `mcp/mcp.toml`, or `mcp/mcp.json` (in that order) and uses the first file it finds. The contents (TOML or JSON) are merged with the `mcp_servers` section from `config.toml`; entries defined in `config.toml` still take precedence when the same server id appears in both places.
 
 Example `mcp.config`:
 
