@@ -66,6 +66,8 @@ impl Overlay {
 
 const KEY_UP: KeyBinding = key_hint::plain(KeyCode::Up);
 const KEY_DOWN: KeyBinding = key_hint::plain(KeyCode::Down);
+const KEY_K: KeyBinding = key_hint::plain(KeyCode::Char('k'));
+const KEY_J: KeyBinding = key_hint::plain(KeyCode::Char('j'));
 const KEY_PAGE_UP: KeyBinding = key_hint::plain(KeyCode::PageUp);
 const KEY_PAGE_DOWN: KeyBinding = key_hint::plain(KeyCode::PageDown);
 const KEY_SPACE: KeyBinding = key_hint::plain(KeyCode::Char(' '));
@@ -79,7 +81,7 @@ const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
 
 // Common pager navigation hints rendered on the first line
 const PAGER_KEY_HINTS: &[(&[KeyBinding], &str)] = &[
-    (&[KEY_UP, KEY_DOWN], "to scroll"),
+    (&[KEY_UP, KEY_DOWN, KEY_K, KEY_J], "to scroll"),
     (&[KEY_PAGE_UP, KEY_PAGE_DOWN], "to page"),
     (&[KEY_HOME, KEY_END], "to jump"),
 ];
@@ -234,10 +236,10 @@ impl PagerView {
 
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
         match key_event {
-            e if KEY_UP.is_press(e) => {
+            e if KEY_UP.is_press(e) || KEY_K.is_press(e) => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
             }
-            e if KEY_DOWN.is_press(e) => {
+            e if KEY_DOWN.is_press(e) || KEY_J.is_press(e) => {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
             }
             e if KEY_PAGE_UP.is_press(e) => {
