@@ -242,8 +242,6 @@ pub unsafe fn create_workspace_write_token_with_cap(
     Ok((new_token, psid_capability))
 }
 
-
-
 pub unsafe fn create_readonly_token_with_cap(
     psid_capability: *mut c_void,
 ) -> Result<(HANDLE, *mut c_void)> {

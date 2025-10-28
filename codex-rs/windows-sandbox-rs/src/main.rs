@@ -1,61 +1,59 @@
-mod acl;
-mod allow;
-mod cap;
-mod env;
-mod logging;
-mod policy;
-mod process;
-mod token;
-mod winutil;
-
-use anyhow::Context;
-use anyhow::Result;
-use std::collections::HashMap;
-use std::ffi::c_void;
-use std::fs;
-use std::path::Path;
-use std::path::PathBuf;
-use windows_sys::Win32::Foundation::CloseHandle;
-use windows_sys::Win32::Foundation::HANDLE;
-
-use crate::acl::add_allow_ace;
-use crate::acl::allow_null_device;
-use crate::acl::revoke_ace;
-use crate::allow::compute_allow_paths;
-use crate::cap::cap_sid_file;
-use crate::cap::load_or_create_cap_sids;
-use crate::env::apply_no_network_to_env;
-use crate::env::ensure_non_interactive_pager;
-use crate::env::normalize_null_device_env;
-use crate::logging::log_failure;
-use crate::logging::log_start;
-use crate::logging::log_success;
-use crate::policy::SandboxMode;
-use crate::policy::SandboxPolicy;
-use crate::process::assign_to_job;
-use crate::process::create_job_kill_on_close;
-use crate::process::create_process_as_user;
-use crate::process::wait_process_and_exitcode;
-use crate::token::convert_string_sid_to_sid;
-use crate::token::create_readonly_token_with_cap;
-use crate::token::create_workspace_write_token_with_cap;
-use crate::token::get_current_token_for_restriction;
-use crate::token::get_logon_sid_bytes;
-
-fn ensure_dir(p: &Path) -> Result<()> {
-    if let Some(d) = p.parent() {
-        std::fs::create_dir_all(d)?;
-    }
-    Ok(())
+macro_rules! windows_modules {
+    ($($name:ident),+ $(,)?) => {
+        $(#[cfg(target_os = "windows")] mod $name;)+
+    };
 }
 
-// allow::compute_allow_paths now provides the shared logic
+windows_modules!(acl, allow, cap, env, logging, policy, process, token, winutil);
 
-fn main() -> Result<()> {
-    if cfg!(not(windows)) {
-        eprintln!("codex-windows-sandbox is only supported on Windows");
-        std::process::exit(2);
+#[cfg(not(target_os = "windows"))]
+fn main() {
+    eprintln!("codex-windows-sandbox is only supported on Windows");
+    std::process::exit(2);
+}
+
+#[cfg(target_os = "windows")]
+fn main() -> anyhow::Result<()> {
+    use anyhow::Context;
+    use std::collections::HashMap;
+    use std::ffi::c_void;
+    use std::fs;
+    use std::path::Path;
+    use std::path::PathBuf;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Foundation::HANDLE;
+
+    use crate::acl::add_allow_ace;
+    use crate::acl::allow_null_device;
+    use crate::acl::revoke_ace;
+    use crate::allow::compute_allow_paths;
+    use crate::cap::cap_sid_file;
+    use crate::cap::load_or_create_cap_sids;
+    use crate::env::apply_no_network_to_env;
+    use crate::env::ensure_non_interactive_pager;
+    use crate::env::normalize_null_device_env;
+    use crate::logging::log_failure;
+    use crate::logging::log_start;
+    use crate::logging::log_success;
+    use crate::policy::SandboxMode;
+    use crate::policy::SandboxPolicy;
+    use crate::process::assign_to_job;
+    use crate::process::create_job_kill_on_close;
+    use crate::process::create_process_as_user;
+    use crate::process::wait_process_and_exitcode;
+    use crate::token::convert_string_sid_to_sid;
+    use crate::token::create_readonly_token_with_cap;
+    use crate::token::create_workspace_write_token_with_cap;
+    use crate::token::get_current_token_for_restriction;
+    use crate::token::get_logon_sid_bytes;
+
+    fn ensure_dir(p: &Path) -> anyhow::Result<()> {
+        if let Some(d) = p.parent() {
+            fs::create_dir_all(d)?;
+        }
+        Ok(())
     }
+
     let mut args: Vec<String> = std::env::args().collect();
     let mut policy_cwd: Option<PathBuf> = None;
     if args.len() > 2 && args[1] == "--sandbox-policy-cwd" {
@@ -105,7 +103,6 @@ fn main() -> Result<()> {
         }
     };
 
-    // Diagnostics parity: allow NUL for current logon sid in WS mode
     unsafe {
         if matches!(policy.0, SandboxMode::WorkspaceWrite) {
             if let Ok(base) = get_current_token_for_restriction() {
@@ -119,7 +116,6 @@ fn main() -> Result<()> {
         }
     }
 
-    // Configure ACLs
     let persist_aces = matches!(policy.0, SandboxMode::WorkspaceWrite);
     let allow = compute_allow_paths(&policy, &policy_cwd, &current_dir, &env_map);
     let mut guards: Vec<(PathBuf, *mut c_void)> = Vec::new();
@@ -128,9 +124,8 @@ fn main() -> Result<()> {
             if let Ok(added) = add_allow_ace(p, psid_to_use) {
                 if added {
                     if persist_aces {
-                        // seed recursively for existing items in workspace
                         if p.is_dir() {
-                            // best-effort: recursive seed bounded (omitted here for brevity)
+                            // best-effort: recursive seed bounded (omitted intentionally)
                         }
                     } else {
                         guards.push((p.clone(), psid_to_use));
@@ -141,10 +136,8 @@ fn main() -> Result<()> {
         allow_null_device(psid_to_use);
     }
 
-    // Command logging (shared)
     log_start(&command);
 
-    // Spawn
     let (pi, _si) =
         match unsafe { create_process_as_user(h_token, &command, &current_dir, &env_map) } {
             Ok(v) => v,
