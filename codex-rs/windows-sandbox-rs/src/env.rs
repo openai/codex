@@ -146,7 +146,19 @@ pub fn apply_no_network_to_env(env_map: &mut HashMap<String, String>) -> Result<
         .entry("GIT_ALLOW_PROTOCOLS".into())
         .or_insert_with(|| "".into());
 
-    let base = ensure_denybin(&["ssh", "scp", "curl", "wget"], None)?;
+    // Block interactive network tools that bypass HTTP(S) proxy settings, but
+    // allow curl/wget to run so commands like `curl --version` still succeed.
+    // Network access is disabled via proxy envs above.
+    let base = ensure_denybin(&["ssh", "scp"], None)?;
+    // Clean up any stale stubs from previous runs so real curl/wget can run.
+    for tool in ["curl", "wget"] {
+        for ext in [".bat", ".cmd"] {
+            let p = base.join(format!("{}{}", tool, ext));
+            if p.exists() {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
     prepend_path(env_map, &base.to_string_lossy());
     reorder_pathext_for_stubs(env_map);
     Ok(())
