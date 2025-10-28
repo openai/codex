@@ -185,9 +185,23 @@ impl ConfigDocument {
             }
 
             if !current[segment].is_table() {
-                current[segment] = Item::Table(Table::new());
-                if let Some(table) = current[segment].as_table_mut() {
-                    table.set_implicit(true);
+                // If this segment is an inline table, convert it to a normal
+                // table while preserving all existing entries to avoid data loss.
+                if let Some(inline) = current[segment]
+                    .as_value_mut()
+                    .and_then(|v| v.as_inline_table_mut())
+                {
+                    let mut tbl = Table::new();
+                    tbl.set_implicit(true);
+                    for (k, v) in inline.iter() {
+                        tbl.insert(k, v.clone().into());
+                    }
+                    current[segment] = Item::Table(tbl);
+                } else {
+                    current[segment] = Item::Table(Table::new());
+                    if let Some(table) = current[segment].as_table_mut() {
+                        table.set_implicit(true);
+                    }
                 }
             }
 
@@ -559,6 +573,53 @@ mod tests {
 model_reasoning_effort = "high"
 "#;
         assert_eq!(contents, expected);
+    }
+
+    #[test]
+    fn blocking_set_model_preserves_inline_table_contents() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+
+        // Seed with inline tables for profiles to simulate common user config.
+        std::fs::write(
+            codex_home.join(CONFIG_TOML_FILE),
+            r#"profile = "fast"
+
+profiles = { fast = { model = "gpt-4o", sandbox_mode = "strict" } }
+"#,
+        )
+        .expect("seed");
+
+        apply_blocking(
+            codex_home,
+            None,
+            &[ConfigEdit::SetModel {
+                model: Some("o4-mini".to_string()),
+                effort: None,
+            }],
+        )
+        .expect("persist");
+
+        let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let value: TomlValue = toml::from_str(&raw).expect("parse config");
+
+        // Ensure sandbox_mode is preserved under profiles.fast and model updated.
+        let profiles_tbl = value
+            .get("profiles")
+            .and_then(|v| v.as_table())
+            .expect("profiles table");
+        let fast_tbl = profiles_tbl
+            .get("fast")
+            .and_then(|v| v.as_table())
+            .expect("fast table");
+        assert_eq!(
+            fast_tbl.get("sandbox_mode").and_then(|v| v.as_str()),
+            Some("strict")
+        );
+        assert_eq!(
+            fast_tbl.get("model").and_then(|v| v.as_str()),
+            Some("o4-mini")
+        );
     }
 
     #[test]
