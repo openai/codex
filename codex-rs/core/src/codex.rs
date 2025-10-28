@@ -104,8 +104,12 @@ use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state::TaskKind;
 use crate::tasks::CompactTask;
+use crate::tasks::GhostSnapshotTask;
 use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
+use crate::tasks::SessionTask;
+use crate::tasks::SessionTaskContext;
+use crate::tasks::UndoTask;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
@@ -127,6 +131,8 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
+use codex_utils_readiness::Readiness;
+use codex_utils_readiness::ReadinessFlag;
 
 pub mod compact;
 use self::compact::build_compacted_history;
@@ -177,6 +183,7 @@ impl Codex {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
+            features: config.features.clone(),
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -270,6 +277,7 @@ pub(crate) struct TurnContext {
     pub(crate) is_review_mode: bool,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
+    pub(crate) tool_call_gate: Arc<ReadinessFlag>,
 }
 
 impl TurnContext {
@@ -310,6 +318,9 @@ pub(crate) struct SessionConfiguration {
     /// `ConfigureSession` operation so that the business-logic layer can
     /// operate deterministically.
     cwd: PathBuf,
+
+    /// Set of feature flags for this session
+    features: Features,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -405,6 +416,7 @@ impl Session {
             is_review_mode: false,
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+            tool_call_gate: Arc::new(ReadinessFlag::new()),
         }
     }
 
@@ -946,7 +958,7 @@ impl Session {
         state.record_items(items.iter());
     }
 
-    async fn replace_history(&self, items: Vec<ResponseItem>) {
+    pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
         let mut state = self.state.lock().await;
         state.replace_history(items);
     }
@@ -1093,6 +1105,43 @@ impl Session {
             message: message.into(),
         });
         self.send_event(turn_context, event).await;
+    }
+
+    async fn maybe_start_ghost_snapshot(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
+    ) {
+        if turn_context.is_review_mode
+            || !self
+                .state
+                .lock()
+                .await
+                .session_configuration
+                .features
+                .enabled(Feature::GhostCommit)
+        {
+            return;
+        }
+
+        let token = match turn_context.tool_call_gate.subscribe().await {
+            Ok(token) => token,
+            Err(err) => {
+                warn!("failed to subscribe to ghost snapshot readiness: {err}");
+                return;
+            }
+        };
+
+        info!("spawning ghost snapshot task");
+        let task = GhostSnapshotTask::new(token);
+        Arc::new(task)
+            .run(
+                Arc::new(SessionTaskContext::new(self.clone())),
+                turn_context.clone(),
+                Vec::new(),
+                cancellation_token,
+            )
+            .await;
     }
 
     /// Returns the input if there was no task running to inject into
@@ -1374,6 +1423,13 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 };
                 sess.send_event_raw(event).await;
             }
+            Op::Undo => {
+                let turn_context = sess
+                    .new_turn_with_sub_id(sub.id.clone(), SessionSettingsUpdate::default())
+                    .await;
+                sess.spawn_task(turn_context, Vec::new(), UndoTask::new())
+                    .await;
+            }
             Op::Compact => {
                 let turn_context = sess
                     .new_turn_with_sub_id(sub.id.clone(), SessionSettingsUpdate::default())
@@ -1510,6 +1566,7 @@ async fn spawn_review_thread(
         is_review_mode: true,
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
+        tool_call_gate: Arc::new(ReadinessFlag::new()),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -1573,6 +1630,8 @@ pub(crate) async fn run_task(
             .await;
     }
 
+    sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
+        .await;
     let mut last_agent_message: Option<String> = None;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
@@ -1765,6 +1824,13 @@ fn parse_review_output_event(text: &str) -> ReviewOutputEvent {
     }
 }
 
+fn filter_model_visible_history(input: Vec<ResponseItem>) -> Vec<ResponseItem> {
+    input
+        .into_iter()
+        .filter(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }))
+        .collect()
+}
+
 async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -1785,7 +1851,7 @@ async fn run_turn(
         .supports_parallel_tool_calls;
     let parallel_tool_calls = model_supports_parallel;
     let prompt = Prompt {
-        input,
+        input: filter_model_visible_history(input),
         tools: router.specs(),
         parallel_tool_calls,
         base_instructions_override: turn_context.base_instructions.clone(),
@@ -1847,7 +1913,7 @@ async fn run_turn(
                     // at a seemingly frozen screen.
                     sess.notify_stream_error(
                         turn_context.as_ref(),
-                        format!("Re-connecting... {retries}/{max_retries}"),
+                        format!("Reconnecting... {retries}/{max_retries}"),
                     )
                     .await;
 
@@ -1983,7 +2049,7 @@ async fn try_run_turn(
                             call_id: String::new(),
                             output: FunctionCallOutputPayload {
                                 content: msg.to_string(),
-                                success: None,
+                                ..Default::default()
                             },
                         };
                         add_completed(ProcessedResponseItem {
@@ -1997,7 +2063,7 @@ async fn try_run_turn(
                             call_id: String::new(),
                             output: FunctionCallOutputPayload {
                                 content: message,
-                                success: None,
+                                ..Default::default()
                             },
                         };
                         add_completed(ProcessedResponseItem {
@@ -2135,41 +2201,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
         }
     })
 }
-pub(crate) fn convert_call_tool_result_to_function_call_output_payload(
-    call_tool_result: &CallToolResult,
-) -> FunctionCallOutputPayload {
-    let CallToolResult {
-        content,
-        is_error,
-        structured_content,
-    } = call_tool_result;
-
-    // In terms of what to send back to the model, we prefer structured_content,
-    // if available, and fallback to content, otherwise.
-    let mut is_success = is_error != &Some(true);
-    let content = if let Some(structured_content) = structured_content
-        && structured_content != &serde_json::Value::Null
-        && let Ok(serialized_structured_content) = serde_json::to_string(&structured_content)
-    {
-        serialized_structured_content
-    } else {
-        match serde_json::to_string(&content) {
-            Ok(serialized_content) => serialized_content,
-            Err(err) => {
-                // If we could not serialize either content or structured_content to
-                // JSON, flag this as an error.
-                is_success = false;
-                err.to_string()
-            }
-        }
-    };
-
-    FunctionCallOutputPayload {
-        content,
-        success: Some(is_success),
-    }
-}
-
 /// Emits an ExitedReviewMode Event with optional ReviewOutput,
 /// and records a developer message with the review output.
 pub(crate) async fn exit_review_mode(
@@ -2280,6 +2311,8 @@ fn is_mcp_client_startup_timeout_error(error: &anyhow::Error) -> bool {
         || error_message.contains("timed out handshaking with MCP server")
 }
 
+use crate::features::Feature;
+use crate::features::Features;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
@@ -2300,10 +2333,6 @@ mod tests {
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
-    use crate::tools::MODEL_FORMAT_HEAD_LINES;
-    use crate::tools::MODEL_FORMAT_MAX_BYTES;
-    use crate::tools::MODEL_FORMAT_MAX_LINES;
-    use crate::tools::MODEL_FORMAT_TAIL_LINES;
     use crate::tools::ToolRouter;
     use crate::tools::context::ToolInvocation;
     use crate::tools::context::ToolOutput;
@@ -2377,7 +2406,7 @@ mod tests {
             })),
         };
 
-        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&json!({
                 "ok": true,
@@ -2385,98 +2414,10 @@ mod tests {
             }))
             .unwrap(),
             success: Some(true),
+            ..Default::default()
         };
 
         assert_eq!(expected, got);
-    }
-
-    #[test]
-    fn model_truncation_head_tail_by_lines() {
-        // Build 400 short lines so line-count limit, not byte budget, triggers truncation
-        let lines: Vec<String> = (1..=400).map(|i| format!("line{i}")).collect();
-        let full = lines.join("\n");
-
-        let exec = ExecToolCallOutput {
-            exit_code: 0,
-            stdout: StreamOutput::new(String::new()),
-            stderr: StreamOutput::new(String::new()),
-            aggregated_output: StreamOutput::new(full),
-            duration: StdDuration::from_secs(1),
-            timed_out: false,
-        };
-
-        let out = format_exec_output_str(&exec);
-
-        // Strip truncation header if present for subsequent assertions
-        let body = out
-            .strip_prefix("Total output lines: ")
-            .and_then(|rest| rest.split_once("\n\n").map(|x| x.1))
-            .unwrap_or(out.as_str());
-
-        // Expect elision marker with correct counts
-        let omitted = 400 - MODEL_FORMAT_MAX_LINES; // 144
-        let marker = format!("\n[... omitted {omitted} of 400 lines ...]\n\n");
-        assert!(out.contains(&marker), "missing marker: {out}");
-
-        // Validate head and tail
-        let parts: Vec<&str> = body.split(&marker).collect();
-        assert_eq!(parts.len(), 2, "expected one marker split");
-        let head = parts[0];
-        let tail = parts[1];
-
-        let expected_head: String = (1..=MODEL_FORMAT_HEAD_LINES)
-            .map(|i| format!("line{i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(head.starts_with(&expected_head), "head mismatch");
-
-        let expected_tail: String = ((400 - MODEL_FORMAT_TAIL_LINES + 1)..=400)
-            .map(|i| format!("line{i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(tail.ends_with(&expected_tail), "tail mismatch");
-    }
-
-    #[test]
-    fn model_truncation_respects_byte_budget() {
-        // Construct a large output (about 100kB) so byte budget dominates
-        let big_line = "x".repeat(100);
-        let full = std::iter::repeat_n(big_line, 1000)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let exec = ExecToolCallOutput {
-            exit_code: 0,
-            stdout: StreamOutput::new(String::new()),
-            stderr: StreamOutput::new(String::new()),
-            aggregated_output: StreamOutput::new(full.clone()),
-            duration: StdDuration::from_secs(1),
-            timed_out: false,
-        };
-
-        let out = format_exec_output_str(&exec);
-        // Keep strict budget on the truncated body (excluding header)
-        let body = out
-            .strip_prefix("Total output lines: ")
-            .and_then(|rest| rest.split_once("\n\n").map(|x| x.1))
-            .unwrap_or(out.as_str());
-        assert!(body.len() <= MODEL_FORMAT_MAX_BYTES, "exceeds byte budget");
-        assert!(out.contains("omitted"), "should contain elision marker");
-
-        // Ensure head and tail are drawn from the original
-        assert!(full.starts_with(body.chars().take(8).collect::<String>().as_str()));
-        assert!(
-            full.ends_with(
-                body.chars()
-                    .rev()
-                    .take(8)
-                    .collect::<String>()
-                    .chars()
-                    .rev()
-                    .collect::<String>()
-                    .as_str()
-            )
-        );
     }
 
     #[test]
@@ -2506,11 +2447,12 @@ mod tests {
             structured_content: Some(serde_json::Value::Null),
         };
 
-        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&vec![text_block("hello"), text_block("world")])
                 .unwrap(),
             success: Some(true),
+            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -2524,10 +2466,11 @@ mod tests {
             structured_content: Some(json!({ "message": "bad" })),
         };
 
-        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&json!({ "message": "bad" })).unwrap(),
             success: Some(false),
+            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -2541,10 +2484,11 @@ mod tests {
             structured_content: None,
         };
 
-        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&vec![text_block("alpha")]).unwrap(),
             success: Some(true),
+            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -2596,6 +2540,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
+            features: Features::default(),
         };
 
         let state = SessionState::new(session_configuration.clone());
@@ -2664,6 +2609,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
+            features: Features::default(),
         };
 
         let state = SessionState::new(session_configuration.clone());

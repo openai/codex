@@ -106,6 +106,7 @@ impl ToolHandler for ListDirHandler {
         output.extend(entries);
         Ok(ToolOutput::Function {
             content: output.join("\n"),
+            content_items: None,
             success: Some(true),
         })
     }

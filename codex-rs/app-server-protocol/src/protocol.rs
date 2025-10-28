@@ -5,7 +5,7 @@ use crate::JSONRPCNotification;
 use crate::JSONRPCRequest;
 use crate::RequestId;
 use codex_protocol::ConversationId;
-use codex_protocol::account::Account;
+use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
@@ -147,6 +147,10 @@ client_request_definitions! {
         params: NewConversationParams,
         response: NewConversationResponse,
     },
+    GetConversationSummary {
+        params: GetConversationSummaryParams,
+        response: GetConversationSummaryResponse,
+    },
     /// List recorded Codex conversations (rollouts) with optional pagination and search.
     ListConversations {
         params: ListConversationsParams,
@@ -232,6 +236,22 @@ client_request_definitions! {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+pub enum Account {
+    #[serde(rename = "apiKey", rename_all = "camelCase")]
+    #[ts(rename = "apiKey", rename_all = "camelCase")]
+    ApiKey { api_key: String },
+
+    #[serde(rename = "chatgpt", rename_all = "camelCase")]
+    #[ts(rename = "chatgpt", rename_all = "camelCase")]
+    ChatGpt {
+        email: Option<String>,
+        plan_type: PlanType,
+    },
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct GetAccountResponse {
@@ -265,6 +285,10 @@ pub struct NewConversationParams {
     /// Optional override for the model name (e.g. "o3", "o4-mini").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+
+    /// Override the model provider to use for this session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
 
     /// Configuration profile from config.toml to specify default options.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -318,6 +342,18 @@ pub struct ResumeConversationResponse {
     pub initial_messages: Option<Vec<EventMsg>>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GetConversationSummaryParams {
+    pub rollout_path: PathBuf,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GetConversationSummaryResponse {
+    pub summary: ConversationSummary,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ListConversationsParams {
@@ -327,6 +363,12 @@ pub struct ListConversationsParams {
     /// Opaque pagination cursor returned by a previous call.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
+    /// Optional model provider filter (matches against session metadata).
+    /// - None => filter by the server's default model provider
+    /// - Some([]) => no filtering, include all providers
+    /// - Some([...]) => only include sessions with one of the specified providers
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_providers: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -338,6 +380,8 @@ pub struct ConversationSummary {
     /// RFC3339 timestamp string for the session start, if available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
+    /// Model provider recorded for the session (resolved when absent in metadata).
+    pub model_provider: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1024,6 +1068,7 @@ mod tests {
             request_id: RequestId::Integer(42),
             params: NewConversationParams {
                 model: Some("gpt-5-codex".to_string()),
+                model_provider: None,
                 profile: None,
                 cwd: None,
                 approval_policy: Some(AskForApproval::OnRequest),
@@ -1214,6 +1259,35 @@ mod tests {
             }),
             serde_json::to_value(&request)?,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn account_serializes_fields_in_camel_case() -> Result<()> {
+        let api_key = Account::ApiKey {
+            api_key: "secret".to_string(),
+        };
+        assert_eq!(
+            json!({
+                "type": "apiKey",
+                "apiKey": "secret",
+            }),
+            serde_json::to_value(&api_key)?,
+        );
+
+        let chatgpt = Account::ChatGpt {
+            email: Some("user@example.com".to_string()),
+            plan_type: PlanType::Plus,
+        };
+        assert_eq!(
+            json!({
+                "type": "chatgpt",
+                "email": "user@example.com",
+                "planType": "plus",
+            }),
+            serde_json::to_value(&chatgpt)?,
+        );
+
         Ok(())
     }
 

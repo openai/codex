@@ -154,7 +154,8 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
                 "instructions": "be nice",
                 "cwd": ".",
                 "originator": "test_originator",
-                "cli_version": "test_version"
+                "cli_version": "test_version",
+                "model_provider": "test-provider"
             }
         })
     )
@@ -524,7 +525,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
 
-    let auth_manager = match CodexAuth::from_codex_home(codex_home.path()) {
+    let auth_manager = match CodexAuth::from_auth_storage(codex_home.path()) {
         Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
         Ok(None) => panic!("No CodexAuth found in codex_home"),
         Err(e) => panic!("Failed to load CodexAuth: {e}"),

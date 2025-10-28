@@ -223,18 +223,14 @@ impl ModelClient {
 
         let input_with_instructions = prompt.get_formatted_input();
 
-        let verbosity = match &self.config.model_family.family {
-            family if family == "gpt-5" => self.config.model_verbosity,
-            _ => {
-                if self.config.model_verbosity.is_some() {
-                    warn!(
-                        "model_verbosity is set but ignored for non-gpt-5 model family: {}",
-                        self.config.model_family.family
-                    );
-                }
-
-                None
-            }
+        let verbosity = if self.config.model_family.support_verbosity {
+            self.config.model_verbosity
+        } else {
+            warn!(
+                "model_verbosity is set but ignored as the model does not support verbosity: {}",
+                self.config.model_family.family
+            );
+            None
         };
 
         // Only include `text.verbosity` for GPT-5 family models
@@ -389,9 +385,14 @@ impl ModelClient {
 
                 if status == StatusCode::UNAUTHORIZED
                     && let Some(manager) = auth_manager.as_ref()
-                    && manager.auth().is_some()
+                    && let Some(auth) = auth.as_ref()
+                    && auth.mode == AuthMode::ChatGPT
                 {
-                    let _ = manager.refresh_token().await;
+                    manager.refresh_token().await.map_err(|err| {
+                        StreamAttemptError::Fatal(CodexErr::Fatal(format!(
+                            "Failed to refresh ChatGPT credentials: {err}"
+                        )))
+                    })?;
                 }
 
                 // The OpenAI Responses endpoint returns structured JSON bodies even for 4xx/5xx

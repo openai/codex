@@ -41,6 +41,29 @@ fn network_disabled() -> bool {
     std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
 }
 
+fn filter_out_ghost_snapshot_entries(items: &[Value]) -> Vec<Value> {
+    items
+        .iter()
+        .filter(|item| !is_ghost_snapshot_message(item))
+        .cloned()
+        .collect()
+}
+
+fn is_ghost_snapshot_message(item: &Value) -> bool {
+    if item.get("type").and_then(Value::as_str) != Some("message") {
+        return false;
+    }
+    if item.get("role").and_then(Value::as_str) != Some("user") {
+        return false;
+    }
+    item.get("content")
+        .and_then(Value::as_array)
+        .and_then(|content| content.first())
+        .and_then(|entry| entry.get("text"))
+        .and_then(Value::as_str)
+        .is_some_and(|text| text.trim_start().starts_with("<ghost_snapshot>"))
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 /// Scenario: compact an initial conversation, resume it, fork one turn back, and
 /// ensure the model-visible history matches expectations at each request.
@@ -556,13 +579,15 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     let resume_input_array = input_after_resume
         .as_array()
         .expect("input after resume should be an array");
+    let compact_filtered = filter_out_ghost_snapshot_entries(compact_input_array);
+    let resume_filtered = filter_out_ghost_snapshot_entries(resume_input_array);
     assert!(
-        compact_input_array.len() <= resume_input_array.len(),
+        compact_filtered.len() <= resume_filtered.len(),
         "after-resume input should have at least as many items as after-compact"
     );
     assert_eq!(
-        compact_input_array.as_slice(),
-        &resume_input_array[..compact_input_array.len()]
+        compact_filtered.as_slice(),
+        &resume_filtered[..compact_filtered.len()]
     );
     // hard coded test
     let prompt = requests[0]["instructions"]

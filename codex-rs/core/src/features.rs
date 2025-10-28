@@ -41,6 +41,8 @@ pub enum Feature {
     WebSearchRequest,
     /// Enable the model-based risk assessments for sandboxed commands.
     SandboxCommandAssessment,
+    /// Create a ghost commit at each turn.
+    GhostCommit,
 }
 
 impl Feature {
@@ -189,6 +191,11 @@ fn feature_for_key(key: &str) -> Option<Feature> {
     legacy::feature_for_key(key)
 }
 
+/// Returns `true` if the provided string matches a known feature toggle key.
+pub fn is_known_feature_key(key: &str) -> bool {
+    feature_for_key(key).is_some()
+}
+
 /// Deserializable features table for TOML.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct FeaturesToml {
@@ -245,6 +252,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SandboxCommandAssessment,
         key: "experimental_sandbox_command_assessment",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::GhostCommit,
+        key: "ghost_commit",
         stage: Stage::Experimental,
         default_enabled: false,
     },
