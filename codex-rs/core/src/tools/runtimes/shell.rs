@@ -231,13 +231,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
             // Lookup in order: RAW → STRIPPED → CANONICAL. Persist all on approval.
-            if let Some(decision) = session
-                .services
-                .tool_approvals
-                .lock()
-                .await
-                .get_any(&keys)
-            {
+            if let Some(decision) = session.services.tool_approvals.lock().await.get_any(&keys) {
                 return decision;
             }
 
