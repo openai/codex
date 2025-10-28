@@ -64,14 +64,15 @@ jobs:
         shell: bash
         run: |
           rustup set profile minimal
-          rustup toolchain install 1.89.0 --profile minimal --target ${{ matrix.target }}
-          rustup default 1.89.0
+          rustup toolchain install 1.90.0 --profile minimal
+          rustup default 1.90.0
+          rustup target add ${{ matrix.target }}
 
       - name: Rust cache (target + registries)
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-preview
-          shared-key: preview-${{ matrix.target }}-rust-1.89
+          shared-key: preview-${{ matrix.target }}-rust-1.90
           workspaces: |
             code-rs -> target
             codex-rs -> target

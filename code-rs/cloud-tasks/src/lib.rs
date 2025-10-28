@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
+use unicode_segmentation::UnicodeSegmentation;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -1202,7 +1203,16 @@ pub async fn run_main(cli: Cli, _code_linux_sandbox_exe: Option<PathBuf>) -> any
                                     if let Some(m) = app.env_modal.as_mut() { m.query.push(ch); }
                                     needs_redraw = true;
                                 }
-                                KeyCode::Backspace => { if let Some(m) = app.env_modal.as_mut() { m.query.pop(); } needs_redraw = true; }
+                                KeyCode::Backspace => {
+                                    if let Some(m) = app.env_modal.as_mut() {
+                                        if let Some((idx, _)) = m.query.grapheme_indices(true).last() {
+                                            m.query.truncate(idx);
+                                        } else {
+                                            m.query.clear();
+                                        }
+                                    }
+                                    needs_redraw = true;
+                                }
                                 KeyCode::Down | KeyCode::Char('j') => { if let Some(m) = app.env_modal.as_mut() { m.selected = m.selected.saturating_add(1); } needs_redraw = true; }
                                 KeyCode::Up | KeyCode::Char('k') => { if let Some(m) = app.env_modal.as_mut() { m.selected = m.selected.saturating_sub(1); } needs_redraw = true; }
                                 KeyCode::Home => { if let Some(m) = app.env_modal.as_mut() { m.selected = 0; } needs_redraw = true; }

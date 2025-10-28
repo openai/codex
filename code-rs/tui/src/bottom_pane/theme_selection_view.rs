@@ -4,6 +4,7 @@ use code_core::config_types::ThemeName;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
+use unicode_segmentation::UnicodeSegmentation;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Alignment;
 use ratatui::layout::Rect;
@@ -1484,7 +1485,11 @@ impl ThemeSelectionView {
                     }
                     match s.step.get() {
                         CreateStep::Prompt => {
-                            s.prompt.pop();
+                            if let Some((idx, _)) = s.prompt.grapheme_indices(true).last() {
+                                s.prompt.truncate(idx);
+                            } else {
+                                s.prompt.clear();
+                            }
                         }
                         CreateStep::Action | CreateStep::Review => {
                             return;
@@ -1496,7 +1501,11 @@ impl ThemeSelectionView {
                     }
                     match s.step.get() {
                         CreateStep::Prompt => {
-                            s.prompt.pop();
+                            if let Some((idx, _)) = s.prompt.grapheme_indices(true).last() {
+                                s.prompt.truncate(idx);
+                            } else {
+                                s.prompt.clear();
+                            }
                         }
                         CreateStep::Action | CreateStep::Review => {
                             return;
