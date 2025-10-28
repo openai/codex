@@ -1,3 +1,4 @@
+use codex_protocol::platform::is_running_under_wsl;
 use codex_protocol::platform::try_map_windows_drive_to_wsl_path;
 use std::path::Path;
 use std::path::PathBuf;
@@ -142,31 +143,27 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
             // the Windows clipboard), attempt a WSL fallback that calls PowerShell on the
             // Windows side to write the clipboard image to a temporary file, then return
             // the corresponding WSL path.
-            match e {
-                PasteImageError::ClipboardUnavailable(_) | PasteImageError::NoImage(_) => {
-                    // Try to run PowerShell (or pwsh) on the Windows side to dump the clipboard
-                    // image to a temp file. This uses WSL interop: 'powershell.exe' or 'pwsh'
-                    // should be callable from WSL. Try several common command names.
-                    tracing::debug!("attempting Windows PowerShell clipboard fallback");
-                    if let Some(win_path) = try_dump_windows_clipboard_image() {
-                        tracing::debug!("powershell produced path: {}", win_path);
-                        if let Some(mapped_path) = try_map_windows_drive_to_wsl_path(&win_path)
-                            && let Ok((w, h)) = image::image_dimensions(&mapped_path)
-                        {
-                            // Return the mapped path directly without copying.
-                            // The file will be read and base64-encoded during serialization.
-                            return Ok((
-                                mapped_path,
-                                PastedImageInfo {
-                                    width: w,
-                                    height: h,
-                                    encoded_format: EncodedImageFormat::Png,
-                                },
-                            ));
-                        }
+            use PasteImageError::{ClipboardUnavailable, NoImage};
+
+            if is_running_under_wsl() && matches!(&e, ClipboardUnavailable(_) | NoImage(_)) {
+                tracing::debug!("attempting Windows PowerShell clipboard fallback");
+                if let Some(win_path) = try_dump_windows_clipboard_image() {
+                    tracing::debug!("powershell produced path: {}", win_path);
+                    if let Some(mapped_path) = try_map_windows_drive_to_wsl_path(&win_path)
+                        && let Ok((w, h)) = image::image_dimensions(&mapped_path)
+                    {
+                        // Return the mapped path directly without copying.
+                        // The file will be read and base64-encoded during serialization.
+                        return Ok((
+                            mapped_path,
+                            PastedImageInfo {
+                                width: w,
+                                height: h,
+                                encoded_format: EncodedImageFormat::Png,
+                            },
+                        ));
                     }
                 }
-                _ => {}
             }
             // If we reach here, fall through to returning the original error.
             Err(e)
