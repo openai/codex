@@ -68,6 +68,7 @@ pub(crate) struct App {
     pub(crate) overlay: Option<Overlay>,
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
     has_emitted_history_lines: bool,
+    rendered_history_width: Option<u16>,
 
     pub(crate) enhanced_keys_supported: bool,
 
@@ -164,6 +165,7 @@ impl App {
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
+            rendered_history_width: None,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             feedback: feedback.clone(),
@@ -230,6 +232,12 @@ impl App {
                         .handle_paste_burst_tick(tui.frame_requester())
                     {
                         return Ok(true);
+                    }
+                    if self.overlay.is_none() {
+                        let screen_width = tui.terminal.size()?.width;
+                        if self.rendered_history_width != Some(screen_width) {
+                            self.reflow_transcript(tui, screen_width)?;
+                        }
                     }
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
@@ -534,6 +542,43 @@ impl App {
             }
         };
     }
+
+    pub(crate) fn transcript_lines_for_width(&self, width: u16) -> (Vec<Line<'static>>, bool) {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut has_visible_output = false;
+        for cell in &self.transcript_cells {
+            let display = cell.display_lines(width);
+            if display.is_empty() {
+                continue;
+            }
+            if !cell.is_stream_continuation() {
+                if has_visible_output {
+                    lines.push(Line::from(""));
+                } else {
+                    has_visible_output = true;
+                }
+            } else if !has_visible_output {
+                has_visible_output = true;
+            }
+            lines.extend(display);
+        }
+        (lines, has_visible_output)
+    }
+
+    pub(crate) fn update_transcript_layout_state(&mut self, width: u16, has_visible_output: bool) {
+        self.has_emitted_history_lines = has_visible_output;
+        self.rendered_history_width = Some(width);
+    }
+
+    fn reflow_transcript(&mut self, tui: &mut tui::Tui, width: u16) -> Result<()> {
+        let (lines, has_visible_output) = self.transcript_lines_for_width(width);
+        tui.clear_history()?;
+        if !lines.is_empty() {
+            tui.insert_history_lines(lines);
+        }
+        self.update_transcript_layout_state(width, has_visible_output);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -580,6 +625,7 @@ mod tests {
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
+            rendered_history_width: None,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
@@ -667,5 +713,24 @@ mod tests {
         let (_, nth, prefill) = app.backtrack.pending.clone().expect("pending backtrack");
         assert_eq!(nth, 1);
         assert_eq!(prefill, "follow-up (edited)");
+    }
+
+    #[test]
+    fn transcript_lines_rewrap_when_width_changes() {
+        let mut app = make_test_app();
+        let paragraph = "This is a very long streamed line that should expand when the \
+                         terminal width grows so that it no longer appears in a single column.";
+        let cell: Arc<dyn HistoryCell> =
+            Arc::new(AgentMessageCell::new(vec![Line::from(paragraph)], true));
+        app.transcript_cells.push(cell);
+
+        let (narrow, _) = app.transcript_lines_for_width(12);
+        let (wide, _) = app.transcript_lines_for_width(80);
+        assert!(
+            narrow.len() > wide.len(),
+            "expected wider renders to require fewer lines (narrow: {}, wide: {})",
+            narrow.len(),
+            wide.len()
+        );
     }
 }

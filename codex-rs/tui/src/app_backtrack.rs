@@ -143,9 +143,11 @@ impl App {
     pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) {
         if !self.transcript_cells.is_empty() {
             let width = tui.terminal.last_known_screen_size.width;
-            for cell in &self.transcript_cells {
-                tui.insert_history_lines(cell.display_lines(width));
+            let (lines, has_visible_output) = self.transcript_lines_for_width(width);
+            if !lines.is_empty() {
+                tui.insert_history_lines(lines);
             }
+            self.update_transcript_layout_state(width, has_visible_output);
         }
     }
 

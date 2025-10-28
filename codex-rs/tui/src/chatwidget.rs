@@ -757,9 +757,7 @@ impl ChatWidget {
                 self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
                 self.needs_final_message_separator = false;
             }
-            self.stream_controller = Some(StreamController::new(
-                self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
-            ));
+            self.stream_controller = Some(StreamController::new(None));
         }
         if let Some(controller) = self.stream_controller.as_mut()
             && controller.push(&delta)

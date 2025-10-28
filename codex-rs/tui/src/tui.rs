@@ -485,6 +485,17 @@ impl Tui {
         self.frame_requester().schedule_frame();
     }
 
+    pub fn clear_history(&mut self) -> Result<()> {
+        let size = self.terminal.size()?;
+        let original_viewport = self.terminal.viewport_area;
+        let full = ratatui::layout::Rect::new(0, 0, size.width, size.height);
+        self.terminal.set_viewport_area(full);
+        self.terminal.clear()?;
+        self.terminal.set_viewport_area(original_viewport);
+        self.pending_history_lines.clear();
+        Ok(())
+    }
+
     pub fn draw(
         &mut self,
         height: u16,

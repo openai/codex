@@ -220,4 +220,22 @@ mod tests {
             "expected exact rendered lines for loose/tight section"
         );
     }
+
+    #[tokio::test]
+    async fn streaming_cells_reflow_when_width_changes() {
+        let mut ctrl = StreamController::new(None);
+        ctrl.push(
+            "This is a long streamed line that should collapse when the terminal grows wider.",
+        );
+        let cell = ctrl
+            .finalize()
+            .expect("finalize should return a history cell for streamed content");
+
+        let narrow = cell.display_lines(10);
+        let wide = cell.display_lines(80);
+        assert!(
+            narrow.len() > wide.len(),
+            "expected rewrapping to reduce the number of lines when width increases"
+        );
+    }
 }
