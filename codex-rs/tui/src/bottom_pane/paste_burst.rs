@@ -219,6 +219,18 @@ impl PasteBurst {
         self.last_paste_at = Some(now);
     }
 
+    /// Try to append a char into the burst buffer only if a burst is already active.
+    ///
+    /// Returns true when the char was captured into the existing burst, false otherwise.
+    pub fn try_append_char_if_active(&mut self, ch: char, now: Instant) -> bool {
+        if self.active || !self.buffer.is_empty() {
+            self.append_char_to_buffer(ch, now);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Decide whether to begin buffering by retroactively capturing recent
     /// chars from the slice before the cursor.
     ///
