@@ -371,7 +371,9 @@ fn create_read_file_tool() -> ToolSpec {
     properties.insert(
         "file_path".to_string(),
         JsonSchema::String {
-            description: Some("Absolute path to the file".to_string()),
+            description: Some(
+                "Path to the file within the workspace. Relative paths are resolved against the workspace root; absolute paths must also remain inside the workspace.".to_string(),
+            ),
         },
     );
     properties.insert(
@@ -453,7 +455,7 @@ fn create_read_file_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "read_file".to_string(),
         description:
-            "Reads a local file with 1-indexed line numbers, supporting slice and indentation-aware block modes."
+            "Reads a workspace file with 1-indexed line numbers, supporting slice and indentation-aware block modes."
                 .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
