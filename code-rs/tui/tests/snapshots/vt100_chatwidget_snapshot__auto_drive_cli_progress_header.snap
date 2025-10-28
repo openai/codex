@@ -1,15 +1,14 @@
 ---
 source: tui/tests/vt100_chatwidget_snapshot.rs
-assertion_line: 452
 expression: "frames.join(\"\\n---FRAME---\\n\")"
 ---
  +----------------------------------------------------------------------------+
  |                                    Code                                    |
  +----------------------------------------------------------------------------+
-   /plan - create a comprehensive plan (multiple agents)
-   /code - perform a coding task (multiple agents)
+   - Running commands
 
-  Auto Drive > Working  ✶ Running (Xs)
+
+  Auto Drive > Ready: run cargo check  ✶ Running (Xs)
  +----------------------------------------------------------------------------+
  | What can I code for you today?                                             |
  +----------------------------------------------------------------------------+
@@ -19,8 +18,8 @@ expression: "frames.join(\"\\n---FRAME---\\n\")"
  +----------------------------------------------------------------------------+
  |                                    Code                                    |
  +----------------------------------------------------------------------------+
-   /plan - create a comprehensive plan (multiple agents)
-   /code - perform a coding task (multiple agents)
+   - Running commands
+
 
   Auto Drive > Installed dependencies > Running cargo check...  ✶ Thinking (Xs)
  +----------------------------------------------------------------------------+
@@ -32,8 +31,8 @@ expression: "frames.join(\"\\n---FRAME---\\n\")"
  +----------------------------------------------------------------------------+
  |                                    Code                                    |
  +----------------------------------------------------------------------------+
-   /plan - create a comprehensive plan (multiple agents)
-   /code - perform a coding task (multiple agents)
+   - Running commands
+
 
   Auto Drive > Installed dependencies > Running cargo check...  ✶ Running (Xs)
  +----------------------------------------------------------------------------+

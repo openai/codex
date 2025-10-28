@@ -5,9 +5,9 @@ expression: output
  +----------------------------------------------------------------------------+
  |                                    Code                                    |
  +----------------------------------------------------------------------------+
-   /chrome - connect to your Chrome browser
-   /plan - create a comprehensive plan (multiple agents)
-   /code - perform a coding task (multiple agents)
+   - Reading files
+   - Running commands
+
 
  › Open docs and find login button
 

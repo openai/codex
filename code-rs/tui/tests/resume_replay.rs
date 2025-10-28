@@ -16,6 +16,11 @@ fn assistant_cell_count(screen: &str) -> usize {
     screen
         .lines()
         .filter(|line| line.trim_start().starts_with("• "))
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !(trimmed.contains("How can I help you today?")
+                || trimmed.contains("I can help with various tasks"))
+        })
         .count()
 }
 

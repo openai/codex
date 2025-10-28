@@ -18,11 +18,24 @@ on:
       - 'codex-cli/package.json'
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
+  actions: read
+  packages: write
+  id-token: write
+  deployments: write
+  issues: write
+  pull-requests: write
+  discussions: write
+  statuses: write
+  attestations: write
+  checks: read
+  security-events: write
+  pages: read
+  repository-projects: read
 
 jobs:
   preflight-tests:
@@ -33,19 +46,35 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Install Rust (1.90)
+      - name: Read Rust toolchain channel
+        id: rust_toolchain
         shell: bash
         run: |
-          rustup set profile minimal
-          rustup toolchain install 1.90.0 --profile minimal
-          rustup default 1.90.0
+          set -euo pipefail
+          TOOLCHAIN=$(python3 - <<'PY'
+import tomllib
+from pathlib import Path
+data = tomllib.loads(Path('code-rs/rust-toolchain.toml').read_text())
+print(data['toolchain']['channel'])
+PY
+)
+          echo "channel=$TOOLCHAIN" >> "$GITHUB_OUTPUT"
+          echo "RUST_TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.rust_toolchain.outputs.channel }}
+          profile: minimal
 
       - name: Setup Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v5-rust
-          shared-key: code-preflight-1.90
+          shared-key: code-preflight-${{ steps.rust_toolchain.outputs.channel }}
           workspaces: |
             code-rs -> target
           cache-targets: false
@@ -177,14 +206,30 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Install Rust (minimal)
+      - name: Read Rust toolchain channel
+        id: rust_toolchain
         shell: bash
         run: |
-          rustup set profile minimal
-          rustup toolchain install 1.90.0 --profile minimal
-          rustup default 1.90.0
-          rustup target add ${{ matrix.target }}
+          set -euo pipefail
+          TOOLCHAIN=$(python3 - <<'PY'
+import tomllib
+from pathlib import Path
+data = tomllib.loads(Path('code-rs/rust-toolchain.toml').read_text())
+print(data['toolchain']['channel'])
+PY
+)
+          echo "channel=$TOOLCHAIN" >> "$GITHUB_OUTPUT"
+          echo "RUST_TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.rust_toolchain.outputs.channel }}
+          profile: minimal
+          targets: ${{ matrix.target }}
 
       # Keep target/ across runs so Cargo can no-op when code hasn't changed
       - id: rust_cache
@@ -192,7 +237,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v5-rust
-          shared-key: code-${{ matrix.target }}-toolchain-1.90
+          shared-key: code-${{ matrix.target }}-toolchain-${{ steps.rust_toolchain.outputs.channel }}
           workspaces: |
             code-rs -> target
           cache-targets: true
@@ -343,6 +388,11 @@ jobs:
             Remove-Item $src -Force
           }
 
+      - name: Install zstd (Linux)
+        if: contains(matrix.os, 'ubuntu')
+        shell: bash
+        run: sudo apt-get update -qq && sudo apt-get install -y zstd
+
       - name: Compress artifacts (Linux dual-format)
         if: contains(matrix.os, 'ubuntu')
         shell: bash
@@ -440,6 +490,11 @@ jobs:
           done < <(find artifacts -type f -name 'code-*' -print0)
           # Show what we collected
           ls -la release-assets/ || true
+
+      - name: Install zstd (package assembly)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo apt-get update -qq && sudo apt-get install -y zstd
 
       - name: Build per-target npm binary packages
         shell: bash
@@ -591,6 +646,11 @@ jobs:
       #  - Review changes between the previous tag and the new version
       #  - Update CHANGELOG.md with a new section for vNEW_VERSION
       #  - Write rich release notes to release-notes/RELEASE_NOTES.md
+      - name: Install zstd (CHANGELOG generation)
+        if: runner.os == 'Linux' && env.OPENAI_API_KEY != ''
+        shell: bash
+        run: sudo apt-get update -qq && sudo apt-get install -y zstd
+
       - name: Generate CHANGELOG + release notes (Code)
         if: env.OPENAI_API_KEY != ''
         shell: bash

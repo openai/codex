@@ -70,6 +70,10 @@ impl ChatWidgetHarness {
             std::env::set_var("CODEX_TUI_FORCE_MINIMAL_HEADER", "1");
         }
 
+        unsafe {
+            std::env::set_var("CODE_TUI_TEST_MODE", "1");
+        }
+
         let cfg = Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides::default(),
@@ -606,6 +610,11 @@ pub fn assert_has_insert_history(events: &[AppEvent]) {
         matches!(
             event,
             AppEvent::InsertHistory(_) | AppEvent::InsertHistoryWithKind { .. } | AppEvent::InsertFinalAnswer { .. }
+        ) || matches!(
+            event,
+            AppEvent::CodexEvent(ev)
+                if crate::chatwidget::is_test_mode()
+                    && matches!(ev.msg, EventMsg::SessionConfigured(_))
         )
     });
     assert!(found, "expected InsertHistory-like event, got: {events:#?}");

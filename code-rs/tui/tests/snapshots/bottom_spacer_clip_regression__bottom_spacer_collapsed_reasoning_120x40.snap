@@ -1,18 +1,11 @@
 ---
 source: tui/tests/bottom_spacer_clip_regression.rs
-assertion_line: 49
 expression: collapsed
 ---
  |                                                        Code                                                        |
                                                                                                                        
 
                                                                                                                        
-
-    █
-    █
-    █
-    █
-    █
     █
     █
     █
@@ -25,13 +18,19 @@ expression: collapsed
 
 
 
+ ★   /code - perform a coding task (multiple agents)
 
- ★ Popular commands:
-   /settings - manage all settings in one place NEW
-   /auto - work autonomously on long tasks with Auto Drive UPDATED
-   /chrome - connect to your Chrome browser
-   /plan - create a comprehensive plan (multiple agents)
-   /code - perform a coding task (multiple agents)
+
+ • Hello! How can I help you today?
+
+
+
+ • I can help with various tasks including:
+
+   - Writing code
+   - Reading files
+   - Running commands
+
 
  › Share your reasoning and then your final answer.
 

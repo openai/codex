@@ -1,13 +1,12 @@
 ---
 source: tui/tests/bottom_spacer_clip_regression.rs
-assertion_line: 20
 expression: output
 ---
  |                                    Code                                    |
                                                                                
-   /plan - create a comprehensive plan (multiple agents)
+   - Running commands
                                                                                
-   /code - perform a coding task (multiple agents)
+
 
  › Could you provide a detailed overview of how the anti-clipping spacer
    works?

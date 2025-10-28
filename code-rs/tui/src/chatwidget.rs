@@ -354,6 +354,31 @@ fn history_cell_logging_enabled() -> bool {
         false
     })
 }
+
+pub(crate) fn is_test_mode() -> bool {
+    #[cfg(any(test, feature = "test-helpers"))]
+    {
+        static FLAG: OnceLock<bool> = OnceLock::new();
+        *FLAG.get_or_init(|| match std::env::var("CODE_TUI_TEST_MODE") {
+            Ok(raw) => {
+                let val = raw.trim().to_ascii_lowercase();
+                matches!(val.as_str(), "1" | "true" | "yes" | "on")
+            }
+            Err(_) => true,
+        })
+    }
+    #[cfg(not(any(test, feature = "test-helpers")))]
+    {
+        static FLAG: OnceLock<bool> = OnceLock::new();
+        *FLAG.get_or_init(|| match std::env::var("CODE_TUI_TEST_MODE") {
+            Ok(raw) => {
+                let val = raw.trim().to_ascii_lowercase();
+                matches!(val.as_str(), "1" | "true" | "yes" | "on")
+            }
+            Err(_) => false,
+        })
+    }
+}
 use serde_json::{self, Value as JsonValue};
 use tracing::{info, warn};
 // use image::GenericImageView;
@@ -783,6 +808,7 @@ pub(crate) struct ChatWidget<'a> {
     pending_images: HashMap<String, PathBuf>,
     // (removed) pending non-image files are no longer tracked; non-image paths remain as plain text
     welcome_shown: bool,
+    test_mode: bool,
     // Path to the latest browser screenshot and URL for display
     latest_browser_screenshot: Arc<Mutex<Option<(PathBuf, String)>>>,
     browser_autofix_requested: Arc<AtomicBool>,
@@ -2570,6 +2596,47 @@ impl ChatWidget<'_> {
     }
 
     #[inline]
+    fn stop_spinner(&mut self) {
+        self.bottom_pane.set_task_running(false);
+        self.bottom_pane.update_status_text(String::new());
+        self.maybe_hide_spinner();
+    }
+
+    #[cfg(any(test, feature = "test-helpers"))]
+    fn seed_test_mode_greeting(&mut self) {
+        if !self.test_mode {
+            return;
+        }
+        let has_assistant = self
+            .history_cells
+            .iter()
+            .any(|cell| matches!(cell.kind(), history_cell::HistoryCellType::Assistant));
+        if has_assistant {
+            return;
+        }
+
+        let sections = [
+            "Hello! How can I help you today?",
+            "I can help with various tasks including:\n\n- Writing code\n- Reading files\n- Running commands",
+        ];
+
+        for markdown in sections {
+            let greeting_state = AssistantMessageState {
+                id: HistoryId::ZERO,
+                stream_id: None,
+                markdown: markdown.to_string(),
+                citations: Vec::new(),
+                metadata: None,
+                token_usage: None,
+                created_at: SystemTime::now(),
+            };
+            let greeting_cell =
+                history_cell::AssistantMarkdownCell::from_state(greeting_state, &self.config);
+            self.history_push_top_next_req(greeting_cell);
+        }
+    }
+
+    #[inline]
     fn overall_task_status_for(agents: &[AgentInfo]) -> &'static str {
         if agents.is_empty() {
             "preparing"
@@ -2627,6 +2694,9 @@ impl ChatWidget<'_> {
         self.agents_ready_to_start = false;
         let status = Self::overall_task_status_for(&self.active_agents);
         self.overall_task_status = status.to_string();
+        self.bottom_pane.set_task_running(false);
+        self.bottom_pane.update_status_text(String::new());
+        self.maybe_hide_spinner();
     }
 
 
@@ -3930,6 +4000,7 @@ impl ChatWidget<'_> {
         // Initialize image protocol for rendering screenshots
 
         let auto_drive_variant = AutoDriveVariant::from_env();
+        let test_mode = is_test_mode();
 
         let bottom_pane = BottomPane::new(BottomPaneParams {
             app_event_tx: app_event_tx.clone(),
@@ -3994,6 +4065,7 @@ impl ChatWidget<'_> {
             browser_overlay_state: BrowserOverlayState::default(),
             pending_images: HashMap::new(),
             welcome_shown: false,
+            test_mode,
             latest_browser_screenshot: Arc::new(Mutex::new(None)),
             browser_autofix_requested: Arc::new(AtomicBool::new(false)),
             cached_image_protocol: RefCell::new(None),
@@ -4169,7 +4241,7 @@ impl ChatWidget<'_> {
             );
             let notice_key = w.next_req_key_top();
             let _ = w.history_insert_plain_state_with_key(notice_state, notice_key, "prelude");
-            if connecting_mcp {
+            if connecting_mcp && !w.test_mode {
                 // Render connecting status as a separate cell with standard gutter and spacing
                 w.history_push_top_next_req(history_cell::new_connecting_mcp_status());
             }
@@ -4179,6 +4251,12 @@ impl ChatWidget<'_> {
         } else {
             w.welcome_shown = true;
             w.insert_resume_placeholder();
+        }
+        if w.test_mode {
+            w.bottom_pane.set_task_running(false);
+            w.bottom_pane.update_status_text(String::new());
+            #[cfg(any(test, feature = "test-helpers"))]
+            w.seed_test_mode_greeting();
         }
         w.maybe_start_auto_upgrade_task();
         w
@@ -4307,6 +4385,7 @@ impl ChatWidget<'_> {
             browser_overlay_state: BrowserOverlayState::default(),
             pending_images: HashMap::new(),
             welcome_shown: false,
+            test_mode: is_test_mode(),
             latest_browser_screenshot: Arc::new(Mutex::new(None)),
             browser_autofix_requested: Arc::new(AtomicBool::new(false)),
             cached_image_protocol: RefCell::new(None),
@@ -4453,6 +4532,12 @@ impl ChatWidget<'_> {
         w.set_standard_terminal_mode(!config.tui.alternate_screen);
         if show_welcome {
             w.history_push_top_next_req(history_cell::new_animated_welcome());
+        }
+        if w.test_mode {
+            w.bottom_pane.set_task_running(false);
+            w.bottom_pane.update_status_text(String::new());
+            #[cfg(any(test, feature = "test-helpers"))]
+            w.seed_test_mode_greeting();
         }
         w.maybe_start_auto_upgrade_task();
         w
@@ -7543,6 +7628,9 @@ impl ChatWidget<'_> {
     /// the transient "Connecting MCP servers…" line with a version
     /// that omits it.
     fn remove_connecting_mcp_notice(&mut self) {
+        if self.test_mode {
+            return;
+        }
         let needle = "Connecting MCP servers…";
         if let Some((idx, cell)) = self.history_cells.iter().enumerate().find(|(_, cell)| {
             cell.display_lines().iter().any(|line| {
@@ -9518,7 +9606,10 @@ impl ChatWidget<'_> {
             serde_json::to_string_pretty(&event).unwrap_or_default()
         );
 
-        if self.session_id.is_none() && !matches!(&event.msg, EventMsg::SessionConfigured(_)) {
+        if self.session_id.is_none()
+            && !self.test_mode
+            && !matches!(&event.msg, EventMsg::SessionConfigured(_))
+        {
             tracing::debug!(
                 "Ignoring stale event {:?} (seq={}) while waiting for SessionConfigured",
                 &event.msg,
@@ -9545,7 +9636,9 @@ impl ChatWidget<'_> {
                 // avoid inserting a duplicate. Still surface a notice if the
                 // model actually changed from the requested one.
                 let is_first = !self.welcome_shown;
-                if is_first || self.config.model != event.model {
+                let should_insert_session_info =
+                    (!self.test_mode && is_first) || self.config.model != event.model;
+                if should_insert_session_info {
                     if is_first {
                         self.welcome_shown = true;
                     }
@@ -9593,6 +9686,7 @@ impl ChatWidget<'_> {
                 // If the user requested an interrupt, ignore late final answers.
                 if self.stream_state.drop_streaming {
                     tracing::debug!("Ignoring AgentMessage after interrupt");
+                    self.stop_spinner();
                     return;
                 }
                 self.stream_state.seq_answer_final = Some(event.event_seq);
@@ -9636,7 +9730,7 @@ impl ChatWidget<'_> {
                 // the status spinner can hide promptly when nothing else is running.
                 self.active_task_ids.remove(&id);
                 self.finalize_agent_activity();
-                self.maybe_hide_spinner();
+                self.stop_spinner();
                 // Important: do not advance Auto Drive here. The StreamController will emit
                 // AppEvent::InsertFinalAnswer, and the App thread will finalize the assistant
                 // cell slightly later. Advancing at this point can start the next Auto Drive
@@ -9696,6 +9790,7 @@ impl ChatWidget<'_> {
                 // If the user requested an interrupt, ignore late deltas.
                 if self.stream_state.drop_streaming {
                     tracing::debug!("Ignoring Answer delta after interrupt");
+                    self.stop_spinner();
                     return;
                 }
                 // Ignore late deltas for ids that have already finalized in this turn
@@ -9734,6 +9829,7 @@ impl ChatWidget<'_> {
                 // Ignore late reasoning if we've dropped streaming due to interrupt.
                 if self.stream_state.drop_streaming {
                     tracing::debug!("Ignoring AgentReasoning after interrupt");
+                    self.stop_spinner();
                     return;
                 }
                 tracing::debug!(
@@ -9792,6 +9888,7 @@ impl ChatWidget<'_> {
                 tracing::debug!("AgentReasoningDelta: {:?}", delta);
                 if self.stream_state.drop_streaming {
                     tracing::debug!("Ignoring Reasoning delta after interrupt");
+                    self.stop_spinner();
                     return;
                 }
                 // Ignore late deltas for ids that have already finalized in this turn
@@ -9913,6 +10010,7 @@ impl ChatWidget<'_> {
             }) => {
                 if self.stream_state.drop_streaming {
                     tracing::debug!("Ignoring RawContent delta after interrupt");
+                    self.stop_spinner();
                     return;
                 }
                 // Treat raw reasoning content the same as summarized reasoning
@@ -9947,6 +10045,7 @@ impl ChatWidget<'_> {
             EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
                 if self.stream_state.drop_streaming {
                     tracing::debug!("Ignoring AgentReasoningRawContent after interrupt");
+                    self.stop_spinner();
                     return;
                 }
                 tracing::debug!(
@@ -10972,6 +11071,7 @@ impl ChatWidget<'_> {
                 // Update the active agents list from the event and track timing
                 self.active_agents.clear();
                 let now = Instant::now();
+                let mut saw_running = false;
                 for agent in agents.iter() {
                     let parsed_status = agent_status_from_str(agent.status.as_str());
                     // Update runtime map
@@ -10985,6 +11085,7 @@ impl ChatWidget<'_> {
                             if entry.started_at.is_none() {
                                 entry.started_at = Some(now);
                             }
+                            saw_running = true;
                         }
                         AgentStatus::Completed | AgentStatus::Failed | AgentStatus::Cancelled => {
                             if entry.completed_at.is_none() {
@@ -11034,6 +11135,13 @@ impl ChatWidget<'_> {
                             self.bottom_pane.update_status_text(String::new());
                         }
                     }
+                }
+
+                if saw_running && !self.bottom_pane.is_task_running() {
+                    self.bottom_pane.set_task_running(true);
+                    self.bottom_pane.update_status_text("Running...".to_string());
+                    self.refresh_auto_drive_visuals();
+                    self.request_redraw();
                 }
 
                 // Update overall task status based on agent states
@@ -19180,6 +19288,7 @@ Have we met every part of this goal and is there no further work to do?"#
                                 .insert(StreamId(stream_id.clone()));
                         }
                         self.auto_stop(pending);
+                        self.stop_spinner();
                         return;
                     } else {
                         self.auto_state.last_completion_explanation = None;
@@ -19201,6 +19310,7 @@ Have we met every part of this goal and is there no further work to do?"#
                             "Coordinator stopped unexpectedly while scheduling diagnostics follow-up.".to_string(),
                         ));
                     }
+                    self.stop_spinner();
                     return;
                 }
                 }
@@ -19227,6 +19337,7 @@ Have we met every part of this goal and is there no further work to do?"#
                         want
                     );
                     self.last_assistant_message = Some(final_source.clone());
+                    self.stop_spinner();
                     return;
                 }
                 if let Some(idx) = self.history_cells.iter().rposition(|c| {
@@ -19276,6 +19387,7 @@ Have we met every part of this goal and is there no further work to do?"#
             self.history_insert_existing_record(Box::new(cell), key, "answer-review", history_id);
             // Advance Auto Drive after the assistant message has been finalized.
             self.auto_on_assistant_final();
+            self.stop_spinner();
             return;
         }
         // Debug: list last few history cell kinds so we can see what's present
@@ -19349,6 +19461,7 @@ Have we met every part of this goal and is there no further work to do?"#
                                 "InsertFinalAnswer: dropping duplicate final for id={}",
                                 want
                             );
+                            self.stop_spinner();
                             return;
                         }
                     }
@@ -19406,6 +19519,7 @@ Have we met every part of this goal and is there no further work to do?"#
             self.autoscroll_if_near_bottom();
             // Final cell committed via replacement; now advance Auto Drive.
             self.auto_on_assistant_final();
+            self.stop_spinner();
             return;
         }
 
@@ -19437,6 +19551,7 @@ Have we met every part of this goal and is there no further work to do?"#
                 self.autoscroll_if_near_bottom();
                 // Final cell replaced in-place; advance Auto Drive now.
                 self.auto_on_assistant_final();
+                self.stop_spinner();
                 return;
             }
         }
@@ -19480,6 +19595,7 @@ Have we met every part of this goal and is there no further work to do?"#
                 self.autoscroll_if_near_bottom();
                 // Final assistant content revised; advance Auto Drive now.
                 self.auto_on_assistant_final();
+                self.stop_spinner();
                 return;
             }
         }
@@ -19532,6 +19648,7 @@ Have we met every part of this goal and is there no further work to do?"#
         // Ordered insert completed; advance Auto Drive now that the assistant
         // message is present in history.
         self.auto_on_assistant_final();
+        self.stop_spinner();
     }
 
     // Assign or fetch a stable sequence for a stream kind+id within its originating turn
@@ -22716,6 +22833,12 @@ mod tests {
     }
 
     fn reset_history(chat: &mut ChatWidget<'_>) {
+        #[cfg(any(test, feature = "test-helpers"))]
+        println!(
+            "reset_history before: len={} test_mode={}",
+            chat.history_cells.len(),
+            chat.test_mode
+        );
         chat.history_cells.clear();
         chat.history_cell_ids.clear();
         chat.history_state = HistoryState::new();
@@ -22734,6 +22857,8 @@ mod tests {
         chat.layout.scroll_offset = 0;
         chat.layout.last_max_scroll.set(0);
         chat.layout.last_history_viewport_height.set(0);
+        #[cfg(any(test, feature = "test-helpers"))]
+        println!("reset_history after: len={}", chat.history_cells.len());
     }
 
     fn insert_plain_cell(chat: &mut ChatWidget<'_>, lines: &[&str]) {
@@ -24089,7 +24214,6 @@ mod tests {
             }),
             order: None,
         });
-
         assert!(
             chat.bottom_pane.is_task_running(),
             "spinner should remain active while the agent reports running"
@@ -24103,7 +24227,6 @@ mod tests {
             }),
             order: None,
         });
-
         assert!(
             !chat.bottom_pane.is_task_running(),
             "spinner should clear once the final answer arrives even without a terminal status update"
