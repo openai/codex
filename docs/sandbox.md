@@ -69,6 +69,7 @@ The mechanism Codex uses to enforce the sandbox policy depends on your OS:
 
 - **macOS 12+** uses **Apple Seatbelt**. Codex invokes `sandbox-exec` with a profile that corresponds to the selected `--sandbox` mode, constraining filesystem and network access at the OS level.
 - **Linux** combines **Landlock** and **seccomp** APIs to approximate the same guarantees. Kernel support is required; older kernels may not expose the necessary features.
+- **Windows** users should run Codex from **Windows Subsystem for Linux (WSL)** so the CLI can rely on the Linux sandbox. After installing WSL, run Codex inside your Linux distro. The Codex IDE extension also supports WSL; set `"chatgpt.preferWsl": true` in VS Code to have the extension run commands inside WSL automatically.
 
 In containerized Linux environments (for example Docker), sandboxing may not work when the host or container configuration does not expose Landlock/seccomp. In those cases, configure the container to provide the isolation you need and run Codex with `--sandbox danger-full-access` (or the shorthand `--dangerously-bypass-approvals-and-sandbox`) inside that container.
 
