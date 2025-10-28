@@ -502,7 +502,7 @@ pub struct ResumeConversationParams {
     /// Absolute path to the rollout JSONL file. If omitted, `conversationId` must be provided.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
-    /// Provide a conversation id instead of a path; the server will locate the rollout.
+    /// If the rollout path is not known, it can be discovered via the conversation id at at the cost of extra latency.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<ConversationId>,
     /// Optional overrides to apply when spawning the resumed session.

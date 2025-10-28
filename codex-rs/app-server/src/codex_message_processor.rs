@@ -1015,45 +1015,41 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: ResumeConversationParams,
     ) {
-        // Determine rollout path from params (one-of: path | conversationId).
-        if params.path.is_some() && params.conversation_id.is_some() {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: "specify exactly one of path or conversationId".to_string(),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
-        }
-
-        let path = if let Some(p) = params.path.clone() {
-            p
-        } else if let Some(conversation_id) = params.conversation_id {
-            match codex_core::find_conversation_path_by_id_str(
-                &self.config.codex_home,
-                &conversation_id.to_string(),
-            )
-            .await
-            {
-                Ok(Some(p)) => p,
-                _ => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("no rollout found for conversation id {conversation_id}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
+        let path = match params {
+            ResumeConversationParams {
+                path: Some(path), ..
+            } => path,
+            ResumeConversationParams {
+                conversation_id: Some(conversation_id),
+                ..
+            } => {
+                match codex_core::find_conversation_path_by_id_str(
+                    &self.config.codex_home,
+                    &conversation_id.to_string(),
+                )
+                .await
+                {
+                    Ok(Some(p)) => p,
+                    _ => {
+                        let error = JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: "unable to locate rollout path".to_string(),
+                            data: None,
+                        };
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
                 }
             }
-        } else {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: "either path or conversationId must be provided".to_string(),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
+            _ => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: "either path or conversation id must be provided".to_string(),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
         };
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
