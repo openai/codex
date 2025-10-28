@@ -21,7 +21,7 @@ When you work inside a project, Codex builds on those global instructions by col
 
 Before Codex gets to work, the instructions are ingested in precedence order: global guidance from `~/.codex` comes first, then each project doc from the repository root down to your current directory. Guidance in deeper directories overrides earlier layers, so the most specific file controls the final behavior.
 
->**Note:** `/review` launches a fresh review thread that ignores `AGENTS.md`
+**Note:** `/review` launches a fresh review thread that ignores `AGENTS.md`.
 
 ### Priority Summary
 
