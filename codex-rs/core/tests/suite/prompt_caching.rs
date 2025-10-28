@@ -18,6 +18,7 @@ use codex_core::shell::default_user_shell;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
+use core_test_support::seed_global_agents_context;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
 use std::collections::HashMap;
@@ -34,6 +35,20 @@ fn text_user_input(text: String) -> serde_json::Value {
         "role": "user",
         "content": [ { "type": "input_text", "text": text } ]
     })
+}
+
+fn message_by_prefix(body: &serde_json::Value, prefix: &str) -> serde_json::Value {
+    body["input"]
+        .as_array()
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item["content"][0]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.starts_with(prefix))
+            })
+        })
+        .cloned()
+        .unwrap_or_else(|| panic!("expected message starting with `{prefix}`"))
 }
 
 fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
@@ -96,6 +111,8 @@ async fn codex_mini_latest_tools() {
 
     let cwd = TempDir::new().unwrap();
     let codex_home = TempDir::new().unwrap();
+    let _ = seed_global_agents_context(&codex_home, "guide.md", "Global memo.");
+    let _ = seed_global_agents_context(&codex_home, "guide.md", "Global memo.");
     let mut config = load_default_config_for_test(&codex_home);
     config.cwd = cwd.path().to_path_buf();
     config.model_provider = model_provider;
@@ -181,6 +198,7 @@ async fn prompt_tools_are_consistent_across_requests() {
 
     let cwd = TempDir::new().unwrap();
     let codex_home = TempDir::new().unwrap();
+    let _ = seed_global_agents_context(&codex_home, "guide.md", "Global memo.");
 
     let mut config = load_default_config_for_test(&codex_home);
     config.cwd = cwd.path().to_path_buf();
@@ -303,6 +321,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
     let cwd = TempDir::new().unwrap();
     let codex_home = TempDir::new().unwrap();
+    let _ = seed_global_agents_context(&codex_home, "guide.md", "Global memo.");
     let mut config = load_default_config_for_test(&codex_home);
     config.cwd = cwd.path().to_path_buf();
     config.model_provider = model_provider;
@@ -374,9 +393,15 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
         "content": [ { "type": "input_text", "text": "hello 1" } ]
     });
     let body1 = requests[0].body_json::<serde_json::Value>().unwrap();
+    let expected_agents_msg = message_by_prefix(&body1, "<agents_context>");
     assert_eq!(
         body1["input"],
-        serde_json::json!([expected_ui_msg, expected_env_msg, expected_user_message_1])
+        serde_json::json!([
+            expected_ui_msg,
+            expected_agents_msg,
+            expected_env_msg,
+            expected_user_message_1
+        ])
     );
 
     let expected_user_message_2 = serde_json::json!({
@@ -393,6 +418,10 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
         .concat()
     );
     assert_eq!(body2["input"], expected_body2);
+    assert_eq!(
+        message_by_prefix(&body2, "<agents_context>"),
+        expected_agents_msg
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -422,6 +451,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
 
     let cwd = TempDir::new().unwrap();
     let codex_home = TempDir::new().unwrap();
+    let _ = seed_global_agents_context(&codex_home, "guide.md", "Global memo.");
     let mut config = load_default_config_for_test(&codex_home);
     config.cwd = cwd.path().to_path_buf();
     config.model_provider = model_provider;
@@ -550,6 +580,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() {
 
     let cwd = TempDir::new().unwrap();
     let codex_home = TempDir::new().unwrap();
+    let _ = seed_global_agents_context(&codex_home, "guide.md", "Global memo.");
     let mut config = load_default_config_for_test(&codex_home);
     config.cwd = cwd.path().to_path_buf();
     config.model_provider = model_provider;
@@ -673,6 +704,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
 
     let cwd = TempDir::new().unwrap();
     let codex_home = TempDir::new().unwrap();
+    let _ = seed_global_agents_context(&codex_home, "guide.md", "Global memo.");
     let mut config = load_default_config_for_test(&codex_home);
     config.cwd = cwd.path().to_path_buf();
     config.model_provider = model_provider;
@@ -737,6 +769,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
     let expected_ui_text =
         "<user_instructions>\n\nbe consistent and helpful\n\n</user_instructions>";
     let expected_ui_msg = text_user_input(expected_ui_text.to_string());
+    let expected_agents_msg_1 = message_by_prefix(&body1, "<agents_context>");
 
     let expected_env_msg_1 = text_user_input(default_env_context_str(
         &cwd.path().to_string_lossy(),
@@ -746,6 +779,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
 
     let expected_input_1 = serde_json::Value::Array(vec![
         expected_ui_msg.clone(),
+        expected_agents_msg_1.clone(),
         expected_env_msg_1.clone(),
         expected_user_message_1.clone(),
     ]);
@@ -754,6 +788,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
     let expected_user_message_2 = text_user_input("hello 2".to_string());
     let expected_input_2 = serde_json::Value::Array(vec![
         expected_ui_msg,
+        expected_agents_msg_1,
         expected_env_msg_1,
         expected_user_message_1,
         expected_user_message_2,
@@ -787,6 +822,7 @@ async fn send_user_turn_with_changes_sends_environment_context() {
 
     let cwd = TempDir::new().unwrap();
     let codex_home = TempDir::new().unwrap();
+    let _ = seed_global_agents_context(&codex_home, "guide.md", "Global memo.");
     let mut config = load_default_config_for_test(&codex_home);
     config.cwd = cwd.path().to_path_buf();
     config.model_provider = model_provider;
@@ -855,11 +891,13 @@ async fn send_user_turn_with_changes_sends_environment_context() {
         "role": "user",
         "content": [ { "type": "input_text", "text": expected_ui_text } ]
     });
+    let expected_agents_msg_1 = message_by_prefix(&body1, "<agents_context>");
     let expected_env_text_1 = default_env_context_str(&default_cwd.to_string_lossy(), &shell);
     let expected_env_msg_1 = text_user_input(expected_env_text_1);
     let expected_user_message_1 = text_user_input("hello 1".to_string());
     let expected_input_1 = serde_json::Value::Array(vec![
         expected_ui_msg.clone(),
+        expected_agents_msg_1.clone(),
         expected_env_msg_1.clone(),
         expected_user_message_1.clone(),
     ]);
@@ -876,6 +914,7 @@ async fn send_user_turn_with_changes_sends_environment_context() {
     let expected_user_message_2 = text_user_input("hello 2".to_string());
     let expected_input_2 = serde_json::Value::Array(vec![
         expected_ui_msg,
+        expected_agents_msg_1,
         expected_env_msg_1,
         expected_user_message_1,
         expected_env_msg_2,

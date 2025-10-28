@@ -1,3 +1,4 @@
+use assert_cmd::cargo::cargo_bin;
 use codex_app_server_protocol::AuthMode;
 use codex_core::CodexAuth;
 use codex_core::ContentItem;
@@ -14,8 +15,12 @@ use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
+use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
+use codex_core::config::ConfigToml;
 use codex_core::error::CodexErr;
 use codex_core::model_family::find_family_for_model;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
@@ -28,6 +33,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses;
+use core_test_support::seed_global_agents_context;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
@@ -35,6 +41,7 @@ use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
 use futures::StreamExt;
 use serde_json::json;
+use std::fs;
 use std::io::Write;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -235,6 +242,11 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         ..built_in_model_providers()["openai"].clone()
     };
     let codex_home = TempDir::new().unwrap();
+    let _guide_path = seed_global_agents_context(
+        &codex_home,
+        "guide.md",
+        "Remember to run the regression script.",
+    );
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
     // Also configure user instructions to ensure they are NOT delivered on resume.
@@ -321,6 +333,11 @@ async fn includes_conversation_id_and_model_headers_in_request() {
 
     // Init session
     let codex_home = TempDir::new().unwrap();
+    let _guide_path = seed_global_agents_context(
+        &codex_home,
+        "guide.md",
+        "Remember to run the regression script.",
+    );
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
 
@@ -377,6 +394,11 @@ async fn includes_base_instructions_override_in_request() {
         ..built_in_model_providers()["openai"].clone()
     };
     let codex_home = TempDir::new().unwrap();
+    let _guide_path = seed_global_agents_context(
+        &codex_home,
+        "guide.md",
+        "Remember to run the regression script.",
+    );
     let mut config = load_default_config_for_test(&codex_home);
 
     config.base_instructions = Some("test instructions".to_string());
@@ -438,6 +460,11 @@ async fn chatgpt_auth_sends_correct_request() {
 
     // Init session
     let codex_home = TempDir::new().unwrap();
+    let _guide_path = seed_global_agents_context(
+        &codex_home,
+        "guide.md",
+        "Remember to run the regression script.",
+    );
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
     let conversation_manager = ConversationManager::with_auth(create_dummy_codex_auth());
@@ -568,10 +595,14 @@ async fn includes_user_instructions_message_in_request() {
     };
 
     let codex_home = TempDir::new().unwrap();
+    let guide_path = seed_global_agents_context(
+        &codex_home,
+        "guide.md",
+        "Remember to run the regression script.",
+    );
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
     config.user_instructions = Some("be nice".to_string());
-
     let conversation_manager =
         ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
     let codex = conversation_manager
@@ -600,12 +631,579 @@ async fn includes_user_instructions_message_in_request() {
             .unwrap()
             .contains("be nice")
     );
-    assert_message_role(&request_body["input"][0], "user");
-    assert_message_starts_with(&request_body["input"][0], "<user_instructions>");
-    assert_message_ends_with(&request_body["input"][0], "</user_instructions>");
-    assert_message_role(&request_body["input"][1], "user");
-    assert_message_starts_with(&request_body["input"][1], "<environment_context>");
-    assert_message_ends_with(&request_body["input"][1], "</environment_context>");
+
+    let input_items = request_body["input"].as_array().expect("input array");
+    let instructions_idx = input_items
+        .iter()
+        .position(|item| {
+            item["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.starts_with("<user_instructions>"))
+        })
+        .expect("user instructions message");
+    let agents_idx = input_items
+        .iter()
+        .position(|item| {
+            item["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.starts_with("<agents_context>"))
+        })
+        .expect("agents context message");
+    let env_idx = input_items
+        .iter()
+        .position(|item| {
+            item["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.starts_with("<environment_context>"))
+        })
+        .expect("environment context message");
+    assert!(
+        instructions_idx < agents_idx,
+        "instructions should precede agents context"
+    );
+    assert!(
+        agents_idx < env_idx,
+        "agents context should precede environment context"
+    );
+
+    assert_message_role(&input_items[instructions_idx], "user");
+    assert_message_starts_with(&input_items[instructions_idx], "<user_instructions>");
+    assert_message_ends_with(&input_items[instructions_idx], "</user_instructions>");
+
+    assert_message_role(&input_items[agents_idx], "user");
+    assert_message_starts_with(&input_items[agents_idx], "<agents_context>");
+    assert_message_ends_with(&input_items[agents_idx], "</agents_context>");
+    let context_text = input_items[agents_idx]["content"][0]["text"]
+        .as_str()
+        .expect("agents context text");
+    let expected_path = guide_path.display().to_string();
+    assert!(
+        context_text.contains(&expected_path),
+        "agents context should reference {expected_path}, got {context_text}"
+    );
+
+    assert_message_role(&input_items[env_idx], "user");
+    assert_message_starts_with(&input_items[env_idx], "<environment_context>");
+    assert_message_ends_with(&input_items[env_idx], "</environment_context>");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_agents_context_message_in_request() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock =
+        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
+            .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let codex_home = TempDir::new().unwrap();
+    let guide_path = seed_global_agents_context(
+        &codex_home,
+        "guide.md",
+        "Remember to run the regression script.",
+    );
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider = model_provider;
+
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create new conversation")
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    let input_items = request_body["input"].as_array().expect("input array");
+    let context_message = input_items
+        .iter()
+        .find(|value| {
+            value["content"][0]["text"].as_str().is_some_and(|text| {
+                text.starts_with("<agents_context>") && text.ends_with("</agents_context>")
+            })
+        })
+        .expect("agents context message present");
+    assert_message_role(context_message, "user");
+    let context_text = context_message["content"][0]["text"]
+        .as_str()
+        .expect("agents context text");
+    assert!(context_text.contains("regression script"));
+    let expected_path = guide_path.display().to_string();
+    assert!(
+        context_text.contains(&expected_path),
+        "expected context prompt to reference {expected_path}, got {context_text}"
+    );
+
+    let env_message = input_items
+        .iter()
+        .find(|value| {
+            value["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.starts_with("<environment_context>"))
+        })
+        .expect("environment context message");
+    assert_message_role(env_message, "user");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_agents_context_message_in_user_turn_request() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock =
+        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
+            .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let codex_home = TempDir::new().unwrap();
+    let guide_path = seed_global_agents_context(
+        &codex_home,
+        "guide.md",
+        "Remember to run the regression script.",
+    );
+
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider = model_provider;
+
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let NewConversation {
+        conversation: codex,
+        ..
+    } = conversation_manager
+        .new_conversation(config.clone())
+        .await
+        .expect("create new conversation");
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+            cwd: config.cwd.clone(),
+            approval_policy: config.approval_policy,
+            sandbox_policy: config.sandbox_policy.clone(),
+            model: config.model.clone(),
+            effort: config.model_reasoning_effort,
+            summary: config.model_reasoning_summary,
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+    let request_pretty = serde_json::to_string_pretty(&request_body).unwrap();
+    let input_items = request_body["input"].as_array().expect("input array");
+    let context_message = input_items
+        .iter()
+        .find(|value| {
+            value["content"][0]["text"].as_str().is_some_and(|text| {
+                text.starts_with("<agents_context>") && text.ends_with("</agents_context>")
+            })
+        })
+        .unwrap_or_else(|| panic!("agents context message missing: {request_pretty}"));
+
+    let context_text = context_message["content"][0]["text"]
+        .as_str()
+        .expect("agents context text");
+    assert!(context_text.contains("regression script"));
+    let expected_path = guide_path.display().to_string();
+    assert!(
+        context_text.contains(&expected_path),
+        "expected context prompt to reference {expected_path}, got {context_text}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn global_agents_home_override_in_prompt() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock =
+        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
+            .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let codex_home = TempDir::new().unwrap();
+    let agents_home_override = TempDir::new().unwrap();
+    let override_root = agents_home_override.path().join("agents-home");
+    std::fs::create_dir_all(override_root.join("context")).unwrap();
+    std::fs::create_dir_all(override_root.join("tools")).unwrap();
+    let context_path = override_root.join("context").join("memo.md");
+    std::fs::write(&context_path, "Global memo.").unwrap();
+    let tool_path = override_root.join("tools").join("helper.sh");
+    std::fs::write(&tool_path, "echo helper\n").unwrap();
+
+    let mut overrides = ConfigOverrides {
+        agents_home: Some(override_root.clone()),
+        ..ConfigOverrides::default()
+    };
+    #[cfg(target_os = "linux")]
+    {
+        overrides.codex_linux_sandbox_exe = Some(cargo_bin("codex-linux-sandbox"));
+    }
+    let mut config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        overrides,
+        codex_home.path().to_path_buf(),
+    )
+    .expect("load config with agents_home override");
+    config.model_provider = model_provider;
+
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create new conversation")
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+    let input_items = request_body["input"].as_array().expect("input array");
+    let context_message = input_items
+        .iter()
+        .find(|value| {
+            value["content"][0]["text"].as_str().is_some_and(|text| {
+                text.starts_with("<agents_context>") && text.ends_with("</agents_context>")
+            })
+        })
+        .expect("agents context message");
+    let context_text = context_message["content"][0]["text"]
+        .as_str()
+        .expect("agents context text");
+
+    let expected_context_path = context_path.display().to_string();
+    assert!(
+        context_text.contains(&expected_context_path),
+        "expected context prompt to reference {expected_context_path}, got {context_text}"
+    );
+    let expected_tool_path = tool_path.display().to_string();
+    assert!(
+        context_text.contains(&expected_tool_path),
+        "expected context prompt to reference {expected_tool_path}, got {context_text}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agents_context_prefers_project_entries() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock =
+        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
+            .await;
+
+    let codex_home = TempDir::new().unwrap();
+    let global_agents = codex_home.path().join(".agents");
+    std::fs::create_dir_all(global_agents.join("context")).unwrap();
+    std::fs::create_dir_all(global_agents.join("tools")).unwrap();
+    std::fs::write(
+        global_agents.join("context").join("guide.md"),
+        "Global memo.",
+    )
+    .unwrap();
+    std::fs::write(
+        global_agents.join("tools").join("analyze.sh"),
+        "echo global\n",
+    )
+    .unwrap();
+
+    let project_dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(project_dir.path().join(".git")).unwrap();
+    let project_agents = project_dir.path().join(".agents");
+    std::fs::create_dir_all(project_agents.join("context")).unwrap();
+    std::fs::create_dir_all(project_agents.join("tools")).unwrap();
+    std::fs::write(
+        project_agents.join("context").join("guide.md"),
+        "Project memo.",
+    )
+    .unwrap();
+    std::fs::write(
+        project_agents.join("tools").join("analyze.sh"),
+        "echo project\n",
+    )
+    .unwrap();
+
+    let mut overrides = ConfigOverrides {
+        cwd: Some(project_dir.path().to_path_buf()),
+        ..ConfigOverrides::default()
+    };
+    #[cfg(target_os = "linux")]
+    {
+        overrides.codex_linux_sandbox_exe = Some(cargo_bin("codex-linux-sandbox"));
+    }
+
+    let mut config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        overrides,
+        codex_home.path().to_path_buf(),
+    )
+    .expect("load config with overrides");
+
+    config.model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create new conversation")
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    let input_items = request_body["input"].as_array().expect("input array");
+    let context_message = input_items
+        .iter()
+        .find(|value| {
+            value["content"][0]["text"].as_str().is_some_and(|text| {
+                text.starts_with("<agents_context>") && text.ends_with("</agents_context>")
+            })
+        })
+        .expect("agents context message");
+
+    let context_text = context_message["content"][0]["text"]
+        .as_str()
+        .expect("agents context text");
+    assert!(context_text.contains("Project memo."));
+    assert!(!context_text.contains("Global memo."));
+    assert!(context_text.contains("Location: .agents/context/guide.md"));
+    assert!(context_text.contains("-> .agents/tools/analyze.sh"));
+    let codex_home_str = codex_home.path().to_string_lossy().to_string();
+    let project_dir_str = project_dir.path().to_string_lossy().to_string();
+    assert!(!context_text.contains(&codex_home_str));
+    assert!(!context_text.contains(&project_dir_str));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cli_overrides_preserve_agents_context() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let sse = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
+    );
+    let resp_mock =
+        responses::mount_sse_once_match(&server, path("/v1/responses"), sse.to_string()).await;
+
+    let home = TempDir::new().unwrap();
+    let global_context = home.path().join(".agents").join("context");
+    fs::create_dir_all(&global_context).unwrap();
+    fs::write(global_context.join("memo.md"), "Global memo.").unwrap();
+    let global_tools = home.path().join(".agents").join("tools");
+    fs::create_dir_all(&global_tools).unwrap();
+    fs::write(global_tools.join("helper.sh"), "echo global\n").unwrap();
+
+    let project_dir = TempDir::new().unwrap();
+    fs::create_dir_all(project_dir.path().join(".git")).unwrap();
+    let project_context = project_dir.path().join(".agents").join("context");
+    fs::create_dir_all(&project_context).unwrap();
+    fs::write(project_context.join("memo.md"), "Project memo.").unwrap();
+    let project_tools = project_dir.path().join(".agents").join("tools");
+    fs::create_dir_all(&project_tools).unwrap();
+    fs::write(project_tools.join("helper.sh"), "echo project\n").unwrap();
+
+    let mut config_override_probe = ConfigOverrides {
+        cwd: Some(project_dir.path().to_path_buf()),
+        ..ConfigOverrides::default()
+    };
+    #[cfg(target_os = "linux")]
+    {
+        config_override_probe.codex_linux_sandbox_exe = Some(cargo_bin("codex-linux-sandbox"));
+    }
+    let config_probe = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        config_override_probe,
+        home.path().to_path_buf(),
+    )
+    .expect("load config with project overrides");
+    let prompt_probe = config_probe
+        .agents_context_prompt
+        .as_ref()
+        .expect("expected agents context prompt");
+    assert!(prompt_probe.contains("Project memo."));
+
+    let mut cli_overrides_struct = ConfigOverrides {
+        approval_policy: Some(AskForApproval::Never),
+        sandbox_mode: Some(SandboxMode::ReadOnly),
+        cwd: Some(project_dir.path().to_path_buf()),
+        ..ConfigOverrides::default()
+    };
+    #[cfg(target_os = "linux")]
+    {
+        cli_overrides_struct.codex_linux_sandbox_exe = Some(cargo_bin("codex-linux-sandbox"));
+    }
+    unsafe {
+        std::env::set_var("CODEX_HOME", home.path());
+    }
+    let config_cli = Config::load_with_cli_overrides(Vec::new(), cli_overrides_struct)
+        .await
+        .expect("load CLI config");
+    unsafe {
+        std::env::remove_var("CODEX_HOME");
+    }
+    let prompt_cli = config_cli
+        .agents_context_prompt
+        .as_ref()
+        .expect("expected CLI agents context prompt");
+    assert!(prompt_cli.contains("Project memo."));
+
+    let mut cli_overrides_struct = ConfigOverrides {
+        approval_policy: Some(AskForApproval::Never),
+        sandbox_mode: Some(SandboxMode::ReadOnly),
+        cwd: Some(project_dir.path().to_path_buf()),
+        model_provider: Some("mock".to_string()),
+        ..ConfigOverrides::default()
+    };
+    #[cfg(target_os = "linux")]
+    {
+        cli_overrides_struct.codex_linux_sandbox_exe = Some(cargo_bin("codex-linux-sandbox"));
+    }
+    let provider_override = toml::Value::Table(
+        [
+            ("name".to_string(), toml::Value::String("mock".to_string())),
+            (
+                "base_url".to_string(),
+                toml::Value::String(format!("{}/v1", server.uri())),
+            ),
+            (
+                "env_key".to_string(),
+                toml::Value::String("PATH".to_string()),
+            ),
+            (
+                "wire_api".to_string(),
+                toml::Value::String("responses".to_string()),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let cli_overrides = vec![
+        ("model_providers.mock".to_string(), provider_override),
+        (
+            "model_provider".to_string(),
+            toml::Value::String("mock".to_string()),
+        ),
+    ];
+
+    unsafe {
+        std::env::set_var("CODEX_HOME", home.path());
+    }
+    let config_cli = Config::load_with_cli_overrides(cli_overrides, cli_overrides_struct)
+        .await
+        .expect("load CLI config");
+    unsafe {
+        std::env::remove_var("CODEX_HOME");
+    }
+    let prompt_cli = config_cli
+        .agents_context_prompt
+        .as_ref()
+        .expect("expected CLI agents context prompt");
+    assert!(prompt_cli.contains("Project memo."));
+
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let NewConversation {
+        conversation: codex,
+        ..
+    } = conversation_manager
+        .new_conversation(config_cli.clone())
+        .await
+        .expect("create new conversation");
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello agent".into(),
+            }],
+            cwd: config_cli.cwd.clone(),
+            approval_policy: config_cli.approval_policy,
+            sandbox_policy: config_cli.sandbox_policy.clone(),
+            model: config_cli.model.clone(),
+            effort: config_cli.model_reasoning_effort,
+            summary: config_cli.model_reasoning_summary,
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+    let request_pretty = serde_json::to_string_pretty(&request_body).unwrap();
+    let input_items = request_body["input"].as_array().expect("input array");
+    let context_message = input_items
+        .iter()
+        .find(|value| {
+            value["content"][0]["text"].as_str().is_some_and(|text| {
+                text.starts_with("<agents_context>") && text.ends_with("</agents_context>")
+            })
+        })
+        .unwrap_or_else(|| panic!("agents context message missing. request: {request_pretty}"));
+
+    let context_text = context_message["content"][0]["text"]
+        .as_str()
+        .expect("agents context text");
+    assert!(context_text.contains("Project memo."));
+    assert!(!context_text.contains("Global memo."));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1380,3 +1978,4 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
         "request 3 tail mismatch",
     );
 }
+use codex_protocol::config_types::SandboxMode;

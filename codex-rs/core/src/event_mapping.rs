@@ -15,7 +15,9 @@ use tracing::warn;
 fn is_session_prefix(text: &str) -> bool {
     let trimmed = text.trim_start();
     let lowered = trimmed.to_ascii_lowercase();
-    lowered.starts_with("<environment_context>") || lowered.starts_with("<user_instructions>")
+    lowered.starts_with("<environment_context>")
+        || lowered.starts_with("<user_instructions>")
+        || lowered.starts_with("<agents_context>")
 }
 
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
@@ -268,5 +270,18 @@ mod tests {
             }
             other => panic!("expected TurnItem::WebSearch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn ignores_agents_context_message() {
+        let item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "<agents_context>\nnotes\n</agents_context>".to_string(),
+            }],
+        };
+
+        assert!(parse_turn_item(&item).is_none());
     }
 }

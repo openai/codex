@@ -1,5 +1,9 @@
 #![expect(clippy::expect_used)]
 
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
+
 use tempfile::TempDir;
 
 use codex_core::CodexConversation;
@@ -35,6 +39,40 @@ pub fn load_default_config_for_test(codex_home: &TempDir) -> Config {
         codex_home.path().to_path_buf(),
     )
     .expect("defaults for test should always succeed")
+}
+
+pub fn seed_global_agents_context(
+    codex_home: &TempDir,
+    relative: impl AsRef<Path>,
+    contents: &str,
+) -> PathBuf {
+    seed_agents_file(codex_home, "context", relative, contents)
+}
+
+pub fn seed_global_agents_tool(
+    codex_home: &TempDir,
+    relative: impl AsRef<Path>,
+    contents: &str,
+) -> PathBuf {
+    seed_agents_file(codex_home, "tools", relative, contents)
+}
+
+fn seed_agents_file(
+    codex_home: &TempDir,
+    subdir: &str,
+    relative: impl AsRef<Path>,
+    contents: &str,
+) -> PathBuf {
+    let path = codex_home
+        .path()
+        .join(".agents")
+        .join(subdir)
+        .join(relative.as_ref());
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create agents directory");
+    }
+    fs::write(&path, contents).expect("write agents file");
+    path
 }
 
 #[cfg(target_os = "linux")]

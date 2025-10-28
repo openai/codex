@@ -81,6 +81,7 @@ tracing = { workspace = true, features = ["log"] }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
+walkdir = { workspace = true }
 which = { workspace = true }
 wildmatch = { workspace = true }
 

@@ -175,6 +175,7 @@ impl Codex {
             model_reasoning_summary: config.model_reasoning_summary,
             user_instructions,
             base_instructions: config.base_instructions.clone(),
+            agents_context_prompt: config.agents_context_prompt.clone(),
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
@@ -266,6 +267,7 @@ pub(crate) struct TurnContext {
     pub(crate) cwd: PathBuf,
     pub(crate) base_instructions: Option<String>,
     pub(crate) user_instructions: Option<String>,
+    pub(crate) agents_context_prompt: Option<String>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
@@ -300,6 +302,8 @@ pub(crate) struct SessionConfiguration {
 
     /// Base instructions override.
     base_instructions: Option<String>,
+    /// Aggregated agents context block surfaced before each turn.
+    agents_context_prompt: Option<String>,
 
     /// When to escalate for approval for execution
     approval_policy: AskForApproval,
@@ -405,6 +409,7 @@ impl Session {
             cwd: session_configuration.cwd.clone(),
             base_instructions: session_configuration.base_instructions.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
+            agents_context_prompt: session_configuration.agents_context_prompt.clone(),
             approval_policy: session_configuration.approval_policy,
             sandbox_policy: session_configuration.sandbox_policy.clone(),
             shell_environment_policy: config.shell_environment_policy.clone(),
@@ -976,9 +981,18 @@ impl Session {
     }
 
     pub(crate) fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
-        let mut items = Vec::<ResponseItem>::with_capacity(2);
+        let mut items = Vec::<ResponseItem>::with_capacity(3);
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(UserInstructions::new(user_instructions.to_string()).into());
+        }
+        if let Some(agents_context) = turn_context.agents_context_prompt.as_ref() {
+            items.push(ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: agents_context.clone(),
+                }],
+            });
         }
         items.push(ResponseItem::from(EnvironmentContext::new(
             Some(turn_context.cwd.clone()),
@@ -1641,6 +1655,7 @@ async fn spawn_review_thread(
         client,
         tools_config,
         user_instructions: None,
+        agents_context_prompt: None,
         base_instructions: Some(base_instructions.clone()),
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
@@ -2623,6 +2638,7 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             user_instructions: config.user_instructions.clone(),
             base_instructions: config.base_instructions.clone(),
+            agents_context_prompt: config.agents_context_prompt.clone(),
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
@@ -2696,6 +2712,7 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             user_instructions: config.user_instructions.clone(),
             base_instructions: config.base_instructions.clone(),
+            agents_context_prompt: config.agents_context_prompt.clone(),
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),

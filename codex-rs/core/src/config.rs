@@ -42,7 +42,10 @@ use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::protocol::AGENTS_CONTEXT_CLOSE_TAG;
+use codex_protocol::protocol::AGENTS_CONTEXT_OPEN_TAG;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
+use codex_utils_string::take_bytes_at_char_boundary;
 use dirs::home_dir;
 use dunce::canonicalize;
 use serde::Deserialize;
@@ -51,9 +54,15 @@ use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
+use std::io::BufReader;
 use std::io::ErrorKind;
+use std::io::Read;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use tempfile::NamedTempFile;
 use toml::Value as TomlValue;
@@ -61,6 +70,7 @@ use toml_edit::Array as TomlArray;
 use toml_edit::DocumentMut;
 use toml_edit::Item as TomlItem;
 use toml_edit::Table as TomlTable;
+use walkdir::WalkDir;
 
 #[cfg(target_os = "windows")]
 pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
@@ -77,6 +87,10 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
 
 const AGENTS_HOME_DEFAULT_SUBDIRS: &[&str] = &["context", "tools", "mcp"];
+const AGENTS_CONTEXT_PROMPT_MAX_BYTES: usize = 64 * 1024; // 64 KiB
+const AGENTS_CONTEXT_FILE_MAX_BYTES: usize = 32 * 1024; // 32 KiB
+const AGENTS_CONTEXT_TRUNCATION_NOTICE: &str = "[... agents context truncated ...]";
+const AGENTS_CONTEXT_FILE_TRUNCATION_NOTICE: &str = "_Content truncated to 32 KiB._";
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
@@ -205,6 +219,15 @@ pub struct Config {
     /// [`agents_home`].
     pub project_agents_home: Option<PathBuf>,
 
+    /// Context documents sourced from the global and project `.agents/context` directories.
+    pub agents_context_entries: Vec<AgentContextEntry>,
+
+    /// Helper scripts discovered under `.agents/tools`.
+    pub agents_tools: Vec<AgentToolEntry>,
+
+    /// Pre-rendered prompt block that surfaces the aggregated agents context.
+    pub agents_context_prompt: Option<String>,
+
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
 
@@ -287,6 +310,38 @@ pub struct Config {
     pub otel: crate::config_types::OtelConfig,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentContextEntry {
+    pub source: AgentsSource,
+    pub relative_path: String,
+    pub absolute_path: PathBuf,
+    pub content: String,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentToolEntry {
+    pub source: AgentsSource,
+    pub relative_path: String,
+    pub absolute_path: PathBuf,
+    pub executable: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentsSource {
+    Global,
+    Project,
+}
+
+impl AgentsSource {
+    fn label(self) -> &'static str {
+        match self {
+            AgentsSource::Global => "global",
+            AgentsSource::Project => "project",
+        }
+    }
+}
+
 impl Config {
     pub async fn load_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
@@ -363,7 +418,7 @@ pub async fn load_global_mcp_servers(
     codex_home: &Path,
 ) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
     let root_value = load_config_as_toml(codex_home).await?;
-    let config_toml: ConfigToml = root_value.clone().try_into().map_err(|err| {
+    let config_toml: ConfigToml = root_value.try_into().map_err(|err| {
         std::io::Error::new(
             ErrorKind::InvalidData,
             format!("failed to deserialize config.toml: {err}"),
@@ -1248,6 +1303,14 @@ impl Config {
             &codex_home,
         )?;
         let project_agents_home = find_project_agents_home(&resolved_cwd);
+        let agents_context_entries =
+            load_agents_context_entries(&agents_home, project_agents_home.as_deref())?;
+        let agents_tools = load_agents_tools(&agents_home, project_agents_home.as_deref())?;
+        let agents_context_prompt = render_agents_context_prompt(
+            &agents_context_entries,
+            &agents_tools,
+            project_agents_home.as_deref(),
+        );
         let additional_writable_roots: Vec<PathBuf> = additional_writable_roots
             .into_iter()
             .map(|path| {
@@ -1438,6 +1501,9 @@ impl Config {
             codex_home,
             agents_home,
             project_agents_home,
+            agents_context_entries,
+            agents_tools,
+            agents_context_prompt,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
@@ -1634,10 +1700,10 @@ fn normalize_agents_home_candidate(candidate: PathBuf, cwd: &Path) -> PathBuf {
             if let Some(home) = home_dir() {
                 return home;
             }
-        } else if let Some(stripped) = raw.strip_prefix("~/") {
-            if let Some(home) = home_dir() {
-                return home.join(stripped);
-            }
+        } else if let Some(stripped) = raw.strip_prefix("~/")
+            && let Some(home) = home_dir()
+        {
+            return home.join(stripped);
         }
     }
 
@@ -1649,12 +1715,11 @@ fn normalize_agents_home_candidate(candidate: PathBuf, cwd: &Path) -> PathBuf {
 }
 
 fn default_agents_home_for(codex_home: &Path) -> PathBuf {
-    if let Some(file_name) = codex_home.file_name().and_then(|name| name.to_str()) {
-        if file_name == ".codex" {
-            if let Some(parent) = codex_home.parent() {
-                return parent.join(".agents");
-            }
-        }
+    if let Some(file_name) = codex_home.file_name().and_then(|name| name.to_str())
+        && file_name == ".codex"
+        && let Some(parent) = codex_home.parent()
+    {
+        return parent.join(".agents");
     }
 
     codex_home.join(".agents")
@@ -1751,7 +1816,7 @@ fn load_agents_mcp_from_dir(
     let extension = path
         .extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase());
+        .map(str::to_ascii_lowercase);
 
     if matches!(extension.as_deref(), Some("json")) {
         parse_agents_mcp_json(&contents, &path)
@@ -1772,6 +1837,376 @@ fn load_agents_mcp_from_dir(
             },
         }
     }
+}
+
+fn load_agents_context_entries(
+    global_agents_home: &Path,
+    project_agents_home: Option<&Path>,
+) -> std::io::Result<Vec<AgentContextEntry>> {
+    let mut entries: BTreeMap<String, AgentContextEntry> = BTreeMap::new();
+    load_agents_context_from_dir(global_agents_home, true, AgentsSource::Global, &mut entries)?;
+    if let Some(local_home) = project_agents_home {
+        load_agents_context_from_dir(local_home, false, AgentsSource::Project, &mut entries)?;
+    }
+    Ok(entries.into_values().collect())
+}
+
+fn load_agents_context_from_dir(
+    agents_home: &Path,
+    ensure_structure: bool,
+    source: AgentsSource,
+    entries: &mut BTreeMap<String, AgentContextEntry>,
+) -> std::io::Result<()> {
+    if ensure_structure {
+        ensure_agents_home_layout(agents_home)?;
+    } else if !agents_home.exists() {
+        return Ok(());
+    }
+
+    let context_dir = agents_home.join("context");
+    if ensure_structure {
+        fs::create_dir_all(&context_dir)?;
+    } else if !context_dir.exists() {
+        return Ok(());
+    }
+
+    for entry in WalkDir::new(&context_dir).follow_links(false) {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                let err_string = err.to_string();
+                if let Some(io) = err.into_io_error() {
+                    return Err(io);
+                }
+                return Err(std::io::Error::other(format!(
+                    "failed to walk {}: {err_string}",
+                    context_dir.display()
+                )));
+            }
+        };
+        if entry.file_type().is_dir() {
+            continue;
+        }
+        if !entry.file_type().is_file() && !entry.file_type().is_symlink() {
+            continue;
+        }
+
+        let path = entry.into_path();
+        let relative = match path.strip_prefix(&context_dir) {
+            Ok(rel) => rel,
+            Err(_) => continue,
+        };
+
+        let Some(relative_str) = normalize_agents_relative_path(relative) else {
+            tracing::warn!(
+                "Skipping agents context file with unsupported path: {}",
+                path.display()
+            );
+            continue;
+        };
+
+        let metadata = match fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to read metadata for agents context file {}: {err}",
+                    path.display()
+                );
+                continue;
+            }
+        };
+
+        if metadata.len() > AGENTS_CONTEXT_FILE_MAX_BYTES as u64 {
+            tracing::warn!(
+                "Agents context file `{}` exceeds {} bytes; truncating.",
+                path.display(),
+                AGENTS_CONTEXT_FILE_MAX_BYTES
+            );
+        }
+
+        let mut reader = BufReader::new(fs::File::open(&path)?);
+        let mut buffer: Vec<u8> = Vec::new();
+        reader
+            .by_ref()
+            .take((AGENTS_CONTEXT_FILE_MAX_BYTES + 4) as u64)
+            .read_to_end(&mut buffer)?;
+
+        let mut content = String::from_utf8_lossy(&buffer).into_owned();
+        let truncated = metadata.len() > AGENTS_CONTEXT_FILE_MAX_BYTES as u64
+            || content.len() > AGENTS_CONTEXT_FILE_MAX_BYTES;
+        if truncated {
+            let trimmed = take_bytes_at_char_boundary(&content, AGENTS_CONTEXT_FILE_MAX_BYTES);
+            content = trimmed.to_string();
+        }
+
+        if content.trim().is_empty() {
+            continue;
+        }
+
+        entries.insert(
+            relative_str.clone(),
+            AgentContextEntry {
+                source,
+                relative_path: relative_str,
+                absolute_path: path,
+                content,
+                truncated,
+            },
+        );
+    }
+
+    Ok(())
+}
+
+fn load_agents_tools(
+    global_agents_home: &Path,
+    project_agents_home: Option<&Path>,
+) -> std::io::Result<Vec<AgentToolEntry>> {
+    let mut entries: BTreeMap<String, AgentToolEntry> = BTreeMap::new();
+    load_agents_tools_from_dir(global_agents_home, true, AgentsSource::Global, &mut entries)?;
+    if let Some(local_home) = project_agents_home {
+        load_agents_tools_from_dir(local_home, false, AgentsSource::Project, &mut entries)?;
+    }
+    Ok(entries.into_values().collect())
+}
+
+fn load_agents_tools_from_dir(
+    agents_home: &Path,
+    ensure_structure: bool,
+    source: AgentsSource,
+    entries: &mut BTreeMap<String, AgentToolEntry>,
+) -> std::io::Result<()> {
+    if ensure_structure {
+        ensure_agents_home_layout(agents_home)?;
+    } else if !agents_home.exists() {
+        return Ok(());
+    }
+
+    let tools_dir = agents_home.join("tools");
+    if ensure_structure {
+        fs::create_dir_all(&tools_dir)?;
+    } else if !tools_dir.exists() {
+        return Ok(());
+    }
+
+    for entry in WalkDir::new(&tools_dir).follow_links(false) {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                let err_string = err.to_string();
+                if let Some(io) = err.into_io_error() {
+                    return Err(io);
+                }
+                return Err(std::io::Error::other(format!(
+                    "failed to walk {}: {err_string}",
+                    tools_dir.display()
+                )));
+            }
+        };
+
+        if entry.file_type().is_dir() {
+            continue;
+        }
+        if !entry.file_type().is_file() && !entry.file_type().is_symlink() {
+            continue;
+        }
+
+        let path = entry.into_path();
+        let relative = match path.strip_prefix(&tools_dir) {
+            Ok(rel) => rel,
+            Err(_) => continue,
+        };
+
+        let Some(relative_str) = normalize_agents_relative_path(relative) else {
+            tracing::warn!(
+                "Skipping agents tool with unsupported path: {}",
+                path.display()
+            );
+            continue;
+        };
+
+        let metadata = match fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to read metadata for agents tool {}: {err}",
+                    path.display()
+                );
+                continue;
+            }
+        };
+
+        let executable = detect_executable(&path, &metadata);
+
+        entries.insert(
+            relative_str.clone(),
+            AgentToolEntry {
+                source,
+                relative_path: relative_str,
+                absolute_path: path,
+                executable,
+            },
+        );
+    }
+
+    Ok(())
+}
+
+fn normalize_agents_relative_path(path: &Path) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => parts.push(part.to_str()?),
+            Component::CurDir => continue,
+            Component::ParentDir => return None,
+            _ => return None,
+        }
+    }
+    Some(parts.join("/"))
+}
+
+fn detect_executable(path: &Path, metadata: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        let _ = path;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        if metadata.permissions().readonly() {
+            return false;
+        }
+        let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+            return false;
+        };
+        matches!(
+            ext.to_ascii_lowercase().as_str(),
+            "bat" | "cmd" | "exe" | "ps1" | "py"
+        )
+    }
+}
+
+fn format_agents_path_for_display(path: &Path) -> String {
+    if let Some(home) = home_dir()
+        && let Ok(stripped) = path.strip_prefix(&home)
+    {
+        let suffix = stripped.to_string_lossy();
+        if suffix.is_empty() {
+            "~".to_string()
+        } else if suffix.starts_with(std::path::MAIN_SEPARATOR) {
+            format!("~{suffix}")
+        } else {
+            format!("~{}{}", std::path::MAIN_SEPARATOR, suffix)
+        }
+    } else {
+        path.display().to_string()
+    }
+}
+
+fn render_agents_context_prompt(
+    context_entries: &[AgentContextEntry],
+    tool_entries: &[AgentToolEntry],
+    project_agents_home: Option<&Path>,
+) -> Option<String> {
+    fn display_path(
+        source: AgentsSource,
+        subdir: &str,
+        relative: &str,
+        absolute: &Path,
+        project_agents_home: Option<&Path>,
+    ) -> String {
+        match source {
+            AgentsSource::Global => format_agents_path_for_display(absolute),
+            AgentsSource::Project => {
+                if let Some(project_home) = project_agents_home
+                    && let Ok(stripped) = absolute.strip_prefix(project_home)
+                {
+                    let stripped = normalize_agents_relative_path(stripped)
+                        .unwrap_or_else(|| relative.to_string());
+                    format!(".agents/{stripped}")
+                } else {
+                    format!(".agents/{subdir}/{relative}")
+                }
+            }
+        }
+    }
+
+    if context_entries.is_empty() && tool_entries.is_empty() {
+        return None;
+    }
+
+    let mut body = String::new();
+
+    if !context_entries.is_empty() {
+        body.push_str("## Context Files\n\n");
+        for entry in context_entries {
+            body.push_str(&format!(
+                "### {} [{}]\nLocation: {}\n",
+                entry.relative_path,
+                entry.source.label(),
+                display_path(
+                    entry.source,
+                    "context",
+                    &entry.relative_path,
+                    &entry.absolute_path,
+                    project_agents_home
+                )
+            ));
+            if entry.truncated {
+                body.push_str(AGENTS_CONTEXT_FILE_TRUNCATION_NOTICE);
+                body.push('\n');
+            }
+            body.push('\n');
+            body.push_str(entry.content.trim_end());
+            body.push_str("\n\n");
+        }
+    }
+
+    if !tool_entries.is_empty() {
+        body.push_str("## Tools\n");
+        for tool in tool_entries {
+            let suffix = if tool.executable {
+                ""
+            } else {
+                " (not executable)"
+            };
+            body.push_str(&format!(
+                "- {} [{}] -> {}{}\n",
+                tool.relative_path,
+                tool.source.label(),
+                display_path(
+                    tool.source,
+                    "tools",
+                    &tool.relative_path,
+                    &tool.absolute_path,
+                    project_agents_home
+                ),
+                suffix
+            ));
+        }
+        body.push('\n');
+    }
+
+    let mut body_text = body.trim_end().to_string();
+    if body_text.len() > AGENTS_CONTEXT_PROMPT_MAX_BYTES {
+        let trimmed = take_bytes_at_char_boundary(&body_text, AGENTS_CONTEXT_PROMPT_MAX_BYTES);
+        body_text = trimmed.to_string();
+        if !body_text.ends_with('\n') {
+            body_text.push('\n');
+        }
+        body_text.push_str(AGENTS_CONTEXT_TRUNCATION_NOTICE);
+    }
+
+    if body_text.trim().is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "{open}\n\n{body}\n\n{close}",
+        open = AGENTS_CONTEXT_OPEN_TAG,
+        body = body_text.trim_end(),
+        close = AGENTS_CONTEXT_CLOSE_TAG,
+    ))
 }
 
 /// Returns the path to the folder where Codex logs are stored. Does not verify
@@ -3136,7 +3571,7 @@ model = "gpt-5-codex"
         let config = Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides::default(),
-            codex_home.clone(),
+            codex_home,
         )?;
 
         let expected_agents = parent.path().join(".agents");
@@ -3170,6 +3605,183 @@ model = "gpt-5-codex"
         for child in AGENTS_HOME_DEFAULT_SUBDIRS {
             assert!(config.agents_home.join(child).is_dir());
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn agents_workspace_resources_loaded() -> std::io::Result<()> {
+        let parent = TempDir::new().expect("temp parent");
+        let codex_home = parent.path().join(".codex");
+        fs::create_dir_all(&codex_home)?;
+
+        let context_dir = parent.path().join(".agents").join("context");
+        fs::create_dir_all(&context_dir)?;
+        fs::write(context_dir.join("global.md"), "Global memo.")?;
+
+        let tools_dir = parent.path().join(".agents").join("tools");
+        fs::create_dir_all(&tools_dir)?;
+        fs::write(
+            tools_dir.join("calc.py"),
+            "#!/usr/bin/env python3\nprint(1+1)\n",
+        )?;
+
+        let workspace = TempDir::new().expect("temp workspace");
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides {
+                cwd: Some(workspace.path().to_path_buf()),
+                ..ConfigOverrides::default()
+            },
+            codex_home,
+        )?;
+
+        assert_eq!(config.agents_context_entries.len(), 1);
+        let entry = &config.agents_context_entries[0];
+        assert_eq!(entry.relative_path, "global.md");
+        assert!(matches!(entry.source, AgentsSource::Global));
+        assert_eq!(entry.content.trim(), "Global memo.");
+        assert!(!entry.truncated);
+        assert_eq!(
+            entry.absolute_path,
+            parent
+                .path()
+                .join(".agents")
+                .join("context")
+                .join("global.md")
+        );
+
+        assert_eq!(config.agents_tools.len(), 1);
+        let tool = &config.agents_tools[0];
+        assert_eq!(tool.relative_path, "calc.py");
+        assert!(matches!(tool.source, AgentsSource::Global));
+        assert_eq!(
+            tool.absolute_path,
+            parent.path().join(".agents").join("tools").join("calc.py")
+        );
+
+        let prompt = config
+            .agents_context_prompt
+            .as_ref()
+            .expect("context prompt expected");
+        assert!(prompt.starts_with(AGENTS_CONTEXT_OPEN_TAG));
+        assert!(prompt.contains("Global memo."));
+        assert!(prompt.contains("calc.py"));
+        assert!(prompt.ends_with(AGENTS_CONTEXT_CLOSE_TAG));
+        let expected_context_path = format_agents_path_for_display(
+            &parent
+                .path()
+                .join(".agents")
+                .join("context")
+                .join("global.md"),
+        );
+        assert!(
+            prompt.contains(&expected_context_path),
+            "prompt should list global context location {expected_context_path}, got {prompt}"
+        );
+        let expected_tool_path = format_agents_path_for_display(
+            &parent.path().join(".agents").join("tools").join("calc.py"),
+        );
+        assert!(
+            prompt.contains(&expected_tool_path),
+            "prompt should list global tool location {expected_tool_path}, got {prompt}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn project_agents_context_overrides_global_entries() -> std::io::Result<()> {
+        let parent = TempDir::new().expect("temp parent");
+        let codex_home = parent.path().join(".codex");
+        fs::create_dir_all(&codex_home)?;
+
+        let global_context_dir = parent.path().join(".agents").join("context");
+        fs::create_dir_all(&global_context_dir)?;
+        fs::write(global_context_dir.join("memo.md"), "Global memo.")?;
+        let global_tools_dir = parent.path().join(".agents").join("tools");
+        fs::create_dir_all(&global_tools_dir)?;
+        fs::write(global_tools_dir.join("cli.sh"), "echo global\n")?;
+
+        let project = TempDir::new().expect("project temp dir");
+        fs::create_dir_all(project.path().join(".git"))?;
+        let project_context_dir = project.path().join(".agents").join("context");
+        fs::create_dir_all(&project_context_dir)?;
+        fs::write(project_context_dir.join("memo.md"), "Project memo.")?;
+        let project_tools_dir = project.path().join(".agents").join("tools");
+        fs::create_dir_all(&project_tools_dir)?;
+        fs::write(project_tools_dir.join("cli.sh"), "echo project\n")?;
+
+        let overrides = ConfigOverrides {
+            cwd: Some(project.path().to_path_buf()),
+            ..Default::default()
+        };
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            overrides,
+            codex_home,
+        )?;
+
+        assert_eq!(config.agents_context_entries.len(), 1);
+        let entry = &config.agents_context_entries[0];
+        assert!(matches!(entry.source, AgentsSource::Project));
+        assert_eq!(entry.relative_path, "memo.md");
+        assert_eq!(entry.content.trim(), "Project memo.");
+
+        assert_eq!(config.agents_tools.len(), 1);
+        let tool = &config.agents_tools[0];
+        assert!(matches!(tool.source, AgentsSource::Project));
+        assert_eq!(tool.relative_path, "cli.sh");
+
+        let prompt = config
+            .agents_context_prompt
+            .as_ref()
+            .expect("context prompt expected");
+        assert!(prompt.contains("Project memo."));
+        assert!(!prompt.contains("Global memo."));
+        assert!(prompt.contains("cli.sh"));
+        assert!(prompt.starts_with(AGENTS_CONTEXT_OPEN_TAG));
+
+        Ok(())
+    }
+
+    #[test]
+    fn agents_prompt_uses_custom_home_override() -> std::io::Result<()> {
+        let codex_home = TempDir::new().expect("codex home");
+        let custom_home = TempDir::new().expect("agents home override");
+        let agents_home = custom_home.path().join("agents-store");
+        fs::create_dir_all(agents_home.join("context"))?;
+        fs::create_dir_all(agents_home.join("tools"))?;
+
+        fs::write(agents_home.join("context").join("memo.md"), "Global memo.")?;
+        fs::write(agents_home.join("tools").join("helper.sh"), "echo helper\n")?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides {
+                agents_home: Some(agents_home.clone()),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        let prompt = config
+            .agents_context_prompt
+            .as_ref()
+            .expect("context prompt expected");
+        let expected_context =
+            format_agents_path_for_display(&agents_home.join("context").join("memo.md"));
+        assert!(
+            prompt.contains(&expected_context),
+            "prompt should mention overridden context path {expected_context}, got {prompt}"
+        );
+        let expected_tool =
+            format_agents_path_for_display(&agents_home.join("tools").join("helper.sh"));
+        assert!(
+            prompt.contains(&expected_tool),
+            "prompt should mention overridden tool path {expected_tool}, got {prompt}"
+        );
 
         Ok(())
     }
@@ -3507,6 +4119,9 @@ model_verbosity = "high"
                 codex_home: fixture.codex_home(),
                 agents_home: expected_agents_home,
                 project_agents_home: None,
+                agents_context_entries: Vec::new(),
+                agents_tools: Vec::new(),
+                agents_context_prompt: None,
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
                 codex_linux_sandbox_exe: None,
@@ -3579,8 +4194,11 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             codex_home: fixture.codex_home(),
-            agents_home: expected_agents_home.clone(),
+            agents_home: expected_agents_home,
             project_agents_home: None,
+            agents_context_entries: Vec::new(),
+            agents_tools: Vec::new(),
+            agents_context_prompt: None,
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
@@ -3670,6 +4288,9 @@ model_verbosity = "high"
             codex_home: fixture.codex_home(),
             agents_home: expected_agents_home,
             project_agents_home: None,
+            agents_context_entries: Vec::new(),
+            agents_tools: Vec::new(),
+            agents_context_prompt: None,
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
@@ -3745,6 +4366,9 @@ model_verbosity = "high"
             codex_home: fixture.codex_home(),
             agents_home: expected_agents_home,
             project_agents_home: None,
+            agents_context_entries: Vec::new(),
+            agents_tools: Vec::new(),
+            agents_context_prompt: None,
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,

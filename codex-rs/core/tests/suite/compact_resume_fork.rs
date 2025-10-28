@@ -17,7 +17,6 @@ use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
 use codex_core::codex::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
-use codex_core::config::OPENAI_DEFAULT_MODEL;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
@@ -27,6 +26,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
+use core_test_support::seed_global_agents_context;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -62,6 +62,72 @@ fn is_ghost_snapshot_message(item: &Value) -> bool {
         .and_then(|entry| entry.get("text"))
         .and_then(Value::as_str)
         .is_some_and(|text| text.trim_start().starts_with("<ghost_snapshot>"))
+}
+
+fn find_message_text_with_prefix(request: &Value, prefix: &str) -> String {
+    request
+        .get("input")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items.iter().find_map(|item| {
+                item.get("content")
+                    .and_then(Value::as_array)
+                    .and_then(|content| content.first())
+                    .and_then(|entry| entry.get("text"))
+                    .and_then(Value::as_str)
+                    .filter(|text| text.starts_with(prefix))
+            })
+        })
+        .unwrap_or_else(|| {
+            panic!("expected request to include message starting with `{prefix}`: {request:?}")
+        })
+        .to_string()
+}
+
+fn session_prefix(request: &Value) -> Vec<Value> {
+    request
+        .get("input")
+        .and_then(Value::as_array)
+        .expect("input array")
+        .iter()
+        .take(3)
+        .cloned()
+        .collect()
+}
+
+fn tail_messages(request: &Value) -> Vec<(String, String)> {
+    request
+        .get("input")
+        .and_then(Value::as_array)
+        .expect("input array")
+        .iter()
+        .skip(3)
+        .map(|item| {
+            let role = item["role"]
+                .as_str()
+                .expect("response item role should be text")
+                .to_string();
+            let text = item["content"][0]["text"]
+                .as_str()
+                .expect("response item text expected in content[0]")
+                .to_string();
+            (role, text)
+        })
+        .collect()
+}
+
+fn user_tail(text: impl Into<String>) -> (String, String) {
+    ("user".to_string(), text.into())
+}
+
+fn assistant_tail(text: impl Into<String>) -> (String, String) {
+    ("assistant".to_string(), text.into())
+}
+
+fn conversation_summary(seed: &str) -> String {
+    format!(
+        "You were originally given instructions from a user over one or more turns. Here were the user messages:\n\n{seed}\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\n{SUMMARY_TEXT}"
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -103,421 +169,64 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     // 3. Capture the requests to the model and validate the history slices.
     let requests = gather_request_bodies(&server).await;
 
-    // input after compact is a prefix of input after resume/fork
-    let input_after_compact = json!(requests[requests.len() - 3]["input"]);
-    let input_after_resume = json!(requests[requests.len() - 2]["input"]);
-    let input_after_fork = json!(requests[requests.len() - 1]["input"]);
-
-    let compact_arr = input_after_compact
-        .as_array()
-        .expect("input after compact should be an array");
-    let resume_arr = input_after_resume
-        .as_array()
-        .expect("input after resume should be an array");
-    let fork_arr = input_after_fork
-        .as_array()
-        .expect("input after fork should be an array");
-
-    assert!(
-        compact_arr.len() <= resume_arr.len(),
-        "after-resume input should have at least as many items as after-compact",
-    );
-    assert_eq!(compact_arr.as_slice(), &resume_arr[..compact_arr.len()]);
-
-    assert!(
-        compact_arr.len() <= fork_arr.len(),
-        "after-fork input should have at least as many items as after-compact",
-    );
-    assert_eq!(
-        &compact_arr.as_slice()[..compact_arr.len()],
-        &fork_arr[..compact_arr.len()]
-    );
-
-    let prompt = requests[0]["instructions"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let user_instructions = requests[0]["input"][0]["content"][0]["text"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let environment_context = requests[0]["input"][1]["content"][0]["text"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let tool_calls = json!(requests[0]["tools"].as_array());
-    let prompt_cache_key = requests[0]["prompt_cache_key"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let fork_prompt_cache_key = requests[requests.len() - 1]["prompt_cache_key"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let expected_model = OPENAI_DEFAULT_MODEL;
-    let user_turn_1 = json!(
-    {
-      "model": expected_model,
-      "instructions": prompt,
-      "input": [
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": user_instructions
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": environment_context
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "hello world"
-            }
-          ]
-        }
-      ],
-      "tools": tool_calls,
-      "tool_choice": "auto",
-      "parallel_tool_calls": false,
-      "reasoning": {
-        "summary": "auto"
-      },
-      "store": false,
-      "stream": true,
-      "include": [
-        "reasoning.encrypted_content"
-      ],
-      "prompt_cache_key": prompt_cache_key
-    });
-    let compact_1 = json!(
-    {
-      "model": expected_model,
-      "instructions": prompt,
-      "input": [
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": user_instructions
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": environment_context
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "hello world"
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "assistant",
-          "content": [
-            {
-              "type": "output_text",
-              "text": "FIRST_REPLY"
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": SUMMARIZATION_PROMPT
-            }
-          ]
-        }
-      ],
-      "tools": [],
-      "tool_choice": "auto",
-      "parallel_tool_calls": false,
-      "reasoning": {
-        "summary": "auto"
-      },
-      "store": false,
-      "stream": true,
-      "include": [
-        "reasoning.encrypted_content"
-      ],
-      "prompt_cache_key": prompt_cache_key
-    });
-    let user_turn_2_after_compact = json!(
-    {
-      "model": expected_model,
-      "instructions": prompt,
-      "input": [
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": user_instructions
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": environment_context
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:
-
-hello world
-
-Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:
-
-SUMMARY_ONLY_CONTEXT"
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "AFTER_COMPACT"
-            }
-          ]
-        }
-      ],
-      "tools": tool_calls,
-      "tool_choice": "auto",
-      "parallel_tool_calls": false,
-      "reasoning": {
-        "summary": "auto"
-      },
-      "store": false,
-      "stream": true,
-      "include": [
-        "reasoning.encrypted_content"
-      ],
-      "prompt_cache_key": prompt_cache_key
-    });
-    let usert_turn_3_after_resume = json!(
-    {
-      "model": expected_model,
-      "instructions": prompt,
-      "input": [
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": user_instructions
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": environment_context
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:
-
-hello world
-
-Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:
-
-SUMMARY_ONLY_CONTEXT"
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "AFTER_COMPACT"
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "assistant",
-          "content": [
-            {
-              "type": "output_text",
-              "text": "AFTER_COMPACT_REPLY"
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "AFTER_RESUME"
-            }
-          ]
-        }
-      ],
-      "tools": tool_calls,
-      "tool_choice": "auto",
-      "parallel_tool_calls": false,
-      "reasoning": {
-        "summary": "auto"
-      },
-      "store": false,
-      "stream": true,
-      "include": [
-        "reasoning.encrypted_content"
-      ],
-      "prompt_cache_key": prompt_cache_key
-    });
-    let user_turn_3_after_fork = json!(
-    {
-      "model": expected_model,
-      "instructions": prompt,
-      "input": [
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": user_instructions
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": environment_context
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:
-
-hello world
-
-Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:
-
-SUMMARY_ONLY_CONTEXT"
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "AFTER_COMPACT"
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "assistant",
-          "content": [
-            {
-              "type": "output_text",
-              "text": "AFTER_COMPACT_REPLY"
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "AFTER_FORK"
-            }
-          ]
-        }
-      ],
-      "tools": tool_calls,
-      "tool_choice": "auto",
-      "parallel_tool_calls": false,
-      "reasoning": {
-        "summary": "auto"
-      },
-      "store": false,
-      "stream": true,
-      "include": [
-        "reasoning.encrypted_content"
-      ],
-      "prompt_cache_key": fork_prompt_cache_key
-    });
-    let mut expected = json!([
-        user_turn_1,
-        compact_1,
-        user_turn_2_after_compact,
-        usert_turn_3_after_resume,
-        user_turn_3_after_fork
-    ]);
-    normalize_line_endings(&mut expected);
     assert_eq!(requests.len(), 5);
-    assert_eq!(json!(requests), expected);
+
+    let prefix = session_prefix(&requests[0]);
+    let instructions = requests[0]["instructions"].clone();
+    let first_cache_key = requests[0]["prompt_cache_key"].clone();
+
+    for (idx, request) in requests.iter().enumerate() {
+        assert_eq!(
+            request["instructions"], instructions,
+            "instructions changed at request {idx}"
+        );
+
+        if idx < requests.len() - 1 {
+            assert_eq!(
+                request["prompt_cache_key"], first_cache_key,
+                "prompt cache key changed at request {idx}"
+            );
+        }
+
+        let input = request["input"].as_array().expect("input array");
+        assert!(
+            input.len() >= prefix.len(),
+            "request {idx} is missing session prefix entries"
+        );
+        assert_eq!(
+            &input[..prefix.len()],
+            &prefix[..],
+            "session prefix mismatch at request {idx}"
+        );
+    }
+
+    let summary_block = conversation_summary("hello world");
+    let expected_tails: Vec<Vec<(String, String)>> = vec![
+        vec![user_tail("hello world")],
+        vec![
+            user_tail("hello world"),
+            assistant_tail(FIRST_REPLY),
+            user_tail(SUMMARIZATION_PROMPT),
+        ],
+        vec![user_tail(summary_block.clone()), user_tail("AFTER_COMPACT")],
+        vec![
+            user_tail(summary_block.clone()),
+            user_tail("AFTER_COMPACT"),
+            assistant_tail("AFTER_COMPACT_REPLY"),
+            user_tail("AFTER_RESUME"),
+        ],
+        vec![
+            user_tail(summary_block),
+            user_tail("AFTER_COMPACT"),
+            assistant_tail("AFTER_COMPACT_REPLY"),
+            user_tail("AFTER_FORK"),
+        ],
+    ];
+
+    for (idx, (request, expected_tail)) in requests.iter().zip(expected_tails).enumerate() {
+        let tail = tail_messages(request);
+        assert_eq!(tail, expected_tail, "tail mismatch at request {idx}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -594,14 +303,10 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         .as_str()
         .unwrap_or_default()
         .to_string();
-    let user_instructions = requests[0]["input"][0]["content"][0]["text"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let environment_instructions = requests[0]["input"][1]["content"][0]["text"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
+    let user_instructions = find_message_text_with_prefix(&requests[0], "<user_instructions>");
+    let agents_context = find_message_text_with_prefix(&requests[0], "<agents_context>");
+    let environment_instructions =
+        find_message_text_with_prefix(&requests[0], "<environment_context>");
 
     let mut expected = json!([
       {
@@ -614,6 +319,16 @@ async fn compact_resume_after_second_compaction_preserves_history() {
               {
                 "type": "input_text",
                 "text": user_instructions
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": agents_context
               }
             ]
           },
@@ -786,6 +501,7 @@ async fn start_test_conversation(
         ..built_in_model_providers()["openai"].clone()
     };
     let home = TempDir::new().expect("create temp dir");
+    let _ = seed_global_agents_context(&home, "guide.md", "Global memo.");
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
 

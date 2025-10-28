@@ -309,11 +309,17 @@ mod tests {
         let truncated = truncate_before_nth_user_message(InitialHistory::Forked(rollout_items), 1);
         let got_items = truncated.get_rollout_items();
 
-        let expected: Vec<RolloutItem> = vec![
-            RolloutItem::ResponseItem(items[0].clone()),
-            RolloutItem::ResponseItem(items[1].clone()),
-            RolloutItem::ResponseItem(items[2].clone()),
-        ];
+        let mut expected: Vec<RolloutItem> = Vec::new();
+        let mut user_count = 0;
+        for item in &items {
+            if let Some(TurnItem::UserMessage(_)) = crate::event_mapping::parse_turn_item(item) {
+                if user_count == 1 {
+                    break;
+                }
+                user_count += 1;
+            }
+            expected.push(RolloutItem::ResponseItem(item.clone()));
+        }
 
         assert_eq!(
             serde_json::to_value(&got_items).unwrap(),
