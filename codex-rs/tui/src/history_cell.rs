@@ -1024,22 +1024,15 @@ impl HistoryCell for DeprecationNoticeCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(
-            vec![
-                "⚠ ".magenta(),
-                "Deprecated".magenta().bold(),
-                ": ".into(),
-                self.summary.clone().into(),
-            ]
+            vec![self.summary.clone().into()]
             .into(),
         );
 
         let wrap_width = width.saturating_sub(4).max(1) as usize;
 
         if let Some(details) = &self.details {
-            let detail_line = Line::from(details.clone().dim());
-            let wrapped = word_wrap_line(&detail_line, RtOptions::new(wrap_width));
-            let owned: Vec<Line<'static>> = wrapped.iter().map(line_to_static).collect();
-            lines.extend(prefix_lines(owned, "  • ".dim(), "    ".dim()));
+            let line = textwrap::wrap(details, wrap_width).into_iter().map(|s| s.to_string().dim().into()).collect::<Vec<_>>();
+            lines.extend(line);
         }
 
         lines
