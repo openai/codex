@@ -1786,6 +1786,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    use std::io::ErrorKind;
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -3231,6 +3232,38 @@ command = "docs-server"
             Some(&expected),
             "expected docs server from agents_home"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn agents_home_json_mcp_config_rejects_inline_bearer_token() -> std::io::Result<()> {
+        let parent = TempDir::new().expect("temp parent");
+        let codex_home = parent.path().join(".codex");
+        fs::create_dir_all(&codex_home)?;
+        let mcp_dir = parent.path().join(".agents").join("mcp");
+        fs::create_dir_all(&mcp_dir)?;
+        fs::write(
+            mcp_dir.join("mcp.json"),
+            r#"{ "docs": { "command": "json-docs", "bearer_token": "secret" } }"#,
+        )?;
+
+        let result = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home,
+        );
+
+        match result {
+            Ok(_) => panic!("expected inline bearer_token to be rejected"),
+            Err(err) => {
+                assert_eq!(err.kind(), ErrorKind::InvalidData);
+                assert!(
+                    err.to_string().contains("bearer_token"),
+                    "error should mention bearer_token, got {err}"
+                );
+            }
+        }
 
         Ok(())
     }
