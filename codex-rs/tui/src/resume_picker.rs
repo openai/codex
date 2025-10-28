@@ -10,7 +10,10 @@ use codex_core::ConversationsPage;
 use codex_core::Cursor;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
+use codex_core::git_info::collect_git_info;
 use codex_protocol::items::TurnItem;
+use codex_protocol::protocol::GitInfo;
+use codex_protocol::protocol::SessionMetaLine;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -69,11 +72,16 @@ pub async fn run_resume_picker(
     tui: &mut Tui,
     codex_home: &Path,
     default_provider: &str,
+    current_cwd: &Path,
 ) -> Result<ResumeSelection> {
     let alt = AltScreenGuard::enter(tui);
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
     let default_provider = default_provider.to_string();
+    let match_context = MatchContext::from_env(
+        current_cwd.to_path_buf(),
+        collect_git_info(current_cwd).await,
+    );
 
     let loader_tx = bg_tx.clone();
     let page_loader: PageLoader = Arc::new(move |request: PageLoadRequest| {
@@ -102,6 +110,7 @@ pub async fn run_resume_picker(
         alt.tui.frame_requester(),
         page_loader,
         default_provider.clone(),
+        match_context,
     );
     state.load_initial_page().await?;
     state.request_frame();
@@ -177,6 +186,7 @@ struct PickerState {
     page_loader: PageLoader,
     view_rows: Option<usize>,
     default_provider: String,
+    match_context: MatchContext,
 }
 
 struct PaginationState {
@@ -234,6 +244,55 @@ struct Row {
     preview: String,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
+    match_marker: String,
+}
+
+#[derive(Clone)]
+struct MatchContext {
+    cwd: PathBuf,
+    git_commit: Option<String>,
+    git_branch: Option<String>,
+    git_repo_url: Option<String>,
+}
+
+impl MatchContext {
+    fn from_env(cwd: PathBuf, git_info: Option<GitInfo>) -> Self {
+        let (git_commit, git_branch, git_repo_url) = match git_info {
+            Some(git) => (
+                normalize_owned(git.commit_hash),
+                normalize_owned(git.branch),
+                normalize_owned(git.repository_url),
+            ),
+            None => (None, None, None),
+        };
+        Self {
+            cwd,
+            git_commit,
+            git_branch,
+            git_repo_url,
+        }
+    }
+
+    #[cfg(test)]
+    fn empty() -> Self {
+        Self {
+            cwd: PathBuf::new(),
+            git_commit: None,
+            git_branch: None,
+            git_repo_url: None,
+        }
+    }
+}
+
+fn normalize_owned(value: Option<String>) -> Option<String> {
+    value.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 impl PickerState {
@@ -242,6 +301,7 @@ impl PickerState {
         requester: FrameRequester,
         page_loader: PageLoader,
         default_provider: String,
+        match_context: MatchContext,
     ) -> Self {
         Self {
             codex_home,
@@ -264,6 +324,7 @@ impl PickerState {
             page_loader,
             view_rows: None,
             default_provider,
+            match_context,
         }
     }
 
@@ -407,7 +468,7 @@ impl PickerState {
             self.pagination.reached_scan_cap = true;
         }
 
-        let rows = rows_from_items(page.items);
+        let rows = rows_from_items(page.items, &self.match_context);
         for row in rows {
             if self.seen_paths.insert(row.path.clone()) {
                 self.all_rows.push(row);
@@ -590,11 +651,14 @@ impl PickerState {
     }
 }
 
-fn rows_from_items(items: Vec<ConversationItem>) -> Vec<Row> {
-    items.into_iter().map(|item| head_to_row(&item)).collect()
+fn rows_from_items(items: Vec<ConversationItem>, context: &MatchContext) -> Vec<Row> {
+    items
+        .into_iter()
+        .map(|item| head_to_row(&item, context))
+        .collect()
 }
 
-fn head_to_row(item: &ConversationItem) -> Row {
+fn head_to_row(item: &ConversationItem, context: &MatchContext) -> Row {
     let created_at = item
         .created_at
         .as_deref()
@@ -616,6 +680,7 @@ fn head_to_row(item: &ConversationItem) -> Row {
         preview,
         created_at,
         updated_at,
+        match_marker: build_match_marker(item, context),
     }
 }
 
@@ -640,6 +705,61 @@ fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
             Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
         })
+}
+
+fn build_match_marker(item: &ConversationItem, context: &MatchContext) -> String {
+    if context.git_commit.is_none()
+        && context.git_branch.is_none()
+        && context.git_repo_url.is_none()
+        && context.cwd.as_os_str().is_empty()
+    {
+        return String::new();
+    }
+
+    let Some(meta_line) = session_meta_from_head(&item.head) else {
+        return String::new();
+    };
+
+    let git = meta_line.git.as_ref();
+    let saved_commit = normalize_borrowed(git.and_then(|g| g.commit_hash.as_ref()));
+    if let (Some(current), Some(saved)) = (&context.git_commit, &saved_commit)
+        && current == saved {
+            return "***".to_string();
+        }
+    let saved_branch = normalize_borrowed(git.and_then(|g| g.branch.as_ref()));
+    if let (Some(current), Some(saved)) = (&context.git_branch, &saved_branch)
+        && current == saved {
+            return "**".to_string();
+        }
+    let saved_repo = normalize_borrowed(git.and_then(|g| g.repository_url.as_ref()));
+    if let (Some(current), Some(saved)) = (&context.git_repo_url, &saved_repo)
+        && current == saved {
+            return "*".to_string();
+        }
+    if !context.cwd.as_os_str().is_empty()
+        && !meta_line.meta.cwd.as_os_str().is_empty()
+        && context.cwd == meta_line.meta.cwd
+    {
+        return "D".to_string();
+    }
+
+    String::new()
+}
+
+fn session_meta_from_head(head: &[serde_json::Value]) -> Option<SessionMetaLine> {
+    head.iter()
+        .find_map(|value| serde_json::from_value::<SessionMetaLine>(value.clone()).ok())
+}
+
+fn normalize_borrowed(value: Option<&String>) -> Option<String> {
+    value.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
@@ -720,10 +840,11 @@ fn render_list(
     let labels = &metrics.labels;
     let mut y = area.y;
 
+    let max_match_width = metrics.max_match_width;
     let max_created_width = metrics.max_created_width;
     let max_updated_width = metrics.max_updated_width;
 
-    for (idx, (row, (created_label, updated_label))) in rows[start..end]
+    for (idx, (row, labels)) in rows[start..end]
         .iter()
         .zip(labels[start..end].iter())
         .enumerate()
@@ -731,30 +852,64 @@ fn render_list(
         let is_sel = start + idx == state.selected;
         let marker = if is_sel { "> ".bold() } else { "  ".into() };
         let marker_width = 2usize;
+        let match_span = if max_match_width == 0 {
+            None
+        } else {
+            Some(
+                Span::from(format!(
+                    "{text:<width$}",
+                    text = &labels.match_label,
+                    width = max_match_width
+                ))
+                .dim(),
+            )
+        };
         let created_span = if max_created_width == 0 {
             None
         } else {
-            Some(Span::from(format!("{created_label:<max_created_width$}")).dim())
+            Some(
+                Span::from(format!(
+                    "{text:<width$}",
+                    text = &labels.created_label,
+                    width = max_created_width
+                ))
+                .dim(),
+            )
         };
         let updated_span = if max_updated_width == 0 {
             None
         } else {
-            Some(Span::from(format!("{updated_label:<max_updated_width$}")).dim())
+            Some(
+                Span::from(format!(
+                    "{text:<width$}",
+                    text = &labels.updated_label,
+                    width = max_updated_width
+                ))
+                .dim(),
+            )
         };
         let mut preview_width = area.width as usize;
         preview_width = preview_width.saturating_sub(marker_width);
+        if max_match_width > 0 {
+            preview_width = preview_width.saturating_sub(max_match_width + 2);
+        }
         if max_created_width > 0 {
             preview_width = preview_width.saturating_sub(max_created_width + 2);
         }
         if max_updated_width > 0 {
             preview_width = preview_width.saturating_sub(max_updated_width + 2);
         }
-        let add_leading_gap = max_created_width == 0 && max_updated_width == 0;
+        let add_leading_gap =
+            max_match_width == 0 && max_created_width == 0 && max_updated_width == 0;
         if add_leading_gap {
             preview_width = preview_width.saturating_sub(2);
         }
         let preview = truncate_text(&row.preview, preview_width);
         let mut spans: Vec<Span> = vec![marker];
+        if let Some(match_column) = match_span {
+            spans.push(match_column);
+            spans.push("  ".into());
+        }
         if let Some(created) = created_span {
             spans.push(created);
             spans.push("  ".into());
@@ -868,6 +1023,15 @@ fn render_column_headers(
     }
 
     let mut spans: Vec<Span> = vec!["  ".into()];
+    if metrics.max_match_width > 0 {
+        let label = format!(
+            "{text:<width$}",
+            text = "Sync",
+            width = metrics.max_match_width
+        );
+        spans.push(Span::from(label).bold());
+        spans.push("  ".into());
+    }
     if metrics.max_created_width > 0 {
         let label = format!(
             "{text:<width$}",
@@ -891,25 +1055,40 @@ fn render_column_headers(
 }
 
 struct ColumnMetrics {
+    max_match_width: usize,
     max_created_width: usize,
     max_updated_width: usize,
-    labels: Vec<(String, String)>,
+    labels: Vec<RowLabels>,
+}
+
+struct RowLabels {
+    match_label: String,
+    created_label: String,
+    updated_label: String,
 }
 
 fn calculate_column_metrics(rows: &[Row]) -> ColumnMetrics {
-    let mut labels: Vec<(String, String)> = Vec::with_capacity(rows.len());
+    let mut labels: Vec<RowLabels> = Vec::with_capacity(rows.len());
+    let mut max_match_width = UnicodeWidthStr::width("Sync");
     let mut max_created_width = UnicodeWidthStr::width("Created");
     let mut max_updated_width = UnicodeWidthStr::width("Updated");
 
     for row in rows {
+        let match_label = row.match_marker.clone();
         let created = format_created_label(row);
         let updated = format_updated_label(row);
+        max_match_width = max_match_width.max(UnicodeWidthStr::width(match_label.as_str()));
         max_created_width = max_created_width.max(UnicodeWidthStr::width(created.as_str()));
         max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
-        labels.push((created, updated));
+        labels.push(RowLabels {
+            match_label,
+            created_label: created,
+            updated_label: updated,
+        });
     }
 
     ColumnMetrics {
+        max_match_width,
         max_created_width,
         max_updated_width,
         labels,
@@ -920,10 +1099,16 @@ fn calculate_column_metrics(rows: &[Row]) -> ColumnMetrics {
 mod tests {
     use super::*;
     use chrono::Duration;
+    use codex_protocol::ConversationId;
+    use codex_protocol::protocol::GitInfo;
+    use codex_protocol::protocol::SessionMeta;
+    use codex_protocol::protocol::SessionMetaLine;
+    use codex_protocol::protocol::SessionSource;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::future::Future;
     use std::path::PathBuf;
@@ -951,6 +1136,47 @@ mod tests {
             tail: Vec::new(),
             created_at: Some(ts.to_string()),
             updated_at: Some(ts.to_string()),
+        }
+    }
+
+    fn conversation_with_meta(
+        cwd: &str,
+        commit: Option<&str>,
+        branch: Option<&str>,
+        repo: Option<&str>,
+    ) -> ConversationItem {
+        let git = if commit.is_some() || branch.is_some() || repo.is_some() {
+            Some(GitInfo {
+                commit_hash: commit.map(std::string::ToString::to_string),
+                branch: branch.map(std::string::ToString::to_string),
+                repository_url: repo.map(std::string::ToString::to_string),
+            })
+        } else {
+            None
+        };
+
+        let session_meta = SessionMetaLine {
+            meta: SessionMeta {
+                id: ConversationId::default(),
+                timestamp: "2025-01-01T00:00:00Z".to_string(),
+                cwd: PathBuf::from(cwd),
+                originator: String::new(),
+                cli_version: String::new(),
+                instructions: None,
+                source: SessionSource::Cli,
+                model_provider: None,
+            },
+            git,
+        };
+
+        let meta_value = serde_json::to_value(session_meta).expect("serialize meta");
+
+        ConversationItem {
+            path: PathBuf::from("/tmp/session.jsonl"),
+            head: vec![meta_value],
+            tail: Vec::new(),
+            created_at: Some("2025-01-01T00:00:00Z".into()),
+            updated_at: Some("2025-01-01T00:00:00Z".into()),
         }
     }
 
@@ -1034,7 +1260,7 @@ mod tests {
             created_at: Some("2025-01-02T00:00:00Z".into()),
             updated_at: Some("2025-01-02T00:00:00Z".into()),
         };
-        let rows = rows_from_items(vec![a, b]);
+        let rows = rows_from_items(vec![a, b], &MatchContext::empty());
         assert_eq!(rows.len(), 2);
         // Preserve the given order even if timestamps differ; backend already provides newest-first.
         assert!(rows[0].preview.contains('A'));
@@ -1063,7 +1289,7 @@ mod tests {
             updated_at: Some("2025-01-01T01:00:00Z".into()),
         };
 
-        let row = head_to_row(&item);
+        let row = head_to_row(&item, &MatchContext::empty());
         let expected_created = chrono::DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
@@ -1073,6 +1299,60 @@ mod tests {
 
         assert_eq!(row.created_at, Some(expected_created));
         assert_eq!(row.updated_at, Some(expected_updated));
+    }
+
+    #[test]
+    fn match_label_prefers_hash_then_branch_then_repo_then_dir() {
+        let context = MatchContext {
+            cwd: PathBuf::from("/work/project"),
+            git_commit: Some("abc123".to_string()),
+            git_branch: Some("main".to_string()),
+            git_repo_url: Some("git@example.com:repo.git".to_string()),
+        };
+
+        let hash_item = conversation_with_meta(
+            "/different",
+            Some("abc123"),
+            Some("feature"),
+            Some("git@example.com:repo.git"),
+        );
+        assert_eq!(build_match_marker(&hash_item, &context), "***");
+
+        let branch_item = conversation_with_meta(
+            "/work/project",
+            Some("zzz999"),
+            Some("main"),
+            Some("git@example.com:repo.git"),
+        );
+        assert_eq!(build_match_marker(&branch_item, &context), "**");
+
+        let repo_item = conversation_with_meta(
+            "/work/project",
+            Some("zzz999"),
+            Some("feature"),
+            Some("git@example.com:repo.git"),
+        );
+        assert_eq!(build_match_marker(&repo_item, &context), "*");
+
+        let dir_item = conversation_with_meta("/work/project", None, None, None);
+        assert_eq!(build_match_marker(&dir_item, &context), "D");
+
+        let miss_item = conversation_with_meta(
+            "/elsewhere",
+            Some("zzz999"),
+            Some("feature"),
+            Some("git@example.com:other.git"),
+        );
+        assert_eq!(build_match_marker(&miss_item, &context), "");
+
+        let no_meta_item = ConversationItem {
+            path: PathBuf::from("/tmp/none.jsonl"),
+            head: Vec::new(),
+            tail: Vec::new(),
+            created_at: None,
+            updated_at: None,
+        };
+        assert_eq!(build_match_marker(&no_meta_item, &context), "");
     }
 
     #[test]
@@ -1088,6 +1368,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            MatchContext::empty(),
         );
 
         let now = Utc::now();
@@ -1097,18 +1378,21 @@ mod tests {
                 preview: String::from("Fix resume picker timestamps"),
                 created_at: Some(now - Duration::minutes(16)),
                 updated_at: Some(now - Duration::seconds(42)),
+                match_marker: String::new(),
             },
             Row {
                 path: PathBuf::from("/tmp/b.jsonl"),
                 preview: String::from("Investigate lazy pagination cap"),
                 created_at: Some(now - Duration::hours(1)),
                 updated_at: Some(now - Duration::minutes(35)),
+                match_marker: String::new(),
             },
             Row {
                 path: PathBuf::from("/tmp/c.jsonl"),
                 preview: String::from("Explain the codebase"),
                 created_at: Some(now - Duration::hours(2)),
                 updated_at: Some(now - Duration::hours(2)),
+                match_marker: String::new(),
             },
         ];
         state.all_rows = rows.clone();
@@ -1148,6 +1432,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            MatchContext::empty(),
         );
 
         state.reset_pagination();
@@ -1214,6 +1499,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            MatchContext::empty(),
         );
         state.reset_pagination();
         state.ingest_page(page(
@@ -1243,6 +1529,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            MatchContext::empty(),
         );
 
         let mut items = Vec::new();
@@ -1291,6 +1578,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            MatchContext::empty(),
         );
 
         let mut items = Vec::new();
@@ -1335,6 +1623,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            MatchContext::empty(),
         );
         state.reset_pagination();
         state.ingest_page(page(
