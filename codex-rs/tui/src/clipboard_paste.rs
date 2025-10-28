@@ -172,11 +172,6 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
     }
 }
 
-// Map a Windows drive-letter path (e.g. C:\\Users\\Alice\\file.png) to a WSL path
-// (/mnt/c/Users/Alice/file.png). Returns None if the input does not look like a
-// drive-letter path.
-// mapping delegated to `tui::platform::try_map_windows_drive_to_wsl_path`
-
 /// Try to call a Windows PowerShell command (several common names) to save the
 /// clipboard image to a temporary PNG and return the Windows path to that file.
 /// Returns None if no command succeeded or no image was present.

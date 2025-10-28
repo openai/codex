@@ -251,7 +251,6 @@ impl ChatComposer {
     }
 
     pub fn handle_paste(&mut self, pasted: String) -> bool {
-        tracing::debug!("handle_paste called; pasted_len={}", pasted.len());
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
             let placeholder = format!("[Pasted Content {char_count} chars]");
