@@ -113,6 +113,8 @@ impl<'a> BottomPaneView<'a> for McpSettingsView {
         block.render(area, buf);
 
         let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut selected_line_index: usize = 0;
+
         if self.rows.is_empty() {
             lines.push(Line::from(vec![Span::styled("No MCP servers configured.", Style::default().fg(crate::colors::text_dim()))]));
             lines.push(Line::from(""));
@@ -123,6 +125,7 @@ impl<'a> BottomPaneView<'a> for McpSettingsView {
             let check = if row.enabled { "[on ]" } else { "[off]" };
             let name = format!("{} {}", check, row.name);
             let name_style = if sel { Style::default().bg(crate::colors::selection()).add_modifier(Modifier::BOLD) } else { Style::default() };
+            let arrow_line_index = lines.len();
             lines.push(Line::from(vec![
                 Span::styled(if sel { "› " } else { "  " }, Style::default()),
                 Span::styled(name, name_style),
@@ -133,18 +136,29 @@ impl<'a> BottomPaneView<'a> for McpSettingsView {
                 Span::styled("   ", Style::default()),
                 Span::styled(row.summary.clone(), sum_style),
             ]));
+            if sel {
+                selected_line_index = arrow_line_index;
+            }
         }
 
         // Add New…
         let add_sel = self.selected == self.rows.len();
         let add_style = if add_sel { Style::default().bg(crate::colors::selection()).add_modifier(Modifier::BOLD) } else { Style::default() };
         lines.push(Line::from(""));
+        let add_line_index = lines.len();
         lines.push(Line::from(vec![Span::styled(if add_sel { "› " } else { "  " }, Style::default()), Span::styled("Add new server…", add_style)]));
+        if add_sel {
+            selected_line_index = add_line_index;
+        }
 
         // Close
         let close_sel = self.selected == self.rows.len().saturating_add(1);
         let close_style = if close_sel { Style::default().bg(crate::colors::selection()).add_modifier(Modifier::BOLD) } else { Style::default() };
+        let close_line_index = lines.len();
         lines.push(Line::from(vec![Span::styled(if close_sel { "› " } else { "  " }, Style::default()), Span::styled("Close", close_style)]));
+        if close_sel {
+            selected_line_index = close_line_index;
+        }
 
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
@@ -156,9 +170,24 @@ impl<'a> BottomPaneView<'a> for McpSettingsView {
             Span::styled(" Close", Style::default().fg(crate::colors::text_dim())),
         ]));
 
+        let total_lines = lines.len();
+        let viewport_height = inner.height as usize;
+        let selected_line_index = selected_line_index.min(total_lines.saturating_sub(1));
+        let mut scroll_top = 0usize;
+        if viewport_height > 0 && total_lines > viewport_height {
+            let half = viewport_height / 2;
+            let mut candidate = selected_line_index.saturating_sub(half);
+            let max_scroll = total_lines - viewport_height;
+            if candidate > max_scroll {
+                candidate = max_scroll;
+            }
+            scroll_top = candidate;
+        }
+
         let paragraph = Paragraph::new(lines)
             .alignment(Alignment::Left)
-            .style(Style::default().bg(crate::colors::background()).fg(crate::colors::text()));
+            .style(Style::default().bg(crate::colors::background()).fg(crate::colors::text()))
+            .scroll((scroll_top as u16, 0));
         paragraph.render(Rect { x: inner.x.saturating_add(1), y: inner.y, width: inner.width.saturating_sub(2), height: inner.height }, buf);
     }
 }
