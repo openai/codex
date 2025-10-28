@@ -1015,6 +1015,47 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: ResumeConversationParams,
     ) {
+        // Determine rollout path from params (one-of: path | conversationId).
+        if params.path.is_some() && params.conversation_id.is_some() {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "specify exactly one of path or conversationId".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let path = if let Some(p) = params.path.clone() {
+            p
+        } else if let Some(conversation_id) = params.conversation_id {
+            match codex_core::find_conversation_path_by_id_str(
+                &self.config.codex_home,
+                &conversation_id.to_string(),
+            )
+            .await
+            {
+                Ok(Some(p)) => p,
+                _ => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("no rollout found for conversation id {conversation_id}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            }
+        } else {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "either path or conversationId must be provided".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        };
+
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let config = match params.overrides {
             Some(overrides) => {
@@ -1037,11 +1078,7 @@ impl CodexMessageProcessor {
 
         match self
             .conversation_manager
-            .resume_conversation_from_rollout(
-                config,
-                params.path.clone(),
-                self.auth_manager.clone(),
-            )
+            .resume_conversation_from_rollout(config, path.clone(), self.auth_manager.clone())
             .await
         {
             Ok(NewConversation {
@@ -1071,6 +1108,7 @@ impl CodexMessageProcessor {
                     conversation_id,
                     model: session_configured.model.clone(),
                     initial_messages,
+                    rollout_path: session_configured.rollout_path.clone(),
                 };
                 self.outgoing.send_response(request_id, response).await;
             }

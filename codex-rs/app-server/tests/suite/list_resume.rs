@@ -171,7 +171,8 @@ async fn test_list_and_resume_conversations() -> Result<()> {
     // Now resume one of the sessions and expect a SessionConfigured notification and response.
     let resume_req_id = mcp
         .send_resume_conversation_request(ResumeConversationParams {
-            path: items[0].path.clone(),
+            path: Some(items[0].path.clone()),
+            conversation_id: None,
             overrides: Some(NewConversationParams {
                 model: Some("o3".to_string()),
                 ..Default::default()
