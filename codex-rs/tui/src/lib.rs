@@ -143,6 +143,7 @@ pub async fn run_main(
         model_provider: model_provider_override,
         config_profile: cli.config_profile.clone(),
         codex_linux_sandbox_exe,
+        agents_home: None,
         base_instructions: None,
         include_apply_patch_tool: None,
         include_view_image_tool: None,

@@ -43,23 +43,30 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
     lines
         .into_iter()
         .map(|line| {
-            if let (Some(dir_pos), Some(pipe_idx)) = (line.find("Directory: "), line.rfind('│')) {
-                let prefix = &line[..dir_pos + "Directory: ".len()];
-                let suffix = &line[pipe_idx..];
-                let content_width = pipe_idx.saturating_sub(dir_pos + "Directory: ".len());
-                let replacement = "[[workspace]]";
-                let mut rebuilt = prefix.to_string();
-                rebuilt.push_str(replacement);
-                if content_width > replacement.len() {
-                    rebuilt.push_str(&" ".repeat(content_width - replacement.len()));
-                }
-                rebuilt.push_str(suffix);
-                rebuilt
-            } else {
-                line
-            }
+            sanitize_field(
+                sanitize_field(line, "Directory: ", "[[workspace]]"),
+                "Agents home: ",
+                "[[agents]]",
+            )
         })
         .collect()
+}
+
+fn sanitize_field(line: String, label: &str, placeholder: &str) -> String {
+    if let (Some(label_pos), Some(pipe_idx)) = (line.find(label), line.rfind('│')) {
+        let prefix = &line[..label_pos + label.len()];
+        let suffix = &line[pipe_idx..];
+        let content_width = pipe_idx.saturating_sub(label_pos + label.len());
+        let mut rebuilt = prefix.to_string();
+        rebuilt.push_str(placeholder);
+        if content_width > placeholder.len() {
+            rebuilt.push_str(&" ".repeat(content_width - placeholder.len()));
+        }
+        rebuilt.push_str(suffix);
+        rebuilt
+    } else {
+        line
+    }
 }
 
 fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) -> i64 {

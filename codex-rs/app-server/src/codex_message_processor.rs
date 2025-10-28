@@ -1668,6 +1668,7 @@ async fn derive_config_from_params(
         sandbox_mode,
         model_provider,
         codex_linux_sandbox_exe,
+        agents_home: None,
         base_instructions,
         include_apply_patch_tool,
         include_view_image_tool: None,

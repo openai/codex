@@ -153,6 +153,7 @@ impl CodexToolCallParam {
             sandbox_mode: sandbox.map(Into::into),
             model_provider: None,
             codex_linux_sandbox_exe,
+            agents_home: None,
             base_instructions,
             include_apply_patch_tool: None,
             include_view_image_tool: None,

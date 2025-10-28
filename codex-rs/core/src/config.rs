@@ -49,6 +49,7 @@ use serde::Deserialize;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
@@ -73,6 +74,8 @@ pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5-codex";
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
+
+const AGENTS_HOME_DEFAULT_SUBDIRS: &[&str] = &["context", "tools", "mcp"];
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
@@ -191,6 +194,10 @@ pub struct Config {
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: PathBuf,
+
+    /// Directory containing shared agent context, tools, and MCP resources.
+    /// Defaults to `~/.agents` (sibling to `~/.codex`) unless overridden.
+    pub agents_home: PathBuf,
 
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
@@ -887,6 +894,9 @@ pub struct ConfigToml {
     #[serde(default)]
     pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
 
+    /// Optional override for the shared agents home directory.
+    pub agents_home: Option<PathBuf>,
+
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     #[serde(default)]
     pub mcp_servers: HashMap<String, McpServerConfig>,
@@ -1154,6 +1164,7 @@ pub struct ConfigOverrides {
     pub model_provider: Option<String>,
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
+    pub agents_home: Option<PathBuf>,
     pub base_instructions: Option<String>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
@@ -1184,6 +1195,7 @@ impl Config {
             model_provider,
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
+            agents_home: agents_home_override,
             base_instructions,
             include_apply_patch_tool: include_apply_patch_tool_override,
             include_view_image_tool: include_view_image_tool_override,
@@ -1238,6 +1250,12 @@ impl Config {
                 }
             }
         };
+        let agents_home = compute_agents_home(
+            agents_home_override,
+            cfg.agents_home.as_ref(),
+            &resolved_cwd,
+            &codex_home,
+        )?;
         let additional_writable_roots: Vec<PathBuf> = additional_writable_roots
             .into_iter()
             .map(|path| {
@@ -1418,6 +1436,7 @@ impl Config {
                 })
                 .collect(),
             codex_home,
+            agents_home,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
@@ -1567,6 +1586,70 @@ pub fn find_codex_home() -> std::io::Result<PathBuf> {
     })?;
     p.push(".codex");
     Ok(p)
+}
+
+fn compute_agents_home(
+    override_path: Option<PathBuf>,
+    config_path: Option<&PathBuf>,
+    cwd: &Path,
+    codex_home: &Path,
+) -> std::io::Result<PathBuf> {
+    let candidate = if let Some(path) = override_path {
+        normalize_agents_home_candidate(path, cwd)
+    } else if let Some(path) = config_path {
+        normalize_agents_home_candidate(path.clone(), cwd)
+    } else if let Ok(env_home) = std::env::var("AGENTS_HOME") {
+        if env_home.trim().is_empty() {
+            default_agents_home_for(codex_home)
+        } else {
+            normalize_agents_home_candidate(PathBuf::from(env_home), cwd)
+        }
+    } else {
+        default_agents_home_for(codex_home)
+    };
+
+    ensure_agents_home_layout(&candidate)?;
+    Ok(candidate)
+}
+
+fn normalize_agents_home_candidate(candidate: PathBuf, cwd: &Path) -> PathBuf {
+    if let Some(raw) = candidate.to_str() {
+        if raw == "~" {
+            if let Some(home) = home_dir() {
+                return home;
+            }
+        } else if let Some(stripped) = raw.strip_prefix("~/") {
+            if let Some(home) = home_dir() {
+                return home.join(stripped);
+            }
+        }
+    }
+
+    if candidate.is_absolute() {
+        candidate
+    } else {
+        cwd.join(candidate)
+    }
+}
+
+fn default_agents_home_for(codex_home: &Path) -> PathBuf {
+    if let Some(file_name) = codex_home.file_name().and_then(|name| name.to_str()) {
+        if file_name == ".codex" {
+            if let Some(parent) = codex_home.parent() {
+                return parent.join(".agents");
+            }
+        }
+    }
+
+    codex_home.join(".agents")
+}
+
+fn ensure_agents_home_layout(base: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(base)?;
+    for child in AGENTS_HOME_DEFAULT_SUBDIRS {
+        fs::create_dir_all(base.join(child))?;
+    }
+    Ok(())
 }
 
 /// Returns the path to the folder where Codex logs are stored. Does not verify
@@ -2945,6 +3028,53 @@ model = "gpt-5-codex"
         }
     }
 
+    #[test]
+    fn agents_home_defaults_next_to_dot_codex() -> std::io::Result<()> {
+        let parent = TempDir::new().expect("temp parent");
+        let codex_home = parent.path().join(".codex");
+        fs::create_dir_all(&codex_home)?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.clone(),
+        )?;
+
+        let expected_agents = parent.path().join(".agents");
+        assert_eq!(expected_agents, config.agents_home);
+        for child in AGENTS_HOME_DEFAULT_SUBDIRS {
+            let subdir = config.agents_home.join(child);
+            assert!(
+                subdir.is_dir(),
+                "expected agents subdir `{}` to exist",
+                subdir.display()
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn agents_home_defaults_within_custom_codex_home() -> std::io::Result<()> {
+        let codex_root = TempDir::new().expect("temp codex root");
+        let codex_home = codex_root.path().join("codex-state");
+        fs::create_dir_all(&codex_home)?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.clone(),
+        )?;
+
+        let expected_agents = codex_home.join(".agents");
+        assert_eq!(expected_agents, config.agents_home);
+        for child in AGENTS_HOME_DEFAULT_SUBDIRS {
+            assert!(config.agents_home.join(child).is_dir());
+        }
+
+        Ok(())
+    }
+
     fn create_test_fixture() -> std::io::Result<PrecedenceTestFixture> {
         let toml = r#"
 model = "o3"
@@ -3065,6 +3195,7 @@ model_verbosity = "high"
             o3_profile_overrides,
             fixture.codex_home(),
         )?;
+        let expected_agents_home = default_agents_home_for(&fixture.codex_home());
         assert_eq!(
             Config {
                 model: "o3".to_string(),
@@ -3090,6 +3221,7 @@ model_verbosity = "high"
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 project_doc_fallback_filenames: Vec::new(),
                 codex_home: fixture.codex_home(),
+                agents_home: expected_agents_home,
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
                 codex_linux_sandbox_exe: None,
@@ -3137,6 +3269,7 @@ model_verbosity = "high"
             gpt3_profile_overrides,
             fixture.codex_home(),
         )?;
+        let expected_agents_home = default_agents_home_for(&fixture.codex_home());
         let expected_gpt3_profile_config = Config {
             model: "gpt-3.5-turbo".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
@@ -3161,6 +3294,7 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             codex_home: fixture.codex_home(),
+            agents_home: expected_agents_home.clone(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
@@ -3223,6 +3357,7 @@ model_verbosity = "high"
             zdr_profile_overrides,
             fixture.codex_home(),
         )?;
+        let expected_agents_home = default_agents_home_for(&fixture.codex_home());
         let expected_zdr_profile_config = Config {
             model: "o3".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
@@ -3247,6 +3382,7 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             codex_home: fixture.codex_home(),
+            agents_home: expected_agents_home,
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
@@ -3295,6 +3431,7 @@ model_verbosity = "high"
             gpt5_profile_overrides,
             fixture.codex_home(),
         )?;
+        let expected_agents_home = default_agents_home_for(&fixture.codex_home());
         let expected_gpt5_profile_config = Config {
             model: "gpt-5".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
@@ -3319,6 +3456,7 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             codex_home: fixture.codex_home(),
+            agents_home: expected_agents_home,
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,

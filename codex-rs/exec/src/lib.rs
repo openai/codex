@@ -174,6 +174,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
         model_provider,
         codex_linux_sandbox_exe,
+        agents_home: None,
         base_instructions: None,
         include_apply_patch_tool: None,
         include_view_image_tool: None,
