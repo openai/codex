@@ -63,30 +63,26 @@ impl ConfigDocument {
                 let mut mutated = false;
                 mutated |= self.write_profile_value(
                     &["model"],
-                    model
-                        .as_ref()
-                        .map(|model_value| value(model_value.clone()).into()),
+                    model.as_ref().map(|model_value| value(model_value.clone())),
                 );
                 mutated |= self.write_profile_value(
                     &["model_reasoning_effort"],
-                    effort.map(|effort| value(effort.to_string()).into()),
+                    effort.map(|effort| value(effort.to_string())),
                 );
                 mutated
             }),
             ConfigEdit::SetNoticeHideFullAccessWarning(acknowledged) => Ok(self.write_value(
                 Scope::Global,
                 &[Notice::TABLE_KEY, "hide_full_access_warning"],
-                value(*acknowledged).into(),
+                value(*acknowledged),
             )),
             ConfigEdit::SetWindowsWslSetupAcknowledged(acknowledged) => Ok(self.write_value(
                 Scope::Global,
                 &["windows_wsl_setup_acknowledged"],
-                value(*acknowledged).into(),
+                value(*acknowledged),
             )),
             ConfigEdit::ReplaceMcpServers(servers) => Ok(self.replace_mcp_servers(servers)),
-            ConfigEdit::SetPath { segments, value } => {
-                Ok(self.write_value_owned(segments, value.clone()))
-            }
+            ConfigEdit::SetPath { segments, value } => Ok(self.insert(segments, value.clone())),
             ConfigEdit::ClearPath { segments } => Ok(self.clear_owned(segments)),
             ConfigEdit::SetProjectTrusted(project_path) => {
                 // Delegate to the existing, tested logic in config.rs to
@@ -97,33 +93,16 @@ impl ConfigDocument {
         }
     }
 
-    fn into_document(self) -> DocumentMut {
-        self.doc
-    }
-
     fn write_profile_value(&mut self, segments: &[&str], value: Option<TomlItem>) -> bool {
-        self.write_value_option(Scope::Profile, segments, value)
+        match value {
+            Some(item) => self.write_value(Scope::Profile, segments, item),
+            None => self.clear(Scope::Profile, segments),
+        }
     }
 
     fn write_value(&mut self, scope: Scope, segments: &[&str], value: TomlItem) -> bool {
         let resolved = self.scoped_segments(scope, segments);
         self.insert(&resolved, value)
-    }
-
-    fn write_value_option(
-        &mut self,
-        scope: Scope,
-        segments: &[&str],
-        value: Option<TomlItem>,
-    ) -> bool {
-        match value {
-            Some(item) => self.write_value(scope, segments, item),
-            None => self.clear(scope, segments),
-        }
-    }
-
-    fn write_value_owned(&mut self, segments: &[String], value: TomlItem) -> bool {
-        self.insert(segments, value)
     }
 
     fn clear(&mut self, scope: Scope, segments: &[&str]) -> bool {
@@ -140,7 +119,14 @@ impl ConfigDocument {
             return self.clear(Scope::Global, &["mcp_servers"]);
         }
 
-        let item = self.serialize_mcp_servers(servers);
+        let mut table = TomlTable::new();
+        table.set_implicit(true);
+
+        for (name, config) in servers {
+            table.insert(name, self.serialize_mcp_server(config));
+        }
+
+        let item = TomlItem::Table(table);
         self.write_value(Scope::Global, &["mcp_servers"], item)
     }
 
@@ -151,17 +137,14 @@ impl ConfigDocument {
             .collect();
 
         if matches!(scope, Scope::Profile)
-            && !resolved
-                .first()
-                .is_some_and(|segment| segment == "profiles")
+            && resolved.first().is_none_or(|segment| segment != "profiles")
+            && let Some(profile) = self.profile.as_deref()
         {
-            if let Some(profile) = self.profile.as_deref() {
-                let mut scoped = Vec::with_capacity(resolved.len() + 2);
-                scoped.push("profiles".to_string());
-                scoped.push(profile.to_string());
-                scoped.extend(resolved);
-                return scoped;
-            }
+            let mut scoped = Vec::with_capacity(resolved.len() + 2);
+            scoped.push("profiles".to_string());
+            scoped.push(profile.to_string());
+            scoped.extend(resolved);
+            return scoped;
         }
 
         resolved
@@ -194,7 +177,16 @@ impl ConfigDocument {
                     let mut tbl = Table::new();
                     tbl.set_implicit(true);
                     for (k, v) in inline.iter() {
-                        tbl.insert(k, v.clone().into());
+                        let mut val = v.clone();
+                        // Drop any trailing whitespace preserved from inline form
+                        {
+                            // If toml_edit exposes decor_mut, clear suffix to avoid EOL spaces
+                            use toml_edit::Value;
+                            let vref: &mut Value = &mut val;
+                            let decor = vref.decor_mut();
+                            decor.set_suffix("");
+                        }
+                        tbl.insert(k, val.into());
                     }
                     current[segment] = Item::Table(tbl);
                 } else {
@@ -205,18 +197,23 @@ impl ConfigDocument {
                 }
             }
 
-            current = current[segment]
-                .as_table_mut()
-                .expect("segment converted to table");
+            let Some(next) = current[segment].as_table_mut() else {
+                return false;
+            };
+            current = next;
         }
 
-        let last = segments.last().expect("segments non-empty");
-        current[last] = value;
-        true
+        if let Some(last) = segments.last() {
+            current[last] = value;
+            true
+        } else {
+            false
+        }
     }
 
     fn remove(&mut self, segments: &[String]) -> bool {
         use toml_edit::Item;
+        use toml_edit::Table;
 
         if segments.is_empty() {
             return false;
@@ -231,22 +228,38 @@ impl ConfigDocument {
                 Item::Table(table) => {
                     current = table;
                 }
+                Item::Value(value) => {
+                    let Some(inline) = value.as_inline_table() else {
+                        return false;
+                    };
+                    let mut table = Table::new();
+                    table.set_implicit(true);
+                    for (key, val) in inline.iter() {
+                        let mut v = val.clone();
+                        // Drop any trailing whitespace preserved from inline form
+                        {
+                            use toml_edit::Value;
+                            let vref: &mut Value = &mut v;
+                            let decor = vref.decor_mut();
+                            decor.set_suffix("");
+                        }
+                        table.insert(key, v.into());
+                    }
+                    *item = Item::Table(table);
+                    let Some(next) = item.as_table_mut() else {
+                        return false;
+                    };
+                    current = next;
+                }
                 _ => return false,
             }
         }
 
-        current.remove(segments.last().unwrap()).is_some()
-    }
-
-    fn serialize_mcp_servers(&self, servers: &BTreeMap<String, McpServerConfig>) -> TomlItem {
-        let mut table = TomlTable::new();
-        table.set_implicit(true);
-
-        for (name, config) in servers {
-            table.insert(name, self.serialize_mcp_server(config));
+        if let Some(last) = segments.last() {
+            current.remove(last).is_some()
+        } else {
+            false
         }
-
-        TomlItem::Table(table)
     }
 
     fn serialize_mcp_server(&self, config: &McpServerConfig) -> TomlItem {
@@ -265,10 +278,10 @@ impl ConfigDocument {
                 if !args.is_empty() {
                     entry["args"] = self.array_from_iter(args.iter().cloned());
                 }
-                if let Some(env) = env {
-                    if !env.is_empty() {
-                        entry["env"] = self.table_from_pairs(env.iter());
-                    }
+                if let Some(env) = env
+                    && !env.is_empty()
+                {
+                    entry["env"] = self.table_from_pairs(env.iter());
                 }
                 if !env_vars.is_empty() {
                     entry["env_vars"] = self.array_from_iter(env_vars.iter().cloned());
@@ -287,15 +300,15 @@ impl ConfigDocument {
                 if let Some(env_var) = bearer_token_env_var {
                     entry["bearer_token_env_var"] = value(env_var.clone());
                 }
-                if let Some(headers) = http_headers {
-                    if !headers.is_empty() {
-                        entry["http_headers"] = self.table_from_pairs(headers.iter());
-                    }
+                if let Some(headers) = http_headers
+                    && !headers.is_empty()
+                {
+                    entry["http_headers"] = self.table_from_pairs(headers.iter());
                 }
-                if let Some(headers) = env_http_headers {
-                    if !headers.is_empty() {
-                        entry["env_http_headers"] = self.table_from_pairs(headers.iter());
-                    }
+                if let Some(headers) = env_http_headers
+                    && !headers.is_empty()
+                {
+                    entry["env_http_headers"] = self.table_from_pairs(headers.iter());
                 }
             }
         }
@@ -309,15 +322,15 @@ impl ConfigDocument {
         if let Some(timeout) = config.tool_timeout_sec {
             entry["tool_timeout_sec"] = value(timeout.as_secs_f64());
         }
-        if let Some(enabled_tools) = &config.enabled_tools {
-            if !enabled_tools.is_empty() {
-                entry["enabled_tools"] = self.array_from_iter(enabled_tools.iter().cloned());
-            }
+        if let Some(enabled_tools) = &config.enabled_tools
+            && !enabled_tools.is_empty()
+        {
+            entry["enabled_tools"] = self.array_from_iter(enabled_tools.iter().cloned());
         }
-        if let Some(disabled_tools) = &config.disabled_tools {
-            if !disabled_tools.is_empty() {
-                entry["disabled_tools"] = self.array_from_iter(disabled_tools.iter().cloned());
-            }
+        if let Some(disabled_tools) = &config.disabled_tools
+            && !disabled_tools.is_empty()
+        {
+            entry["disabled_tools"] = self.array_from_iter(disabled_tools.iter().cloned());
         }
 
         TomlItem::Table(entry)
@@ -397,7 +410,7 @@ pub fn apply_blocking(
     })?;
 
     let tmp = NamedTempFile::new_in(codex_home)?;
-    std::fs::write(tmp.path(), document.into_document().to_string()).with_context(|| {
+    std::fs::write(tmp.path(), document.doc.to_string()).with_context(|| {
         format!(
             "failed to write temporary config file at {}",
             tmp.path().display()
@@ -419,63 +432,6 @@ pub async fn apply(
     task::spawn_blocking(move || apply_blocking(&codex_home, profile.as_deref(), &edits))
         .await
         .context("config persistence task panicked")?
-}
-
-/// Persist a model selection update.
-pub async fn set_model(
-    codex_home: &Path,
-    profile: Option<&str>,
-    model: Option<&str>,
-    effort: Option<ReasoningEffort>,
-) -> anyhow::Result<()> {
-    apply(
-        codex_home,
-        profile,
-        vec![ConfigEdit::SetModel {
-            model: model.map(ToOwned::to_owned),
-            effort,
-        }],
-    )
-    .await
-}
-
-/// Persist the full access warning acknowledgement toggle.
-pub async fn set_hide_full_access_warning(
-    codex_home: &Path,
-    acknowledged: bool,
-) -> anyhow::Result<()> {
-    apply(
-        codex_home,
-        None,
-        vec![ConfigEdit::SetNoticeHideFullAccessWarning(acknowledged)],
-    )
-    .await
-}
-
-/// Persist the Windows onboarding acknowledgement flag.
-pub async fn set_windows_wsl_setup_acknowledged(
-    codex_home: &Path,
-    acknowledged: bool,
-) -> anyhow::Result<()> {
-    apply(
-        codex_home,
-        None,
-        vec![ConfigEdit::SetWindowsWslSetupAcknowledged(acknowledged)],
-    )
-    .await
-}
-
-/// Replace the global MCP servers table.
-pub async fn replace_mcp_servers(
-    codex_home: &Path,
-    servers: &BTreeMap<String, McpServerConfig>,
-) -> anyhow::Result<()> {
-    apply(
-        codex_home,
-        None,
-        vec![ConfigEdit::ReplaceMcpServers(servers.clone())],
-    )
-    .await
 }
 
 /// Fluent builder to batch config edits and apply them atomically.
@@ -539,7 +495,9 @@ impl ConfigEditsBuilder {
 
     /// Apply edits asynchronously via a blocking offload.
     pub async fn apply(self) -> anyhow::Result<()> {
-        apply(&self.codex_home, self.profile.as_deref(), self.edits).await
+        task::spawn_blocking(move || apply_blocking(&self.codex_home, self.profile.as_deref(), &self.edits))
+            .await
+            .context("config persistence task panicked")?
     }
 }
 
@@ -620,6 +578,41 @@ profiles = { fast = { model = "gpt-4o", sandbox_mode = "strict" } }
             fast_tbl.get("model").and_then(|v| v.as_str()),
             Some("o4-mini")
         );
+    }
+
+    #[test]
+    fn blocking_clear_model_removes_inline_table_entry() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+
+        std::fs::write(
+            codex_home.join(CONFIG_TOML_FILE),
+            r#"profile = "fast"
+
+profiles = { fast = { model = "gpt-4o", sandbox_mode = "strict" } }
+"#,
+        )
+        .expect("seed");
+
+        apply_blocking(
+            codex_home,
+            None,
+            &[ConfigEdit::SetModel {
+                model: None,
+                effort: Some(ReasoningEffort::High),
+            }],
+        )
+        .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"profile = "fast"
+
+[profiles.fast]
+sandbox_mode = "strict"
+model_reasoning_effort = "high"
+"#;
+        assert_eq!(contents, expected);
     }
 
     #[test]
@@ -815,7 +808,7 @@ hide_full_access_warning = true
         let tmp = tempdir().expect("tmpdir");
         let codex_home = tmp.path();
 
-        let item = value(false).into();
+        let item = value(false);
         apply_blocking(
             codex_home,
             None,
@@ -832,23 +825,20 @@ hide_full_access_warning = true
             .get("tui")
             .and_then(|item| item.as_table())
             .and_then(|tbl| tbl.get("notifications"))
-            .and_then(|item| item.as_bool());
+            .and_then(toml::Value::as_bool);
         assert_eq!(notifications, Some(false));
     }
 
     #[tokio::test]
-    async fn async_set_model_delegates_to_blocking() {
+    async fn async_builder_set_model_persists() {
         let tmp = tempdir().expect("tmpdir");
         let codex_home = tmp.path().to_path_buf();
 
-        set_model(
-            &codex_home,
-            None,
-            Some("gpt-5-codex"),
-            Some(ReasoningEffort::High),
-        )
-        .await
-        .expect("persist");
+        ConfigEditsBuilder::new(&codex_home)
+            .set_model(Some("gpt-5-codex"), Some(ReasoningEffort::High))
+            .apply()
+            .await
+            .expect("persist");
 
         let contents =
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
@@ -865,7 +855,9 @@ hide_full_access_warning = true
         let codex_home = tmp.path().to_path_buf();
 
         rt.block_on(async {
-            set_hide_full_access_warning(&codex_home, true)
+            ConfigEditsBuilder::new(&codex_home)
+                .set_hide_full_access_warning(true)
+                .apply()
                 .await
                 .expect("persist");
         });
@@ -876,7 +868,7 @@ hide_full_access_warning = true
             .get("notice")
             .and_then(|item| item.as_table())
             .and_then(|tbl| tbl.get("hide_full_access_warning"))
-            .and_then(|item| item.as_bool());
+            .and_then(toml::Value::as_bool);
         assert_eq!(notice, Some(true));
     }
 

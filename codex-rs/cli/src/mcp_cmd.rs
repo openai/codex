@@ -11,7 +11,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
-use codex_core::config_edit::replace_mcp_servers;
+use codex_core::config_edit::ConfigEditsBuilder;
 use codex_core::config_types::McpServerConfig;
 use codex_core::config_types::McpServerTransportConfig;
 use codex_core::features::Feature;
@@ -263,7 +263,9 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 
     servers.insert(name.clone(), new_entry);
 
-    replace_mcp_servers(&codex_home, &servers)
+    ConfigEditsBuilder::new(&codex_home)
+        .replace_mcp_servers(&servers)
+        .apply()
         .await
         .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
 
@@ -322,7 +324,9 @@ async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveAr
     let removed = servers.remove(&name).is_some();
 
     if removed {
-        replace_mcp_servers(&codex_home, &servers)
+        ConfigEditsBuilder::new(&codex_home)
+            .replace_mcp_servers(&servers)
+            .apply()
             .await
             .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
     }

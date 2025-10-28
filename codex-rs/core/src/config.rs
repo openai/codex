@@ -1248,8 +1248,8 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use crate::config_edit::ConfigEdit;
+    use crate::config_edit::ConfigEditsBuilder;
     use crate::config_edit::apply_blocking;
-    use crate::config_edit::set_model;
     use crate::config_types::HistoryPersistence;
     use crate::config_types::McpServerTransportConfig;
     use crate::config_types::Notifications;
@@ -2505,13 +2505,10 @@ url = "https://example.com/mcp"
     async fn set_model_updates_defaults() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
-        set_model(
-            codex_home.path(),
-            None,
-            Some("gpt-5-codex"),
-            Some(ReasoningEffort::High),
-        )
-        .await?;
+        ConfigEditsBuilder::new(codex_home.path())
+            .set_model(Some("gpt-5-codex"), Some(ReasoningEffort::High))
+            .apply()
+            .await?;
 
         let serialized =
             tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
@@ -2540,13 +2537,10 @@ model = "gpt-4.1"
         )
         .await?;
 
-        set_model(
-            codex_home.path(),
-            None,
-            Some("o4-mini"),
-            Some(ReasoningEffort::High),
-        )
-        .await?;
+        ConfigEditsBuilder::new(codex_home.path())
+            .set_model(Some("o4-mini"), Some(ReasoningEffort::High))
+            .apply()
+            .await?;
 
         let serialized = tokio::fs::read_to_string(config_path).await?;
         let parsed: ConfigToml = toml::from_str(&serialized)?;
@@ -2568,13 +2562,11 @@ model = "gpt-4.1"
     async fn set_model_updates_profile() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
-        set_model(
-            codex_home.path(),
-            Some("dev"),
-            Some("gpt-5-codex"),
-            Some(ReasoningEffort::Medium),
-        )
-        .await?;
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_profile(Some("dev"))
+            .set_model(Some("gpt-5-codex"), Some(ReasoningEffort::Medium))
+            .apply()
+            .await?;
 
         let serialized =
             tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
@@ -2611,13 +2603,11 @@ model = "gpt-5-codex"
         )
         .await?;
 
-        set_model(
-            codex_home.path(),
-            Some("dev"),
-            Some("o4-high"),
-            Some(ReasoningEffort::Medium),
-        )
-        .await?;
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_profile(Some("dev"))
+            .set_model(Some("o4-high"), Some(ReasoningEffort::Medium))
+            .apply()
+            .await?;
 
         let serialized = tokio::fs::read_to_string(config_path).await?;
         let parsed: ConfigToml = toml::from_str(&serialized)?;

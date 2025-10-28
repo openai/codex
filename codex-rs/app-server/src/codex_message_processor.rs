@@ -73,7 +73,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 use codex_core::config::load_config_as_toml;
-use codex_core::config_edit::set_model;
+use codex_core::config_edit::ConfigEditsBuilder;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
@@ -685,13 +685,11 @@ impl CodexMessageProcessor {
             reasoning_effort,
         } = params;
 
-        match set_model(
-            &self.config.codex_home,
-            self.config.active_profile.as_deref(),
-            model.as_deref(),
-            reasoning_effort,
-        )
-        .await
+        match ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_profile(self.config.active_profile.as_deref())
+            .set_model(model.as_deref(), reasoning_effort)
+            .apply()
+            .await
         {
             Ok(()) => {
                 let response = SetDefaultModelResponse {};

@@ -17,8 +17,7 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
-use codex_core::config_edit::set_hide_full_access_warning;
-use codex_core::config_edit::set_model;
+use codex_core::config_edit::ConfigEditsBuilder;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
@@ -374,13 +373,11 @@ impl App {
             }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
-                match set_model(
-                    &self.config.codex_home,
-                    profile,
-                    Some(model.as_str()),
-                    effort,
-                )
-                .await
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .set_model(Some(model.as_str()), effort)
+                    .apply()
+                    .await
                 {
                     Ok(()) => {
                         let effort_label = effort
@@ -426,7 +423,10 @@ impl App {
                 self.chat_widget.set_full_access_warning_acknowledged(ack);
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
-                if let Err(err) = set_hide_full_access_warning(&self.config.codex_home, true).await
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_hide_full_access_warning(true)
+                    .apply()
+                    .await
                 {
                     tracing::error!(
                         error = %err,
