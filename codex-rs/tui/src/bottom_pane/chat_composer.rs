@@ -52,6 +52,7 @@ use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_file_search::FileMatch;
+use codex_protocol::platform::is_running_under_wsl;
 use codex_protocol::platform::try_map_windows_drive_to_wsl_path;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -948,16 +949,16 @@ impl ChatComposer {
         // Support an explicit keyboard shortcut to paste image from clipboard
         // using the native clipboard reader (arboard) or Windows PowerShell
         // fallback when running under WSL. This avoids relying on the terminal
-        // to forward Ctrl+V as text. Shortcut: Ctrl+Shift+V or Ctrl+Alt+V.
+        // to forward Ctrl+V as text. Shortcut: Ctrl+Alt+V.
         if let KeyEvent {
             code: KeyCode::Char('v'),
             modifiers,
             ..
         } = key_event
             && modifiers.contains(KeyModifiers::CONTROL)
-            && (modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT))
+            && modifiers.contains(KeyModifiers::ALT)
+            && is_running_under_wsl()
         {
-            tracing::debug!("explicit paste-image shortcut pressed");
             match paste_image_to_temp_png() {
                 Ok((path, info)) => {
                     let format_label = pasted_image_format(&path).label();
