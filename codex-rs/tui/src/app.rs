@@ -17,8 +17,8 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
-use codex_core::config::persist_model_selection;
-use codex_core::config::set_hide_full_access_warning;
+use codex_core::config_edit::set_hide_full_access_warning;
+use codex_core::config_edit::set_model;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
@@ -374,8 +374,13 @@ impl App {
             }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
-                match persist_model_selection(&self.config.codex_home, profile, &model, effort)
-                    .await
+                match set_model(
+                    &self.config.codex_home,
+                    profile,
+                    Some(model.as_str()),
+                    effort,
+                )
+                .await
                 {
                     Ok(()) => {
                         let effort_label = effort
@@ -421,7 +426,8 @@ impl App {
                 self.chat_widget.set_full_access_warning_acknowledged(ack);
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
-                if let Err(err) = set_hide_full_access_warning(&self.config.codex_home, true) {
+                if let Err(err) = set_hide_full_access_warning(&self.config.codex_home, true).await
+                {
                     tracing::error!(
                         error = %err,
                         "failed to persist full access warning acknowledgement"
