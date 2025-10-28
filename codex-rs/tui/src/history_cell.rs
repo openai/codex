@@ -2291,7 +2291,7 @@ mod tests {
         assert_eq!(
             rendered,
             vec![
-                "Feature flag `foo`".to_string(),
+                "⚠ Feature flag `foo`".to_string(),
                 "Use flag `bar` instead.".to_string(),
             ]
         );
