@@ -58,7 +58,16 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
 
     let auth = match codex_core::config::find_codex_home()
         .ok()
-        .map(|home| codex_login::AuthManager::new(home, false))
+        .map(|home| {
+            let store_mode = codex_core::config::Config::load_from_base_config_with_overrides(
+                codex_core::config::ConfigToml::default(),
+                codex_core::config::ConfigOverrides::default(),
+                home.clone(),
+            )
+            .map(|cfg| cfg.cli_auth_credentials_store_mode)
+            .unwrap_or_default();
+            codex_login::AuthManager::new(home, false, store_mode)
+        })
         .and_then(|am| am.auth())
     {
         Some(auth) => auth,
