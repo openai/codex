@@ -1238,10 +1238,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
-        let should_break = match sub.op.clone() {
+        match sub.op.clone() {
             Op::Interrupt => {
                 handlers::interrupt(&sess).await;
-                false
             }
             Op::OverrideTurnContext {
                 cwd,
@@ -1264,56 +1263,45 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     },
                 )
                 .await;
-                false
             }
             Op::UserInput { .. } | Op::UserTurn { .. } => {
                 handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
                     .await;
-                false
             }
             Op::ExecApproval { id, decision } => {
                 handlers::exec_approval(&sess, id, decision).await;
-                false
             }
             Op::PatchApproval { id, decision } => {
                 handlers::patch_approval(&sess, id, decision).await;
-                false
             }
             Op::AddToHistory { text } => {
                 handlers::add_to_history(&sess, &config, text).await;
-                false
             }
             Op::GetHistoryEntryRequest { offset, log_id } => {
                 handlers::get_history_entry_request(&sess, &config, sub.id.clone(), offset, log_id)
                     .await;
-                false
             }
             Op::ListMcpTools => {
                 handlers::list_mcp_tools(&sess, &config, sub.id.clone()).await;
-                false
             }
             Op::ListCustomPrompts => {
                 handlers::list_custom_prompts(&sess, sub.id.clone()).await;
-                false
             }
             Op::Undo => {
                 handlers::undo(&sess, sub.id.clone()).await;
-                false
             }
             Op::Compact => {
                 handlers::compact(&sess, sub.id.clone()).await;
-                false
             }
-            Op::Shutdown => handlers::shutdown(&sess, sub.id.clone()).await,
+            Op::Shutdown => {
+                if handlers::shutdown(&sess, sub.id.clone()).await {
+                    break;
+                }
+            }
             Op::Review { review_request } => {
                 handlers::review(&sess, &config, sub.id.clone(), review_request).await;
-                false
             }
-            _ => false, // Ignore unknown ops; enum is non_exhaustive to allow extensions.
-        };
-
-        if should_break {
-            break;
+            _ => {} // Ignore unknown ops; enum is non_exhaustive to allow extensions.
         }
     }
     debug!("Agent loop exited");
