@@ -6,10 +6,12 @@ use std::io::BufWriter;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use filetime::{set_file_mtime, FileTime};
 use tempfile::TempDir;
 use time::OffsetDateTime;
 use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
+use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use uuid::Uuid;
 
@@ -19,6 +21,7 @@ use crate::rollout::list::ConversationsPage;
 use crate::rollout::list::Cursor;
 use crate::rollout::list::get_conversation;
 use crate::rollout::list::get_conversations;
+use std::time::{Duration, SystemTime};
 use code_protocol::models::{ContentItem, ResponseItem};
 use code_protocol::ConversationId;
 use code_protocol::protocol::{
@@ -426,7 +429,7 @@ async fn test_pagination_cursor() {
     ];
     let expected_cursor1: Cursor =
         serde_json::from_str(&format!("\"2025-03-04T09-00-00|{u4}\"")).unwrap();
-    assert_page_summary(&page1, &expected_page1_items, Some(expected_cursor1.clone()), 3);
+    assert_page_summary(&page1, &expected_page1_items, Some(expected_cursor1.clone()), 5);
 
     let page2 = get_conversations(
         home,
@@ -522,6 +525,69 @@ async fn test_get_conversation_contents() {
         let item_type = value.get("type").and_then(|v| v.as_str());
         assert_eq!(item_type, Some("event"), "line {idx} should be event");
     }
+}
+
+#[tokio::test]
+async fn test_list_conversations_prefers_recent_mtime() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let older_uuid = Uuid::from_u128(0x11);
+    let newer_uuid = Uuid::from_u128(0x22);
+
+    write_session_file(
+        home,
+        "2025-08-01T10-00-00",
+        older_uuid,
+        1,
+        Some(SessionSource::VSCode),
+    )
+    .unwrap();
+    write_session_file(
+        home,
+        "2025-09-01T10-00-00",
+        newer_uuid,
+        1,
+        Some(SessionSource::VSCode),
+    )
+    .unwrap();
+
+    let older_path = home
+        .join("sessions")
+        .join("2025")
+        .join("08")
+        .join("01")
+        .join(format!("rollout-2025-08-01T10-00-00-{older_uuid}.jsonl"));
+
+    let future_time = SystemTime::now() + Duration::from_secs(300);
+    set_file_mtime(&older_path, FileTime::from_system_time(future_time)).unwrap();
+
+    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES)
+        .await
+        .unwrap();
+
+    let first = page.items.first().expect("expected at least one session");
+    assert_eq!(first.path, older_path);
+
+    let modified_at = first
+        .modified_at
+        .as_deref()
+        .expect("expected modified_at");
+    let updated_at = first
+        .updated_at
+        .as_deref()
+        .expect("expected updated_at");
+
+    let modified_dt = OffsetDateTime::parse(modified_at, &Rfc3339).expect("parse modified_at");
+    let format: &[FormatItem] =
+        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+    let updated_dt = PrimitiveDateTime::parse(updated_at, format)
+        .expect("parse updated_at")
+        .assume_utc();
+    assert!(
+        modified_dt > updated_dt,
+        "modified_at should reflect newer filesystem mtime"
+    );
 }
 
 #[tokio::test]

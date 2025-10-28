@@ -11,6 +11,7 @@ use time::OffsetDateTime;
 use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
+use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 use super::SESSIONS_SUBDIR;
@@ -47,6 +48,8 @@ pub struct ConversationItem {
     pub created_at: Option<String>,
     /// RFC3339 timestamp string for the most recent response in the tail, if available.
     pub updated_at: Option<String>,
+    /// RFC3339 timestamp string for the file's last modification time, if available.
+    pub modified_at: Option<String>,
 }
 
 #[derive(Default)]
@@ -147,7 +150,7 @@ async fn traverse_directories_for_paths(
     anchor: Option<Cursor>,
     allowed_sources: &[SessionSource],
 ) -> io::Result<ConversationsPage> {
-    let mut items: Vec<ConversationItem> = Vec::with_capacity(page_size);
+    let mut candidates: Vec<(OffsetDateTime, OffsetDateTime, Uuid, ConversationItem)> = Vec::new();
     let mut scanned_files = 0usize;
     let mut anchor_passed = anchor.is_none();
     let (anchor_ts, anchor_id) = match anchor {
@@ -171,7 +174,7 @@ async fn traverse_directories_for_paths(
                 if scanned_files >= MAX_SCAN_FILES {
                     break 'outer;
                 }
-                let mut day_files = collect_files(day_path, |name_str, path| {
+                let day_files = collect_files(day_path, |name_str, path| {
                     if !name_str.starts_with("rollout-") || !name_str.ends_with(".jsonl") {
                         return None;
                     }
@@ -180,11 +183,22 @@ async fn traverse_directories_for_paths(
                         .map(|(ts, id)| (ts, id, name_str.to_string(), path.to_path_buf()))
                 })
                 .await?;
-                // Stable ordering within the same second: (timestamp desc, uuid desc)
-                day_files.sort_by_key(|(ts, sid, _name_str, _path)| (Reverse(*ts), Reverse(*sid)));
+                let mut day_entries = Vec::with_capacity(day_files.len());
                 for (ts, sid, _name_str, path) in day_files.into_iter() {
+                    let modified = tokio::fs::metadata(&path)
+                        .await
+                        .ok()
+                        .and_then(|meta| meta.modified().ok())
+                        .map(OffsetDateTime::from)
+                        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+                    day_entries.push((modified, ts, sid, path));
+                }
+                day_entries.sort_by_key(|(modified, ts, sid, _)| {
+                    (Reverse(*modified), Reverse(*ts), Reverse(*sid))
+                });
+                for (modified, ts, sid, path) in day_entries.into_iter() {
                     scanned_files += 1;
-                    if scanned_files >= MAX_SCAN_FILES && items.len() >= page_size {
+                    if scanned_files >= MAX_SCAN_FILES {
                         break 'outer;
                     }
                     if !anchor_passed {
@@ -193,9 +207,6 @@ async fn traverse_directories_for_paths(
                         } else {
                             continue;
                         }
-                    }
-                    if items.len() == page_size {
-                        break 'outer;
                     }
                     let summary = read_head_and_tail(&path, HEAD_RECORD_LIMIT, TAIL_RECORD_LIMIT)
                         .await
@@ -216,17 +227,37 @@ async fn traverse_directories_for_paths(
                             ..
                         } = summary;
                         updated_at = updated_at.or_else(|| created_at.clone());
-                        items.push(ConversationItem {
-                            path,
-                            head,
-                            tail,
-                            created_at,
-                            updated_at,
-                        });
+                        let modified_at = if modified == OffsetDateTime::UNIX_EPOCH {
+                            updated_at.clone().or_else(|| created_at.clone())
+                        } else {
+                            modified.format(&Rfc3339).ok()
+                        };
+                        candidates.push((
+                            modified,
+                            ts,
+                            sid,
+                            ConversationItem {
+                                path,
+                                head,
+                                tail,
+                                created_at,
+                                updated_at,
+                                modified_at,
+                            },
+                        ));
                     }
                 }
             }
         }
+    }
+
+    candidates.sort_by_key(|(modified, ts, sid, _)| {
+        (Reverse(*modified), Reverse(*ts), Reverse(*sid))
+    });
+
+    let mut items: Vec<ConversationItem> = Vec::with_capacity(page_size.min(candidates.len()));
+    for (_, _, _, item) in candidates.into_iter().take(page_size) {
+        items.push(item);
     }
 
     let next = build_next_cursor(&items);
