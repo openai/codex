@@ -1006,12 +1006,6 @@ impl Session {
         }
     }
 
-    // todo (aibrahim): get rid of this method. we shouldn't deal with vec[resposne_item] and rather use ConversationHistory.
-    pub(crate) async fn history_snapshot(&self) -> Vec<ResponseItem> {
-        let mut state = self.state.lock().await;
-        state.history_snapshot()
-    }
-
     pub(crate) async fn clone_history(&self) -> ConversationHistory {
         let state = self.state.lock().await;
         state.clone_history()
@@ -1665,7 +1659,7 @@ pub(crate) async fn run_task(
         } else {
             sess.record_conversation_items(&turn_context, &pending_input)
                 .await;
-            sess.history_snapshot().await
+            sess.clone_history().await.get_history_for_prompt()
         };
 
         let turn_input_messages: Vec<String> = turn_input
@@ -1842,7 +1836,7 @@ async fn run_turn(
         .supports_parallel_tool_calls;
     let parallel_tool_calls = model_supports_parallel;
     let prompt = Prompt {
-        input: filter_model_visible_history(input),
+        input,
         tools: router.specs(),
         parallel_tool_calls,
         base_instructions_override: turn_context.base_instructions.clone(),
@@ -2370,7 +2364,9 @@ mod tests {
             },
         )));
 
-        let actual = tokio_test::block_on(async { session.state.lock().await.history_snapshot() });
+        let actual = tokio_test::block_on(async {
+            session.state.lock().await.clone_history().get_history()
+        });
         assert_eq!(expected, actual);
     }
 
@@ -2381,7 +2377,9 @@ mod tests {
 
         tokio_test::block_on(session.record_initial_history(InitialHistory::Forked(rollout_items)));
 
-        let actual = tokio_test::block_on(async { session.state.lock().await.history_snapshot() });
+        let actual = tokio_test::block_on(async {
+            session.state.lock().await.clone_history().get_history()
+        });
         assert_eq!(expected, actual);
     }
 
@@ -2778,7 +2776,7 @@ mod tests {
             }
         }
 
-        let history = sess.history_snapshot().await;
+        let history = sess.clone_history().await.get_history();
         let found = history.iter().any(|item| match item {
             ResponseItem::Message { role, content, .. } if role == "user" => {
                 content.iter().any(|ci| match ci {
