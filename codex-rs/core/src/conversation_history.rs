@@ -65,7 +65,7 @@ impl ConversationHistory {
     pub(crate) fn get_history(&mut self) -> Vec<ResponseItem> {
         self.normalize_history();
         let mut history = self.contents();
-        Self::remove_reasoning_before_last_user(&mut history);
+        Self::remove_reasoning_before_last_turn(&mut history);
         history
     }
 
@@ -113,9 +113,13 @@ impl ConversationHistory {
         self.items.clone()
     }
 
-    fn remove_reasoning_before_last_user(items: &mut Vec<ResponseItem>) {
+    fn remove_reasoning_before_last_turn(items: &mut Vec<ResponseItem>) {
+        // Responses API drops reasoning items before the last user message.
+        // Sending them is harmless but can lead to validation errors when switching between API organizations.
+        // https://cookbook.openai.com/examples/responses_api/reasoning_items#caching
         let Some(last_user_index) = items
             .iter()
+            // Use last user message as the turn boundary.
             .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
         else {
             return;
