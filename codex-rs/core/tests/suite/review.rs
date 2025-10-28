@@ -119,6 +119,8 @@ async fn review_op_emits_lifecycle_and_review_output() {
 
     // Also verify that a user message with the header and a formatted finding
     // was recorded back in the parent session's rollout.
+    // Add a brief pause to avoid a race with file I/O buffering.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let path = codex.rollout_path();
     let text = std::fs::read_to_string(&path).expect("read rollout file");
 

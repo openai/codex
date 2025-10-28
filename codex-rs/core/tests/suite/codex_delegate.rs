@@ -27,7 +27,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     // Sub-agent turn 1: emit a shell function_call requiring approval, then complete.
     let call_id = "call-exec-1";
     let args = serde_json::json!({
-        "command": ["bash", "-lc", "echo delegated"],
+        "command": ["bash", "-lc", "rm -rf delegated"],
         "timeout_ms": 1000,
     })
     .to_string();
@@ -88,7 +88,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     // Approve via parent; id "0" is the active sub_id in tests.
     test.codex
         .submit(Op::ExecApproval {
-            id: "0".into(),
+            id: "auto-compact-0".into(),
             decision: ReviewDecision::Approved,
         })
         .await
@@ -132,7 +132,8 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
 
     let mut builder = test_codex().with_config(|config| {
         config.approval_policy = AskForApproval::OnRequest;
-        config.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        // Use a restricted sandbox so patch approval is required
+        config.sandbox_policy = SandboxPolicy::ReadOnly;
         config.include_apply_patch_tool = true;
     });
     let test = builder.build(&server).await.expect("build test codex");
@@ -159,7 +160,7 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     // Deny via parent so delegate can continue; id "0" is the active sub_id in tests.
     test.codex
         .submit(Op::PatchApproval {
-            id: "0".into(),
+            id: "auto-compact-0".into(),
             decision: ReviewDecision::Denied,
         })
         .await
