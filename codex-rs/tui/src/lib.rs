@@ -507,14 +507,16 @@ async fn load_config_or_exit(
 /// or if the current cwd project is already trusted. If not, we need to
 /// show the trust screen.
 fn should_show_trust_screen(config: &Config) -> bool {
-    if config.did_user_set_custom_approval_policy_or_sandbox_mode {
-        // if the user has overridden either approval policy or sandbox mode,
-        // skip the trust flow
-        false
-    } else {
-        // otherwise, skip iff the active project is trusted
-        !config.active_project.is_trusted()
+    if cfg!(target_os = "windows") {
+        // Native Windows cannot enforce sandboxed write access without WSL; skip the trust prompt entirely.
+        return false;
     }
+    if config.did_user_set_custom_approval_policy_or_sandbox_mode {
+        // Respect explicit approval/sandbox overrides made by the user.
+        return false;
+    }
+    // otherwise, skip iff the active project is trusted
+    !config.active_project.is_trusted()
 }
 
 fn should_show_onboarding(
@@ -542,4 +544,39 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
     }
 
     login_status == LoginStatus::NotAuthenticated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::config::ConfigOverrides;
+    use codex_core::config::ConfigToml;
+    use codex_core::config::ProjectConfig;
+    use tempfile::TempDir;
+
+    #[test]
+    fn windows_skips_trust_prompt() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            temp_dir.path().to_path_buf(),
+        )?;
+        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
+        config.active_project = ProjectConfig { trust_level: None };
+
+        let should_show = should_show_trust_screen(&config);
+        if cfg!(target_os = "windows") {
+            assert!(
+                !should_show,
+                "Windows trust prompt should always be skipped on native Windows"
+            );
+        } else {
+            assert!(
+                should_show,
+                "Non-Windows should still show trust prompt when project is untrusted"
+            );
+        }
+        Ok(())
+    }
 }
