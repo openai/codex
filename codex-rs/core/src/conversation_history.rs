@@ -632,7 +632,7 @@ mod tests {
             .iter()
             .filter(|item| matches!(item, ResponseItem::Reasoning { .. }))
             .count();
-        assert_eq!(reasoning_count, 2);
+        assert_eq!(reasoning_count, 3);
     }
 
     #[test]
