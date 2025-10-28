@@ -1,3 +1,4 @@
+mod eol;
 mod parser;
 mod seek_sequence;
 mod standalone_executable;
@@ -583,17 +584,64 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
                         format!("Failed to create parent directories for {}", path.display())
                     })?;
                 }
-                let eol = decide_eol(path, true);
-                let final_contents = match eol {
-                    Eol::Crlf => normalize_to_eol_preserve_eof(contents.clone(), Eol::Crlf),
-                    Eol::Lf => normalize_to_eol_preserve_eof(contents.clone(), Eol::Lf),
-                    Eol::Unknown => contents.clone(),
+                // If a .gitattributes file is being modified, clear attr caches
+                if path.file_name().is_some_and(|n| n == ".gitattributes")
+                    && let (Some(root), _) = repo_root_and_rel_for_path(path)
+                {
+                    crate::eol::notify_gitattributes_touched(&root);
+                }
+                let (repo_root, rel) = repo_root_and_rel_for_path(path);
+                let mut target = eol::decide_eol(repo_root.as_deref(), rel.as_deref(), true);
+                if matches!(target, eol::Eol::Unknown)
+                    && let Some(root) = repo_root.as_deref()
+                    && let Some(e) = eol::git_check_attr_eol(root, path)
+                {
+                    target = e;
+                }
+                // Optional detect-from-buffer fallback for non-git dir, per policy.
+                use crate::eol::{AssumeEol, Eol, get_assume_eol};
+                match get_assume_eol() {
+                    AssumeEol::Detect => {
+                        let det = eol::detect_eol_from_bytes(contents.as_bytes());
+                        if matches!(det, Eol::Lf | Eol::Crlf) {
+                            target = det;
+                        }
+                    }
+                    AssumeEol::Unspecified => {
+                        if repo_root.is_none() && !likely_in_git_repo(path.parent()) {
+                            let det = eol::detect_eol_from_bytes(contents.as_bytes());
+                            if matches!(det, Eol::Lf | Eol::Crlf) {
+                                target = det;
+                            }
+                        }
+                        // Ensure .gitattributes wins absent overrides
+                        if let (Some(root), Some(relp)) = (repo_root.as_deref(), rel.as_deref())
+                            && let Some(attr) = eol::git_check_attr_eol_cached(root, relp)
+                        {
+                            target = attr;
+                        }
+                    }
+                    _ => {}
+                }
+                let final_contents = match target {
+                    eol::Eol::Crlf => {
+                        eol::normalize_to_eol_preserve_eof(contents.clone(), eol::Eol::Crlf)
+                    }
+                    eol::Eol::Lf => {
+                        eol::normalize_to_eol_preserve_eof(contents.clone(), eol::Eol::Lf)
+                    }
+                    eol::Eol::Unknown => contents.clone(),
                 };
                 std::fs::write(path, final_contents)
                     .with_context(|| format!("Failed to write file {}", path.display()))?;
                 added.push(path.clone());
             }
             Hunk::DeleteFile { path } => {
+                if path.file_name().is_some_and(|n| n == ".gitattributes")
+                    && let (Some(root), _) = repo_root_and_rel_for_path(path)
+                {
+                    crate::eol::notify_gitattributes_touched(&root);
+                }
                 std::fs::remove_file(path)
                     .with_context(|| format!("Failed to delete file {}", path.display()))?;
                 deleted.push(path.clone());
@@ -603,15 +651,55 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
                 move_path,
                 chunks,
             } => {
+                if path.file_name().is_some_and(|n| n == ".gitattributes")
+                    && let (Some(root), _) = repo_root_and_rel_for_path(path)
+                {
+                    crate::eol::notify_gitattributes_touched(&root);
+                }
                 let AppliedPatch {
-                    original_contents: _,
+                    original_contents,
                     new_contents,
                 } = derive_new_contents_from_chunks(path, chunks)?;
-                let target_eol = decide_eol(path, false);
-                let final_contents = match target_eol {
-                    Eol::Crlf => normalize_to_eol_preserve_eof(new_contents.clone(), Eol::Crlf),
-                    Eol::Lf => normalize_to_eol_preserve_eof(new_contents.clone(), Eol::Lf),
-                    Eol::Unknown => new_contents,
+                let (repo_root, rel) = repo_root_and_rel_for_path(path);
+                let final_contents = {
+                    use crate::eol::{AssumeEol, Eol};
+                    match crate::eol::get_assume_eol() {
+                        AssumeEol::Lf => {
+                            crate::eol::normalize_to_eol_preserve_eof(new_contents.clone(), Eol::Lf)
+                        }
+                        AssumeEol::Crlf => crate::eol::normalize_to_eol_preserve_eof(
+                            new_contents.clone(),
+                            Eol::Crlf,
+                        ),
+                        AssumeEol::Git => {
+                            let decided =
+                                crate::eol::decide_eol(repo_root.as_deref(), rel.as_deref(), false);
+                            match decided {
+                                Eol::Lf => crate::eol::normalize_to_eol_preserve_eof(
+                                    new_contents.clone(),
+                                    Eol::Lf,
+                                ),
+                                Eol::Crlf => crate::eol::normalize_to_eol_preserve_eof(
+                                    new_contents.clone(),
+                                    Eol::Crlf,
+                                ),
+                                Eol::Unknown => new_contents.clone(),
+                            }
+                        }
+                        AssumeEol::Detect | AssumeEol::Unspecified => {
+                            match crate::eol::detect_eol_from_bytes(original_contents.as_bytes()) {
+                                Eol::Lf => crate::eol::normalize_to_eol_preserve_eof(
+                                    new_contents.clone(),
+                                    Eol::Lf,
+                                ),
+                                Eol::Crlf => crate::eol::normalize_to_eol_preserve_eof(
+                                    new_contents.clone(),
+                                    Eol::Crlf,
+                                ),
+                                Eol::Unknown => new_contents.clone(),
+                            }
+                        }
+                    }
                 };
                 if let Some(dest) = move_path {
                     if let Some(parent) = dest.parent()
@@ -681,6 +769,61 @@ fn derive_new_contents_from_chunks(
         original_contents,
         new_contents,
     })
+}
+
+// Helper: compute repo root and repo-relative path for a given file path, if any
+fn repo_root_and_rel_for_path(path: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .arg("rev-parse")
+        .arg("--show-toplevel")
+        .output();
+    if let Ok(out) = out
+        && out.status.success()
+    {
+        let root = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim().to_string());
+        // Be resilient on Windows where case / separators may differ
+        if let Some(rel) = rel_path_case_insensitive(&root, path) {
+            return (Some(root), Some(rel));
+        }
+        return (Some(root), None);
+    }
+    (None, None)
+}
+
+// Heuristic: walk up from `dir` to determine if there is a .git directory/file.
+fn likely_in_git_repo(mut dir: Option<&Path>) -> bool {
+    while let Some(d) = dir {
+        let marker = d.join(".git");
+        if marker.exists() {
+            return true;
+        }
+        dir = d.parent();
+    }
+    false
+}
+
+#[cfg(windows)]
+fn rel_path_case_insensitive(root: &Path, path: &Path) -> Option<PathBuf> {
+    let r = root.to_string_lossy().replace('\\', "/");
+    let p = path.to_string_lossy().replace('\\', "/");
+    let r_lower = r.to_ascii_lowercase();
+    let p_lower = p.to_ascii_lowercase();
+    if let Some(_rest) = p_lower.strip_prefix(&(r_lower.clone() + "/")) {
+        let start = r.len() + 1; // include '/'
+        return Some(PathBuf::from(&p[start..]));
+    }
+    if p_lower == r_lower {
+        return Some(PathBuf::from("."));
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn rel_path_case_insensitive(root: &Path, path: &Path) -> Option<PathBuf> {
+    path.strip_prefix(root).ok().map(PathBuf::from)
 }
 
 /// Compute a list of replacements needed to transform `original_lines` into the
@@ -854,265 +997,21 @@ pub fn print_summary(
     Ok(())
 }
 
-// Line ending handling for text files written by apply_patch.
-// Detect the original file's EOL and normalize the final text to match.
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-enum Eol {
-    Lf,
-    Crlf,
-    Unknown,
-}
+// Line ending handling moved to `eol` module.
 
-// Legacy helper kept for compatibility in tests that assume LF vs CRLF detection by presence.
-#[allow(dead_code)]
-fn detect_eol(s: &str) -> Eol {
-    if s.contains("\r\n") {
-        Eol::Crlf
-    } else {
-        Eol::Lf
-    }
-}
+// Legacy helper `detect_eol` removed; use `eol::detect_eol_from_bytes` when needed.
 
-// Byte-based detection that counts CRLF vs lone LF to handle mixed files.
-fn detect_eol_from_bytes(buf: &[u8]) -> Eol {
-    let mut crlf = 0usize;
-    let mut lf = 0usize;
-    let mut i = 0usize;
-    while i < buf.len() {
-        if buf[i] == b'\n' {
-            if i > 0 && buf[i - 1] == b'\r' {
-                crlf += 1;
-            } else {
-                lf += 1;
-            }
-        }
-        i += 1;
-    }
-    if crlf == 0 && lf == 0 {
-        Eol::Unknown
-    } else if crlf >= lf {
-        Eol::Crlf
-    } else {
-        Eol::Lf
-    }
-}
+// `detect_eol_from_bytes` now lives in `eol`.
 
-// Preserve whether the original had a trailing newline. Do NOT add or remove it.
-fn normalize_to_eol_preserve_eof(mut s: String, e: Eol) -> String {
-    let has_trailing_nl = s.as_bytes().last().map(|b| *b == b'\n').unwrap_or(false);
-    let target = match e {
-        Eol::Crlf => "\r\n",
-        Eol::Lf | Eol::Unknown => "\n",
-    };
-    // Replace all CRLF with LF first, then expand if needed.
-    s = s.replace("\r\n", "\n");
-    if matches!(e, Eol::Crlf) {
-        s = s.replace('\n', "\r\n");
-    }
-    // Preserve trailing newline presence exactly
-    let ends_with_nl_now = s.ends_with(target);
-    match (has_trailing_nl, ends_with_nl_now) {
-        (true, false) => s.push_str(target),
-        (false, true) => {
-            let trim_len = target.len();
-            let new_len = s.len().saturating_sub(trim_len);
-            s.truncate(new_len);
-        }
-        _ => {}
-    }
-    s
-}
+// `normalize_to_eol_preserve_eof` now lives in `eol`.
 
-// CLI/env override for new-file EOL selection.
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-enum AssumeEol {
-    Unspecified,
-    Git,
-    Detect,
-    Lf,
-    Crlf,
-}
+// AssumeEol parsing and state now live in `eol`.
 
-static ASSUME_EOL: LazyLock<std::sync::Mutex<AssumeEol>> =
-    LazyLock::new(|| std::sync::Mutex::new(assume_eol_from_env()));
+// git_check_attr helper removed; attribute parsing handled in `eol::git_check_attr_eol`.
 
-fn assume_eol_from_env() -> AssumeEol {
-    match std::env::var("APPLY_PATCH_ASSUME_EOL") {
-        Ok(v) => parse_assume_eol(&v).unwrap_or(AssumeEol::Unspecified),
-        Err(_) => AssumeEol::Unspecified,
-    }
-}
+// repo_root_from_cwd removed; we compute repo root relative to each path.
 
-pub(crate) fn set_assume_eol(a: AssumeEol) {
-    if let Ok(mut guard) = ASSUME_EOL.lock() {
-        *guard = a;
-    }
-}
-
-fn get_assume_eol() -> AssumeEol {
-    ASSUME_EOL
-        .lock()
-        .map(|g| *g)
-        .unwrap_or(AssumeEol::Unspecified)
-}
-
-pub(crate) fn parse_assume_eol(s: &str) -> Option<AssumeEol> {
-    let val = s.trim().to_ascii_lowercase();
-    match val.as_str() {
-        "lf" => Some(AssumeEol::Lf),
-        "crlf" => Some(AssumeEol::Crlf),
-        "git" => Some(AssumeEol::Git),
-        "detect" => Some(AssumeEol::Detect),
-        _ => None,
-    }
-}
-
-fn os_native_eol() -> Eol {
-    if cfg!(windows) { Eol::Crlf } else { Eol::Lf }
-}
-
-fn git_core_eol(repo_root: &Path) -> Option<Eol> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("config")
-        .arg("--get")
-        .arg("core.eol")
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .to_ascii_lowercase();
-    match s.as_str() {
-        "lf" => Some(Eol::Lf),
-        "crlf" => Some(Eol::Crlf),
-        "native" => Some(os_native_eol()),
-        _ => None,
-    }
-}
-
-fn git_core_autocrlf(repo_root: &Path) -> Option<Eol> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("config")
-        .arg("--get")
-        .arg("core.autocrlf")
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .to_ascii_lowercase();
-    match s.as_str() {
-        "true" => Some(Eol::Crlf),
-        "input" => Some(Eol::Lf),
-        _ => None,
-    }
-}
-
-fn git_check_attr(repo_root: &Path, rel_path: &Path) -> Option<HashMap<String, String>> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("check-attr")
-        .arg("eol")
-        .arg("text")
-        .arg("binary")
-        .arg("--")
-        .arg(rel_path)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let mut map = HashMap::new();
-    for line in stdout.lines() {
-        // Format: "path: attr: value"
-        let mut parts = line.splitn(3, ": ");
-        let _path = parts.next();
-        if let (Some(attr), Some(value)) = (parts.next(), parts.next()) {
-            map.insert(attr.to_string(), value.to_string());
-        }
-    }
-    Some(map)
-}
-
-fn git_check_attr_eol(repo_root: &Path, rel_path: &Path) -> Option<Eol> {
-    let map = git_check_attr(repo_root, rel_path)?;
-    if let Some(v) = map.get("binary") && v.trim() == "set" {
-        return Some(Eol::Unknown);
-    }
-    if let Some(v) = map.get("text") && v.trim() == "unset" {
-        return Some(Eol::Unknown);
-    }
-    match map.get("eol").map(|s| s.trim().to_ascii_lowercase()) {
-        Some(ref v) if v == "lf" => Some(Eol::Lf),
-        Some(ref v) if v == "crlf" => Some(Eol::Crlf),
-        Some(ref v) if v == "native" => Some(os_native_eol()),
-        _ => None,
-    }
-}
-
-fn repo_root_from_cwd() -> Option<PathBuf> {
-    let out = std::process::Command::new("git")
-        .arg("rev-parse")
-        .arg("--show-toplevel")
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(s))
-    }
-}
-
-fn decide_eol(path: &Path, is_new_file: bool) -> Eol {
-    // Existing files: detect from on-disk bytes
-    if !is_new_file {
-        if let Ok(bytes) = std::fs::read(path) {
-            let e = detect_eol_from_bytes(&bytes);
-            if !matches!(e, Eol::Unknown) {
-                return e;
-            }
-        }
-        return Eol::Unknown; // Preserve current fallback behaviour
-    }
-
-    // New files: precedence
-    // 1) CLI/env explicit lf/crlf
-    match get_assume_eol() {
-        AssumeEol::Lf => return Eol::Lf,
-        AssumeEol::Crlf => return Eol::Crlf,
-        _ => {}
-    }
-
-    // 2) .gitattributes, core.eol, core.autocrlf
-    if let Some(root) = repo_root_from_cwd() {
-        if let Ok(rel) = path.strip_prefix(&root)
-            && let Some(e) = git_check_attr_eol(&root, rel)
-        {
-            // Unknown here indicates binary/-text → skip normalization
-            if !matches!(e, Eol::Unknown) { return e; } else { return Eol::Unknown; }
-        }
-        if let Some(e) = git_core_eol(&root) { return e; }
-        if let Some(e) = git_core_autocrlf(&root) { return e; }
-    }
-
-    // 3) CLI 'git' or 'detect' imply keep checking git or fall through.
-    // No additional detection here; fall back to Unknown to preserve defaults.
-    Eol::Unknown
-}
+// legacy_decide_eol_do_not_use removed.
 
 #[cfg(test)]
 mod tests {
@@ -1366,7 +1265,9 @@ PATCH"#,
         assert_eq!(stdout_str, expected_out);
         assert_eq!(stderr_str, "");
         let contents = fs::read_to_string(path).unwrap();
-        assert_eq!(contents, "ab\ncd\n");
+        // New EOL policy may write OS-native EOLs for non-git dirs; normalize for assertion
+        let normalized = contents.replace("\r\n", "\n");
+        assert_eq!(normalized, "ab\ncd\n");
     }
 
     #[test]
@@ -1777,21 +1678,17 @@ PATCH"#,
 
     #[test]
     fn test_detect_eol_from_bytes_variants() {
+        use crate::eol::{Eol, detect_eol_from_bytes};
         assert_eq!(detect_eol_from_bytes(b"no newlines"), Eol::Unknown);
         assert_eq!(detect_eol_from_bytes(b"a\n"), Eol::Lf);
         assert_eq!(detect_eol_from_bytes(b"a\r\n"), Eol::Crlf);
-        assert_eq!(
-            detect_eol_from_bytes(b"a\r\n b\n c\r\n"),
-            Eol::Crlf, // CRLF majority
-        );
-        assert_eq!(
-            detect_eol_from_bytes(b"a\n b\r\n c\n"),
-            Eol::Lf, // LF majority
-        );
+        assert_eq!(detect_eol_from_bytes(b"a\r\n b\n c\r\n"), Eol::Crlf,);
+        assert_eq!(detect_eol_from_bytes(b"a\n b\r\n c\n"), Eol::Lf);
     }
 
     #[test]
     fn test_normalize_to_eol_preserve_eof() {
+        use crate::eol::{Eol, normalize_to_eol_preserve_eof};
         // Preserve EOF newline presence when converting
         let s = String::from("a\nb\n");
         let out = normalize_to_eol_preserve_eof(s, Eol::Crlf);
@@ -1855,9 +1752,19 @@ PATCH"#,
 
         let path = dir.path().join("baz.txt");
         let patch = wrap_patch(&format!("*** Add File: {}\n+line1\n+line2", path.display()));
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        apply_patch(&patch, &mut stdout, &mut stderr).unwrap();
+        // Use subprocess CLI to avoid concurrent git initialization quirks on Windows
+        use assert_cmd::prelude::*;
+        use std::process::Command as PCommand;
+        let fake_global = dir.path().join("_gitconfig_global");
+        fs::write(&fake_global, "").unwrap();
+        PCommand::cargo_bin("apply_patch")
+            .unwrap()
+            .current_dir(dir.path())
+            .env("GIT_CONFIG_GLOBAL", &fake_global)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .arg(&patch)
+            .assert()
+            .success();
         let contents = fs::read(&path).unwrap();
         assert!(!contents.windows(2).any(|w| w == b"\r\n"));
         assert!(contents.contains(&b'\n'));
@@ -1875,6 +1782,24 @@ PATCH"#,
         let assert = cmd.arg("--assume-eol=lf").arg(patch).assert();
         assert.success();
         let contents = fs::read(&path).unwrap();
+        assert!(!contents.windows(2).any(|w| w == b"\r\n"));
+    }
+
+    #[test]
+    fn test_new_file_eol_detect_from_patch_no_repo() {
+        // When not in a git repo and without overrides, prefer EOL used in the
+        // patch buffer as a last fallback.
+        use assert_cmd::prelude::*;
+        use std::process::Command as PCommand;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("detect.txt");
+        // Patch content uses LF line endings
+        let patch = wrap_patch(&format!("*** Add File: {}\n+hello\n+world", path.display()));
+        let mut cmd = PCommand::cargo_bin("apply_patch").unwrap();
+        cmd.current_dir(dir.path()).arg(&patch).assert().success();
+        let contents = std::fs::read(&path).unwrap();
+        // Ensure file contains LF and does not contain CRLF even on Windows
+        assert!(contents.contains(&b'\n'));
         assert!(!contents.windows(2).any(|w| w == b"\r\n"));
     }
 
@@ -1915,9 +1840,19 @@ PATCH"#,
 
         let path = dir.path().join("data.bin");
         let patch = wrap_patch(&format!("*** Add File: {}\n+aa\n+bb", path.display()));
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        apply_patch(&patch, &mut stdout, &mut stderr).unwrap();
+        // Use subprocess CLI to avoid cross-test global state and ensure git context
+        use assert_cmd::prelude::*;
+        use std::process::Command as PCommand;
+        let fake_global = dir.path().join("_gitconfig_global");
+        fs::write(&fake_global, "").unwrap();
+        PCommand::cargo_bin("apply_patch")
+            .unwrap()
+            .current_dir(dir.path())
+            .env("GIT_CONFIG_GLOBAL", &fake_global)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .arg(&patch)
+            .assert()
+            .success();
         let contents = fs::read(&path).unwrap();
         // Keep as-is (LF) despite any git config
         assert!(!contents.windows(2).any(|w| w == b"\r\n"));

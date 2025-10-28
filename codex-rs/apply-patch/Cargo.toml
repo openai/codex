@@ -20,9 +20,16 @@ similar = { workspace = true }
 thiserror = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
+clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
+
+[features]
+default = ["eol-cache"]
+# Compile-time gate for EOL caching. When disabled, the code falls back to
+# raw git lookups with identical behavior.
+eol-cache = []
