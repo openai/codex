@@ -40,9 +40,6 @@ use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
 
-#[cfg(not(debug_assertions))]
-use crate::history_cell::UpdateAvailableHistoryCell;
-
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
@@ -149,9 +146,6 @@ impl App {
         };
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
-        #[cfg(not(debug_assertions))]
-        let upgrade_version = crate::updates::get_upgrade_version(&config);
-
         let mut app = Self {
             server: conversation_manager,
             app_event_tx,
@@ -173,20 +167,6 @@ impl App {
 
         for event in initial_events {
             app.handle_event(tui, event).await?;
-        }
-
-        // TODO(jif) clean this
-        #[cfg(not(debug_assertions))]
-        if let Some(latest_version) = upgrade_version {
-            app.handle_event(
-                tui,
-                AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
-                    crate::version::CODEX_CLI_VERSION,
-                    latest_version,
-                    crate::updates::get_update_action(),
-                ))),
-            )
-            .await?;
         }
 
         let tui_events = tui.event_stream();
