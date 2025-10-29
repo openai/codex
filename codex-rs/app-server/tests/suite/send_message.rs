@@ -16,6 +16,7 @@ use codex_app_server_protocol::SendUserMessageResponse;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::RawResponseItemEvent;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -294,7 +295,9 @@ async fn read_raw_response_item(
         .cloned()
         .expect("raw response item should include msg payload");
 
-    serde_json::from_value(msg_value).expect("deserialize raw response item")
+    let event: RawResponseItemEvent =
+        serde_json::from_value(msg_value).expect("deserialize raw response item");
+    event.item
 }
 
 fn assert_instructions_message(item: &ResponseItem) {
