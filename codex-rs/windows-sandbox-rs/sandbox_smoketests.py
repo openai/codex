@@ -1,5 +1,5 @@
 # sandbox_smoketests.py
-# Run a suite of smoke tests against the Rust Windows sandbox implementation
+# Run a suite of smoke tests against the Windows sandbox via the Codex CLI
 # Requires: Python 3.8+ on Windows. No pip requirements.
 
 import os
@@ -9,41 +9,48 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-def _resolve_sandbox_exe() -> Path:
-    """Locate the sandbox binary in release or debug; raise if missing.
+def _resolve_codex_cmd() -> List[str]:
+    """Resolve the Codex CLI to invoke `codex sandbox windows`.
 
-    Many environments build debug by default. Prefer release if available,
-    otherwise fall back to debug. Provide a clear message if neither exists.
+    Prefer `codex` on PATH; if not found, try common local build locations.
+    Returns the argv prefix to run Codex.
     """
+    # 1) Prefer PATH
+    try:
+        cp = subprocess.run(["where", "codex"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        if cp.returncode == 0:
+            for line in cp.stdout.splitlines():
+                p = Path(line.strip())
+                if p.exists():
+                    return [str(p)]
+    except Exception:
+        pass
+
+    # 2) Try workspace targets
     root = Path(__file__).parent
     ws_root = root.parent
     cargo_target = os.environ.get("CARGO_TARGET_DIR")
     candidates = [
-        # Per-crate targets
-        root / "target" / "release" / "codex-windows-sandbox.exe",
-        root / "target" / "debug" / "codex-windows-sandbox.exe",
-        # Workspace targets (Cargo default when using a workspace)
-        ws_root / "target" / "release" / "codex-windows-sandbox.exe",
-        ws_root / "target" / "debug" / "codex-windows-sandbox.exe",
+        ws_root / "target" / "release" / "codex.exe",
+        ws_root / "target" / "debug" / "codex.exe",
     ]
     if cargo_target:
         candidates.extend([
-            Path(cargo_target) / "release" / "codex-windows-sandbox.exe",
-            Path(cargo_target) / "debug" / "codex-windows-sandbox.exe",
+            Path(cargo_target) / "release" / "codex.exe",
+            Path(cargo_target) / "debug" / "codex.exe",
         ])
     for p in candidates:
         if p.exists():
-            return p
+            return [str(p)]
 
-    hint = (
-        "Sandbox binary not found. Build it first, e.g.\n"
-        "  cargo build -p codex-windows-sandbox --release\n"
+    raise FileNotFoundError(
+        "Codex CLI not found. Build it first, e.g.\n"
+        "  cargo build -p codex-cli --release\n"
         "or for debug:\n"
-        "  cargo build -p codex-windows-sandbox\n"
+        "  cargo build -p codex-cli\n"
     )
-    raise FileNotFoundError(hint)
 
-RUST_EXE = str(_resolve_sandbox_exe())
+CODEX_CMD = _resolve_codex_cmd()
 TIMEOUT_SEC = 20
 
 WS_ROOT = Path(os.environ["USERPROFILE"]) / "sbx_ws_tests"
@@ -60,7 +67,13 @@ def run_sbx(policy: str, cmd_argv: List[str], cwd: Path, env_extra: Optional[dic
     env.update(ENV_BASE)
     if env_extra:
         env.update(env_extra)
-    argv = [RUST_EXE, "--sandbox-policy-cwd", str(cwd), policy, "--", *cmd_argv]
+    # Map policy to codex CLI flags
+    # read-only => default; workspace-write => --full-auto
+    if policy not in ("read-only", "workspace-write"):
+        raise ValueError(f"unknown policy: {policy}")
+    policy_flags: List[str] = ["--full-auto"] if policy == "workspace-write" else []
+
+    argv = [*CODEX_CMD, "sandbox", "windows", *policy_flags, "--", *cmd_argv]
     print(cmd_argv)
     cp = subprocess.run(argv, cwd=str(cwd), env=env,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
