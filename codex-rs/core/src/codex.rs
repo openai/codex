@@ -1795,6 +1795,7 @@ pub(crate) async fn run_task(
         }
     }
 
+    sess.flush_rollout().await;
     last_agent_message
 }
 
