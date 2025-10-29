@@ -2,6 +2,10 @@
 use std::path::PathBuf;
 
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
+use crate::render::Insets;
+use crate::render::RectExt;
+use crate::render::renderable::Renderable as _;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
 use codex_file_search::FileMatch;
@@ -32,6 +36,7 @@ pub(crate) use feedback_view::feedback_selection_params;
 pub(crate) use feedback_view::feedback_upload_consent_params;
 mod paste_burst;
 pub mod popup_consts;
+mod queued_user_messages;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
@@ -70,8 +75,8 @@ pub(crate) struct BottomPane {
 
     /// Inline status indicator shown above the composer while a task is running.
     status: Option<StatusIndicatorWidget>,
-    /// Queued user messages to show under the status indicator.
-    queued_user_messages: Vec<String>,
+    /// Queued user messages to show above the composer while a turn is running.
+    queued_user_messages: QueuedUserMessages,
     context_window_percent: Option<i64>,
 }
 
@@ -85,7 +90,6 @@ pub(crate) struct BottomPaneParams {
 }
 
 impl BottomPane {
-    const BOTTOM_PAD_LINES: u16 = 0;
     pub fn new(params: BottomPaneParams) -> Self {
         let enhanced_keys_supported = params.enhanced_keys_supported;
         Self {
@@ -103,7 +107,7 @@ impl BottomPane {
             is_task_running: false,
             ctrl_c_quit_hint: false,
             status: None,
-            queued_user_messages: Vec::new(),
+            queued_user_messages: QueuedUserMessages::new(),
             esc_backtrack_hint: false,
             context_window_percent: None,
         }
@@ -123,49 +127,61 @@ impl BottomPane {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        // Always reserve one blank row above the pane for visual spacing.
         let top_margin = 1;
 
         // Base height depends on whether a modal/overlay is active.
         let base = match self.active_view().as_ref() {
             Some(view) => view.desired_height(width),
-            None => self.composer.desired_height(width).saturating_add(
-                self.status
-                    .as_ref()
-                    .map_or(0, |status| status.desired_height(width)),
-            ),
-        };
-        // Account for bottom padding rows. Top spacing is handled in layout().
-        base.saturating_add(Self::BOTTOM_PAD_LINES)
-            .saturating_add(top_margin)
-    }
-
-    fn layout(&self, area: Rect) -> [Rect; 2] {
-        // At small heights, bottom pane takes the entire height.
-        let (top_margin, bottom_margin) = if area.height <= BottomPane::BOTTOM_PAD_LINES + 1 {
-            (0, 0)
-        } else {
-            (1, BottomPane::BOTTOM_PAD_LINES)
-        };
-
-        let area = Rect {
-            x: area.x,
-            y: area.y + top_margin,
-            width: area.width,
-            height: area.height - top_margin - bottom_margin,
-        };
-        match self.active_view() {
-            Some(_) => [Rect::ZERO, area],
             None => {
                 let status_height = self
                     .status
                     .as_ref()
-                    .map_or(0, |status| status.desired_height(area.width))
-                    .min(area.height.saturating_sub(1));
-
-                Layout::vertical([Constraint::Max(status_height), Constraint::Min(1)]).areas(area)
+                    .map_or(0, |status| status.desired_height(width));
+                let queue_height = self.queued_user_messages.desired_height(width);
+                let spacing_height = if status_height == 0 && queue_height == 0 {
+                    0
+                } else {
+                    1
+                };
+                self.composer
+                    .desired_height(width)
+                    .saturating_add(spacing_height)
+                    .saturating_add(status_height)
+                    .saturating_add(queue_height)
             }
+        };
+        // Account for bottom padding rows. Top spacing is handled in layout().
+        base.saturating_add(top_margin)
+    }
+
+    fn layout(&self, area: Rect) -> [Rect; 2] {
+        // At small heights, bottom pane takes the entire height.
+        let top_margin = if area.height <= 1 { 0 } else { 1 };
+
+        let area = area.inset(Insets::tlbr(top_margin, 0, 0, 0));
+        if self.active_view().is_some() {
+            return [Rect::ZERO, area];
         }
+        let has_queue = !self.queued_user_messages.messages.is_empty();
+        let mut status_height = self
+            .status
+            .as_ref()
+            .map_or(0, |status| status.desired_height(area.width))
+            .min(area.height.saturating_sub(1));
+        if has_queue && status_height > 1 {
+            status_height = status_height.saturating_sub(1);
+        }
+        let combined_height = status_height
+            .saturating_add(self.queued_user_messages.desired_height(area.width))
+            .min(area.height.saturating_sub(1));
+
+        let [status_area, _, content_area] = Layout::vertical([
+            Constraint::Length(combined_height),
+            Constraint::Length(if combined_height == 0 { 0 } else { 1 }),
+            Constraint::Min(1),
+        ])
+        .areas(area);
+        [status_area, content_area]
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -349,7 +365,6 @@ impl BottomPane {
             }
             if let Some(status) = self.status.as_mut() {
                 status.set_interrupt_hint_visible(true);
-                status.set_queued_messages(self.queued_user_messages.clone());
             }
             self.request_redraw();
         } else {
@@ -398,12 +413,9 @@ impl BottomPane {
         self.push_view(Box::new(view));
     }
 
-    /// Update the queued messages shown under the status header.
+    /// Update the queued messages preview shown above the composer.
     pub(crate) fn set_queued_user_messages(&mut self, queued: Vec<String>) {
-        self.queued_user_messages = queued.clone();
-        if let Some(status) = self.status.as_mut() {
-            status.set_queued_messages(queued);
-        }
+        self.queued_user_messages.messages = queued;
         self.request_redraw();
     }
 
@@ -532,20 +544,34 @@ impl BottomPane {
 
 impl WidgetRef for &BottomPane {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let [status_area, content] = self.layout(area);
+        let [top_area, content_area] = self.layout(area);
 
         // When a modal view is active, it owns the whole content area.
         if let Some(view) = self.active_view() {
-            view.render(content, buf);
+            view.render(content_area, buf);
         } else {
-            // No active modal:
-            // If a status indicator is active, render it above the composer.
-            if let Some(status) = &self.status {
-                status.render_ref(status_area, buf);
+            let status_height = self
+                .status
+                .as_ref()
+                .map(|status| status.desired_height(top_area.width).min(top_area.height))
+                .unwrap_or(0);
+            if let Some(status) = &self.status
+                && status_height > 0
+            {
+                status.render_ref(top_area, buf);
             }
 
-            // Render the composer in the remaining area.
-            self.composer.render_ref(content, buf);
+            let queue_area = Rect {
+                x: top_area.x,
+                y: top_area.y.saturating_add(status_height),
+                width: top_area.width,
+                height: top_area.height.saturating_sub(status_height),
+            };
+            if queue_area.height > 0 {
+                self.queued_user_messages.render(queue_area, buf);
+            }
+
+            self.composer.render_ref(content_area, buf);
         }
     }
 }
@@ -792,6 +818,57 @@ mod tests {
         assert_snapshot!(
             "status_hidden_when_height_too_small_height_1",
             render_snapshot(&pane, area1)
+        );
+    }
+
+    #[test]
+    fn queued_messages_visible_when_status_hidden_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+        });
+
+        pane.set_task_running(true);
+        pane.set_queued_user_messages(vec!["Queued follow-up question".to_string()]);
+        pane.hide_status_indicator();
+
+        let width = 48;
+        let height = pane.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        assert_snapshot!(
+            "queued_messages_visible_when_status_hidden_snapshot",
+            render_snapshot(&pane, area)
+        );
+    }
+
+    #[test]
+    fn status_and_queued_messages_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+        });
+
+        pane.set_task_running(true);
+        pane.set_queued_user_messages(vec!["Queued follow-up question".to_string()]);
+
+        let width = 48;
+        let height = pane.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        assert_snapshot!(
+            "status_and_queued_messages_snapshot",
+            render_snapshot(&pane, area)
         );
     }
 }

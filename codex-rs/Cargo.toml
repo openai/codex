@@ -18,7 +18,6 @@ members = [
     "execpolicy",
     "keyring-store",
     "file-search",
-    "git-tooling",
     "linux-sandbox",
     "login",
     "mcp-server",
@@ -32,7 +31,7 @@ members = [
     "stdio-to-uds",
     "otel",
     "tui",
-    "git-apply",
+    "utils/git",
     "utils/cache",
     "utils/image",
     "utils/json-to-toml",
@@ -67,7 +66,7 @@ codex-core = { path = "core" }
 codex-exec = { path = "exec" }
 codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
-codex-git-tooling = { path = "git-tooling" }
+codex-git = { path = "utils/git" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-login = { path = "login" }

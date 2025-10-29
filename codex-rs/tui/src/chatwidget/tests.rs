@@ -38,6 +38,7 @@ use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_protocol::ConversationId;
+use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -530,6 +531,7 @@ fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
             command,
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             parsed_cmd,
+            is_user_shell_command: false,
         }),
     });
 }
@@ -1508,6 +1510,7 @@ async fn binary_size_transcript_snapshot() {
                                     command: e.command,
                                     cwd: e.cwd,
                                     parsed_cmd,
+                                    is_user_shell_command: false,
                                 }),
                             }
                         }
@@ -2557,6 +2560,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
                     path: "diff_render.rs".into(),
                 },
             ],
+            is_user_shell_command: false,
         }),
     });
     chat.handle_codex_event(Event {
