@@ -151,7 +151,6 @@ pub enum CommandExecutionStatus {
 pub struct CommandExecutionItem {
     pub command: String,
     pub aggregated_output: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     pub status: CommandExecutionStatus,
 }
@@ -217,9 +216,7 @@ pub struct McpToolCallItem {
     pub tool: String,
     #[serde(default)]
     pub arguments: JsonValue,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<McpToolCallItemResult>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<McpToolCallItemError>,
     pub status: McpToolCallStatus,
 }
