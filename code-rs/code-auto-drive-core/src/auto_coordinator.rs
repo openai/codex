@@ -1456,6 +1456,9 @@ fn request_coordinator_decision(
         event_tx,
         cancel_token,
     )?;
+    if output_text.trim().is_empty() && response_items.is_empty() {
+        return Err(anyhow!("coordinator stream ended without producing output (possible transient error)"));
+    }
     let (mut decision, value) = parse_decision(&output_text)?;
     debug!("[Auto coordinator] model decision: {:?}", value);
     decision.response_items = response_items;
