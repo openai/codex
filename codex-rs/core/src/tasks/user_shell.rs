@@ -53,9 +53,10 @@ impl SessionTask for UserShellCommandTask {
         let session = session.clone_session();
         session.send_event(turn_context.as_ref(), event).await;
 
-        let shell_invocation = session
-            .user_shell()
-            .format_user_shell_script(&self.command)
+        // Do not try to re-format the user's command for their shell; simply
+        // split it into argv using POSIX shell semantics. If splitting fails,
+        // fall back to treating the full string as argv[0].
+        let shell_invocation = shlex::split(&self.command)
             .unwrap_or_else(|| vec![self.command.clone()]);
 
         let params = ShellToolCallParams {
