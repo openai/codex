@@ -7,6 +7,14 @@
 
 - (none)
 
+## [0.4.4] - 2025-10-29
+
+- TUI: Interrupts in-flight runs when `/new` starts a fresh chat so responses never bleed between sessions. (0421f643)
+- TUI/MCP: Keeps the selected MCP row visible while scrolling large server lists. (4c114758)
+- Agents: Refreshes the Enabled toggle UX and persists state immediately in history. (56a0b37d)
+- Config: Surfaces legacy `~/.codex/prompts` directories so custom prompts load automatically. (0be4f19c)
+- Rollout: Sorts session history by latest activity to make resume picks faster. (9f6481a1)
+
 ## [0.4.2] - 2025-10-27
 
 - Auto Drive: add compaction, token metrics, and durable transcripts so long runs stay stable. (0071313, 57b398f, cd880a5)
