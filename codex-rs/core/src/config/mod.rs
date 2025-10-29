@@ -769,6 +769,8 @@ impl ConfigToml {
         let mut forced_auto_mode_downgraded_on_windows = false;
         if cfg!(target_os = "windows")
             && matches!(resolved_sandbox_mode, SandboxMode::WorkspaceWrite)
+            // If the experimental Windows sandbox is enabled, do not force a downgrade.
+            && crate::safety::get_platform_sandbox().is_none()
         {
             sandbox_policy = SandboxPolicy::new_read_only_policy();
             forced_auto_mode_downgraded_on_windows = true;
