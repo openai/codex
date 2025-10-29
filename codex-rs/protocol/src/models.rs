@@ -239,7 +239,6 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             if platform::is_running_under_wsl() {
                                 let win_path_str = path.to_string_lossy();
                                 platform::try_map_windows_drive_to_wsl_path(&win_path_str)
-                                    .map(std::path::PathBuf::from)
                                     .filter(|p| p.exists())
                             } else {
                                 None
@@ -249,43 +248,44 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                                 mapped.as_deref().unwrap_or(&path);
 
                         match load_and_resize_to_fit(effective_path) {
-                        Ok(image) => ContentItem::InputImage {
-                            image_url: image.into_data_url(),
-                        },
-                        Err(err) => {
-                            tracing::warn!("Failed to resize image {}: {}", effective_path.display(), err);
-                            if matches!(&err, ImageProcessingError::Read { .. }) {
-                                local_image_error_placeholder(effective_path, &err)
-                            } else {
-                                match std::fs::read(effective_path) {
-                                    Ok(bytes) => {
-                                        let Some(mime_guess) = mime_guess::from_path(effective_path).first()
-                                        else {
-                                            return local_image_error_placeholder(
-                                                effective_path,
-                                                "unsupported MIME type (unknown)",
-                                            );
-                                        };
-                                        let mime = mime_guess.essence_str().to_owned();
-                                        if !mime.starts_with("image/") {
-                                            return local_image_error_placeholder(
-                                                effective_path,
-                                                format!("unsupported MIME type `{mime}`"),
-                                            );
+                            Ok(image) => ContentItem::InputImage {
+                                image_url: image.into_data_url(),
+                            },
+                            Err(err) => {
+                                tracing::warn!("Failed to resize image {}: {}", effective_path.display(), err);
+                                if matches!(&err, ImageProcessingError::Read { .. }) {
+                                    local_image_error_placeholder(effective_path, &err)
+                                } else {
+                                    match std::fs::read(effective_path) {
+                                        Ok(bytes) => {
+                                            let Some(mime_guess) = mime_guess::from_path(effective_path).first()
+                                            else {
+                                                return local_image_error_placeholder(
+                                                    effective_path,
+                                                    "unsupported MIME type (unknown)",
+                                                );
+                                            };
+                                            let mime = mime_guess.essence_str().to_owned();
+                                            if !mime.starts_with("image/") {
+                                                return local_image_error_placeholder(
+                                                    effective_path,
+                                                    format!("unsupported MIME type `{mime}`"),
+                                                );
+                                            }
+                                            let encoded =
+                                                base64::engine::general_purpose::STANDARD.encode(bytes);
+                                            ContentItem::InputImage {
+                                                image_url: format!("data:{mime};base64,{encoded}"),
+                                            }
                                         }
-                                        let encoded =
-                                            base64::engine::general_purpose::STANDARD.encode(bytes);
-                                        ContentItem::InputImage {
-                                            image_url: format!("data:{mime};base64,{encoded}"),
+                                        Err(read_err) => {
+                                            tracing::warn!(
+                                                "Skipping image {} – could not read file: {}",
+                                                effective_path.display(),
+                                                read_err
+                                            );
+                                            local_image_error_placeholder(effective_path, &read_err)
                                         }
-                                    }
-                                    Err(read_err) => {
-                                        tracing::warn!(
-                                            "Skipping image {} – could not read file: {}",
-                                            effective_path.display(),
-                                            read_err
-                                        );
-                                        local_image_error_placeholder(effective_path, &read_err)
                                     }
                                 }
                             }
