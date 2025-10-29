@@ -235,30 +235,34 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                     UserInput::Text { text } => ContentItem::InputText { text },
                     UserInput::Image { image_url } => ContentItem::InputImage { image_url },
                     UserInput::LocalImage { path } => {
-                        let mapped: Option<std::path::PathBuf> = 
-                            if platform::is_running_under_wsl() {
-                                let win_path_str = path.to_string_lossy();
-                                platform::try_map_windows_drive_to_wsl_path(&win_path_str)
-                                    .filter(|p| p.exists())
-                            } else {
-                                None
-                            };
+                        let mapped: Option<std::path::PathBuf> = if platform::is_running_under_wsl() 
+                        {
+                            let win_path_str = path.to_string_lossy();
+                            platform::try_map_windows_drive_to_wsl_path(&win_path_str)
+                                .filter(|p| p.exists())
+                        } else {
+                            None
+                        };
 
-                            let effective_path: &std::path::Path =
-                                mapped.as_deref().unwrap_or(&path);
+                        let effective_path: &std::path::Path = mapped.as_deref().unwrap_or(&path);
 
                         match load_and_resize_to_fit(effective_path) {
                             Ok(image) => ContentItem::InputImage {
                                 image_url: image.into_data_url(),
                             },
                             Err(err) => {
-                                tracing::warn!("Failed to resize image {}: {}", effective_path.display(), err);
+                                tracing::warn!(
+                                    "Failed to resize image {}: {}", 
+                                    effective_path.display(), 
+                                    err
+                                );
                                 if matches!(&err, ImageProcessingError::Read { .. }) {
                                     local_image_error_placeholder(effective_path, &err)
                                 } else {
                                     match std::fs::read(effective_path) {
                                         Ok(bytes) => {
-                                            let Some(mime_guess) = mime_guess::from_path(effective_path).first()
+                                            let Some(mime_guess) = 
+                                                mime_guess::from_path(effective_path).first()
                                             else {
                                                 return local_image_error_placeholder(
                                                     effective_path,
@@ -273,7 +277,8 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                                                 );
                                             }
                                             let encoded =
-                                                base64::engine::general_purpose::STANDARD.encode(bytes);
+                                                base64::engine::general_purpose::STANDARD
+                                                    .encode(bytes);
                                             ContentItem::InputImage {
                                                 image_url: format!("data:{mime};base64,{encoded}"),
                                             }
