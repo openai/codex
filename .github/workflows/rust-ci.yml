@@ -102,7 +102,7 @@ jobs:
       # Speed up repeated builds across CI runs by caching compiled objects.
       RUSTC_WRAPPER: sccache
       CARGO_INCREMENTAL: "0"
-      SCCACHE_CACHE_SIZE: 10G
+      SCCACHE_CACHE_SIZE: 20G
       # Use lld on Windows targets to speed up linking. rust-lld.exe ships with
       # the Rust toolchain, so no extra install is required.
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
@@ -196,11 +196,26 @@ jobs:
             echo "Using sccache local disk + actions/cache fallback"
           fi
 
+      - name: Force sccache GHA (Windows)
+        if: startsWith(matrix.runner, 'windows')
+        shell: bash
+        run: |
+          if [[ -n "${ACTIONS_CACHE_URL:-}" && -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
+            echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+            echo "Forcing sccache GitHub backend on Windows"
+          fi
+
       - name: Remap debug paths (Windows)
         if: startsWith(matrix.runner, 'windows')
         shell: bash
         run: |
           echo "RUSTFLAGS=--remap-path-prefix=${GITHUB_WORKSPACE}=." >> "$GITHUB_ENV"
+
+      - name: Lower debug info (Windows, dev)
+        if: startsWith(matrix.runner, 'windows')
+        shell: bash
+        run: |
+          echo "CARGO_PROFILE_DEV_DEBUG=0" >> "$GITHUB_ENV"
 
       - name: Restore sccache cache (fallback)
         if: ${{ env.SCCACHE_GHA_ENABLED != 'true' }}
@@ -348,7 +363,7 @@ jobs:
     env:
       RUSTC_WRAPPER: sccache
       CARGO_INCREMENTAL: "0"
-      SCCACHE_CACHE_SIZE: 10G
+      SCCACHE_CACHE_SIZE: 20G
       # Use lld on Windows targets to speed up linking. rust-lld.exe ships with
       # the Rust toolchain, so no extra install is required.
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
@@ -412,11 +427,26 @@ jobs:
             echo "Using sccache local disk + actions/cache fallback"
           fi
 
+      - name: Force sccache GHA (Windows)
+        if: startsWith(matrix.runner, 'windows')
+        shell: bash
+        run: |
+          if [[ -n "${ACTIONS_CACHE_URL:-}" && -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
+            echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+            echo "Forcing sccache GitHub backend on Windows"
+          fi
+
       - name: Remap debug paths (Windows)
         if: startsWith(matrix.runner, 'windows')
         shell: bash
         run: |
           echo "RUSTFLAGS=--remap-path-prefix=${GITHUB_WORKSPACE}=." >> "$GITHUB_ENV"
+
+      - name: Lower debug info (Windows, ci-test)
+        if: startsWith(matrix.runner, 'windows')
+        shell: bash
+        run: |
+          echo "CARGO_PROFILE_CI_TEST_DEBUG=0" >> "$GITHUB_ENV"
 
       - name: Restore sccache cache (fallback)
         if: ${{ env.SCCACHE_GHA_ENABLED != 'true' }}
