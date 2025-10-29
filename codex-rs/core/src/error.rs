@@ -253,7 +253,7 @@ impl std::fmt::Display for UsageLimitReachedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let message = match self.plan_type.as_ref() {
             Some(PlanType::Known(KnownPlan::Plus)) => format!(
-                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing){}",
+                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing) or visit chatgpt.com/codex/settings/usage to purchase more credits{}",
                 retry_suffix_after_or(self.resets_at.as_ref())
             ),
             Some(PlanType::Known(KnownPlan::Team)) | Some(PlanType::Known(KnownPlan::Business)) => {
