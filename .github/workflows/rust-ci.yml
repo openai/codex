@@ -223,8 +223,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.sccache/
-          key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          key: sccache-${{ github.job }}-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
+            sccache-${{ github.job }}-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-
             sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-
             sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
 
@@ -314,7 +315,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.sccache/
-          key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          key: sccache-${{ github.job }}-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
 
       - name: sccache stats
         if: always()
@@ -375,19 +376,19 @@ jobs:
         include:
           - runner: macos-14
             target: aarch64-apple-darwin
-            profile: dev
+            profile: ci-test
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-            profile: dev
+            profile: ci-test
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            profile: dev
+            profile: ci-test
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
-            profile: dev
+            profile: ci-test
           - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
-            profile: dev
+            profile: ci-test
 
     steps:
       - uses: actions/checkout@v5
@@ -454,8 +455,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.sccache/
-          key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          key: sccache-${{ github.job }}-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
+            sccache-${{ github.job }}-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-
             sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-
             sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
 
@@ -495,7 +497,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.sccache/
-          key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          key: sccache-${{ github.job }}-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
 
       - name: sccache stats
         if: always()
