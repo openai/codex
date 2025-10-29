@@ -7,6 +7,8 @@ use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
 use codex_app_server_protocol::AuthMode;
+use codex_auto_updater::Error as AutoUpdateError;
+use codex_auto_updater::update_status;
 use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::CodexAuth;
@@ -255,6 +257,22 @@ pub async fn run_main(
             .with(feedback_layer)
             .try_init();
     };
+
+    match update_status() {
+        Ok(status) if status.update_available => {
+            let current = status.current_version;
+            let latest = status.latest_version;
+            tracing::error!(
+                current_version = current.as_str(),
+                latest_version = latest.as_str(),
+                "A newer Codex release is available. Update Codex from {current} to {latest} with `brew upgrade codex`."
+            );
+        }
+        Ok(_) | Err(AutoUpdateError::Unsupported) => {}
+        Err(err) => {
+            tracing::debug!(error = ?err, "Failed to check for Codex updates");
+        }
+    }
 
     run_ratatui_app(
         cli,

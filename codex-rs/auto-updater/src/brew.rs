@@ -1,4 +1,5 @@
 use crate::Installer;
+use crate::UpdateStatus;
 use crate::errors::Error;
 use async_trait::async_trait;
 use semver::Version;
@@ -23,14 +24,14 @@ impl BrewInstaller {
         };
 
         let installer = Self { path };
-        match installer.status() {
+        match installer.install_status() {
             Ok(_) => Ok(Some(installer)),
             Err(Error::Unsupported) => Ok(None),
             Err(err) => Err(err),
         }
     }
 
-    fn status(&self) -> Result<InstallStatus, Error> {
+    fn install_status(&self) -> Result<InstallStatus, Error> {
         if let Some(info) = self.formula_info()? {
             let current_version = self.formula_current_version()?;
             return Ok(InstallStatus {
@@ -126,27 +127,39 @@ impl BrewInstaller {
 
 #[async_trait]
 impl Installer for BrewInstaller {
-    fn update_available(&self) -> Result<bool, Error> {
-        let status = self.status()?;
-        status.needs_update()
+    fn version_status(&self) -> Result<UpdateStatus, Error> {
+        let status = self.install_status()?;
+        let update_available = status.needs_update()?;
+        let InstallStatus {
+            method: _,
+            current_version,
+            latest_version,
+        } = status;
+        Ok(UpdateStatus {
+            current_version,
+            latest_version,
+            update_available,
+        })
     }
 
     async fn update(&self) -> Result<String, Error> {
         let initial_status = run_blocking({
             let brew = self.clone();
-            move || brew.status()
+            move || brew.install_status()
         })
         .await?;
 
-        if !initial_status.needs_update()? {
+        let needs_update = initial_status.needs_update()?;
+        let method = initial_status.method;
+        if !needs_update {
             return Ok(initial_status.current_version);
         }
 
-        self.upgrade(initial_status.method).await?;
+        self.upgrade(method).await?;
 
         run_blocking({
             let brew = self.clone();
-            move || brew.current_version(initial_status.method)
+            move || brew.current_version(method)
         })
         .await
     }
@@ -483,6 +496,19 @@ esac
         }
 
         #[tokio::test]
+        async fn update_status_reports_versions() -> Result<(), Box<dyn StdError>> {
+            let fake_brew = FakeBrew::formula("0.8.0", "0.9.0", "0.9.0")?;
+
+            let status = crate::update_status()?;
+
+            pretty_assertions::assert_eq!(status.update_available, true);
+            pretty_assertions::assert_eq!(status.current_version, "0.8.0".to_string());
+            pretty_assertions::assert_eq!(status.latest_version, "0.9.0".to_string());
+            drop(fake_brew);
+            Ok(())
+        }
+
+        #[tokio::test]
         async fn update_executes_formula_upgrade() -> Result<(), Box<dyn StdError>> {
             let fake_brew = FakeBrew::formula("0.8.0", "0.9.0", "0.9.0")?;
 
@@ -644,17 +670,15 @@ esac
                 fs::write(&upgrade_log, Vec::new())?;
 
                 let env = EnvironmentGuard::new(tempdir.path());
-                let mut vars = Vec::new();
-                vars.push(VarGuard::new("BREW_FORMULA_INFO", &formula_info_path));
-                vars.push(VarGuard::new("BREW_CASK_INFO", &cask_info_path));
-                vars.push(VarGuard::new("BREW_FORMULA_LIST", &formula_list_path));
-                vars.push(VarGuard::new("BREW_CASK_LIST", &cask_list_path));
-                vars.push(VarGuard::new(
-                    "BREW_FORMULA_UPDATED_LIST",
-                    &formula_updated_path,
-                ));
-                vars.push(VarGuard::new("BREW_CASK_UPDATED_LIST", &cask_updated_path));
-                vars.push(VarGuard::new("BREW_UPGRADE_LOG", &upgrade_log));
+                let vars = vec![
+                    VarGuard::new("BREW_FORMULA_INFO", &formula_info_path),
+                    VarGuard::new("BREW_CASK_INFO", &cask_info_path),
+                    VarGuard::new("BREW_FORMULA_LIST", &formula_list_path),
+                    VarGuard::new("BREW_CASK_LIST", &cask_list_path),
+                    VarGuard::new("BREW_FORMULA_UPDATED_LIST", &formula_updated_path),
+                    VarGuard::new("BREW_CASK_UPDATED_LIST", &cask_updated_path),
+                    VarGuard::new("BREW_UPGRADE_LOG", &upgrade_log),
+                ];
 
                 Ok(Self {
                     _tempdir: tempdir,

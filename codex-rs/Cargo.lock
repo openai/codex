@@ -1460,6 +1460,7 @@ dependencies = [
  "codex-ansi-escape",
  "codex-app-server-protocol",
  "codex-arg0",
+ "codex-auto-updater",
  "codex-common",
  "codex-core",
  "codex-feedback",

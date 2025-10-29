@@ -33,6 +33,7 @@ codex-common = { workspace = true, features = [
     "elapsed",
     "sandbox_summary",
 ] }
+codex-auto-updater = { workspace = true }
 codex-core = { workspace = true }
 codex-file-search = { workspace = true }
 codex-login = { workspace = true }

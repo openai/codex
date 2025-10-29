@@ -60,6 +60,7 @@ codex-app-server = { path = "app-server" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
+codex-auto-updater = { path = "auto-updater" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
 codex-chatgpt = { path = "chatgpt" }
