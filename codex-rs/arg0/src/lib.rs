@@ -179,11 +179,9 @@ fn prepend_path_entry_for_apply_patch() -> std::io::Result<TempDir> {
     const PATH_SEPARATOR: &str = ";";
 
     let path_element = path.display();
-    // Append our temp dir to PATH rather than prepending to avoid
-    // disturbing user PATH ordering (e.g., virtualenvs, shims).
     let updated_path_env_var = match std::env::var("PATH") {
         Ok(existing_path) => {
-            format!("{existing_path}{PATH_SEPARATOR}{path_element}")
+            format!("{path_element}{PATH_SEPARATOR}{existing_path}")
         }
         Err(_) => {
             format!("{path_element}")

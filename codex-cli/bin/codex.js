@@ -73,10 +73,9 @@ const binaryPath = path.join(archRoot, "codex", codexBinaryName);
 function getUpdatedPath(newDirs) {
   const pathSep = process.platform === "win32" ? ";" : ":";
   const existingPath = process.env.PATH || "";
-  // Preserve caller PATH precedence by appending any additional dirs.
   const updatedPath = [
-    ...existingPath.split(pathSep).filter(Boolean),
     ...newDirs,
+    ...existingPath.split(pathSep).filter(Boolean),
   ].join(pathSep);
   return updatedPath;
 }
