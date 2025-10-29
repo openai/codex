@@ -15,5 +15,7 @@ expression: sanitized
 │                                                                            │
 │  Token usage:      1.2K total  (800 input + 400 output)                    │
 │  Context window:   100% left (1.2K used / 272K)                            │
+│  Note:             visit chatgpt.com/codex/settings/usage                  │
+│                    for up-to-date rate limits and credits                  │
 │  Monthly limit:    [██░░░░░░░░░░░░░░░░░░] 12% used (resets 07:08 on 7 May) │
 ╰────────────────────────────────────────────────────────────────────────────╯

@@ -195,13 +195,7 @@ impl StatusHistoryCell {
                 lines
             }
             StatusRateLimitData::Missing => {
-                vec![formatter.line(
-                    "Limits",
-                    vec![
-                        Span::from("visit ").dim(),
-                        "chatgpt.com/codex/settings/usage".cyan().underlined(),
-                    ],
-                )]
+                vec![formatter.line("Limits", vec![Span::from("data not available yet").dim()])]
             }
         }
     }
@@ -310,6 +304,7 @@ impl HistoryCell for StatusHistoryCell {
         if self.token_usage.context_window.is_some() {
             push_label(&mut labels, &mut seen, "Context window");
         }
+        push_label(&mut labels, &mut seen, "Note");
         self.collect_rate_limit_labels(&mut seen, &mut labels);
 
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
@@ -347,6 +342,17 @@ impl HistoryCell for StatusHistoryCell {
         if let Some(spans) = self.context_window_spans() {
             lines.push(formatter.line("Context window", spans));
         }
+
+        lines.push(formatter.line(
+            "Note",
+            vec![
+                Span::from("visit "),
+                "chatgpt.com/codex/settings/usage".cyan().underlined(),
+            ],
+        ));
+        lines.push(
+            formatter.continuation(vec![Span::from("for up-to-date rate limits and credits")]),
+        );
 
         lines.extend(self.rate_limit_lines(available_inner_width, &formatter));
 
