@@ -62,11 +62,16 @@ jobs:
 
       - name: Install Rust toolchain
         shell: bash
+        env:
+          RUST_TOOLCHAIN: 1.90.0
         run: |
           rustup set profile minimal
-          rustup toolchain install 1.90.0 --profile minimal
-          rustup default 1.90.0
-          rustup target add ${{ matrix.target }}
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+          rustup target add "${{ matrix.target }}"
+          if [[ "${{ matrix.target }}" == *"unknown-linux-musl"* ]]; then
+            rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+          fi
 
       - name: Rust cache (target + registries)
         uses: Swatinem/rust-cache@v2
