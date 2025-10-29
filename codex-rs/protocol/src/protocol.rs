@@ -814,7 +814,7 @@ pub struct AgentReasoningDeltaEvent {
     pub delta: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
 pub struct McpInvocation {
     /// Name of the MCP server as defined in the config.
     pub server: String,
@@ -824,14 +824,14 @@ pub struct McpInvocation {
     pub arguments: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
 pub struct McpToolCallBeginEvent {
     /// Identifier so this can be paired with the McpToolCallEnd event.
     pub call_id: String,
     pub invocation: McpInvocation,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
 pub struct McpToolCallEndEvent {
     /// Identifier for the corresponding McpToolCallBegin that finished.
     pub call_id: String,
