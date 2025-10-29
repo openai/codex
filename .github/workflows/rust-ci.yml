@@ -177,7 +177,7 @@ jobs:
         uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
         with:
           tool: sccache
-          version: 0.7.5
+          version: 0.12.0
 
       - name: Configure sccache backend
         shell: bash
