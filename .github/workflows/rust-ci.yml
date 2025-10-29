@@ -6,6 +6,10 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  actions: write
+  contents: read
+
 # CI builds in debug (dev) for faster signal.
 
 jobs:
@@ -191,6 +195,12 @@ jobs:
             echo "SCCACHE_DIR=${{ github.workspace }}/.sccache" >> "$GITHUB_ENV"
             echo "Using sccache local disk + actions/cache fallback"
           fi
+
+      - name: Remap debug paths (Windows)
+        if: startsWith(matrix.runner, 'windows')
+        shell: bash
+        run: |
+          echo 'RUSTFLAGS=-C remap-path-prefix=${{ github.workspace }}=.' >> "$GITHUB_ENV"
 
       - name: Restore sccache cache (fallback)
         if: ${{ env.SCCACHE_GHA_ENABLED != 'true' }}
@@ -381,7 +391,7 @@ jobs:
         uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
         with:
           tool: sccache
-          version: 0.7.5
+          version: 0.12.0
 
       - name: Configure sccache backend
         shell: bash
@@ -395,6 +405,12 @@ jobs:
             echo "SCCACHE_DIR=${{ github.workspace }}/.sccache" >> "$GITHUB_ENV"
             echo "Using sccache local disk + actions/cache fallback"
           fi
+
+      - name: Remap debug paths (Windows)
+        if: startsWith(matrix.runner, 'windows')
+        shell: bash
+        run: |
+          echo 'RUSTFLAGS=-C remap-path-prefix=${{ github.workspace }}=.' >> "$GITHUB_ENV"
 
       - name: Restore sccache cache (fallback)
         if: ${{ env.SCCACHE_GHA_ENABLED != 'true' }}
