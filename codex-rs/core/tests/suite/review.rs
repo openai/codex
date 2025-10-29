@@ -479,6 +479,7 @@ async fn review_input_isolated_from_parent_history() {
 
     // Also verify that a user interruption note was recorded in the rollout.
     let path = codex.rollout_path();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let text = std::fs::read_to_string(&path).expect("read rollout file");
     let mut saw_interruption_message = false;
     for line in text.lines() {
