@@ -320,10 +320,10 @@ impl HistoryCell for StatusHistoryCell {
             Span::from("information on rate limits and credits").cyan(),
         ]);
         let note_initial_indent = Line::from(vec![
-            Span::from(format!("{}ⓘ ", FieldFormatter::INDENT)).cyan(),
+            Span::from(format!("{}  ", FieldFormatter::INDENT)).dim(),
         ]);
         let note_subsequent_indent = Line::from(vec![
-            Span::from(format!("{}  ", FieldFormatter::INDENT)).cyan(),
+            Span::from(format!("{}  ", FieldFormatter::INDENT)).dim(),
         ]);
         let note_lines = word_wrap_lines(
             [note_first_line, note_second_line],
