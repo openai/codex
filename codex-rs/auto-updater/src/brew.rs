@@ -33,6 +33,11 @@ impl BrewInstaller {
         }
     }
 
+    fn update_repository(&self) -> Result<(), Error> {
+        run_command_sync_with_env(&self.path, &["update"], &[])?;
+        Ok(())
+    }
+
     fn install_status(&self) -> Result<InstallStatus, Error> {
         if let Some(info) = self.formula_info()? {
             return Ok(InstallStatus {
@@ -56,7 +61,7 @@ impl BrewInstaller {
             InstallMethod::Formula => &["upgrade", CODENAME],
             InstallMethod::Cask => &["upgrade", "--cask", CODENAME],
         };
-        run_command_async(&self.path, args, Some(("HOMEBREW_NO_AUTO_UPDATE", "1"))).await?;
+        run_command_async(&self.path, args, &[("HOMEBREW_NO_AUTO_UPDATE", "1")]).await?;
         Ok(())
     }
 
@@ -150,6 +155,7 @@ impl Installer for BrewInstaller {
     fn version_status(&self) -> Result<UpdateStatus, Error> {
         let started = Instant::now();
         let outcome = (|| {
+            self.update_repository()?;
             let status = self.install_status()?;
             let update_available = status.needs_update()?;
             let InstallStatus {
@@ -274,23 +280,31 @@ struct CommandOutput {
 }
 
 fn run_command_sync(path: &Path, args: &[&str]) -> Result<CommandOutput, Error> {
-    let output = Command::new(path)
-        .args(args)
-        .env("HOMEBREW_NO_AUTO_UPDATE", "1")
-        .output()
-        .map_err(|err| Error::Io(err.to_string()))?;
+    run_command_sync_with_env(path, args, &[("HOMEBREW_NO_AUTO_UPDATE", "1")])
+}
+
+fn run_command_sync_with_env(
+    path: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Result<CommandOutput, Error> {
+    let mut command = Command::new(path);
+    command.args(args);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let output = command.output().map_err(|err| Error::Io(err.to_string()))?;
     handle_command_output(path, args, output)
 }
 
 async fn run_command_async(
     path: &Path,
     args: &[&str],
-    env: Option<(&str, &str)>,
+    env: &[(&str, &str)],
 ) -> Result<CommandOutput, Error> {
     let mut command = tokio::process::Command::new(path);
     command.args(args);
-    command.env("HOMEBREW_NO_AUTO_UPDATE", "1");
-    if let Some((key, value)) = env {
+    for (key, value) in env {
         command.env(key, value);
     }
     let output = command
@@ -387,16 +401,15 @@ fn version_ordering(lhs: &str, rhs: &str) -> Ordering {
 }
 
 fn compare_versions(current: &str, latest: &str) -> Result<bool, Error> {
-    Ok(true)
-    // match (Version::parse(current), Version::parse(latest)) {
-    //     (Ok(current_semver), Ok(latest_semver)) => Ok(latest_semver > current_semver),
-    //     (Err(_), Err(_)) | (Ok(_), Err(_)) | (Err(_), Ok(_)) => {
-    //         if let Some(result) = compare_brew_versions(current, latest) {
-    //             return Ok(result);
-    //         }
-    //         Ok(latest > current)
-    //     }
-    // }
+    match (Version::parse(current), Version::parse(latest)) {
+        (Ok(current_semver), Ok(latest_semver)) => Ok(latest_semver > current_semver),
+        (Err(_), Err(_)) | (Ok(_), Err(_)) | (Err(_), Ok(_)) => {
+            if let Some(result) = compare_brew_versions(current, latest) {
+                return Ok(result);
+            }
+            Ok(latest > current)
+        }
+    }
 }
 
 fn compare_brew_versions(current: &str, latest: &str) -> Option<bool> {
@@ -542,6 +555,9 @@ case "$command" in
       cat "$BREW_FORMULA_LIST"
     fi
     ;;
+  update)
+    printf '%s\n' 'update' >> "$BREW_UPDATE_LOG"
+    ;;
   upgrade)
     if [ "${HOMEBREW_NO_AUTO_UPDATE:-}" != "1" ]; then
       echo "missing HOMEBREW_NO_AUTO_UPDATE" >&2
@@ -593,6 +609,18 @@ esac
             pretty_assertions::assert_eq!(status.update_available, true);
             pretty_assertions::assert_eq!(status.current_version, "0.8.0".to_string());
             pretty_assertions::assert_eq!(status.latest_version, "0.9.0".to_string());
+            drop(fake_brew);
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn version_status_runs_brew_update() -> Result<(), Box<dyn StdError>> {
+            let fake_brew = FakeBrew::formula("0.8.0", "0.9.0", "0.9.0")?;
+
+            let status = crate::update_status()?;
+
+            pretty_assertions::assert_eq!(status.latest_version, "0.9.0".to_string());
+            pretty_assertions::assert_eq!(fake_brew.update_log_contents()?, "update\n".to_string());
             drop(fake_brew);
             Ok(())
         }
@@ -676,6 +704,7 @@ esac
             _tempdir: TempDir,
             _env: EnvironmentGuard,
             _vars: Vec<VarGuard>,
+            update_log: PathBuf,
             upgrade_log: PathBuf,
             formula_list: PathBuf,
             cask_list: PathBuf,
@@ -755,6 +784,8 @@ esac
                 let cask_updated_path = tempdir.path().join("cask_list_updated.txt");
                 fs::write(&cask_updated_path, cask_updated_list.as_bytes())?;
 
+                let update_log = tempdir.path().join("update.log");
+                fs::write(&update_log, Vec::new())?;
                 let upgrade_log = tempdir.path().join("upgrade.log");
                 fs::write(&upgrade_log, Vec::new())?;
 
@@ -766,6 +797,7 @@ esac
                     VarGuard::new("BREW_CASK_LIST", &cask_list_path),
                     VarGuard::new("BREW_FORMULA_UPDATED_LIST", &formula_updated_path),
                     VarGuard::new("BREW_CASK_UPDATED_LIST", &cask_updated_path),
+                    VarGuard::new("BREW_UPDATE_LOG", &update_log),
                     VarGuard::new("BREW_UPGRADE_LOG", &upgrade_log),
                 ];
 
@@ -773,10 +805,15 @@ esac
                     _tempdir: tempdir,
                     _env: env,
                     _vars: vars,
+                    update_log,
                     upgrade_log,
                     formula_list: formula_list_path,
                     cask_list: cask_list_path,
                 })
+            }
+
+            fn update_log_contents(&self) -> Result<String, Box<dyn StdError>> {
+                Ok(fs::read_to_string(&self.update_log)?)
             }
 
             fn upgrade_log_contents(&self) -> Result<String, Box<dyn StdError>> {

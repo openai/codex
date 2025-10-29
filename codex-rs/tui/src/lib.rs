@@ -315,8 +315,8 @@ async fn run_ratatui_app(
     color_eyre::install()?;
 
     let mut initial_events = Vec::new();
-    if let Some(status) = cached_update_status {
-        if status.update_available {
+    if let Some(status) = cached_update_status
+        && status.update_available {
             let update_action = {
                 #[cfg(not(debug_assertions))]
                 {
@@ -335,7 +335,6 @@ async fn run_ratatui_app(
                 ),
             )));
         }
-    }
 
     // Forward panic reports through tracing so they appear in the UI status
     // line, but do not swallow the default/color-eyre panic handler.
