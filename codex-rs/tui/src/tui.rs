@@ -486,12 +486,22 @@ impl Tui {
     }
 
     pub fn clear_history(&mut self) -> Result<()> {
+        {
+            let backend = self.terminal.backend_mut();
+            std::io::Write::write_all(backend, b"\x1b[3J")?;
+            std::io::Write::write_all(backend, b"\x1b[2J")?;
+            std::io::Write::write_all(backend, b"\x1b[H")?;
+            std::io::Write::flush(backend)?;
+        }
+
         let size = self.terminal.size()?;
         let original_viewport = self.terminal.viewport_area;
         let full = ratatui::layout::Rect::new(0, 0, size.width, size.height);
         self.terminal.set_viewport_area(full);
         self.terminal.clear()?;
         self.terminal.set_viewport_area(original_viewport);
+        self.terminal
+            .set_cursor_position(original_viewport.as_position())?;
         self.pending_history_lines.clear();
         Ok(())
     }
