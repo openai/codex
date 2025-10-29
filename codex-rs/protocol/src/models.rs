@@ -235,7 +235,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                     UserInput::Text { text } => ContentItem::InputText { text },
                     UserInput::Image { image_url } => ContentItem::InputImage { image_url },
                     UserInput::LocalImage { path } => {
-                        let mapped: Option<std::path::PathBuf> = if platform::is_running_under_wsl() 
+                        let mapped: Option<std::path::PathBuf> = if platform::is_running_under_wsl()
                         {
                             let win_path_str = path.to_string_lossy();
                             platform::try_map_windows_drive_to_wsl_path(&win_path_str)
@@ -252,8 +252,8 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             },
                             Err(err) => {
                                 tracing::warn!(
-                                    "Failed to resize image {}: {}", 
-                                    effective_path.display(), 
+                                    "Failed to resize image {}: {}",
+                                    effective_path.display(),
                                     err
                                 );
                                 if matches!(&err, ImageProcessingError::Read { .. }) {
@@ -261,7 +261,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                                 } else {
                                     match std::fs::read(effective_path) {
                                         Ok(bytes) => {
-                                            let Some(mime_guess) = 
+                                            let Some(mime_guess) =
                                                 mime_guess::from_path(effective_path).first()
                                             else {
                                                 return local_image_error_placeholder(
@@ -276,9 +276,8 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                                                     format!("unsupported MIME type `{mime}`"),
                                                 );
                                             }
-                                            let encoded =
-                                                base64::engine::general_purpose::STANDARD
-                                                    .encode(bytes);
+                                            let encoded = base64::engine::general_purpose::STANDARD
+                                                .encode(bytes);
                                             ContentItem::InputImage {
                                                 image_url: format!("data:{mime};base64,{encoded}"),
                                             }
@@ -295,7 +294,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                                 }
                             }
                         }
-                    },
+                    }
                 })
                 .collect::<Vec<ContentItem>>(),
         }
