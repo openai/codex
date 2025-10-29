@@ -195,6 +195,11 @@ jobs:
   release:
     name: Publish prerelease (all targets)
     needs: [build]
+    outputs:
+      slug: ${{ steps.slug.outputs.slug }}
+      tag: ${{ steps.slug.outputs.tag }}
+      title: ${{ steps.slug.outputs.title }}
+      skip: ${{ steps.slug.outputs.skip }}
     # Only publish for PRs from the main repo (not forks) to avoid permission failures.
     # Fixes: https://github.com/just-every/code/issues/355
     # Fixes: https://github.com/just-every/code/issues/356
@@ -267,8 +272,14 @@ jobs:
                 }
               } catch {}
             }
-
-            if (!slug) throw new Error('Missing ID. Add a code/<slug> label on the PR or linked issue, or include <!-- codex-id: <slug> --> in the PR/issue.');
+            if (!slug) {
+              core.notice('Missing ID. Skipping prerelease publish; add code/<slug> or <!-- codex-id: ... --> to enable preview binaries.');
+              core.setOutput('slug', '');
+              core.setOutput('tag', '');
+              core.setOutput('title', '');
+              core.setOutput('skip', 'true');
+              return;
+            }
 
             // Best-effort: ensure linked issue carries code/<slug>
             if (linkedIssue && slug) {
@@ -296,12 +307,20 @@ jobs:
             core.setOutput('slug', slug);
             core.setOutput('tag', next);
             core.setOutput('title', `Preview for ${slug}`);
+            core.setOutput('skip', 'false');
+      - name: Skip summary
+        if: steps.slug.outputs.skip == 'true'
+        shell: bash
+        run: |
+          printf 'Skipping prerelease upload: missing code/<slug> label or <!-- codex-id: ... --> marker.\n' >> "$GITHUB_STEP_SUMMARY"
       - name: Download all artifacts
+        if: steps.slug.outputs.skip != 'true'
         uses: actions/download-artifact@v4
         with:
           path: artifacts/
 
       - name: Create or update prerelease with assets
+        if: steps.slug.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.slug.outputs.tag }}
@@ -336,6 +355,26 @@ jobs:
             echo "No artifacts found to upload." >&2
           fi
 
+  fallback:
+    name: Run fallback build-fast
+    needs: [build, release]
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.ref != 'upstream-merge' &&
+      github.event.pull_request.draft == false &&
+      (
+        needs.release.result == 'skipped' ||
+        needs.release.outputs.skip == 'true'
+      )
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run build-fast
+        run: ./build-fast.sh
+
   comment:
     name: Post Artifact Links
     needs: [build, release]
@@ -343,20 +382,22 @@ jobs:
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.ref != 'upstream-merge' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      needs.release.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Resolve slug and latest tag
         id: slug
         uses: actions/github-script@v7
+        env:
+          RELEASE_SLUG: ${{ needs.release.outputs.slug }}
         with:
           script: |
             const owner = context.repo.owner; const repo = context.repo.repo; const pr = context.payload.pull_request.number;
             const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number: pr });
             const marker = /<!--\s*codex-id:\s*([a-z0-9-]{3,})\s*-->/i;
             function normalizeSlug(s){ if(!s) return ''; let x=String(s).toLowerCase().trim(); if(x.startsWith('code/')) x=x.slice(5); if(x.startsWith('id/')) x=x.slice(3); x=x.replace(/[^a-z0-9-]+/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,''); return /^[a-z0-9-]{3,}$/.test(x)?x:''; }
-
-            let slug = '';
+            let slug = normalizeSlug(process.env.RELEASE_SLUG || '');
             // PR labels first
             try { const labs = await github.paginate(github.rest.issues.listLabelsOnIssue, { owner, repo, issue_number: pr, per_page: 100 });
               const names = labs.map(l => (typeof l === 'string' ? l : l.name)).filter(Boolean);
