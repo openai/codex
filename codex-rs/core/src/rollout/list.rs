@@ -409,7 +409,7 @@ async fn read_head_and_tail(
 
         match rollout_line.item {
             RolloutItem::SessionMeta(session_meta_line) => {
-                summary.source = Some(session_meta_line.meta.source);
+                summary.source = Some(session_meta_line.meta.source.clone());
                 summary.model_provider = session_meta_line.meta.model_provider.clone();
                 summary.created_at = summary
                     .created_at

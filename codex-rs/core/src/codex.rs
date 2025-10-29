@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::mcp::auth::McpAuthStatusEntry;
 use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
@@ -1109,6 +1110,16 @@ impl Session {
         turn_context: Arc<TurnContext>,
         cancellation_token: CancellationToken,
     ) {
+        if !self
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .features
+            .enabled(Feature::GhostCommit)
+        {
+            return;
+        }
         let token = match turn_context.tool_call_gate.subscribe().await {
             Ok(token) => token,
             Err(err) => {

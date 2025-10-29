@@ -933,7 +933,7 @@ impl InitialHistory {
     }
 }
 
-#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, JsonSchema, TS, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS, Default)]
 #[serde(rename_all = "lowercase")]
 #[ts(rename_all = "lowercase")]
 pub enum SessionSource {
@@ -942,9 +942,16 @@ pub enum SessionSource {
     VSCode,
     Exec,
     Mcp,
-    SubAgent,
+    SubAgent(SubAgentSource),
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+pub enum SubAgentSource {
+    Review,
+    Compact,
+    Other(String),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]

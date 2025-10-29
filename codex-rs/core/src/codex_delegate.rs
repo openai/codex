@@ -10,6 +10,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::user_input::UserInput;
 use tokio::time::Duration;
@@ -46,7 +47,7 @@ pub(crate) async fn run_codex_conversation_interactive(
         config,
         auth_manager,
         InitialHistory::New,
-        SessionSource::SubAgent,
+        SessionSource::SubAgent(SubAgentSource::Review),
     )
     .await?;
     let codex = Arc::new(codex);
