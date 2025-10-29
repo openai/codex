@@ -50,6 +50,10 @@ pub struct CodexToolCallParam {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_instructions: Option<String>,
 
+    /// Developer instructions that should be injected as a developer role message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub developer_instructions: Option<String>,
+
     /// Prompt used when compacting the conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact_prompt: Option<String>,
@@ -145,6 +149,7 @@ impl CodexToolCallParam {
             sandbox,
             config: cli_overrides,
             base_instructions,
+            developer_instructions,
             compact_prompt,
         } = self;
 
@@ -159,6 +164,7 @@ impl CodexToolCallParam {
             model_provider: None,
             codex_linux_sandbox_exe,
             base_instructions,
+            developer_instructions,
             compact_prompt,
             include_apply_patch_tool: None,
             include_view_image_tool: None,
@@ -292,6 +298,10 @@ mod tests {
               },
               "base-instructions": {
                 "description": "The set of instructions to use instead of the default ones.",
+                "type": "string"
+              },
+              "developer-instructions": {
+                "description": "Developer instructions that should be injected as a developer role message.",
                 "type": "string"
               },
               "compact-prompt": {

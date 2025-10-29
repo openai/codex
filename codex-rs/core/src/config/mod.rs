@@ -128,6 +128,9 @@ pub struct Config {
     /// Base instructions override.
     pub base_instructions: Option<String>,
 
+    /// Developer instructions override injected as a separate message.
+    pub developer_instructions: Option<String>,
+
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
@@ -543,6 +546,11 @@ pub struct ConfigToml {
 
     /// System instructions.
     pub instructions: Option<String>,
+
+    /// Developer instructions inserted as a `developer` role message.
+    #[serde(default)]
+    pub developer_instructions: Option<String>,
+
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
 
@@ -830,6 +838,7 @@ pub struct ConfigOverrides {
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
+    pub developer_instructions: Option<String>,
     pub compact_prompt: Option<String>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
@@ -861,6 +870,7 @@ impl Config {
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
             base_instructions,
+            developer_instructions,
             compact_prompt,
             include_apply_patch_tool: include_apply_patch_tool_override,
             include_view_image_tool: include_view_image_tool_override,
@@ -1060,6 +1070,7 @@ impl Config {
             "experimental instructions file",
         )?;
         let base_instructions = base_instructions.or(file_base_instructions);
+        let developer_instructions = developer_instructions.or(cfg.developer_instructions);
 
         let experimental_compact_prompt_path = config_profile
             .experimental_compact_prompt_file
@@ -1095,6 +1106,7 @@ impl Config {
             notify: cfg.notify,
             user_instructions,
             base_instructions,
+            developer_instructions,
             compact_prompt,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
@@ -2886,6 +2898,7 @@ model_verbosity = "high"
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
+                developer_instructions: None,
                 compact_prompt: None,
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
@@ -2958,6 +2971,7 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            developer_instructions: None,
             compact_prompt: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
@@ -3045,6 +3059,7 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            developer_instructions: None,
             compact_prompt: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
@@ -3118,6 +3133,7 @@ model_verbosity = "high"
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            developer_instructions: None,
             compact_prompt: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,

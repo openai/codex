@@ -321,6 +321,10 @@ pub struct NewConversationParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_instructions: Option<String>,
 
+    /// Developer instructions that will be sent as a `developer` role message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub developer_instructions: Option<String>,
+
     /// Prompt used during conversation compaction.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compact_prompt: Option<String>,
@@ -1129,6 +1133,7 @@ mod tests {
                 sandbox: None,
                 config: None,
                 base_instructions: None,
+                developer_instructions: None,
                 compact_prompt: None,
                 include_apply_patch_tool: None,
             },
