@@ -10,6 +10,7 @@ use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
+use codex_protocol::protocol::SessionSource;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
 use futures::StreamExt;
@@ -26,12 +27,9 @@ async fn responses_stream_includes_task_type_header() {
         responses::ev_completed("resp-1"),
     ]);
 
-    let request_recorder = responses::mount_sse_once_match(
-        &server,
-        header("Codex-Task-Type", "standard"),
-        response_body,
-    )
-    .await;
+    let request_recorder =
+        responses::mount_sse_once_match(&server, header("Codex-Task-Type", "exec"), response_body)
+            .await;
 
     let provider = ModelProviderInfo {
         name: "mock".into(),
@@ -78,6 +76,7 @@ async fn responses_stream_includes_task_type_header() {
         effort,
         summary,
         conversation_id,
+        SessionSource::Exec,
     );
 
     let mut prompt = Prompt::default();
@@ -97,8 +96,5 @@ async fn responses_stream_includes_task_type_header() {
     }
 
     let request = request_recorder.single_request();
-    assert_eq!(
-        request.header("Codex-Task-Type").as_deref(),
-        Some("standard")
-    );
+    assert_eq!(request.header("Codex-Task-Type").as_deref(), Some("exec"));
 }

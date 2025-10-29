@@ -8,6 +8,7 @@ mod apply_patch_cli;
 mod approvals;
 mod cli_stream;
 mod client;
+mod codex_delegate;
 mod compact;
 mod compact_resume_fork;
 mod deprecation_notice;
