@@ -11,6 +11,9 @@ use codex_app_server_protocol::ResumeConversationParams;
 use codex_app_server_protocol::ResumeConversationResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionConfiguredNotification;
+use codex_core::protocol::EventMsg;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::fs;
@@ -168,11 +171,14 @@ async fn test_list_and_resume_conversations() -> Result<()> {
     assert!(empty_items.is_empty());
     assert!(empty_next.is_none());
 
-    // Now resume one of the sessions and expect a SessionConfigured notification and response.
+    let first_item = &items[0];
+
+    // Now resume one of the sessions from an explicit rollout path.
     let resume_req_id = mcp
         .send_resume_conversation_request(ResumeConversationParams {
-            path: Some(items[0].path.clone()),
+            path: Some(first_item.path.clone()),
             conversation_id: None,
+            history: None,
             overrides: Some(NewConversationParams {
                 model: Some("o3".to_string()),
                 ..Default::default()
@@ -187,17 +193,25 @@ async fn test_list_and_resume_conversations() -> Result<()> {
     )
     .await??;
     let session_configured: ServerNotification = notification.try_into()?;
-    // Basic shape assertion: ensure event type is sessionConfigured
     let ServerNotification::SessionConfigured(SessionConfiguredNotification {
         model,
         rollout_path,
+        initial_messages: session_initial_messages,
         ..
     }) = session_configured
     else {
         unreachable!("expected sessionConfigured notification");
     };
     assert_eq!(model, "o3");
-    assert_eq!(items[0].path.clone(), rollout_path);
+    assert_eq!(rollout_path, first_item.path.clone());
+    let session_initial_messages = session_initial_messages
+        .expect("expected initial messages when resuming from rollout path");
+    match session_initial_messages.as_slice() {
+        [EventMsg::UserMessage(message)] => {
+            assert_eq!(message.message, first_item.preview.clone());
+        }
+        other => panic!("unexpected initial messages from rollout resume: {other:#?}"),
+    }
 
     // Then the response for resumeConversation
     let resume_resp: JSONRPCResponse = timeout(
@@ -206,10 +220,140 @@ async fn test_list_and_resume_conversations() -> Result<()> {
     )
     .await??;
     let ResumeConversationResponse {
-        conversation_id, ..
+        conversation_id,
+        model: resume_model,
+        initial_messages: response_initial_messages,
+        ..
     } = to_response::<ResumeConversationResponse>(resume_resp)?;
     // conversation id should be a valid UUID
     assert!(!conversation_id.to_string().is_empty());
+    assert_eq!(resume_model, "o3");
+    let response_initial_messages =
+        response_initial_messages.expect("expected initial messages in resume response");
+    match response_initial_messages.as_slice() {
+        [EventMsg::UserMessage(message)] => {
+            assert_eq!(message.message, first_item.preview.clone());
+        }
+        other => panic!("unexpected initial messages in resume response: {other:#?}"),
+    }
+
+    // Resuming with only a conversation id should locate the rollout automatically.
+    let resume_by_id_req_id = mcp
+        .send_resume_conversation_request(ResumeConversationParams {
+            path: None,
+            conversation_id: Some(first_item.conversation_id),
+            history: None,
+            overrides: Some(NewConversationParams {
+                model: Some("o3".to_string()),
+                ..Default::default()
+            }),
+        })
+        .await?;
+    let notification: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("sessionConfigured"),
+    )
+    .await??;
+    let session_configured: ServerNotification = notification.try_into()?;
+    let ServerNotification::SessionConfigured(SessionConfiguredNotification {
+        model,
+        rollout_path,
+        initial_messages: session_initial_messages,
+        ..
+    }) = session_configured
+    else {
+        unreachable!("expected sessionConfigured notification");
+    };
+    assert_eq!(model, "o3");
+    assert_eq!(rollout_path, first_item.path.clone());
+    let session_initial_messages = session_initial_messages
+        .expect("expected initial messages when resuming from conversation id");
+    match session_initial_messages.as_slice() {
+        [EventMsg::UserMessage(message)] => {
+            assert_eq!(message.message, first_item.preview.clone());
+        }
+        other => panic!("unexpected initial messages from conversation id resume: {other:#?}"),
+    }
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_by_id_req_id)),
+    )
+    .await??;
+    let ResumeConversationResponse {
+        conversation_id: by_id_conversation_id,
+        model: by_id_model,
+        initial_messages: by_id_initial_messages,
+        ..
+    } = to_response::<ResumeConversationResponse>(resume_resp)?;
+    assert!(!by_id_conversation_id.to_string().is_empty());
+    assert_eq!(by_id_model, "o3");
+    let by_id_initial_messages = by_id_initial_messages
+        .expect("expected initial messages when resuming from conversation id response");
+    match by_id_initial_messages.as_slice() {
+        [EventMsg::UserMessage(message)] => {
+            assert_eq!(message.message, first_item.preview.clone());
+        }
+        other => {
+            panic!("unexpected initial messages in conversation id resume response: {other:#?}")
+        }
+    }
+
+    // Resuming with explicit history should succeed even without a stored rollout.
+    let fork_history_text = "Hello from history";
+    let history = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: fork_history_text.to_string(),
+        }],
+    }];
+    let resume_with_history_req_id = mcp
+        .send_resume_conversation_request(ResumeConversationParams {
+            path: None,
+            conversation_id: None,
+            history: Some(history),
+            overrides: Some(NewConversationParams {
+                model: Some("o3".to_string()),
+                ..Default::default()
+            }),
+        })
+        .await?;
+    let notification: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("sessionConfigured"),
+    )
+    .await??;
+    let session_configured: ServerNotification = notification.try_into()?;
+    let ServerNotification::SessionConfigured(SessionConfiguredNotification {
+        model,
+        initial_messages: session_initial_messages,
+        ..
+    }) = session_configured
+    else {
+        unreachable!("expected sessionConfigured notification");
+    };
+    assert_eq!(model, "o3");
+    assert!(
+        session_initial_messages.as_ref().is_none_or(Vec::is_empty),
+        "expected no initial messages when resuming from explicit history but got {session_initial_messages:#?}"
+    );
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_with_history_req_id)),
+    )
+    .await??;
+    let ResumeConversationResponse {
+        conversation_id: history_conversation_id,
+        model: history_model,
+        initial_messages: history_initial_messages,
+        ..
+    } = to_response::<ResumeConversationResponse>(resume_resp)?;
+    assert!(!history_conversation_id.to_string().is_empty());
+    assert_eq!(history_model, "o3");
+    assert!(
+        history_initial_messages.as_ref().is_none_or(Vec::is_empty),
+        "expected no initial messages in resume response when history is provided but got {history_initial_messages:#?}"
+    );
 
     Ok(())
 }

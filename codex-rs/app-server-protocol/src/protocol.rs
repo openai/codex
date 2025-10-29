@@ -11,6 +11,7 @@ use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -499,12 +500,15 @@ pub struct LogoutAccountResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumeConversationParams {
-    /// Absolute path to the rollout JSONL file. If omitted, `conversationId` must be provided.
+    /// Absolute path to the rollout JSONL file, when explicitly resuming a known rollout.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
-    /// If the rollout path is not known, it can be discovered via the conversation id at at the cost of extra latency.
+    /// If the rollout path is not known, it can be discovered via the conversation id at the cost of extra latency.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<ConversationId>,
+    /// if the rollout path or conversation id is not known, it can be resumed from given history
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history: Option<Vec<ResponseItem>>,
     /// Optional overrides to apply when spawning the resumed session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overrides: Option<NewConversationParams>,
