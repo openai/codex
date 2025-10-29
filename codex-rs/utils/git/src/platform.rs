@@ -34,4 +34,4 @@ pub fn create_symlink(
 }
 
 #[cfg(not(any(unix, windows)))]
-compile_error!("codex-git-tooling symlink support is only implemented for Unix and Windows");
+compile_error!("codex-git symlink support is only implemented for Unix and Windows");

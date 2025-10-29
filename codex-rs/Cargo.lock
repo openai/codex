@@ -950,7 +950,7 @@ dependencies = [
  "clap",
  "codex-common",
  "codex-core",
- "codex-git-apply",
+ "codex-git",
  "serde",
  "serde_json",
  "tempfile",
@@ -1027,7 +1027,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "codex-backend-client",
- "codex-git-apply",
+ "codex-git",
  "diffy",
  "serde",
  "serde_json",
@@ -1063,7 +1063,7 @@ dependencies = [
  "codex-apply-patch",
  "codex-async-utils",
  "codex-file-search",
- "codex-git-tooling",
+ "codex-git",
  "codex-keyring-store",
  "codex-otel",
  "codex-protocol",
@@ -1202,20 +1202,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-git-apply"
-version = "0.0.0"
-dependencies = [
- "once_cell",
- "regex",
- "tempfile",
-]
-
-[[package]]
-name = "codex-git-tooling"
+name = "codex-git"
 version = "0.0.0"
 dependencies = [
  "assert_matches",
+ "once_cell",
  "pretty_assertions",
+ "regex",
  "schemars 0.8.22",
  "serde",
  "tempfile",
@@ -1346,7 +1339,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "base64",
- "codex-git-tooling",
+ "codex-git",
  "codex-utils-image",
  "icu_decimal",
  "icu_locale_core",

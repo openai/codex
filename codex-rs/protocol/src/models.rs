@@ -12,7 +12,7 @@ use ts_rs::TS;
 
 use crate::platform;
 use crate::user_input::UserInput;
-use codex_git_tooling::GhostCommit;
+use codex_git::GhostCommit;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 

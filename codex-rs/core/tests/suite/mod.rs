@@ -10,6 +10,7 @@ mod cli_stream;
 mod client;
 mod compact;
 mod compact_resume_fork;
+mod deprecation_notice;
 mod exec;
 mod fork_conversation;
 mod grep_files;
