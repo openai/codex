@@ -9,7 +9,7 @@ on:
 # CI builds in debug (dev) for faster signal.
 
 jobs:
-  # --- Detect what changed (always runs) -------------------------------------
+  # --- Detect what changed to detect which tests to run (always runs) -------------------------------------
   changed:
     name: Detect changed areas
     runs-on: ubuntu-24.04
@@ -84,8 +84,8 @@ jobs:
         run: cargo shear
 
   # --- CI to validate on different os/targets --------------------------------
-  lint_build_test:
-    name: ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.profile == 'release' && ' (release)' || '' }}
+  lint_build:
+    name: Lint/Build — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.profile == 'release' && ' (release)' || '' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     needs: changed
@@ -94,6 +94,11 @@ jobs:
     defaults:
       run:
         working-directory: codex-rs
+    env:
+      # Speed up repeated builds across CI runs by caching compiled objects.
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_CACHE_SIZE: 10G
 
     strategy:
       fail-fast: false
@@ -159,20 +164,83 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('codex-rs/rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
 
-      - name: Restore target cache (except gnu-dev)
-        id: cache_target_restore
-        if: ${{ !(matrix.target == 'x86_64-unknown-linux-gnu' && matrix.profile != 'release') }}
+      # Install and restore sccache cache
+      - name: Install sccache
+        uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
+        with:
+          tool: sccache
+          version: 0.7.5
+
+      - name: Configure sccache backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${ACTIONS_CACHE_URL:-}" && -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
+            echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+            echo "Using sccache GitHub backend"
+          else
+            echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
+            echo "SCCACHE_DIR=${{ github.workspace }}/.sccache" >> "$GITHUB_ENV"
+            echo "Using sccache local disk + actions/cache fallback"
+          fi
+
+      - name: Restore sccache cache (fallback)
+        if: ${{ env.SCCACHE_GHA_ENABLED != 'true' }}
+        id: cache_sccache_restore
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/codex-rs/target/
-          key: cargo-target-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}
+          path: ${{ github.workspace }}/.sccache/
+          key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-
+            sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Prepare APT cache directories (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /var/cache/apt/archives /var/lib/apt/lists
+          sudo chown -R "$USER:$USER" /var/cache/apt /var/lib/apt/lists
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Restore APT cache (musl)
+        id: cache_apt_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /var/cache/apt
+          key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        shell: bash
         run: |
-          sudo apt install -y musl-tools pkg-config && sudo rm -rf /var/lib/apt/lists/*
+          set -euo pipefail
+          sudo apt-get -y update -o Acquire::Retries=3
+          sudo apt-get -y install --no-install-recommends musl-tools pkg-config
+
+      - name: Install cargo-chef
+        if: ${{ matrix.profile == 'release' }}
+        uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
+        with:
+          tool: cargo-chef
+          version: 0.1.71
+
+      - name: Pre-warm dependency cache (cargo-chef)
+        if: ${{ matrix.profile == 'release' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RECIPE="${RUNNER_TEMP}/chef-recipe.json"
+          cargo chef prepare --recipe-path "$RECIPE"
+          cargo chef cook --recipe-path "$RECIPE" --target ${{ matrix.target }} --release --all-features
 
       - name: cargo clippy
         id: clippy
@@ -191,20 +259,6 @@ jobs:
           find . -name Cargo.toml -mindepth 2 -maxdepth 2 -print0 \
             | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo check --profile ${{ matrix.profile }}'
 
-      - uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
-        with:
-          tool: nextest
-          version: 0.9.103
-
-      - name: tests
-        id: test
-        # Tests take too long for release builds to run them on every PR.
-        if: ${{ matrix.profile != 'release' }}
-        continue-on-error: true
-        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test
-        env:
-          RUST_BACKTRACE: 1
-
       # Save caches explicitly; make non-fatal so cache packaging
       # never fails the overall job. Only save when key wasn't hit.
       - name: Save cargo home cache
@@ -217,33 +271,193 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('codex-rs/rust-toolchain.toml') }}
 
-      - name: Save target cache (except gnu-dev)
-        if: >-
-          always() && !cancelled() &&
-          (steps.cache_target_restore.outputs.cache-hit != 'true') &&
-          !(matrix.target == 'x86_64-unknown-linux-gnu' && matrix.profile != 'release')
+      - name: Save sccache cache (fallback)
+        if: always() && !cancelled() && env.SCCACHE_GHA_ENABLED != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/codex-rs/target/
-          key: cargo-target-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}
+          path: ${{ github.workspace }}/.sccache/
+          key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+
+      - name: sccache stats
+        if: always()
+        continue-on-error: true
+        run: sccache --show-stats || true
+
+      - name: sccache summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### sccache stats — ${{ matrix.target }} (${{ matrix.profile }})";
+            echo;
+            echo '```';
+            sccache --show-stats || true;
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save APT cache (musl)
+        if: always() && !cancelled() && (matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl') && steps.cache_apt_restore.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /var/cache/apt
+          key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
 
       # Fail the job if any of the previous steps failed.
       - name: verify all steps passed
         if: |
           steps.clippy.outcome == 'failure' ||
-          steps.cargo_check_all_crates.outcome == 'failure' ||
-          steps.test.outcome == 'failure'
+          steps.cargo_check_all_crates.outcome == 'failure'
         run: |
-          echo "One or more checks failed (clippy, cargo_check_all_crates, or test). See logs for details."
+          echo "One or more checks failed (clippy or cargo_check_all_crates). See logs for details."
+          exit 1
+
+  tests:
+    name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    needs: changed
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_CACHE_SIZE: 10G
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            profile: dev
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            profile: dev
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            profile: dev
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            profile: dev
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            profile: dev
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.90
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Restore cargo home cache
+        id: cache_cargo_home_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('codex-rs/rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
+
+      - name: Install sccache
+        uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
+        with:
+          tool: sccache
+          version: 0.7.5
+
+      - name: Configure sccache backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${ACTIONS_CACHE_URL:-}" && -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
+            echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+            echo "Using sccache GitHub backend"
+          else
+            echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
+            echo "SCCACHE_DIR=${{ github.workspace }}/.sccache" >> "$GITHUB_ENV"
+            echo "Using sccache local disk + actions/cache fallback"
+          fi
+
+      - name: Restore sccache cache (fallback)
+        if: ${{ env.SCCACHE_GHA_ENABLED != 'true' }}
+        id: cache_sccache_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.sccache/
+          key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-
+            sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
+
+      - uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
+        with:
+          tool: nextest
+          version: 0.9.103
+
+      - name: tests
+        id: test
+        continue-on-error: true
+        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test
+        env:
+          RUST_BACKTRACE: 1
+
+      - name: Save cargo home cache
+        if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('codex-rs/rust-toolchain.toml') }}
+
+      - name: Save sccache cache (fallback)
+        if: always() && !cancelled() && env.SCCACHE_GHA_ENABLED != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.sccache/
+          key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+
+      - name: sccache stats
+        if: always()
+        continue-on-error: true
+        run: sccache --show-stats || true
+
+      - name: sccache summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### sccache stats — ${{ matrix.target }} (tests)";
+            echo;
+            echo '```';
+            sccache --show-stats || true;
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: verify tests passed
+        if: steps.test.outcome == 'failure'
+        run: |
+          echo "Tests failed. See logs for details."
           exit 1
 
   # --- Gatherer job that you mark as the ONLY required status -----------------
   results:
     name: CI results (required)
-    needs: [changed, general, cargo_shear, lint_build_test]
+    needs: [changed, general, cargo_shear, lint_build, tests]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -252,7 +466,8 @@ jobs:
         run: |
           echo "general: ${{ needs.general.result }}"
           echo "shear  : ${{ needs.cargo_shear.result }}"
-          echo "matrix : ${{ needs.lint_build_test.result }}"
+          echo "lint   : ${{ needs.lint_build.result }}"
+          echo "tests  : ${{ needs.tests.result }}"
 
           # If nothing relevant changed (PR touching only root README, etc.),
           # declare success regardless of other jobs.
@@ -264,4 +479,10 @@ jobs:
           # Otherwise require the jobs to have succeeded
           [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
           [[ '${{ needs.cargo_shear.result }}' == 'success' ]] || { echo 'cargo_shear failed'; exit 1; }
-          [[ '${{ needs.lint_build_test.result }}' == 'success' ]] || { echo 'matrix failed'; exit 1; }
+          [[ '${{ needs.lint_build.result }}' == 'success' ]] || { echo 'lint_build failed'; exit 1; }
+          [[ '${{ needs.tests.result }}' == 'success' ]] || { echo 'tests failed'; exit 1; }
+
+      - name: sccache summary note
+        if: always()
+        run: |
+          echo "Per-job sccache stats are attached to each matrix job's Step Summary."

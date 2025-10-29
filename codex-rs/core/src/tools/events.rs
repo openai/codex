@@ -19,7 +19,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use super::format_exec_output;
 use super::format_exec_output_str;
 
 #[derive(Clone, Copy)]
@@ -57,7 +56,12 @@ pub(crate) enum ToolEventFailure {
     Message(String),
 }
 
-pub(crate) async fn emit_exec_command_begin(ctx: ToolEventCtx<'_>, command: &[String], cwd: &Path) {
+pub(crate) async fn emit_exec_command_begin(
+    ctx: ToolEventCtx<'_>,
+    command: &[String],
+    cwd: &Path,
+    is_user_shell_command: bool,
+) {
     ctx.session
         .send_event(
             ctx.turn,
@@ -66,6 +70,7 @@ pub(crate) async fn emit_exec_command_begin(ctx: ToolEventCtx<'_>, command: &[St
                 command: command.to_vec(),
                 cwd: cwd.to_path_buf(),
                 parsed_cmd: parse_command(command),
+                is_user_shell_command,
             }),
         )
         .await;
@@ -75,6 +80,7 @@ pub(crate) enum ToolEmitter {
     Shell {
         command: Vec<String>,
         cwd: PathBuf,
+        is_user_shell_command: bool,
     },
     ApplyPatch {
         changes: HashMap<PathBuf, FileChange>,
@@ -90,8 +96,12 @@ pub(crate) enum ToolEmitter {
 }
 
 impl ToolEmitter {
-    pub fn shell(command: Vec<String>, cwd: PathBuf) -> Self {
-        Self::Shell { command, cwd }
+    pub fn shell(command: Vec<String>, cwd: PathBuf, is_user_shell_command: bool) -> Self {
+        Self::Shell {
+            command,
+            cwd,
+            is_user_shell_command,
+        }
     }
 
     pub fn apply_patch(changes: HashMap<PathBuf, FileChange>, auto_approved: bool) -> Self {
@@ -111,8 +121,15 @@ impl ToolEmitter {
 
     pub async fn emit(&self, ctx: ToolEventCtx<'_>, stage: ToolEventStage) {
         match (self, stage) {
-            (Self::Shell { command, cwd }, ToolEventStage::Begin) => {
-                emit_exec_command_begin(ctx, command, cwd.as_path()).await;
+            (
+                Self::Shell {
+                    command,
+                    cwd,
+                    is_user_shell_command,
+                },
+                ToolEventStage::Begin,
+            ) => {
+                emit_exec_command_begin(ctx, command, cwd.as_path(), *is_user_shell_command).await;
             }
             (Self::Shell { .. }, ToolEventStage::Success(output)) => {
                 emit_exec_end(
@@ -146,7 +163,7 @@ impl ToolEmitter {
                     (*message).to_string(),
                     -1,
                     Duration::ZERO,
-                    format_exec_output(&message),
+                    message.clone(),
                 )
                 .await;
             }
@@ -201,7 +218,7 @@ impl ToolEmitter {
                 emit_patch_end(ctx, String::new(), (*message).to_string(), false).await;
             }
             (Self::UnifiedExec { command, cwd, .. }, ToolEventStage::Begin) => {
-                emit_exec_command_begin(ctx, &[command.to_string()], cwd.as_path()).await;
+                emit_exec_command_begin(ctx, &[command.to_string()], cwd.as_path(), false).await;
             }
             (Self::UnifiedExec { .. }, ToolEventStage::Success(output)) => {
                 emit_exec_end(
@@ -241,7 +258,7 @@ impl ToolEmitter {
                     (*message).to_string(),
                     -1,
                     Duration::ZERO,
-                    format_exec_output(&message),
+                    message.clone(),
                 )
                 .await;
             }
@@ -277,7 +294,7 @@ impl ToolEmitter {
             }
             Err(ToolError::Codex(err)) => {
                 let message = format!("execution error: {err:?}");
-                let response = super::format_exec_output(&message);
+                let response = message.clone();
                 event = ToolEventStage::Failure(ToolEventFailure::Message(message));
                 Err(FunctionCallError::RespondToModel(response))
             }
@@ -289,9 +306,9 @@ impl ToolEmitter {
                 } else {
                     msg
                 };
-                let response = super::format_exec_output(&normalized);
-                event = ToolEventStage::Failure(ToolEventFailure::Message(normalized));
-                Err(FunctionCallError::RespondToModel(response))
+                let response = &normalized;
+                event = ToolEventStage::Failure(ToolEventFailure::Message(normalized.clone()));
+                Err(FunctionCallError::RespondToModel(response.clone()))
             }
         };
         self.emit(ctx, event).await;

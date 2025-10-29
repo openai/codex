@@ -506,6 +506,7 @@ fn exec_command_end_success_produces_completed_command_item() {
             command: vec!["bash".to_string(), "-lc".to_string(), "echo hi".to_string()],
             cwd: std::env::current_dir().unwrap(),
             parsed_cmd: Vec::new(),
+            is_user_shell_command: false,
         }),
     );
     let out_begin = ep.collect_thread_events(&begin);
@@ -566,6 +567,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
             command: vec!["sh".to_string(), "-c".to_string(), "exit 1".to_string()],
             cwd: std::env::current_dir().unwrap(),
             parsed_cmd: Vec::new(),
+            is_user_shell_command: false,
         }),
     );
     assert_eq!(

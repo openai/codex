@@ -127,11 +127,7 @@ impl HistoryCell for UserHistoryCell {
         let style = user_message_style();
 
         let wrapped = word_wrap_lines(
-            &self
-                .message
-                .lines()
-                .map(|l| Line::from(l).style(style))
-                .collect::<Vec<_>>(),
+            self.message.lines().map(|l| Line::from(l).style(style)),
             // Wrap algorithm matches textarea.rs.
             RtOptions::new(usize::from(wrap_width))
                 .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
@@ -465,7 +461,7 @@ struct CompletedMcpToolCallWithImageOutput {
 }
 impl HistoryCell for CompletedMcpToolCallWithImageOutput {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        vec!["tool result (image output omitted)".into()]
+        vec!["tool result (image output)".into()]
     }
 }
 
@@ -880,18 +876,20 @@ impl HistoryCell for McpToolCallCell {
         }
 
         let mut detail_lines: Vec<Line<'static>> = Vec::new();
+        // Reserve four columns for the tree prefix ("  └ "/"    ") and ensure the wrapper still has at least one cell to work with.
+        let detail_wrap_width = (width as usize).saturating_sub(4).max(1);
 
         if let Some(result) = &self.result {
             match result {
                 Ok(mcp_types::CallToolResult { content, .. }) => {
                     if !content.is_empty() {
                         for block in content {
-                            let text = Self::render_content_block(block, width as usize);
+                            let text = Self::render_content_block(block, detail_wrap_width);
                             for segment in text.split('\n') {
                                 let line = Line::from(segment.to_string().dim());
                                 let wrapped = word_wrap_line(
                                     &line,
-                                    RtOptions::new((width as usize).saturating_sub(4))
+                                    RtOptions::new(detail_wrap_width)
                                         .initial_indent("".into())
                                         .subsequent_indent("    ".into()),
                                 );
@@ -909,7 +907,7 @@ impl HistoryCell for McpToolCallCell {
                     let err_line = Line::from(err_text.dim());
                     let wrapped = word_wrap_line(
                         &err_line,
-                        RtOptions::new((width as usize).saturating_sub(4))
+                        RtOptions::new(detail_wrap_width)
                             .initial_indent("".into())
                             .subsequent_indent("    ".into()),
                     );
@@ -1007,6 +1005,38 @@ pub(crate) fn new_warning_event(message: String) -> PlainHistoryCell {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct DeprecationNoticeCell {
+    summary: String,
+    details: Option<String>,
+}
+
+pub(crate) fn new_deprecation_notice(
+    summary: String,
+    details: Option<String>,
+) -> DeprecationNoticeCell {
+    DeprecationNoticeCell { summary, details }
+}
+
+impl HistoryCell for DeprecationNoticeCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(vec!["⚠ ".red().bold(), self.summary.clone().red()].into());
+
+        let wrap_width = width.saturating_sub(4).max(1) as usize;
+
+        if let Some(details) = &self.details {
+            let line = textwrap::wrap(details, wrap_width)
+                .into_iter()
+                .map(|s| s.to_string().dim().into())
+                .collect::<Vec<_>>();
+            lines.extend(line);
+        }
+
+        lines
+    }
+}
+
 /// Render a summary of configured MCP servers from the current `Config`.
 pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
     let lines: Vec<Line<'static>> = vec![
@@ -1047,7 +1077,10 @@ pub(crate) fn new_mcp_tools_output(
         return PlainHistoryCell { lines };
     }
 
-    for (server, cfg) in config.mcp_servers.iter() {
+    let mut servers: Vec<_> = config.mcp_servers.iter().collect();
+    servers.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    for (server, cfg) in servers {
         let prefix = format!("mcp__{server}__");
         let mut names: Vec<String> = tools
             .keys()
@@ -1111,7 +1144,7 @@ pub(crate) fn new_mcp_tools_output(
                     pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
                     let display = pairs
                         .into_iter()
-                        .map(|(name, value)| format!("{name}={value}"))
+                        .map(|(name, _)| format!("{name}=*****"))
                         .collect::<Vec<_>>()
                         .join(", ");
                     lines.push(vec!["    • HTTP headers: ".into(), display.into()].into());
@@ -1123,7 +1156,7 @@ pub(crate) fn new_mcp_tools_output(
                     pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
                     let display = pairs
                         .into_iter()
-                        .map(|(name, env_var)| format!("{name}={env_var}"))
+                        .map(|(name, var)| format!("{name}={var}"))
                         .collect::<Vec<_>>()
                         .join(", ");
                     lines.push(vec!["    • Env HTTP headers: ".into(), display.into()].into());
@@ -1297,6 +1330,8 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
                 aggregated_output: stderr,
             }),
             OutputLinesParams {
+                line_limit: TOOL_CALL_MAX_LINES,
+                only_err: true,
                 include_angle_pipe: true,
                 include_prefix: true,
             },
@@ -1415,14 +1450,20 @@ mod tests {
     use codex_core::config::Config;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ConfigToml;
+    use codex_core::config_types::McpServerConfig;
+    use codex_core::config_types::McpServerTransportConfig;
+    use codex_core::protocol::McpAuthStatus;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::collections::HashMap;
 
     use mcp_types::CallToolResult;
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
+    use mcp_types::Tool;
+    use mcp_types::ToolInputSchema;
 
     fn test_config() -> Config {
         Config::load_from_base_config_with_overrides(
@@ -1447,6 +1488,91 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines(u16::MAX))
+    }
+
+    #[test]
+    fn mcp_tools_output_masks_sensitive_values() {
+        let mut config = test_config();
+        let mut env = HashMap::new();
+        env.insert("TOKEN".to_string(), "secret".to_string());
+        let stdio_config = McpServerConfig {
+            transport: McpServerTransportConfig::Stdio {
+                command: "docs-server".to_string(),
+                args: vec![],
+                env: Some(env),
+                env_vars: vec!["APP_TOKEN".to_string()],
+                cwd: None,
+            },
+            enabled: true,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            enabled_tools: None,
+            disabled_tools: None,
+        };
+        config.mcp_servers.insert("docs".to_string(), stdio_config);
+
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer secret".to_string());
+        let mut env_headers = HashMap::new();
+        env_headers.insert("X-API-Key".to_string(), "API_KEY_ENV".to_string());
+        let http_config = McpServerConfig {
+            transport: McpServerTransportConfig::StreamableHttp {
+                url: "https://example.com/mcp".to_string(),
+                bearer_token_env_var: Some("MCP_TOKEN".to_string()),
+                http_headers: Some(headers),
+                env_http_headers: Some(env_headers),
+            },
+            enabled: true,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            enabled_tools: None,
+            disabled_tools: None,
+        };
+        config.mcp_servers.insert("http".to_string(), http_config);
+
+        let mut tools: HashMap<String, Tool> = HashMap::new();
+        tools.insert(
+            "mcp__docs__list".to_string(),
+            Tool {
+                annotations: None,
+                description: None,
+                input_schema: ToolInputSchema {
+                    properties: None,
+                    required: None,
+                    r#type: "object".to_string(),
+                },
+                name: "list".to_string(),
+                output_schema: None,
+                title: None,
+            },
+        );
+        tools.insert(
+            "mcp__http__ping".to_string(),
+            Tool {
+                annotations: None,
+                description: None,
+                input_schema: ToolInputSchema {
+                    properties: None,
+                    required: None,
+                    r#type: "object".to_string(),
+                },
+                name: "ping".to_string(),
+                output_schema: None,
+                title: None,
+            },
+        );
+
+        let auth_statuses: HashMap<String, McpAuthStatus> = HashMap::new();
+        let cell = new_mcp_tools_output(
+            &config,
+            tools,
+            HashMap::new(),
+            HashMap::new(),
+            &auth_statuses,
+        );
+        let rendered = render_lines(&cell.display_lines(120)).join("\n");
+
+        insta::assert_snapshot!(rendered);
     }
 
     #[test]
@@ -1733,6 +1859,7 @@ mod tests {
                 },
             ],
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -1755,6 +1882,7 @@ mod tests {
                 cmd: "rg shimmer_spans".into(),
             }],
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -1770,6 +1898,7 @@ mod tests {
                     cmd: "cat shimmer.rs".into(),
                     path: "shimmer.rs".into(),
                 }],
+                false,
             )
             .unwrap();
         cell.complete_call("c2", CommandOutput::default(), Duration::from_millis(1));
@@ -1783,6 +1912,7 @@ mod tests {
                     cmd: "cat status_indicator_widget.rs".into(),
                     path: "status_indicator_widget.rs".into(),
                 }],
+                false,
             )
             .unwrap();
         cell.complete_call("c3", CommandOutput::default(), Duration::from_millis(1));
@@ -1815,6 +1945,7 @@ mod tests {
                 },
             ],
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -1834,6 +1965,7 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), cmd],
             parsed: Vec::new(),
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -1855,6 +1987,7 @@ mod tests {
             command: vec!["echo".into(), "ok".into()],
             parsed: Vec::new(),
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -1874,6 +2007,7 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), long],
             parsed: Vec::new(),
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -1892,6 +2026,7 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), cmd],
             parsed: Vec::new(),
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -1911,6 +2046,7 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), cmd],
             parsed: Vec::new(),
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -1930,6 +2066,7 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), "seq 1 10 1>&2 && false".into()],
             parsed: Vec::new(),
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -1975,6 +2112,7 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), long_cmd.to_string()],
             parsed: Vec::new(),
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -2152,5 +2290,22 @@ mod tests {
 
         let rendered_transcript = render_transcript(cell.as_ref());
         assert_eq!(rendered_transcript, vec!["• We should fix the bug next."]);
+    }
+
+    #[test]
+    fn deprecation_notice_renders_summary_with_details() {
+        let cell = new_deprecation_notice(
+            "Feature flag `foo`".to_string(),
+            Some("Use flag `bar` instead.".to_string()),
+        );
+        let lines = cell.display_lines(80);
+        let rendered = render_lines(&lines);
+        assert_eq!(
+            rendered,
+            vec![
+                "⚠ Feature flag `foo`".to_string(),
+                "Use flag `bar` instead.".to_string(),
+            ]
+        );
     }
 }

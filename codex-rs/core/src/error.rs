@@ -55,7 +55,7 @@ pub enum SandboxErr {
 #[derive(Error, Debug)]
 pub enum CodexErr {
     // todo(aibrahim): git rid of this error carrying the dangling artifacts
-    #[error("turn aborted")]
+    #[error("turn aborted. Something went wrong? Hit `/feedback` to report the issue.")]
     TurnAborted {
         dangling_artifacts: Vec<ProcessedResponseItem>,
     },
@@ -91,7 +91,7 @@ pub enum CodexErr {
 
     /// Returned by run_command_stream when the user pressed Ctrl‑C (SIGINT). Session uses this to
     /// surface a polite FunctionCallOutput back to the model instead of crashing the CLI.
-    #[error("interrupted (Ctrl-C)")]
+    #[error("interrupted (Ctrl-C). Something went wrong? Hit `/feedback` to report the issue.")]
     Interrupted,
 
     /// Unexpected HTTP status code.

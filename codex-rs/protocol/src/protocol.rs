@@ -34,6 +34,12 @@ use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
 
+pub use crate::approvals::ApplyPatchApprovalRequestEvent;
+pub use crate::approvals::ExecApprovalRequestEvent;
+pub use crate::approvals::SandboxCommandAssessment;
+pub use crate::approvals::SandboxRiskCategory;
+pub use crate::approvals::SandboxRiskLevel;
+
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
 pub const USER_INSTRUCTIONS_OPEN_TAG: &str = "<user_instructions>";
@@ -160,10 +166,6 @@ pub enum Op {
     /// Request a single history entry identified by `log_id` + `offset`.
     GetHistoryEntryRequest { offset: usize, log_id: u64 },
 
-    /// Request the full in-memory conversation transcript for the current session.
-    /// Reply is delivered via `EventMsg::ConversationHistory`.
-    GetPath,
-
     /// Request the list of MCP tools available across all configured servers.
     /// Reply is delivered via `EventMsg::McpListToolsResponse`.
     ListMcpTools,
@@ -176,11 +178,24 @@ pub enum Op {
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
 
+    /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
+    Undo,
+
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
 
     /// Request to shut down codex instance.
     Shutdown,
+
+    /// Execute a user-initiated one-off shell command (triggered by "!cmd").
+    ///
+    /// The command string is executed using the user's default shell and may
+    /// include shell syntax (pipes, redirects, etc.). Output is streamed via
+    /// `ExecCommand*` events and the UI regains control upon `TaskComplete`.
+    RunUserShellCommand {
+        /// The raw command string after '!'
+        command: String,
+    },
 }
 
 /// Determines the conditions under which the user is consulted to approve
@@ -482,7 +497,15 @@ pub enum EventMsg {
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
 
+    /// Notification advising the user that something they are using has been
+    /// deprecated and should be phased out.
+    DeprecationNotice(DeprecationNoticeEvent),
+
     BackgroundEvent(BackgroundEventEvent),
+
+    UndoStarted(UndoStartedEvent),
+
+    UndoCompleted(UndoCompletedEvent),
 
     /// Notification that a model stream experienced an error or disconnect
     /// and the system is handling it (e.g., retrying with backoff).
@@ -513,13 +536,13 @@ pub enum EventMsg {
     /// Notification that the agent is shutting down.
     ShutdownComplete,
 
-    ConversationPath(ConversationPathResponseEvent),
-
     /// Entered review mode.
     EnteredReviewMode(ReviewRequest),
 
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
+
+    RawResponseItem(ResponseItem),
 
     ItemStarted(ItemStartedEvent),
     ItemCompleted(ItemCompletedEvent),
@@ -805,7 +828,7 @@ pub struct AgentReasoningDeltaEvent {
     pub delta: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
 pub struct McpInvocation {
     /// Name of the MCP server as defined in the config.
     pub server: String,
@@ -815,14 +838,14 @@ pub struct McpInvocation {
     pub arguments: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
 pub struct McpToolCallBeginEvent {
     /// Identifier so this can be paired with the McpToolCallEnd event.
     pub call_id: String,
     pub invocation: McpInvocation,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
 pub struct McpToolCallEndEvent {
     /// Identifier for the corresponding McpToolCallBegin that finished.
     pub call_id: String,
@@ -933,6 +956,7 @@ pub struct SessionMeta {
     pub instructions: Option<String>,
     #[serde(default)]
     pub source: SessionSource,
+    pub model_provider: Option<String>,
 }
 
 impl Default for SessionMeta {
@@ -945,6 +969,7 @@ impl Default for SessionMeta {
             cli_version: String::new(),
             instructions: None,
             source: SessionSource::default(),
+            model_provider: None,
         }
     }
 }
@@ -1075,6 +1100,10 @@ pub struct ExecCommandBeginEvent {
     /// The command's working directory if not the default cwd for the agent.
     pub cwd: PathBuf,
     pub parsed_cmd: Vec<ParsedCommand>,
+    /// True when this exec was initiated directly by the user (e.g. bang command),
+    /// not by the agent/model. Defaults to false for backwards compatibility.
+    #[serde(default)]
+    pub is_user_shell_command: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1127,35 +1156,30 @@ pub struct ExecCommandOutputDeltaEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ExecApprovalRequestEvent {
-    /// Identifier for the associated exec call, if available.
-    pub call_id: String,
-    /// The command to be executed.
-    pub command: Vec<String>,
-    /// The command's working directory.
-    pub cwd: PathBuf,
-    /// Optional human-readable reason for the approval (e.g. retry without sandbox).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    pub parsed_cmd: Vec<ParsedCommand>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ApplyPatchApprovalRequestEvent {
-    /// Responses API call id for the associated patch apply call, if available.
-    pub call_id: String,
-    pub changes: HashMap<PathBuf, FileChange>,
-    /// Optional explanatory reason (e.g. request for extra write access).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    /// When set, the agent is asking the user to allow writes under this root for the remainder of the session.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub grant_root: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct BackgroundEventEvent {
     pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct DeprecationNoticeEvent {
+    /// Concise summary of what is deprecated.
+    pub summary: String,
+    /// Optional extra guidance, such as migration steps or rationale.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct UndoStartedEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct UndoCompletedEvent {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
