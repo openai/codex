@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use async_channel::Receiver;
-use async_channel::Sender;
 use codex_async_utils::OrCancelExt;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -21,18 +20,6 @@ use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::CodexErr;
 use codex_protocol::protocol::InitialHistory;
-
-/// Channels for interacting with a sub-Codex conversation.
-///
-/// - `events_rx` streams non-approval `EventMsg`s from the sub-agent.
-///   Approval requests are handled internally via the parent session and are not surfaced here.
-/// - `ops_tx` allows callers to submit `Op`s to the sub-agent (e.g., `Op::UserInput`,
-///   `Op::ExecApproval`, `Op::PatchApproval`).
-#[derive(Clone)]
-pub(crate) struct ConversationIo {
-    pub events_rx: Receiver<EventMsg>,
-    pub ops_tx: Sender<Op>,
-}
 
 /// Start an interactive sub-Codex conversation and return IO channels.
 ///
