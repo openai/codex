@@ -76,38 +76,13 @@ pub(crate) fn create_env_for_mcp_server(
     extra_env: Option<HashMap<String, String>>,
     env_vars: &[String],
 ) -> HashMap<String, String> {
-    #[cfg(windows)]
-    let mut map: HashMap<String, String> = DEFAULT_ENV_VARS
+    DEFAULT_ENV_VARS
         .iter()
         .copied()
         .chain(env_vars.iter().map(String::as_str))
         .filter_map(|var| env::var(var).ok().map(|value| (var.to_string(), value)))
         .chain(extra_env.unwrap_or_default())
-        .collect();
-
-    #[cfg(not(windows))]
-    let map: HashMap<String, String> = DEFAULT_ENV_VARS
-        .iter()
-        .copied()
-        .chain(env_vars.iter().map(String::as_str))
-        .filter_map(|var| env::var(var).ok().map(|value| (var.to_string(), value)))
-        .chain(extra_env.unwrap_or_default())
-        .collect();
-
-    #[cfg(windows)]
-    {
-        if let Some(v) = map
-            .get("PATH")
-            .cloned()
-            .or_else(|| map.get("Path").cloned())
-            .or_else(|| env::var("PATH").ok())
-        {
-            map.insert("PATH".to_string(), v.clone());
-            map.insert("Path".to_string(), v);
-        }
-    }
-
-    map
+        .collect()
 }
 
 pub(crate) fn build_default_headers(
@@ -196,33 +171,13 @@ pub(crate) const DEFAULT_ENV_VARS: &[&str] = &[
 
 #[cfg(windows)]
 pub(crate) const DEFAULT_ENV_VARS: &[&str] = &[
-    // Core path resolution
     "PATH",
     "PATHEXT",
-    // Shell and system roots
-    "COMSPEC",
-    "SYSTEMROOT",
-    "SYSTEMDRIVE",
-    // User context and profiles
     "USERNAME",
     "USERDOMAIN",
     "USERPROFILE",
-    "HOMEDRIVE",
-    "HOMEPATH",
-    // Program locations
-    "PROGRAMFILES",
-    "PROGRAMFILES(X86)",
-    "PROGRAMW6432",
-    "PROGRAMDATA",
-    // App data and caches
-    "LOCALAPPDATA",
-    "APPDATA",
-    // Temp locations
     "TEMP",
     "TMP",
-    // Common shells/pwsh hints
-    "POWERSHELL",
-    "PWSH",
 ];
 
 #[cfg(test)]
@@ -266,16 +221,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn windows_path_alias_is_present() {
-        let _guard = EnvVarGuard::set("PATH", r"C:\\Windows;C:\\Windows\\System32");
-        let env = create_env_for_mcp_server(None, &[]);
-        assert!(env.contains_key("PATH"));
-        assert!(env.contains_key("Path"));
-        assert_eq!(env.get("PATH"), env.get("Path"));
     }
 
     #[tokio::test]
