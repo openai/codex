@@ -132,9 +132,9 @@ use self::compact::collect_user_messages;
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
 pub struct Codex {
-    next_id: AtomicU64,
-    tx_sub: Sender<Submission>,
-    rx_event: Receiver<Event>,
+    pub(crate) next_id: AtomicU64,
+    pub(crate) tx_sub: Sender<Submission>,
+    pub(crate) rx_event: Receiver<Event>,
 }
 
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],

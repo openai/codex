@@ -3,6 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
@@ -63,7 +64,7 @@ async fn start_review_conversation(
     ctx: Arc<TurnContext>,
     input: Vec<UserInput>,
     cancellation_token: CancellationToken,
-) -> Option<async_channel::Receiver<EventMsg>> {
+) -> Option<async_channel::Receiver<Event>> {
     let config = ctx.client.config();
     let mut sub_agent_config = config.as_ref().clone();
     // Run with only reviewer rubric — drop outer user_instructions
@@ -93,20 +94,23 @@ async fn start_review_conversation(
     )
     .await)
         .ok()
-        .map(|io| io.events_rx)
+        .map(|io| io.rx_event)
 }
 
 async fn process_review_events(
     session: Arc<SessionTaskContext>,
     ctx: Arc<TurnContext>,
-    receiver: async_channel::Receiver<EventMsg>,
+    receiver: async_channel::Receiver<Event>,
 ) -> Option<ReviewOutputEvent> {
-    let mut prev_agent_message: Option<EventMsg> = None;
+    let mut prev_agent_message: Option<Event> = None;
     while let Ok(event) = receiver.recv().await {
-        match event.clone() {
+        match event.clone().msg {
             EventMsg::AgentMessage(_) => {
                 if let Some(prev) = prev_agent_message.take() {
-                    session.clone_session().send_event(ctx.as_ref(), prev).await;
+                    session
+                        .clone_session()
+                        .send_event(ctx.as_ref(), prev.msg)
+                        .await;
                 }
                 prev_agent_message = Some(event);
             }

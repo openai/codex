@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -7,6 +8,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::Submission;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 
@@ -43,7 +45,7 @@ pub(crate) async fn run_codex_conversation_interactive(
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
-) -> Result<ConversationIo, CodexErr> {
+) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
 
@@ -80,17 +82,18 @@ pub(crate) async fn run_codex_conversation_interactive(
     let codex_for_ops = Arc::clone(&codex);
     tokio::spawn(async move {
         loop {
-            let op = match rx_ops.recv().or_cancel(&cancel_token_ops).await {
-                Ok(Ok(op)) => op,
+            let op: Op = match rx_ops.recv().or_cancel(&cancel_token_ops).await {
+                Ok(Ok(Submission { id: _, op })) => op,
                 Ok(Err(_)) | Err(_) => break,
             };
             let _ = codex_for_ops.submit(op).await;
         }
     });
 
-    Ok(ConversationIo {
-        events_rx: rx_sub,
-        ops_tx: tx_ops,
+    Ok(Codex {
+        next_id: AtomicU64::new(0),
+        tx_sub: tx_ops,
+        rx_event: rx_sub,
     })
 }
 
@@ -104,7 +107,7 @@ pub(crate) async fn run_codex_conversation_one_shot(
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
-) -> Result<ConversationIo, CodexErr> {
+) -> Result<Codex, CodexErr> {
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
     let child_cancel = cancel_token.child_token();
@@ -118,37 +121,47 @@ pub(crate) async fn run_codex_conversation_one_shot(
     .await?;
 
     // Send the initial input to kick off the one-shot turn.
-    io.ops_tx
-        .send(Op::UserInput { items: input })
-        .await
-        .map_err(|err| CodexErr::Fatal(format!("failed to send initial input op: {err}")))?;
+    io.submit(Op::UserInput { items: input }).await?;
 
     // Bridge events so we can observe completion and shut down automatically.
     let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
-    let ops_tx = io.ops_tx.clone();
-    let events_rx = io.events_rx.clone();
+    let ops_tx = io.tx_sub.clone();
     tokio::spawn(async move {
-        while let Ok(event) = events_rx.recv().await {
-            let should_shutdown =
-                matches!(event, EventMsg::TaskComplete(_) | EventMsg::TurnAborted(_));
+        while let Ok(event) = io.next_event().await {
+            let should_shutdown = matches!(
+                event.msg,
+                EventMsg::TaskComplete(_) | EventMsg::TurnAborted(_)
+            );
             let _ = tx_bridge.send(event).await;
             if should_shutdown {
-                let _ = ops_tx.send(Op::Shutdown {}).await;
+                let _ = ops_tx
+                    .send(Submission {
+                        id: "shutdown".to_string(),
+                        op: Op::Shutdown {},
+                    })
+                    .await;
                 child_cancel.cancel();
                 break;
             }
         }
     });
 
-    Ok(ConversationIo {
-        events_rx: rx_bridge,
-        ops_tx: io.ops_tx,
+    // For one-shot usage, return a closed `tx_sub` so callers cannot submit
+    // additional ops after the initial request. Create a channel and drop the
+    // receiver to close it immediately.
+    let (tx_closed, rx_closed) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
+    drop(rx_closed);
+
+    Ok(Codex {
+        next_id: AtomicU64::new(0),
+        rx_event: rx_bridge,
+        tx_sub: tx_closed,
     })
 }
 
 async fn forward_events(
     codex: Arc<Codex>,
-    tx_sub: Sender<EventMsg>,
+    tx_sub: Sender<Event>,
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
 ) {
@@ -196,7 +209,7 @@ async fn forward_events(
                     .await;
             }
             other => {
-                let _ = tx_sub.send(other.msg).await;
+                let _ = tx_sub.send(other).await;
             }
         }
     }
