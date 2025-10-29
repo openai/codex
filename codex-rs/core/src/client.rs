@@ -56,7 +56,6 @@ use crate::openai_model_info::get_model_info;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::RateLimitWindow;
 use crate::protocol::TokenUsage;
-use crate::state::TaskKind;
 use crate::token_data::PlanType;
 use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::util::backoff;
@@ -127,13 +126,6 @@ impl ModelClient {
         })
     }
 
-    /// Dispatches to either the Responses or Chat implementation depending on
-    /// the provider config.  Public callers always invoke `stream()` – the
-    /// specialised helpers are private to avoid accidental misuse.
-    pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
-        self.stream_with_task_kind(prompt, TaskKind::Regular).await
-    }
-
     pub fn config(&self) -> Arc<Config> {
         Arc::clone(&self.config)
     }
@@ -142,13 +134,9 @@ impl ModelClient {
         &self.provider
     }
 
-    pub(crate) async fn stream_with_task_kind(
-        &self,
-        prompt: &Prompt,
-        task_kind: TaskKind,
-    ) -> Result<ResponseStream> {
+    pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
         match self.provider.wire_api {
-            WireApi::Responses => self.stream_responses(prompt, task_kind).await,
+            WireApi::Responses => self.stream_responses(prompt).await,
             WireApi::Chat => {
                 // Create the raw streaming connection first.
                 let response_stream = stream_chat_completions(
@@ -189,11 +177,7 @@ impl ModelClient {
     }
 
     /// Implementation for the OpenAI *Responses* experimental API.
-    async fn stream_responses(
-        &self,
-        prompt: &Prompt,
-        task_kind: TaskKind,
-    ) -> Result<ResponseStream> {
+    async fn stream_responses(&self, prompt: &Prompt) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             // short circuit for tests
             warn!(path, "Streaming from fixture");
@@ -268,7 +252,7 @@ impl ModelClient {
         let max_attempts = self.provider.request_max_retries();
         for attempt in 0..=max_attempts {
             match self
-                .attempt_stream_responses(attempt, &payload_json, &auth_manager, task_kind)
+                .attempt_stream_responses(attempt, &payload_json, &auth_manager)
                 .await
             {
                 Ok(stream) => {
@@ -296,7 +280,6 @@ impl ModelClient {
         attempt: u64,
         payload_json: &Value,
         auth_manager: &Option<Arc<AuthManager>>,
-        task_kind: TaskKind,
     ) -> std::result::Result<ResponseStream, StreamAttemptError> {
         // Always fetch the latest auth in case a prior attempt refreshed the token.
         let auth = auth_manager.as_ref().and_then(|m| m.auth());
@@ -319,7 +302,6 @@ impl ModelClient {
             .header("conversation_id", self.conversation_id.to_string())
             .header("session_id", self.conversation_id.to_string())
             .header(reqwest::header::ACCEPT, "text/event-stream")
-            .header("Codex-Task-Type", task_kind.header_value())
             .json(payload_json);
 
         if let Some(auth) = auth.as_ref()

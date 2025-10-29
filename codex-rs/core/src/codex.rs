@@ -96,7 +96,6 @@ use crate::shell;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
-use crate::state::TaskKind;
 use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
@@ -1096,6 +1095,17 @@ impl Session {
         turn_context: Arc<TurnContext>,
         cancellation_token: CancellationToken,
     ) {
+        // If we're not inside a Git repository, skip spawning the ghost snapshot task.
+        // Skipping the subscription means the tool gate will auto-mark ready
+        // on the first waiter, allowing tool execution to proceed immediately.
+        if !looks_like_git_repo(&turn_context.cwd) {
+            info!(
+                "skipping ghost snapshot: no .git directory found for cwd {}",
+                turn_context.cwd.display()
+            );
+            return;
+        }
+
         let token = match turn_context.tool_call_gate.subscribe().await {
             Ok(token) => token,
             Err(err) => {
@@ -1207,6 +1217,18 @@ impl Session {
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
     }
+}
+
+fn looks_like_git_repo(path: &std::path::Path) -> bool {
+    let mut current = Some(path);
+    while let Some(dir) = current {
+        let candidate = dir.join(".git");
+        if candidate.exists() {
+            return true;
+        }
+        current = dir.parent();
+    }
+    false
 }
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
@@ -1657,7 +1679,6 @@ pub(crate) async fn run_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
-    task_kind: TaskKind,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
     if input.is_empty() {
@@ -1716,7 +1737,6 @@ pub(crate) async fn run_task(
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
             turn_input,
-            task_kind,
             cancellation_token.child_token(),
         )
         .await
@@ -1803,7 +1823,6 @@ async fn run_turn(
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
     input: Vec<ResponseItem>,
-    task_kind: TaskKind,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
     let mcp_tools = sess.services.mcp_connection_manager.list_all_tools();
@@ -1833,7 +1852,6 @@ async fn run_turn(
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
             &prompt,
-            task_kind,
             cancellation_token.child_token(),
         )
         .await
@@ -1916,7 +1934,6 @@ async fn try_run_turn(
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
-    task_kind: TaskKind,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
@@ -1932,7 +1949,7 @@ async fn try_run_turn(
     let mut stream = turn_context
         .client
         .clone()
-        .stream_with_task_kind(prompt, task_kind)
+        .stream(prompt)
         .or_cancel(&cancellation_token)
         .await??;
 
