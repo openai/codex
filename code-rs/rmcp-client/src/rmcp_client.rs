@@ -241,3 +241,20 @@ fn handshake_timeout_error(duration: Duration) -> anyhow::Error {
         "timed out handshaking with MCP server after {duration:?} (expected MCP schema version {MCP_SCHEMA_VERSION})"
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_schema_version_is_well_formed() {
+        assert!(!MCP_SCHEMA_VERSION.is_empty());
+        let parts: Vec<&str> = MCP_SCHEMA_VERSION.split('-').collect();
+        assert_eq!(
+            parts.len(),
+            3,
+            "MCP_SCHEMA_VERSION should be in YYYY-MM-DD format"
+        );
+        assert!(parts.iter().all(|segment| !segment.trim().is_empty()));
+    }
+}
