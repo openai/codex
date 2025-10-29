@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use async_channel::Receiver;
+use async_channel::Sender;
 use codex_async_utils::OrCancelExt;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
