@@ -308,8 +308,7 @@ describe("Codex", () => {
       await close();
     }
   });
-  // TODO(pakrym): unskip the test
-  xit("forwards images to exec", async () => {
+  it("forwards images to exec", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,
       responseBodies: [
