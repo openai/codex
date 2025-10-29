@@ -176,16 +176,18 @@ impl Codex {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: config.features.clone(),
+            session_source,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
+        let session_source_clone = session_configuration.session_source.clone();
         let session = Session::new(
             session_configuration,
             config.clone(),
             auth_manager.clone(),
             tx_event.clone(),
             conversation_history,
-            session_source,
+            session_source_clone,
         )
         .await
         .map_err(|e| {
@@ -316,6 +318,8 @@ pub(crate) struct SessionConfiguration {
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
+    /// Source of the session (cli, vscode, exec, mcp, ...)
+    session_source: SessionSource,
 }
 
 impl SessionConfiguration {
@@ -388,6 +392,7 @@ impl Session {
             session_configuration.model_reasoning_effort,
             session_configuration.model_reasoning_summary,
             conversation_id,
+            session_configuration.session_source.clone(),
         );
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -809,6 +814,7 @@ impl Session {
             auth_manager,
             &otel,
             self.conversation_id,
+            turn_context.client.get_session_source(),
             call_id,
             command,
             &turn_context.sandbox_policy,
@@ -1663,6 +1669,7 @@ async fn spawn_review_thread(
         per_turn_config.model_reasoning_effort,
         per_turn_config.model_reasoning_summary,
         sess.conversation_id,
+        parent_turn_context.client.get_session_source(),
     );
 
     let review_turn_context = TurnContext {
@@ -2495,6 +2502,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
+            session_source: SessionSource::Exec,
         };
 
         let state = SessionState::new(session_configuration.clone());
@@ -2568,6 +2576,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
+            session_source: SessionSource::Exec,
         };
 
         let state = SessionState::new(session_configuration.clone());

@@ -13,10 +13,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::user_input::UserInput;
-use tokio::time::Duration;
-use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
-use tracing::error;
 
 use crate::AuthManager;
 use crate::codex::Codex;
@@ -149,8 +146,6 @@ pub(crate) async fn run_codex_conversation_one_shot(
     })
 }
 
-const APPROVAL_TIMEOUT_SECS: i64 = 120;
-
 async fn forward_events(
     codex: Arc<Codex>,
     tx_sub: Sender<Event>,
@@ -233,13 +228,11 @@ async fn handle_exec_approval(
         event.reason,
         event.risk,
     );
-    let decision = await_approval_with_cancel_timeout(
+    let decision = await_approval_with_cancel(
         approval_fut,
         parent_session,
         &parent_ctx.sub_id,
         cancel_token,
-        "exec",
-        APPROVAL_TIMEOUT_SECS,
     )
     .await;
 
@@ -264,26 +257,22 @@ async fn handle_patch_approval(
             event.grant_root,
         )
         .await;
-    let decision = await_approval_with_cancel_timeout(
+    let decision = await_approval_with_cancel(
         async move { decision_rx.await.unwrap_or_default() },
         parent_session,
         &parent_ctx.sub_id,
         cancel_token,
-        "patch",
-        APPROVAL_TIMEOUT_SECS,
     )
     .await;
     let _ = codex.submit(Op::PatchApproval { id, decision }).await;
 }
 
-/// Await an approval decision with cancellation and timeout safeguards.
-async fn await_approval_with_cancel_timeout<F>(
+/// Await an approval decision, aborting on cancellation.
+async fn await_approval_with_cancel<F>(
     fut: F,
     parent_session: &Session,
     sub_id: &str,
     cancel_token: &CancellationToken,
-    label: &str,
-    timeout_secs: i64,
 ) -> codex_protocol::protocol::ReviewDecision
 where
     F: core::future::Future<Output = codex_protocol::protocol::ReviewDecision>,
@@ -295,17 +284,6 @@ where
                 .notify_approval(sub_id, codex_protocol::protocol::ReviewDecision::Abort)
                 .await;
             codex_protocol::protocol::ReviewDecision::Abort
-        }
-        // We need to timeout so that sub agent isn't stuck waiting forever for approval.
-        _ = sleep(Duration::from_secs(timeout_secs as u64)) => {
-            error!("{label} approval timed out after {timeout_secs}s");
-            if cfg!(debug_assertions) {
-                panic!("{label} approval timed out");
-            }
-            parent_session
-                .notify_approval(sub_id, codex_protocol::protocol::ReviewDecision::Denied)
-                .await;
-            codex_protocol::protocol::ReviewDecision::Denied
         }
         decision = fut => {
             decision

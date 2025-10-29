@@ -20,6 +20,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::SessionSource;
 use eventsource_stream::Eventsource;
 use futures::Stream;
 use futures::StreamExt;
@@ -41,6 +42,7 @@ pub(crate) async fn stream_chat_completions(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     otel_event_manager: &OtelEventManager,
+    session_source: &SessionSource,
 ) -> Result<ResponseStream> {
     if prompt.output_schema.is_some() {
         return Err(CodexErr::UnsupportedOperation(
@@ -343,7 +345,15 @@ pub(crate) async fn stream_chat_completions(
     loop {
         attempt += 1;
 
-        let req_builder = provider.create_request_builder(client, &None).await?;
+        let mut req_builder = provider.create_request_builder(client, &None).await?;
+
+        // Include session source for backend telemetry and routing.
+        let task_type = match serde_json::to_value(session_source) {
+            Ok(serde_json::Value::String(s)) => s,
+            Ok(other) => other.to_string(),
+            Err(_) => "unknown".to_string(),
+        };
+        req_builder = req_builder.header("Codex-Task-Type", task_type);
 
         let res = otel_event_manager
             .log_request(attempt, || {

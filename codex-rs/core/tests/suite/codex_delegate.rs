@@ -73,13 +73,13 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
         .expect("submit review");
 
     // Lifecycle: Entered -> ExecApprovalRequest -> Exited(Some) -> TaskComplete.
-    let _entered = wait_for_event(&test.codex, |ev| {
+    wait_for_event(&test.codex, |ev| {
         matches!(ev, EventMsg::EnteredReviewMode(_))
     })
     .await;
 
     // Expect parent-side approval request (forwarded by delegate).
-    let _approval = wait_for_event(&test.codex, |ev| {
+    wait_for_event(&test.codex, |ev| {
         matches!(ev, EventMsg::ExecApprovalRequest(_))
     })
     .await;
@@ -93,11 +93,11 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
         .await
         .expect("submit exec approval");
 
-    let _exited = wait_for_event(&test.codex, |ev| {
+    wait_for_event(&test.codex, |ev| {
         matches!(ev, EventMsg::ExitedReviewMode(_))
     })
     .await;
-    let _complete = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 }
 
 /// Delegate should surface ApplyPatchApprovalRequest and honor parent decision
@@ -147,11 +147,11 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
         .await
         .expect("submit review");
 
-    let _entered = wait_for_event(&test.codex, |ev| {
+    wait_for_event(&test.codex, |ev| {
         matches!(ev, EventMsg::EnteredReviewMode(_))
     })
     .await;
-    let _approval = wait_for_event(&test.codex, |ev| {
+    wait_for_event(&test.codex, |ev| {
         matches!(ev, EventMsg::ApplyPatchApprovalRequest(_))
     })
     .await;
@@ -165,9 +165,9 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
         .await
         .expect("submit patch approval");
 
-    let _exited = wait_for_event(&test.codex, |ev| {
+    wait_for_event(&test.codex, |ev| {
         matches!(ev, EventMsg::ExitedReviewMode(_))
     })
     .await;
-    let _complete = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 }

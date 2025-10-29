@@ -13,6 +13,7 @@ use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::SessionSource;
 use eventsource_stream::Eventsource;
 use futures::prelude::*;
 use regex_lite::Regex;
@@ -86,8 +87,10 @@ pub struct ModelClient {
     conversation_id: ConversationId,
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
+    session_source: SessionSource,
 }
 
+#[allow(clippy::too_many_arguments)]
 impl ModelClient {
     pub fn new(
         config: Arc<Config>,
@@ -97,6 +100,7 @@ impl ModelClient {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         conversation_id: ConversationId,
+        session_source: SessionSource,
     ) -> Self {
         let client = create_client();
 
@@ -109,6 +113,7 @@ impl ModelClient {
             conversation_id,
             effort,
             summary,
+            session_source,
         }
     }
 
@@ -145,6 +150,7 @@ impl ModelClient {
                     &self.client,
                     &self.provider,
                     &self.otel_event_manager,
+                    &self.session_source,
                 )
                 .await?;
 
@@ -297,6 +303,14 @@ impl ModelClient {
             .await
             .map_err(StreamAttemptError::Fatal)?;
 
+        // Include session source for backend telemetry and routing.
+        let task_type = match serde_json::to_value(&self.session_source) {
+            Ok(serde_json::Value::String(s)) => s,
+            Ok(other) => other.to_string(),
+            Err(_) => "unknown".to_string(),
+        };
+        req_builder = req_builder.header("Codex-Task-Type", task_type);
+
         req_builder = req_builder
             // Send session_id for compatibility.
             .header("conversation_id", self.conversation_id.to_string())
@@ -442,6 +456,10 @@ impl ModelClient {
 
     pub fn get_otel_event_manager(&self) -> OtelEventManager {
         self.otel_event_manager.clone()
+    }
+
+    pub fn get_session_source(&self) -> SessionSource {
+        self.session_source.clone()
     }
 
     /// Returns the currently configured model slug.
