@@ -115,7 +115,6 @@ export type TodoListItem = {
   items: TodoItem[];
 };
 
-
 /** Canonical union of thread items and their type-specific payloads. */
 export type ThreadItem =
   | AgentMessageItem
