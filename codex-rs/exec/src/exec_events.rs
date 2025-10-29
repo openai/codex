@@ -5,7 +5,7 @@ use serde_json::Value as JsonValue;
 use ts_rs::TS;
 
 /// Top-level JSONL events emitted by codex exec
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(tag = "type")]
 pub enum ThreadEvent {
     /// Emitted when a new thread is started as the first event.
@@ -35,28 +35,28 @@ pub enum ThreadEvent {
     Error(ThreadErrorEvent),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct ThreadStartedEvent {
     /// The identified of the new thread. Can be used to resume the thread later.
     pub thread_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS, Default)]
 
 pub struct TurnStartedEvent {}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct TurnCompletedEvent {
     pub usage: Usage,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct TurnFailedEvent {
     pub error: ThreadErrorEvent,
 }
 
 /// Describes the usage of tokens during a turn.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS, Default)]
 pub struct Usage {
     /// The number of input tokens used during the turn.
     pub input_tokens: i64,
@@ -66,29 +66,29 @@ pub struct Usage {
     pub output_tokens: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct ItemStartedEvent {
     pub item: ThreadItem,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct ItemCompletedEvent {
     pub item: ThreadItem,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct ItemUpdatedEvent {
     pub item: ThreadItem,
 }
 
 /// Fatal error emitted by the stream.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct ThreadErrorEvent {
     pub message: String,
 }
 
 /// Canonical representation of a thread item and its domain-specific payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct ThreadItem {
     pub id: String,
     #[serde(flatten)]
@@ -96,7 +96,7 @@ pub struct ThreadItem {
 }
 
 /// Typed payloads for each supported thread item type.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ThreadItemDetails {
     /// Response from the agent.
@@ -125,13 +125,13 @@ pub enum ThreadItemDetails {
 
 /// Response from the agent.
 /// Either a natural-language response or a JSON string when structured output is requested.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct AgentMessageItem {
     pub text: String,
 }
 
 /// Agent's reasoning summary.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct ReasoningItem {
     pub text: String,
 }
@@ -147,7 +147,7 @@ pub enum CommandExecutionStatus {
 }
 
 /// A command executed by the agent.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct CommandExecutionItem {
     pub command: String,
     pub aggregated_output: String,
@@ -157,14 +157,14 @@ pub struct CommandExecutionItem {
 }
 
 /// A set of file changes by the agent.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct FileUpdateChange {
     pub path: String,
     pub kind: PatchChangeKind,
 }
 
 /// The status of a file change.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum PatchApplyStatus {
     Completed,
@@ -172,14 +172,14 @@ pub enum PatchApplyStatus {
 }
 
 /// A set of file changes by the agent.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct FileChangeItem {
     pub changes: Vec<FileUpdateChange>,
     pub status: PatchApplyStatus,
 }
 
 /// Indicates the type of the file change.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum PatchChangeKind {
     Add,
@@ -198,20 +198,20 @@ pub enum McpToolCallStatus {
 }
 
 /// Result payload produced by an MCP tool invocation.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct McpToolCallItemResult {
     pub content: Vec<McpContentBlock>,
     pub structured_content: Option<JsonValue>,
 }
 
 /// Error details reported by a failed MCP tool invocation.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct McpToolCallItemError {
     pub message: String,
 }
 
 /// A call to an MCP tool.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct McpToolCallItem {
     pub server: String,
     pub tool: String,
@@ -225,25 +225,25 @@ pub struct McpToolCallItem {
 }
 
 /// A web search request.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct WebSearchItem {
     pub query: String,
 }
 
 /// An error notification.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct ErrorItem {
     pub message: String,
 }
 
 /// An item in agent's to-do list.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct TodoItem {
     pub text: String,
     pub completed: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct TodoListItem {
     pub items: Vec<TodoItem>,
 }

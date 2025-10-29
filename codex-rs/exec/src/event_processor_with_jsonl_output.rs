@@ -50,7 +50,6 @@ use codex_core::protocol::TaskStartedEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
-use serde_json::Map;
 use serde_json::Value as JsonValue;
 use tracing::error;
 use tracing::warn;

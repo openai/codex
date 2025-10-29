@@ -422,7 +422,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
                             text: "done".to_string(),
                             r#type: "text".to_string(),
                         })],
-                        structured_content: json!({ "status": "ok" }),
+                        structured_content: Some(json!({ "status": "ok" })),
                     }),
                     error: None,
                     status: McpToolCallStatus::Completed,
