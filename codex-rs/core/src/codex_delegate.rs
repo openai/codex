@@ -12,7 +12,10 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::user_input::UserInput;
+use tokio::time::Duration;
+use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
+use tracing::error;
 
 use crate::AuthManager;
 use crate::codex::Codex;
@@ -63,6 +66,7 @@ pub(crate) async fn run_codex_conversation_interactive(
             tx_sub,
             parent_session_clone,
             parent_ctx_clone,
+            cancel_token_events.clone(),
         )
         .or_cancel(&cancel_token_events)
         .await;
@@ -123,11 +127,14 @@ pub(crate) async fn run_codex_conversation_one_shot(
     })
 }
 
+const APPROVAL_TIMEOUT_SECS: i64 = 120;
+
 async fn forward_events(
     codex: Arc<Codex>,
     tx_sub: Sender<Event>,
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
+    cancel_token: CancellationToken,
 ) {
     while let Ok(event) = codex.next_event().await {
         match event {
@@ -140,13 +147,29 @@ async fn forward_events(
                 msg: EventMsg::ExecApprovalRequest(event),
             } => {
                 // Initiate approval via parent session; do not surface to consumer.
-                handle_exec_approval(&codex, id, &parent_session, &parent_ctx, event).await;
+                handle_exec_approval(
+                    &codex,
+                    id,
+                    &parent_session,
+                    &parent_ctx,
+                    event,
+                    &cancel_token,
+                )
+                .await;
             }
             Event {
                 id,
                 msg: EventMsg::ApplyPatchApprovalRequest(event),
             } => {
-                handle_patch_approval(&codex, id, &parent_session, &parent_ctx, event).await;
+                handle_patch_approval(
+                    &codex,
+                    id,
+                    &parent_session,
+                    &parent_ctx,
+                    event,
+                    &cancel_token,
+                )
+                .await;
             }
             other => {
                 let _ = tx_sub.send(other).await;
@@ -203,17 +226,27 @@ async fn handle_exec_approval(
     parent_session: &Session,
     parent_ctx: &TurnContext,
     event: ExecApprovalRequestEvent,
+    cancel_token: &CancellationToken,
 ) {
-    let decision = parent_session
-        .request_command_approval(
-            parent_ctx,
-            parent_ctx.sub_id.clone(),
-            event.command,
-            event.cwd,
-            event.reason,
-            event.risk,
-        )
-        .await;
+    // Race approval with cancellation and timeout to avoid hangs.
+    let approval_fut = parent_session.request_command_approval(
+        parent_ctx,
+        parent_ctx.sub_id.clone(),
+        event.command,
+        event.cwd,
+        event.reason,
+        event.risk,
+    );
+    let decision = await_approval_with_cancel_timeout(
+        approval_fut,
+        parent_session,
+        &parent_ctx.sub_id,
+        cancel_token,
+        "exec",
+        APPROVAL_TIMEOUT_SECS,
+    )
+    .await;
+
     let _ = codex.submit(Op::ExecApproval { id, decision }).await;
 }
 
@@ -224,6 +257,7 @@ async fn handle_patch_approval(
     parent_session: &Session,
     parent_ctx: &TurnContext,
     event: ApplyPatchApprovalRequestEvent,
+    cancel_token: &CancellationToken,
 ) {
     let decision_rx = parent_session
         .request_patch_approval(
@@ -234,10 +268,51 @@ async fn handle_patch_approval(
             event.grant_root,
         )
         .await;
-    let _ = codex
-        .submit(Op::PatchApproval {
-            id,
-            decision: decision_rx.await.unwrap_or_default(),
-        })
-        .await;
+    let decision = await_approval_with_cancel_timeout(
+        async move { decision_rx.await.unwrap_or_default() },
+        parent_session,
+        &parent_ctx.sub_id,
+        cancel_token,
+        "patch",
+        APPROVAL_TIMEOUT_SECS,
+    )
+    .await;
+    let _ = codex.submit(Op::PatchApproval { id, decision }).await;
+}
+
+/// Await an approval decision with cancellation and timeout safeguards.
+async fn await_approval_with_cancel_timeout<F>(
+    fut: F,
+    parent_session: &Session,
+    sub_id: &str,
+    cancel_token: &CancellationToken,
+    label: &str,
+    timeout_secs: i64,
+) -> codex_protocol::protocol::ReviewDecision
+where
+    F: core::future::Future<Output = codex_protocol::protocol::ReviewDecision>,
+{
+    tokio::select! {
+        biased;
+        _ = cancel_token.cancelled() => {
+            parent_session
+                .notify_approval(sub_id, codex_protocol::protocol::ReviewDecision::Abort)
+                .await;
+            codex_protocol::protocol::ReviewDecision::Abort
+        }
+        // We need to timeout so that sub agent isn't stuck waiting forever for approval.
+        _ = sleep(Duration::from_secs(timeout_secs as u64)) => {
+            error!("{label} approval timed out after {timeout_secs}s");
+            if cfg!(debug_assertions) {
+                panic!("{label} approval timed out");
+            }
+            parent_session
+                .notify_approval(sub_id, codex_protocol::protocol::ReviewDecision::Denied)
+                .await;
+            codex_protocol::protocol::ReviewDecision::Denied
+        }
+        decision = fut => {
+            decision
+        }
+    }
 }
