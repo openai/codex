@@ -102,6 +102,7 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+filetime = { workspace = true }
 maplit = { workspace = true }
 once_cell = { workspace = true }
 serial_test = "3.2.0"

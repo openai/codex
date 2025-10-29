@@ -1289,6 +1289,7 @@ dependencies = [
  "dunce",
  "env-flags",
  "eventsource-stream",
+ "filetime",
  "fs2",
  "futures",
  "htmd",
