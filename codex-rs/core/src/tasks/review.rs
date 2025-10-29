@@ -12,7 +12,6 @@ use tokio_util::sync::CancellationToken;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_conversation_one_shot;
-// use crate::config::Config; // no longer needed directly; use session.base_config()
 use crate::review_format::format_review_findings_block;
 use crate::state::TaskKind;
 use codex_protocol::user_input::UserInput;
