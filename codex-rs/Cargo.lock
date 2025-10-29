@@ -1064,6 +1064,7 @@ dependencies = [
  "codex-async-utils",
  "codex-file-search",
  "codex-git-tooling",
+ "codex-keyring-store",
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
@@ -1080,7 +1081,9 @@ dependencies = [
  "eventsource-stream",
  "futures",
  "http",
+ "image",
  "indexmap 2.10.0",
+ "keyring",
  "landlock",
  "libc",
  "maplit",
@@ -1097,6 +1100,7 @@ dependencies = [
  "serde_json",
  "serial_test",
  "sha1",
+ "sha2",
  "shlex",
  "similar",
  "strum_macros 0.27.2",
@@ -1221,6 +1225,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-keyring-store"
+version = "0.0.0"
+dependencies = [
+ "keyring",
+ "tracing",
+]
+
+[[package]]
 name = "codex-linux-sandbox"
 version = "0.0.0"
 dependencies = [
@@ -1335,6 +1347,7 @@ dependencies = [
  "anyhow",
  "base64",
  "codex-git-tooling",
+ "codex-utils-image",
  "icu_decimal",
  "icu_locale_core",
  "mcp-types",
@@ -1384,6 +1397,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "axum",
+ "codex-keyring-store",
  "codex-protocol",
  "dirs",
  "escargot",
@@ -1477,6 +1491,27 @@ dependencies = [
  "unicode-width 0.2.1",
  "url",
  "vt100",
+]
+
+[[package]]
+name = "codex-utils-cache"
+version = "0.0.0"
+dependencies = [
+ "lru",
+ "sha1",
+ "tokio",
+]
+
+[[package]]
+name = "codex-utils-image"
+version = "0.0.0"
+dependencies = [
+ "base64",
+ "codex-utils-cache",
+ "image",
+ "tempfile",
+ "thiserror 2.0.16",
+ "tokio",
 ]
 
 [[package]]
