@@ -30,6 +30,7 @@ pub enum JSONRPCMessage {
 
 /// A request that expects a response.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct JSONRPCRequest {
     pub id: RequestId,
     pub method: String,
@@ -39,6 +40,7 @@ pub struct JSONRPCRequest {
 
 /// A notification which does not expect a response.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct JSONRPCNotification {
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -60,6 +62,7 @@ pub struct JSONRPCError {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct JSONRPCErrorError {
     pub code: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
