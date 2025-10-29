@@ -248,6 +248,7 @@ pub enum Account {
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
     ChatGpt {
+        #[ts(optional = nullable)]
         email: Option<String>,
         plan_type: PlanType,
     },
@@ -266,6 +267,7 @@ pub struct InitializeParams {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientInfo {
     pub name: String,
@@ -281,6 +283,7 @@ pub struct InitializeResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct NewConversationParams {
     /// Optional override for the model name (e.g. "o3", "o4-mini").
@@ -324,6 +327,7 @@ pub struct NewConversationParams {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct NewConversationResponse {
     pub conversation_id: ConversationId,
@@ -335,6 +339,7 @@ pub struct NewConversationResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumeConversationResponse {
     pub conversation_id: ConversationId,
@@ -368,6 +373,7 @@ pub struct GetConversationSummaryResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct ListConversationsParams {
     /// Optional page size; defaults to a reasonable server-side value.
@@ -385,6 +391,7 @@ pub struct ListConversationsParams {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationSummary {
     pub conversation_id: ConversationId,
@@ -398,6 +405,7 @@ pub struct ConversationSummary {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct ListConversationsResponse {
     pub items: Vec<ConversationSummary>,
@@ -408,6 +416,7 @@ pub struct ListConversationsResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct ListModelsParams {
     /// Optional page size; defaults to a reasonable server-side value.
@@ -439,6 +448,7 @@ pub struct ReasoningEffortOption {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct ListModelsResponse {
     pub items: Vec<Model>,
@@ -449,6 +459,7 @@ pub struct ListModelsResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadFeedbackParams {
     pub classification: String,
@@ -482,6 +493,7 @@ pub enum LoginAccountParams {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginAccountResponse {
     /// Only set if the login method is ChatGPT.
@@ -498,6 +510,7 @@ pub struct LoginAccountResponse {
 pub struct LogoutAccountResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumeConversationParams {
     /// Absolute path to the rollout JSONL file, when explicitly resuming a known rollout.
@@ -589,6 +602,7 @@ pub struct LogoutChatGptParams {}
 pub struct LogoutChatGptResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct GetAuthStatusParams {
     /// If true, include the current auth token (if available) in the response.
@@ -600,6 +614,7 @@ pub struct GetAuthStatusParams {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecOneOffCommandParams {
     /// Command argv to execute.
@@ -631,6 +646,7 @@ pub struct GetAccountRateLimitsResponse {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(optional_fields = nullable)]
 pub struct GetAuthStatusResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_method: Option<AuthMode>,
@@ -651,6 +667,7 @@ pub struct GetUserAgentResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct UserInfoResponse {
     /// Note: `alleged_user_email` is not currently verified. We read it from
@@ -667,6 +684,7 @@ pub struct GetUserSavedConfigResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct SetDefaultModelParams {
     /// If set to None, this means `model` should be cleared in config.toml.
@@ -686,6 +704,7 @@ pub struct SetDefaultModelResponse {}
 /// client-configurable settings that can be specified in the NewConversation
 /// and SendUserTurn requests.
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct UserSavedConfig {
     /// Approvals
@@ -724,6 +743,7 @@ pub struct UserSavedConfig {
 
 /// MCP representation of a [`codex_core::config_profile::ConfigProfile`].
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     pub model: Option<String>,
@@ -738,6 +758,7 @@ pub struct Profile {
 }
 /// MCP representation of a [`codex_core::config::ToolsToml`].
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct Tools {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -748,6 +769,7 @@ pub struct Tools {
 
 /// MCP representation of a [`codex_core::config_types::SandboxWorkspaceWrite`].
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxSettings {
     #[serde(default)]
@@ -768,6 +790,7 @@ pub struct SendUserMessageParams {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct SendUserTurnParams {
     pub conversation_id: ConversationId,
@@ -911,6 +934,7 @@ server_request_definitions! {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplyPatchApprovalParams {
     pub conversation_id: ConversationId,
@@ -928,6 +952,7 @@ pub struct ApplyPatchApprovalParams {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecCommandApprovalParams {
     pub conversation_id: ConversationId,
@@ -954,6 +979,7 @@ pub struct ApplyPatchApprovalResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct FuzzyFileSearchParams {
@@ -966,6 +992,7 @@ pub struct FuzzyFileSearchParams {
 
 /// Superset of [`codex_file_search::FileMatch`]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct FuzzyFileSearchResult {
     pub root: String,
     pub path: String,
@@ -981,6 +1008,7 @@ pub struct FuzzyFileSearchResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginChatGptCompleteNotification {
     #[schemars(with = "String")]
@@ -991,6 +1019,7 @@ pub struct LoginChatGptCompleteNotification {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionConfiguredNotification {
     /// Name left as session_id instead of conversation_id for backwards compatibility.
@@ -1019,6 +1048,7 @@ pub struct SessionConfiguredNotification {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthStatusChangeNotification {
     /// Current authentication method; omitted if signed out.
