@@ -5,12 +5,13 @@ use crate::JSONRPCNotification;
 use crate::JSONRPCRequest;
 use crate::RequestId;
 use codex_protocol::ConversationId;
-use codex_protocol::account::Account;
+use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -236,6 +237,22 @@ client_request_definitions! {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+pub enum Account {
+    #[serde(rename = "apiKey", rename_all = "camelCase")]
+    #[ts(rename = "apiKey", rename_all = "camelCase")]
+    ApiKey { api_key: String },
+
+    #[serde(rename = "chatgpt", rename_all = "camelCase")]
+    #[ts(rename = "chatgpt", rename_all = "camelCase")]
+    ChatGpt {
+        email: Option<String>,
+        plan_type: PlanType,
+    },
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct GetAccountResponse {
@@ -324,12 +341,24 @@ pub struct ResumeConversationResponse {
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_messages: Option<Vec<EventMsg>>,
+    pub rollout_path: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct GetConversationSummaryParams {
-    pub rollout_path: PathBuf,
+#[serde(untagged)]
+pub enum GetConversationSummaryParams {
+    /// Provide the absolute or CODEX_HOME‑relative rollout path directly.
+    RolloutPath {
+        #[serde(rename = "rolloutPath")]
+        rollout_path: PathBuf,
+    },
+    /// Provide a conversation id; the server will locate the rollout using the
+    /// same logic as `resumeConversation`. There will be extra latency compared to using the rollout path,
+    /// as the server needs to locate the rollout path first.
+    ConversationId {
+        #[serde(rename = "conversationId")]
+        conversation_id: ConversationId,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
@@ -471,8 +500,15 @@ pub struct LogoutAccountResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumeConversationParams {
-    /// Absolute path to the rollout JSONL file.
-    pub path: PathBuf,
+    /// Absolute path to the rollout JSONL file, when explicitly resuming a known rollout.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    /// If the rollout path is not known, it can be discovered via the conversation id at the cost of extra latency.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<ConversationId>,
+    /// if the rollout path or conversation id is not known, it can be resumed from given history
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history: Option<Vec<ResponseItem>>,
     /// Optional overrides to apply when spawning the resumed session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overrides: Option<NewConversationParams>,
@@ -1243,6 +1279,35 @@ mod tests {
             }),
             serde_json::to_value(&request)?,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn account_serializes_fields_in_camel_case() -> Result<()> {
+        let api_key = Account::ApiKey {
+            api_key: "secret".to_string(),
+        };
+        assert_eq!(
+            json!({
+                "type": "apiKey",
+                "apiKey": "secret",
+            }),
+            serde_json::to_value(&api_key)?,
+        );
+
+        let chatgpt = Account::ChatGpt {
+            email: Some("user@example.com".to_string()),
+            plan_type: PlanType::Plus,
+        };
+        assert_eq!(
+            json!({
+                "type": "chatgpt",
+                "email": "user@example.com",
+                "planType": "plus",
+            }),
+            serde_json::to_value(&chatgpt)?,
+        );
+
         Ok(())
     }
 

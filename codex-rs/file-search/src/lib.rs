@@ -40,6 +40,7 @@ pub struct FileMatch {
     pub indices: Option<Vec<u32>>, // Sorted & deduplicated when present
 }
 
+#[derive(Debug)]
 pub struct FileSearchResults {
     pub matches: Vec<FileMatch>,
     pub total_match_count: usize,

@@ -105,7 +105,7 @@ impl ToolCallRuntime {
                 call_id: call.call_id.clone(),
                 output: FunctionCallOutputPayload {
                     content: "aborted".to_string(),
-                    success: None,
+                    ..Default::default()
                 },
             },
         }
