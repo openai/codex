@@ -105,21 +105,45 @@ pub(crate) async fn run_codex_conversation_one_shot(
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
 ) -> Result<ConversationIo, CodexErr> {
+    // Use a child token so we can stop the delegate after completion without
+    // requiring the caller to cancel the parent token.
+    let child_cancel = cancel_token.child_token();
     let io = run_codex_conversation_interactive(
         config,
         auth_manager,
         parent_session,
         parent_ctx,
-        cancel_token,
+        child_cancel.clone(),
     )
     .await?;
 
+    // Send the initial input to kick off the one-shot turn.
     io.ops_tx
         .send(Op::UserInput { items: input })
         .await
         .map_err(|err| CodexErr::Fatal(format!("failed to send initial input op: {err}")))?;
 
-    Ok(io)
+    // Bridge events so we can observe completion and shut down automatically.
+    let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let ops_tx = io.ops_tx.clone();
+    let events_rx = io.events_rx.clone();
+    tokio::spawn(async move {
+        while let Ok(event) = events_rx.recv().await {
+            let should_shutdown =
+                matches!(event, EventMsg::TaskComplete(_) | EventMsg::TurnAborted(_));
+            let _ = tx_bridge.send(event).await;
+            if should_shutdown {
+                let _ = ops_tx.send(Op::Shutdown {}).await;
+                child_cancel.cancel();
+                break;
+            }
+        }
+    });
+
+    Ok(ConversationIo {
+        events_rx: rx_bridge,
+        ops_tx: io.ops_tx,
+    })
 }
 
 async fn forward_events(
