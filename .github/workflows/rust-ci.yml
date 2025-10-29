@@ -99,6 +99,10 @@ jobs:
       RUSTC_WRAPPER: sccache
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
+      # Use lld on Windows targets to speed up linking. rust-lld.exe ships with
+      # the Rust toolchain, so no extra install is required.
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
+      CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
 
     strategy:
       fail-fast: false
@@ -329,6 +333,10 @@ jobs:
       RUSTC_WRAPPER: sccache
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
+      # Use lld on Windows targets to speed up linking. rust-lld.exe ships with
+      # the Rust toolchain, so no extra install is required.
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
+      CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
 
     strategy:
       fail-fast: false
