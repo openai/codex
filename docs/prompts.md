@@ -14,15 +14,16 @@ Custom prompts turn your repeatable instructions into reusable slash commands, s
 
 - Body: The file contents are sent verbatim when you run the prompt (after placeholder expansion).
 - Frontmatter (optional): Add YAML-style metadata at the top of the file to improve the slash popup.
-
+  
   ```markdown
   ---
   description: Request a concise git diff review
   argument-hint: FILE=<path> [FOCUS=<section>]
   ---
   ```
-
+  
   - `description` shows under the entry in the popup.
+  
   - `argument-hint` (or `argument_hint`) lets you document expected inputs, though the current UI ignores this metadata.
 
 ### Placeholders and arguments
@@ -42,16 +43,110 @@ Custom prompts turn your repeatable instructions into reusable slash commands, s
 
 ### Examples
 
-**Draft PR helper**
+#### Example 1: Basic named arguments
 
-`~/.codex/prompts/draftpr.md`
+**File:** `~/.codex/prompts/ticket.md`
 
 ```markdown
 ---
-description: Create feature branch, commit and open draft PR.
+description: Generate a commit message for a ticket
+argument-hint: TICKET_ID=<id> TICKET_TITLE=<title>
 ---
-
-Create a branch named `tibo/<feature_name>`, commit the changes, and open a draft PR.
+Please write a concise commit message for ticket $TICKET_ID: $TICKET_TITLE
 ```
 
-Usage: type `/prompts:draftpr` to have codex perform the work.
+**Usage:**
+
+```
+/prompts:ticket TICKET_ID=JIRA-1234 TICKET_TITLE="Fix login bug"
+```
+
+**Expanded prompt sent to Codex:**
+
+```
+Please write a concise commit message for ticket JIRA-1234: Fix login bug
+```
+
+**Note:** Both `TICKET_ID` and `TICKET_TITLE` are required. If either is missing, Codex will show a validation error. Values with spaces must be double-quoted.
+
+#### Example 2: Mixed positional and named arguments
+
+**File:** `~/.codex/prompts/review.md`
+
+```markdown
+---
+description: Review code in a specific file with focus area
+argument-hint: FILE=<path> [FOCUS=<section>]
+---
+Review the code in $FILE. Pay special attention to $FOCUS.
+```
+
+**Usage:**
+
+```
+/prompts:review FILE=src/auth.js FOCUS="error handling"
+```
+
+**Expanded prompt:**
+
+```
+Review the code in src/auth.js. Pay special attention to error handling.
+```
+
+#### Example 3: Using positional arguments
+
+**File:** `~/.codex/prompts/explain.md`
+
+```markdown
+---
+description: Explain a concept
+---
+Explain $1 in simple terms.
+```
+
+**Usage:**
+
+```
+/prompts:explain "recursion"
+```
+
+**Expanded prompt:**
+
+```
+Explain recursion in simple terms.
+```
+
+#### Example 4: Draft PR helper
+
+**File:** `~/.codex/prompts/draftpr.md`
+
+```markdown
+---
+description: Create feature branch, commit and open draft PR
+argument-hint: FEATURE_NAME=<name>
+---
+Create a branch named `tibo/$FEATURE_NAME`, commit the changes, and open a draft PR.
+```
+
+**Usage:**
+
+```
+/prompts:draftpr FEATURE_NAME=new-auth-flow
+```
+
+**Expanded prompt:**
+
+```
+Create a branch named `tibo/new-auth-flow`, commit the changes, and open a draft PR.
+```
+
+### Implementation reference
+
+The named argument parsing and placeholder expansion for custom prompts is implemented in the prompt engine. Key features include:
+
+- **Argument parsing:** Supports `KEY=value` syntax with optional double-quoted values for strings containing spaces
+- **Placeholder expansion:** Named placeholders (e.g., `$FILE`, `$TICKET_ID`) are replaced with corresponding argument values
+- **Validation:** All named placeholders found in the prompt template must have corresponding arguments provided at invocation time
+- **Case sensitivity:** Placeholder names and argument keys are case-sensitive and must match exactly
+
+For more details on the implementation, refer to the prompt parsing logic in the codebase (introduced in PRs #4470 and #4474, with clarifications in #5332 and #5403).
