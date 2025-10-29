@@ -198,15 +198,11 @@ pub enum McpToolCallStatus {
 }
 
 /// Result payload produced by an MCP tool invocation.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct McpToolCallItemResult {
     pub content: Vec<McpContentBlock>,
-    #[serde(rename = "structuredContent")]
-    #[ts(rename = "structuredContent")]
-    pub structured_content: JsonValue,
+    pub structured_content: Option<JsonValue>,
 }
-
-impl Eq for McpToolCallItemResult {}
 
 /// Error details reported by a failed MCP tool invocation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]

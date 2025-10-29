@@ -283,13 +283,9 @@ impl EventProcessorWithJsonOutput {
 
         let (result, error) = match &ev.result {
             Ok(value) => {
-                let structured_content = match value.structured_content.clone() {
-                    Some(JsonValue::Object(map)) => JsonValue::Object(map),
-                    Some(_) | None => JsonValue::Object(Map::new()),
-                };
                 let result = McpToolCallItemResult {
                     content: value.content.clone(),
-                    structured_content,
+                    structured_content: value.structured_content.clone(),
                 };
                 (Some(result), None)
             }

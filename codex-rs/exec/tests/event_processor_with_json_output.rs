@@ -297,7 +297,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
                     arguments: json!({ "key": "value" }),
                     result: Some(McpToolCallItemResult {
                         content: Vec::new(),
-                        structured_content: json!({}),
+                        structured_content: None,
                     }),
                     error: None,
                     status: McpToolCallStatus::Completed,

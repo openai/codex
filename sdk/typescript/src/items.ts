@@ -1,6 +1,6 @@
 // based on item types from codex-rs/exec/src/exec_events.rs
 
-import type { ContentBlock as McpContentBlock } from "@modelcontextprotocol/sdk/dist/esm/types";
+import type { ContentBlock as McpContentBlock } from "@modelcontextprotocol/sdk/types.js";
 
 /** The status of a command execution. */
 export type CommandExecutionStatus = "in_progress" | "completed" | "failed";
@@ -60,7 +60,7 @@ export type McpToolCallItem = {
   /** Result payload returned by the MCP server for successful calls. */
   result?: {
     content: McpContentBlock[];
-    structuredContent: unknown;
+    structured_content: unknown;
   };
   /** Error message reported for failed calls. */
   error?: {
