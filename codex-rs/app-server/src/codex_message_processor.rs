@@ -834,12 +834,37 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: GetConversationSummaryParams,
     ) {
-        let GetConversationSummaryParams { rollout_path } = params;
-        let path = if rollout_path.is_relative() {
-            self.config.codex_home.join(&rollout_path)
-        } else {
-            rollout_path.clone()
+        let path = match params {
+            GetConversationSummaryParams::RolloutPath { rollout_path } => {
+                if rollout_path.is_relative() {
+                    self.config.codex_home.join(&rollout_path)
+                } else {
+                    rollout_path
+                }
+            }
+            GetConversationSummaryParams::ConversationId { conversation_id } => {
+                match codex_core::find_conversation_path_by_id_str(
+                    &self.config.codex_home,
+                    &conversation_id.to_string(),
+                )
+                .await
+                {
+                    Ok(Some(p)) => p,
+                    _ => {
+                        let error = JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!(
+                                "no rollout found for conversation id {conversation_id}"
+                            ),
+                            data: None,
+                        };
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                }
+            }
         };
+
         let fallback_provider = self.config.model_provider_id.as_str();
 
         match read_summary_from_rollout(&path, fallback_provider).await {
@@ -990,6 +1015,43 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: ResumeConversationParams,
     ) {
+        let path = match params {
+            ResumeConversationParams {
+                path: Some(path), ..
+            } => path,
+            ResumeConversationParams {
+                conversation_id: Some(conversation_id),
+                ..
+            } => {
+                match codex_core::find_conversation_path_by_id_str(
+                    &self.config.codex_home,
+                    &conversation_id.to_string(),
+                )
+                .await
+                {
+                    Ok(Some(p)) => p,
+                    _ => {
+                        let error = JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: "unable to locate rollout path".to_string(),
+                            data: None,
+                        };
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                }
+            }
+            _ => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: "either path or conversation id must be provided".to_string(),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let config = match params.overrides {
             Some(overrides) => {
@@ -1012,11 +1074,7 @@ impl CodexMessageProcessor {
 
         match self
             .conversation_manager
-            .resume_conversation_from_rollout(
-                config,
-                params.path.clone(),
-                self.auth_manager.clone(),
-            )
+            .resume_conversation_from_rollout(config, path.clone(), self.auth_manager.clone())
             .await
         {
             Ok(NewConversation {
@@ -1046,6 +1104,7 @@ impl CodexMessageProcessor {
                     conversation_id,
                     model: session_configured.model.clone(),
                     initial_messages,
+                    rollout_path: session_configured.rollout_path.clone(),
                 };
                 self.outgoing.send_response(request_id, response).await;
             }

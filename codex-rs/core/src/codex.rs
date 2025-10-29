@@ -1001,12 +1001,6 @@ impl Session {
         }
     }
 
-    // todo (aibrahim): get rid of this method. we shouldn't deal with vec[resposne_item] and rather use ConversationHistory.
-    pub(crate) async fn history_snapshot(&self) -> Vec<ResponseItem> {
-        let mut state = self.state.lock().await;
-        state.history_snapshot()
-    }
-
     pub(crate) async fn clone_history(&self) -> ConversationHistory {
         let state = self.state.lock().await;
         state.clone_history()
@@ -1746,11 +1740,11 @@ pub(crate) async fn run_task(
             if !pending_input.is_empty() {
                 review_thread_history.record_items(&pending_input);
             }
-            review_thread_history.get_history()
+            review_thread_history.get_history_for_prompt()
         } else {
             sess.record_conversation_items(&turn_context, &pending_input)
                 .await;
-            sess.history_snapshot().await
+            sess.clone_history().await.get_history_for_prompt()
         };
 
         let turn_input_messages: Vec<String> = turn_input
@@ -1907,13 +1901,6 @@ fn parse_review_output_event(text: &str) -> ReviewOutputEvent {
     }
 }
 
-fn filter_model_visible_history(input: Vec<ResponseItem>) -> Vec<ResponseItem> {
-    input
-        .into_iter()
-        .filter(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }))
-        .collect()
-}
-
 async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -1934,7 +1921,7 @@ async fn run_turn(
         .supports_parallel_tool_calls;
     let parallel_tool_calls = model_supports_parallel;
     let prompt = Prompt {
-        input: filter_model_visible_history(input),
+        input,
         tools: router.specs(),
         parallel_tool_calls,
         base_instructions_override: turn_context.base_instructions.clone(),
@@ -2462,7 +2449,9 @@ mod tests {
             },
         )));
 
-        let actual = tokio_test::block_on(async { session.state.lock().await.history_snapshot() });
+        let actual = tokio_test::block_on(async {
+            session.state.lock().await.clone_history().get_history()
+        });
         assert_eq!(expected, actual);
     }
 
@@ -2473,7 +2462,9 @@ mod tests {
 
         tokio_test::block_on(session.record_initial_history(InitialHistory::Forked(rollout_items)));
 
-        let actual = tokio_test::block_on(async { session.state.lock().await.history_snapshot() });
+        let actual = tokio_test::block_on(async {
+            session.state.lock().await.clone_history().get_history()
+        });
         assert_eq!(expected, actual);
     }
 
@@ -2870,7 +2861,7 @@ mod tests {
             }
         }
 
-        let history = sess.history_snapshot().await;
+        let history = sess.clone_history().await.get_history();
         let found = history.iter().any(|item| match item {
             ResponseItem::Message { role, content, .. } if role == "user" => {
                 content.iter().any(|ci| match ci {

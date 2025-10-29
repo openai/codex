@@ -244,10 +244,20 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             } else {
                                 match std::fs::read(&path) {
                                     Ok(bytes) => {
-                                        let mime = mime_guess::from_path(&path)
-                                            .first()
-                                            .map(|m| m.essence_str().to_owned())
-                                            .unwrap_or_else(|| "image".to_string());
+                                        let Some(mime_guess) = mime_guess::from_path(&path).first()
+                                        else {
+                                            return local_image_error_placeholder(
+                                                &path,
+                                                "unsupported MIME type (unknown)",
+                                            );
+                                        };
+                                        let mime = mime_guess.essence_str().to_owned();
+                                        if !mime.starts_with("image/") {
+                                            return local_image_error_placeholder(
+                                                &path,
+                                                format!("unsupported MIME type `{mime}`"),
+                                            );
+                                        }
                                         let encoded =
                                             base64::engine::general_purpose::STANDARD.encode(bytes);
                                         ContentItem::InputImage {
@@ -625,6 +635,39 @@ mod tests {
                         assert!(
                             text.contains("could not read"),
                             "placeholder should mention read issue: {text}"
+                        );
+                    }
+                    other => panic!("expected placeholder text but found {other:?}"),
+                }
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn local_image_non_image_adds_placeholder() -> Result<()> {
+        let dir = tempdir()?;
+        let json_path = dir.path().join("example.json");
+        std::fs::write(&json_path, br#"{"hello":"world"}"#)?;
+
+        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+            path: json_path.clone(),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert_eq!(content.len(), 1);
+                match &content[0] {
+                    ContentItem::InputText { text } => {
+                        assert!(
+                            text.contains("unsupported MIME type `application/json`"),
+                            "placeholder should mention unsupported MIME: {text}"
+                        );
+                        assert!(
+                            text.contains(&json_path.display().to_string()),
+                            "placeholder should mention path: {text}"
                         );
                     }
                     other => panic!("expected placeholder text but found {other:?}"),

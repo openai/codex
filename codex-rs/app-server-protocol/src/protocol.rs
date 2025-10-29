@@ -340,12 +340,24 @@ pub struct ResumeConversationResponse {
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_messages: Option<Vec<EventMsg>>,
+    pub rollout_path: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct GetConversationSummaryParams {
-    pub rollout_path: PathBuf,
+#[serde(untagged)]
+pub enum GetConversationSummaryParams {
+    /// Provide the absolute or CODEX_HOME‑relative rollout path directly.
+    RolloutPath {
+        #[serde(rename = "rolloutPath")]
+        rollout_path: PathBuf,
+    },
+    /// Provide a conversation id; the server will locate the rollout using the
+    /// same logic as `resumeConversation`. There will be extra latency compared to using the rollout path,
+    /// as the server needs to locate the rollout path first.
+    ConversationId {
+        #[serde(rename = "conversationId")]
+        conversation_id: ConversationId,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
@@ -487,8 +499,12 @@ pub struct LogoutAccountResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumeConversationParams {
-    /// Absolute path to the rollout JSONL file.
-    pub path: PathBuf,
+    /// Absolute path to the rollout JSONL file. If omitted, `conversationId` must be provided.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    /// If the rollout path is not known, it can be discovered via the conversation id at at the cost of extra latency.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<ConversationId>,
     /// Optional overrides to apply when spawning the resumed session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overrides: Option<NewConversationParams>,
