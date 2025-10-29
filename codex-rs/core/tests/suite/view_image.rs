@@ -314,6 +314,98 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = test_codex().build(&server).await?;
+
+    let rel_path = "assets/example.json";
+    let abs_path = cwd.path().join(rel_path);
+    if let Some(parent) = abs_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&abs_path, br#"{ "message": "hello" }"#)?;
+
+    let call_id = "view-image-non-image";
+    let arguments = serde_json::json!({ "path": rel_path }).to_string();
+
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call(call_id, "view_image", &arguments),
+        ev_completed("resp-1"),
+    ]);
+    responses::mount_sse_once_match(&server, any(), first_response).await;
+
+    let second_response = sse(vec![
+        ev_assistant_message("msg-1", "done"),
+        ev_completed("resp-2"),
+    ]);
+    let mock = responses::mount_sse_once_match(&server, any(), second_response).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "please use the view_image tool to read the json file".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    let request = mock.single_request();
+    assert!(
+        request.inputs_of_type("input_image").is_empty(),
+        "non-image file should not produce an input_image message"
+    );
+
+    let placeholder = request
+        .inputs_of_type("message")
+        .iter()
+        .find_map(|item| {
+            let content = item.get("content").and_then(Value::as_array)?;
+            content.iter().find_map(|span| {
+                if span.get("type").and_then(Value::as_str) == Some("input_text") {
+                    let text = span.get("text").and_then(Value::as_str)?;
+                    if text.contains("Codex could not read the local image at")
+                        && text.contains("unsupported MIME type `application/json`")
+                    {
+                        return Some(text.to_string());
+                    }
+                }
+                None
+            })
+        })
+        .expect("placeholder text found");
+
+    assert!(
+        placeholder.contains(&abs_path.display().to_string()),
+        "placeholder should mention path: {placeholder}"
+    );
+
+    let output_item = mock.single_request().function_call_output(call_id);
+    let output_text = extract_output_text(&output_item).expect("output text present");
+    assert_eq!(output_text, "attached local image path");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
