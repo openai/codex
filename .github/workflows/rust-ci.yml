@@ -33,7 +33,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             BASE_SHA='${{ github.event.pull_request.base.sha }}'
             echo "Base SHA: $BASE_SHA"
-            # List files changed between base and current HEAD (merge-base aware)
+            # List files changed between base and  current HEAD (merge-base aware)
             mapfile -t files < <(git diff --name-only --no-renames "$BASE_SHA"...HEAD)
           else
             # On push / manual runs, default to running everything
@@ -200,7 +200,7 @@ jobs:
         if: startsWith(matrix.runner, 'windows')
         shell: bash
         run: |
-          echo 'RUSTFLAGS=-C remap-path-prefix=${{ github.workspace }}=.' >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=--remap-path-prefix=${GITHUB_WORKSPACE}=." >> "$GITHUB_ENV"
 
       - name: Restore sccache cache (fallback)
         if: ${{ env.SCCACHE_GHA_ENABLED != 'true' }}
@@ -212,6 +212,12 @@ jobs:
           restore-keys: |
             sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-
             sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
+
+      - name: Start sccache server and zero stats
+        shell: bash
+        run: |
+          sccache --start-server || true
+          sccache --zero-stats || true
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Prepare APT cache directories (musl)
@@ -410,7 +416,7 @@ jobs:
         if: startsWith(matrix.runner, 'windows')
         shell: bash
         run: |
-          echo 'RUSTFLAGS=-C remap-path-prefix=${{ github.workspace }}=.' >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=--remap-path-prefix=${GITHUB_WORKSPACE}=." >> "$GITHUB_ENV"
 
       - name: Restore sccache cache (fallback)
         if: ${{ env.SCCACHE_GHA_ENABLED != 'true' }}
@@ -422,6 +428,12 @@ jobs:
           restore-keys: |
             sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}-
             sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
+
+      - name: Start sccache server and zero stats
+        shell: bash
+        run: |
+          sccache --start-server || true
+          sccache --zero-stats || true
 
       - uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
         with:
