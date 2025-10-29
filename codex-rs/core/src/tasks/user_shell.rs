@@ -73,8 +73,9 @@ impl SessionTask for UserShellCommandTask {
                 "-Command".to_string(),
                 self.command.clone(),
             ],
-            crate::shell::Shell::Unknown => shlex::split(&self.command)
-                .unwrap_or_else(|| vec![self.command.clone()]),
+            crate::shell::Shell::Unknown => {
+                shlex::split(&self.command).unwrap_or_else(|| vec![self.command.clone()])
+            }
         };
 
         let params = ShellToolCallParams {
