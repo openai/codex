@@ -166,6 +166,11 @@ impl Session {
             *active = None;
         }
         drop(active);
+        // Ensure rollout file is durably flushed at task completion.
+        // We already flush in many places (e.g., after initial history), but
+        // flushing here guarantees the on-disk rollout reflects the final state
+        // of the turn around the TaskComplete event.
+        self.flush_rollout().await;
         let event = EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message });
         self.send_event(turn_context.as_ref(), event).await;
     }
