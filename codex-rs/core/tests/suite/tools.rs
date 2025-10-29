@@ -278,18 +278,28 @@ async fn sandbox_denied_shell_returns_original_output() -> Result<()> {
         )
         .await?;
 
-    let output_json = mock
+    let output_text = mock
         .function_call_output_text(call_id)
         .context("shell output present")?;
-    let parsed: Value = serde_json::from_str(&output_json)?;
-    let body = parsed["output"].as_str().context("output body present")?;
-    let exit_code = parsed["metadata"]["exit_code"]
-        .as_i64()
-        .context("exit code present")?;
+    let exit_code_line = output_text
+        .lines()
+        .next()
+        .context("exit code line present")?;
+    let exit_code = exit_code_line
+        .strip_prefix("Exit code: ")
+        .context("exit code prefix present")?
+        .trim()
+        .parse::<i32>()
+        .context("exit code is integer")?;
+    let body = output_text;
 
     let body_lower = body.to_lowercase();
+    // Required for multi-OS.
+    let has_denial = body_lower.contains("permission denied")
+        || body_lower.contains("operation not permitted")
+        || body_lower.contains("read-only file system");
     assert!(
-        body_lower.contains("permission denied"),
+        has_denial,
         "expected sandbox denial details in tool output: {body}"
     );
     assert!(
