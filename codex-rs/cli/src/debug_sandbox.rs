@@ -125,7 +125,14 @@ async fn run_command_under_sandbox(
             let env_map = env.clone();
             let command_vec = command.clone();
             let res = tokio::task::spawn_blocking(move || {
-                run_windows_sandbox_capture(policy_str, &sandbox_cwd, command_vec, &cwd_clone, env_map, None)
+                run_windows_sandbox_capture(
+                    policy_str,
+                    &sandbox_cwd,
+                    command_vec,
+                    &cwd_clone,
+                    env_map,
+                    None,
+                )
             })
             .await;
 
