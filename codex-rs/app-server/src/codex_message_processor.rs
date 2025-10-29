@@ -64,6 +64,7 @@ use codex_core::CodexConversation;
 use codex_core::ConversationManager;
 use codex_core::Cursor as RolloutCursor;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
+use codex_core::InitialHistory;
 use codex_core::NewConversation;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
@@ -73,12 +74,11 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 use codex_core::config::load_config_as_toml;
-use codex_core::config_edit::CONFIG_KEY_EFFORT;
-use codex_core::config_edit::CONFIG_KEY_MODEL;
-use codex_core::config_edit::persist_overrides_and_clear_if_none;
+use codex_core::config_edit::ConfigEditsBuilder;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
+use codex_core::find_conversation_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::git_info::git_diff_to_remote;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
@@ -97,6 +97,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_utils_json_to_toml::json_to_toml;
@@ -686,19 +687,12 @@ impl CodexMessageProcessor {
             model,
             reasoning_effort,
         } = params;
-        let effort_str = reasoning_effort.map(|effort| effort.to_string());
 
-        let overrides: [(&[&str], Option<&str>); 2] = [
-            (&[CONFIG_KEY_MODEL], model.as_deref()),
-            (&[CONFIG_KEY_EFFORT], effort_str.as_deref()),
-        ];
-
-        match persist_overrides_and_clear_if_none(
-            &self.config.codex_home,
-            self.config.active_profile.as_deref(),
-            &overrides,
-        )
-        .await
+        match ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_profile(self.config.active_profile.as_deref())
+            .set_model(model.as_deref(), reasoning_effort)
+            .apply()
+            .await
         {
             Ok(()) => {
                 let response = SetDefaultModelResponse {};
@@ -707,7 +701,7 @@ impl CodexMessageProcessor {
             Err(err) => {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to persist overrides: {err}"),
+                    message: format!("failed to persist model selection: {err}"),
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
@@ -834,12 +828,37 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: GetConversationSummaryParams,
     ) {
-        let GetConversationSummaryParams { rollout_path } = params;
-        let path = if rollout_path.is_relative() {
-            self.config.codex_home.join(&rollout_path)
-        } else {
-            rollout_path.clone()
+        let path = match params {
+            GetConversationSummaryParams::RolloutPath { rollout_path } => {
+                if rollout_path.is_relative() {
+                    self.config.codex_home.join(&rollout_path)
+                } else {
+                    rollout_path
+                }
+            }
+            GetConversationSummaryParams::ConversationId { conversation_id } => {
+                match codex_core::find_conversation_path_by_id_str(
+                    &self.config.codex_home,
+                    &conversation_id.to_string(),
+                )
+                .await
+                {
+                    Ok(Some(p)) => p,
+                    _ => {
+                        let error = JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!(
+                                "no rollout found for conversation id {conversation_id}"
+                            ),
+                            data: None,
+                        };
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                }
+            }
         };
+
         let fallback_provider = self.config.model_provider_id.as_str();
 
         match read_summary_from_rollout(&path, fallback_provider).await {
@@ -990,8 +1009,15 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: ResumeConversationParams,
     ) {
+        let ResumeConversationParams {
+            path,
+            conversation_id,
+            history,
+            overrides,
+        } = params;
+
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let config = match params.overrides {
+        let config = match overrides {
             Some(overrides) => {
                 derive_config_from_params(overrides, self.codex_linux_sandbox_exe.clone()).await
             }
@@ -1000,21 +1026,88 @@ impl CodexMessageProcessor {
         let config = match config {
             Ok(cfg) => cfg,
             Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("error deriving config: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("error deriving config: {err}"),
+                )
+                .await;
                 return;
+            }
+        };
+
+        let conversation_history = if let Some(path) = path {
+            match RolloutRecorder::get_rollout_history(&path).await {
+                Ok(initial_history) => initial_history,
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to load rollout `{}`: {err}", path.display()),
+                    )
+                    .await;
+                    return;
+                }
+            }
+        } else if let Some(conversation_id) = conversation_id {
+            match find_conversation_path_by_id_str(
+                &self.config.codex_home,
+                &conversation_id.to_string(),
+            )
+            .await
+            {
+                Ok(Some(found_path)) => {
+                    match RolloutRecorder::get_rollout_history(&found_path).await {
+                        Ok(initial_history) => initial_history,
+                        Err(err) => {
+                            self.send_invalid_request_error(
+                                request_id,
+                                format!(
+                                    "failed to load rollout `{}` for conversation {conversation_id}: {err}",
+                                    found_path.display()
+                                ),
+                            ).await;
+                            return;
+                        }
+                    }
+                }
+                Ok(None) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("no rollout found for conversation id {conversation_id}"),
+                    )
+                    .await;
+                    return;
+                }
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to locate conversation id {conversation_id}: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            }
+        } else {
+            match history {
+                Some(history) if !history.is_empty() => InitialHistory::Forked(
+                    history.into_iter().map(RolloutItem::ResponseItem).collect(),
+                ),
+                Some(_) | None => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        "either path, conversation id or non empty history must be provided"
+                            .to_string(),
+                    )
+                    .await;
+                    return;
+                }
             }
         };
 
         match self
             .conversation_manager
-            .resume_conversation_from_rollout(
+            .resume_conversation_with_history(
                 config,
-                params.path.clone(),
+                conversation_history,
                 self.auth_manager.clone(),
             )
             .await
@@ -1046,6 +1139,7 @@ impl CodexMessageProcessor {
                     conversation_id,
                     model: session_configured.model.clone(),
                     initial_messages,
+                    rollout_path: session_configured.rollout_path.clone(),
                 };
                 self.outgoing.send_response(request_id, response).await;
             }
@@ -1058,6 +1152,15 @@ impl CodexMessageProcessor {
                 self.outgoing.send_error(request_id, error).await;
             }
         }
+    }
+
+    async fn send_invalid_request_error(&self, request_id: RequestId, message: String) {
+        let error = JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message,
+            data: None,
+        };
+        self.outgoing.send_error(request_id, error).await;
     }
 
     async fn archive_conversation(&self, request_id: RequestId, params: ArchiveConversationParams) {

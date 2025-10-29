@@ -18,11 +18,14 @@ pub enum ParsedCommand {
     },
     ListFiles {
         cmd: String,
+        #[ts(optional = nullable)]
         path: Option<String>,
     },
     Search {
         cmd: String,
+        #[ts(optional = nullable)]
         query: Option<String>,
+        #[ts(optional = nullable)]
         path: Option<String>,
     },
     Unknown {

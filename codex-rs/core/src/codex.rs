@@ -25,6 +25,7 @@ use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
+use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -78,6 +79,7 @@ use crate::protocol::AgentReasoningSectionBreakEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
 use crate::protocol::BackgroundEventEvent;
+use crate::protocol::DeprecationNoticeEvent;
 use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
@@ -455,7 +457,7 @@ impl Session {
         };
 
         // Error messages to dispatch after SessionConfigured is sent.
-        let mut post_session_configured_error_events = Vec::<Event>::new();
+        let mut post_session_configured_events = Vec::<Event>::new();
 
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
@@ -503,7 +505,7 @@ impl Session {
             Err(e) => {
                 let message = format!("Failed to create MCP connection manager: {e:#}");
                 error!("{message}");
-                post_session_configured_error_events.push(Event {
+                post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
                     msg: EventMsg::Error(ErrorEvent { message }),
                 });
@@ -517,13 +519,29 @@ impl Session {
                 let auth_entry = auth_statuses.get(&server_name);
                 let display_message = mcp_init_error_display(&server_name, auth_entry, &err);
                 warn!("MCP client for `{server_name}` failed to start: {err:#}");
-                post_session_configured_error_events.push(Event {
+                post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
                     msg: EventMsg::Error(ErrorEvent {
                         message: display_message,
                     }),
                 });
             }
+        }
+
+        for (alias, feature) in session_configuration.features.legacy_feature_usages() {
+            let canonical = feature.key();
+            let summary = format!("`{alias}` is deprecated. Use `{canonical}` instead.");
+            let details = if alias == canonical {
+                None
+            } else {
+                Some(format!(
+                    "You can either enable it using the CLI with `--enable {canonical}` or through the config.toml file with `[features].{canonical}`"
+                ))
+            };
+            post_session_configured_events.push(Event {
+                id: INITIAL_SUBMIT_ID.to_owned(),
+                msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent { summary, details }),
+            });
         }
 
         let otel_event_manager = OtelEventManager::new(
@@ -590,7 +608,7 @@ impl Session {
                 rollout_path,
             }),
         })
-        .chain(post_session_configured_error_events.into_iter());
+        .chain(post_session_configured_events.into_iter());
         for event in events {
             sess.send_event_raw(event).await;
         }
@@ -952,8 +970,11 @@ impl Session {
 
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
         for item in items {
-            self.send_event(turn_context, EventMsg::RawResponseItem(item.clone()))
-                .await;
+            self.send_event(
+                turn_context,
+                EventMsg::RawResponseItem(RawResponseItemEvent { item: item.clone() }),
+            )
+            .await;
         }
     }
 
@@ -1058,9 +1079,6 @@ impl Session {
         }
     }
 
-    /// Helper that emits a BackgroundEvent with the given message. This keeps
-    /// the call‑sites terse so adding more diagnostics does not clutter the
-    /// core agent logic.
     pub(crate) async fn notify_background_event(
         &self,
         turn_context: &TurnContext,
@@ -1269,6 +1287,15 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Compact => {
                 handlers::compact(&sess, sub.id.clone()).await;
             }
+            Op::RunUserShellCommand { command } => {
+                handlers::run_user_shell_command(
+                    &sess,
+                    sub.id.clone(),
+                    command,
+                    &mut previous_context,
+                )
+                .await;
+            }
             Op::Shutdown => {
                 if handlers::shutdown(&sess, sub.id.clone()).await {
                     break;
@@ -1295,6 +1322,7 @@ mod handlers {
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
+    use crate::tasks::UserShellCommandTask;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -1368,6 +1396,24 @@ mod handlers {
                 .await;
             *previous_context = Some(current_context);
         }
+    }
+
+    pub async fn run_user_shell_command(
+        sess: &Arc<Session>,
+        sub_id: String,
+        command: String,
+        previous_context: &mut Option<Arc<TurnContext>>,
+    ) {
+        let turn_context = sess
+            .new_turn_with_sub_id(sub_id, SessionSettingsUpdate::default())
+            .await;
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            Vec::new(),
+            UserShellCommandTask::new(command),
+        )
+        .await;
+        *previous_context = Some(turn_context);
     }
 
     pub async fn exec_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {

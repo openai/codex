@@ -186,6 +186,16 @@ pub enum Op {
 
     /// Request to shut down codex instance.
     Shutdown,
+
+    /// Execute a user-initiated one-off shell command (triggered by "!cmd").
+    ///
+    /// The command string is executed using the user's default shell and may
+    /// include shell syntax (pipes, redirects, etc.). Output is streamed via
+    /// `ExecCommand*` events and the UI regains control upon `TaskComplete`.
+    RunUserShellCommand {
+        /// The raw command string after '!'
+        command: String,
+    },
 }
 
 /// Determines the conditions under which the user is consulted to approve
@@ -487,6 +497,10 @@ pub enum EventMsg {
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
 
+    /// Notification advising the user that something they are using has been
+    /// deprecated and should be phased out.
+    DeprecationNotice(DeprecationNoticeEvent),
+
     BackgroundEvent(BackgroundEventEvent),
 
     UndoStarted(UndoStartedEvent),
@@ -528,7 +542,7 @@ pub enum EventMsg {
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
 
-    RawResponseItem(ResponseItem),
+    RawResponseItem(RawResponseItemEvent),
 
     ItemStarted(ItemStartedEvent),
     ItemCompleted(ItemCompletedEvent),
@@ -536,6 +550,11 @@ pub enum EventMsg {
     AgentMessageContentDelta(AgentMessageContentDeltaEvent),
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct RawResponseItemEvent {
+    pub item: ResponseItem,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -642,6 +661,7 @@ impl HasLegacyEvent for EventMsg {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct ExitedReviewModeEvent {
     pub review_output: Option<ReviewOutputEvent>,
 }
@@ -654,11 +674,13 @@ pub struct ErrorEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct TaskCompleteEvent {
     pub last_agent_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct TaskStartedEvent {
     pub model_context_window: Option<i64>,
 }
@@ -678,9 +700,11 @@ pub struct TokenUsage {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
+    #[ts(optional = nullable)]
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
 }
@@ -741,25 +765,30 @@ impl TokenUsageInfo {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
     pub rate_limits: Option<RateLimitSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct RateLimitWindow {
     /// Percentage (0-100) of the window that has been consumed.
     pub used_percent: f64,
     /// Rolling window duration, in minutes.
+    #[ts(optional = nullable)]
     #[ts(type = "number | null")]
     pub window_minutes: Option<i64>,
     /// Unix timestamp (seconds since epoch) when the window resets.
+    #[ts(optional = nullable)]
     #[ts(type = "number | null")]
     pub resets_at: Option<i64>,
 }
@@ -873,6 +902,7 @@ pub struct AgentMessageEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct UserMessageEvent {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -908,6 +938,7 @@ pub struct AgentReasoningDeltaEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
+#[ts(optional_fields = nullable)]
 pub struct McpInvocation {
     /// Name of the MCP server as defined in the config.
     pub server: String,
@@ -1026,6 +1057,7 @@ pub enum SessionSource {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct SessionMeta {
     pub id: ConversationId,
     pub timestamp: String,
@@ -1054,6 +1086,7 @@ impl Default for SessionMeta {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct SessionMetaLine {
     #[serde(flatten)]
     pub meta: SessionMeta,
@@ -1089,6 +1122,7 @@ impl From<CompactedItem> for ResponseItem {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct TurnContextItem {
     pub cwd: PathBuf,
     pub approval_policy: AskForApproval,
@@ -1107,6 +1141,7 @@ pub struct RolloutLine {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct GitInfo {
     /// Current commit hash (SHA)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1179,6 +1214,10 @@ pub struct ExecCommandBeginEvent {
     /// The command's working directory if not the default cwd for the agent.
     pub cwd: PathBuf,
     pub parsed_cmd: Vec<ParsedCommand>,
+    /// True when this exec was initiated directly by the user (e.g. bang command),
+    /// not by the agent/model. Defaults to false for backwards compatibility.
+    #[serde(default)]
+    pub is_user_shell_command: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1236,12 +1275,24 @@ pub struct BackgroundEventEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
+pub struct DeprecationNoticeEvent {
+    /// Concise summary of what is deprecated.
+    pub summary: String,
+    /// Optional extra guidance, such as migration steps or rationale.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct UndoStartedEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct UndoCompletedEvent {
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1286,6 +1337,7 @@ pub struct TurnDiffEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct GetHistoryEntryResponseEvent {
     pub offset: usize,
     pub log_id: u64,
@@ -1335,6 +1387,7 @@ pub struct ListCustomPromptsResponseEvent {
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct SessionConfiguredEvent {
     /// Name left as session_id instead of conversation_id for backwards compatibility.
     pub session_id: ConversationId,
@@ -1395,6 +1448,7 @@ pub enum FileChange {
     },
     Update {
         unified_diff: String,
+        #[ts(optional = nullable)]
         move_path: Option<PathBuf>,
     },
 }

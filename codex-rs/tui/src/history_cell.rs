@@ -876,18 +876,20 @@ impl HistoryCell for McpToolCallCell {
         }
 
         let mut detail_lines: Vec<Line<'static>> = Vec::new();
+        // Reserve four columns for the tree prefix ("  └ "/"    ") and ensure the wrapper still has at least one cell to work with.
+        let detail_wrap_width = (width as usize).saturating_sub(4).max(1);
 
         if let Some(result) = &self.result {
             match result {
                 Ok(mcp_types::CallToolResult { content, .. }) => {
                     if !content.is_empty() {
                         for block in content {
-                            let text = Self::render_content_block(block, width as usize);
+                            let text = Self::render_content_block(block, detail_wrap_width);
                             for segment in text.split('\n') {
                                 let line = Line::from(segment.to_string().dim());
                                 let wrapped = word_wrap_line(
                                     &line,
-                                    RtOptions::new((width as usize).saturating_sub(4))
+                                    RtOptions::new(detail_wrap_width)
                                         .initial_indent("".into())
                                         .subsequent_indent("    ".into()),
                                 );
@@ -905,7 +907,7 @@ impl HistoryCell for McpToolCallCell {
                     let err_line = Line::from(err_text.dim());
                     let wrapped = word_wrap_line(
                         &err_line,
-                        RtOptions::new((width as usize).saturating_sub(4))
+                        RtOptions::new(detail_wrap_width)
                             .initial_indent("".into())
                             .subsequent_indent("    ".into()),
                     );
@@ -1000,6 +1002,38 @@ fn try_new_completed_mcp_tool_call_with_image_output(
 pub(crate) fn new_warning_event(message: String) -> PlainHistoryCell {
     PlainHistoryCell {
         lines: vec![vec![format!("⚠ {message}").yellow()].into()],
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct DeprecationNoticeCell {
+    summary: String,
+    details: Option<String>,
+}
+
+pub(crate) fn new_deprecation_notice(
+    summary: String,
+    details: Option<String>,
+) -> DeprecationNoticeCell {
+    DeprecationNoticeCell { summary, details }
+}
+
+impl HistoryCell for DeprecationNoticeCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(vec!["⚠ ".red().bold(), self.summary.clone().red()].into());
+
+        let wrap_width = width.saturating_sub(4).max(1) as usize;
+
+        if let Some(details) = &self.details {
+            let line = textwrap::wrap(details, wrap_width)
+                .into_iter()
+                .map(|s| s.to_string().dim().into())
+                .collect::<Vec<_>>();
+            lines.extend(line);
+        }
+
+        lines
     }
 }
 
@@ -1296,6 +1330,8 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
                 aggregated_output: stderr,
             }),
             OutputLinesParams {
+                line_limit: TOOL_CALL_MAX_LINES,
+                only_err: true,
                 include_angle_pipe: true,
                 include_prefix: true,
             },
@@ -1823,6 +1859,7 @@ mod tests {
                 },
             ],
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -1845,6 +1882,7 @@ mod tests {
                 cmd: "rg shimmer_spans".into(),
             }],
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -1860,6 +1898,7 @@ mod tests {
                     cmd: "cat shimmer.rs".into(),
                     path: "shimmer.rs".into(),
                 }],
+                false,
             )
             .unwrap();
         cell.complete_call("c2", CommandOutput::default(), Duration::from_millis(1));
@@ -1873,6 +1912,7 @@ mod tests {
                     cmd: "cat status_indicator_widget.rs".into(),
                     path: "status_indicator_widget.rs".into(),
                 }],
+                false,
             )
             .unwrap();
         cell.complete_call("c3", CommandOutput::default(), Duration::from_millis(1));
@@ -1905,6 +1945,7 @@ mod tests {
                 },
             ],
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -1924,6 +1965,7 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), cmd],
             parsed: Vec::new(),
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -1945,6 +1987,7 @@ mod tests {
             command: vec!["echo".into(), "ok".into()],
             parsed: Vec::new(),
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -1964,6 +2007,7 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), long],
             parsed: Vec::new(),
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -1982,6 +2026,7 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), cmd],
             parsed: Vec::new(),
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -2001,6 +2046,7 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), cmd],
             parsed: Vec::new(),
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -2020,6 +2066,7 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), "seq 1 10 1>&2 && false".into()],
             parsed: Vec::new(),
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -2065,6 +2112,7 @@ mod tests {
             command: vec!["bash".into(), "-lc".into(), long_cmd.to_string()],
             parsed: Vec::new(),
             output: None,
+            is_user_shell_command: false,
             start_time: Some(Instant::now()),
             duration: None,
         });
@@ -2242,5 +2290,22 @@ mod tests {
 
         let rendered_transcript = render_transcript(cell.as_ref());
         assert_eq!(rendered_transcript, vec!["• We should fix the bug next."]);
+    }
+
+    #[test]
+    fn deprecation_notice_renders_summary_with_details() {
+        let cell = new_deprecation_notice(
+            "Feature flag `foo`".to_string(),
+            Some("Use flag `bar` instead.".to_string()),
+        );
+        let lines = cell.display_lines(80);
+        let rendered = render_lines(&lines);
+        assert_eq!(
+            rendered,
+            vec![
+                "⚠ Feature flag `foo`".to_string(),
+                "Use flag `bar` instead.".to_string(),
+            ]
+        );
     }
 }

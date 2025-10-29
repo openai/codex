@@ -11,6 +11,7 @@ use ts_rs::TS;
 pub const PROMPTS_CMD_PREFIX: &str = "prompts";
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
+#[ts(optional_fields = nullable)]
 pub struct CustomPrompt {
     pub name: String,
     pub path: PathBuf,
