@@ -207,7 +207,7 @@ impl RolloutRecorder {
             .map_err(|e| IoError::other(format!("failed waiting for rollout flush: {e}")))
     }
 
-    pub(crate) async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
+    pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
         info!("Resuming rollout from {path:?}");
         let text = tokio::fs::read_to_string(path).await?;
         if text.trim().is_empty() {
