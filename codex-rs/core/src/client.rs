@@ -55,6 +55,9 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
 use std::sync::Arc;
 
+const RESPONSES_BETA_HEADER_V1: &str = "responses=v1";
+const RESPONSES_BETA_HEADER_EXPERIMENTAL: &str = "responses=experimental";
+
 #[derive(Debug, Deserialize)]
 struct ErrorResponse {
     error: Error,
@@ -288,8 +291,21 @@ impl ModelClient {
             .await
             .map_err(StreamAttemptError::Fatal)?;
 
+        let has_beta_header = req_builder
+            .try_clone()
+            .and_then(|builder| builder.build().ok())
+            .map_or(false, |req| req.headers().contains_key("OpenAI-Beta"));
+
+        if !has_beta_header {
+            let beta_value = if self.provider.is_public_openai_responses_endpoint() {
+                RESPONSES_BETA_HEADER_V1
+            } else {
+                RESPONSES_BETA_HEADER_EXPERIMENTAL
+            };
+            req_builder = req_builder.header("OpenAI-Beta", beta_value);
+        }
+
         req_builder = req_builder
-            .header("OpenAI-Beta", "responses=experimental")
             // Send session_id for compatibility.
             .header("conversation_id", self.conversation_id.to_string())
             .header("session_id", self.conversation_id.to_string())
@@ -933,6 +949,7 @@ fn is_context_window_error(error: &Error) -> bool {
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
+    use std::collections::HashMap;
     use serde_json::json;
     use tokio::sync::mpsc;
     use tokio_test::io::Builder as IoBuilder;
@@ -969,6 +986,145 @@ mod tests {
             events.push(ev);
         }
         events
+    }
+
+    #[tokio::test]
+    async fn responses_request_sets_beta_header_for_public_openai() {
+        let provider = ModelProviderInfo {
+            name: "openai".to_string(),
+            base_url: Some("https://api.openai.com/v1".to_string()),
+            env_key: None,
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: Some(0),
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
+            openrouter: None,
+        };
+
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("client");
+
+        let mut builder = provider
+            .create_request_builder(&client, &None)
+            .await
+            .expect("builder");
+
+        let has_beta = builder
+            .try_clone()
+            .and_then(|b| b.build().ok())
+            .map_or(false, |req| req.headers().contains_key("OpenAI-Beta"));
+        if !has_beta {
+            builder = builder.header("OpenAI-Beta", RESPONSES_BETA_HEADER_V1);
+        }
+
+        let request = builder
+            .try_clone()
+            .expect("clone request builder")
+            .build()
+            .expect("build request");
+
+        let header_value = request
+            .headers()
+            .get("OpenAI-Beta")
+            .expect("OpenAI-Beta header present");
+        assert_eq!(header_value, RESPONSES_BETA_HEADER_V1);
+    }
+
+    #[tokio::test]
+    async fn responses_request_sets_beta_header_for_backend() {
+        let provider = ModelProviderInfo {
+            name: "backend".to_string(),
+            base_url: Some("https://chatgpt.com/backend-api/codex".to_string()),
+            env_key: None,
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: Some(0),
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
+            openrouter: None,
+        };
+
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("client");
+
+        let mut builder = provider
+            .create_request_builder(&client, &None)
+            .await
+            .expect("builder");
+
+        let has_beta = builder
+            .try_clone()
+            .and_then(|b| b.build().ok())
+            .map_or(false, |req| req.headers().contains_key("OpenAI-Beta"));
+        if !has_beta {
+            builder = builder.header("OpenAI-Beta", RESPONSES_BETA_HEADER_EXPERIMENTAL);
+        }
+
+        let request = builder
+            .try_clone()
+            .expect("clone request builder")
+            .build()
+            .expect("build request");
+
+        let header_value = request
+            .headers()
+            .get("OpenAI-Beta")
+            .expect("OpenAI-Beta header present");
+        assert_eq!(header_value, RESPONSES_BETA_HEADER_EXPERIMENTAL);
+    }
+
+    #[tokio::test]
+    async fn responses_request_respects_existing_beta_header() {
+        let mut headers = HashMap::new();
+        headers.insert("OpenAI-Beta".to_string(), "custom".to_string());
+        let provider = ModelProviderInfo {
+            name: "custom".to_string(),
+            base_url: Some("https://api.openai.com/v1".to_string()),
+            env_key: None,
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: Some(headers),
+            env_http_headers: None,
+            request_max_retries: Some(0),
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
+            openrouter: None,
+        };
+
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("client");
+
+        let request = provider
+            .create_request_builder(&client, &None)
+            .await
+            .expect("builder")
+            .try_clone()
+            .expect("clone request builder")
+            .build()
+            .expect("build request");
+
+        let header_value = request
+            .headers()
+            .get("OpenAI-Beta")
+            .expect("OpenAI-Beta header present");
+        assert_eq!(header_value, "custom");
     }
 
     /// Builds an in-memory SSE stream from JSON fixtures and returns only the

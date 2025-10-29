@@ -177,6 +177,35 @@ impl ModelProviderInfo {
             .unwrap_or(false)
     }
 
+    pub(crate) fn is_backend_responses_endpoint(&self) -> bool {
+        if self.wire_api != WireApi::Responses {
+            return false;
+        }
+
+        if self.name.eq_ignore_ascii_case("backend") {
+            return true;
+        }
+
+        self.base_url
+            .as_ref()
+            .map_or(false, |base| base.contains("/backend-api"))
+    }
+
+    pub(crate) fn is_public_openai_responses_endpoint(&self) -> bool {
+        if self.wire_api != WireApi::Responses {
+            return false;
+        }
+        if self.is_backend_responses_endpoint() || self.is_azure_responses_endpoint() {
+            return false;
+        }
+
+        self.base_url
+            .as_ref()
+            .and_then(|base| url::Url::parse(base).ok())
+            .and_then(|parsed| parsed.host_str().map(|host| host.eq_ignore_ascii_case("api.openai.com")))
+            .unwrap_or(true)
+    }
+
     /// Apply provider-specific HTTP headers (both static and environment-based)
     /// onto an existing `reqwest::RequestBuilder` and return the updated
     /// builder.

@@ -497,10 +497,6 @@ impl ModelClient {
                 .create_request_builder(&self.client, &auth)
                 .await?;
 
-            // `Codex-Task-Type` differentiates traffic for caching; default to "standard" until
-            // task-specific dispatch is re-introduced.
-            let codex_task_type = "standard";
-
             let has_beta_header = req_builder
                 .try_clone()
                 .and_then(|builder| builder.build().ok())
@@ -514,6 +510,10 @@ impl ModelClient {
                 };
                 req_builder = req_builder.header("OpenAI-Beta", beta_value);
             }
+
+            // `Codex-Task-Type` differentiates traffic for caching; default to "standard" until
+            // task-specific dispatch is re-introduced.
+            let codex_task_type = "standard";
 
             req_builder = req_builder
                 // Send `conversation_id`/`session_id` so the server can hit the prompt-cache.
@@ -1376,6 +1376,7 @@ async fn stream_from_fixture(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model_provider_info::{ModelProviderInfo, WireApi};
     use std::collections::HashMap;
     use serde_json::json;
     use tokio::sync::mpsc;
