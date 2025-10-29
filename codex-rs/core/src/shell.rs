@@ -29,8 +29,6 @@ pub enum Shell {
 }
 
 impl Shell {
-    // No formatting helpers — callers should provide the full argv they want to execute.
-
     pub fn name(&self) -> Option<String> {
         match self {
             Shell::Zsh(zsh) => std::path::Path::new(&zsh.shell_path)
@@ -234,12 +232,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn removed_format_helpers_do_not_exist() {
-        // Intentionally left empty; formatting helpers were removed.
-        assert!(true);
     }
 }
 
