@@ -1,10 +1,13 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
+use async_channel::Receiver;
 use async_channel::Sender;
 use codex_async_utils::OrCancelExt;
+use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
@@ -68,13 +71,7 @@ pub(crate) async fn run_codex_conversation_interactive(
     // Forward ops from the caller to the sub-agent.
     let codex_for_ops = Arc::clone(&codex);
     tokio::spawn(async move {
-        loop {
-            let op: Op = match rx_ops.recv().or_cancel(&cancel_token_ops).await {
-                Ok(Ok(Submission { id: _, op })) => op,
-                Ok(Err(_)) | Err(_) => break,
-            };
-            let _ = codex_for_ops.submit(op).await;
-        }
+        forward_ops(codex_for_ops, rx_ops, cancel_token_ops).await;
     });
 
     Ok(Codex {
@@ -111,27 +108,7 @@ pub(crate) async fn run_codex_conversation_one_shot(
     io.submit(Op::UserInput { items: input }).await?;
 
     // Bridge events so we can observe completion and shut down automatically.
-    let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
-    let ops_tx = io.tx_sub.clone();
-    tokio::spawn(async move {
-        while let Ok(event) = io.next_event().await {
-            let should_shutdown = matches!(
-                event.msg,
-                EventMsg::TaskComplete(_) | EventMsg::TurnAborted(_)
-            );
-            let _ = tx_bridge.send(event).await;
-            if should_shutdown {
-                let _ = ops_tx
-                    .send(Submission {
-                        id: "shutdown".to_string(),
-                        op: Op::Shutdown {},
-                    })
-                    .await;
-                child_cancel.cancel();
-                break;
-            }
-        }
-    });
+    let rx_bridge = bridge_until_shutdown(io, child_cancel);
 
     // For one-shot usage, return a closed `tx_sub` so callers cannot submit
     // additional ops after the initial request. Create a channel and drop the
@@ -163,41 +140,104 @@ async fn forward_events(
                 msg: EventMsg::ExecApprovalRequest(event),
             } => {
                 // Initiate approval via parent session; do not surface to consumer.
-                let decision = parent_session
-                    .request_command_approval(
-                        parent_ctx.as_ref(),
-                        parent_ctx.sub_id.clone(),
-                        event.command.clone(),
-                        event.cwd.clone(),
-                        event.reason.clone(),
-                        event.risk,
-                    )
-                    .await;
-                let _ = codex.submit(Op::ExecApproval { id, decision }).await;
+                handle_exec_approval(&codex, id, &parent_session, &parent_ctx, event).await;
             }
             Event {
                 id,
                 msg: EventMsg::ApplyPatchApprovalRequest(event),
             } => {
-                let decision = parent_session
-                    .request_patch_approval(
-                        parent_ctx.as_ref(),
-                        parent_ctx.sub_id.clone(),
-                        event.changes.clone(),
-                        event.reason.clone(),
-                        event.grant_root.clone(),
-                    )
-                    .await;
-                let _ = codex
-                    .submit(Op::PatchApproval {
-                        id,
-                        decision: decision.await.unwrap_or_default(),
-                    })
-                    .await;
+                handle_patch_approval(&codex, id, &parent_session, &parent_ctx, event).await;
             }
             other => {
                 let _ = tx_sub.send(other).await;
             }
         }
     }
+}
+
+/// Forward ops from a caller to a sub-agent, respecting cancellation.
+async fn forward_ops(
+    codex: Arc<Codex>,
+    rx_ops: Receiver<Submission>,
+    cancel_token_ops: CancellationToken,
+) {
+    loop {
+        let op: Op = match rx_ops.recv().or_cancel(&cancel_token_ops).await {
+            Ok(Ok(Submission { id: _, op })) => op,
+            Ok(Err(_)) | Err(_) => break,
+        };
+        let _ = codex.submit(op).await;
+    }
+}
+
+/// Bridge events from `io` to a fresh channel, shutting down on completion.
+fn bridge_until_shutdown(io: Codex, child_cancel: CancellationToken) -> Receiver<Event> {
+    let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let ops_tx = io.tx_sub.clone();
+    tokio::spawn(async move {
+        while let Ok(event) = io.next_event().await {
+            let should_shutdown = matches!(
+                event.msg,
+                EventMsg::TaskComplete(_) | EventMsg::TurnAborted(_)
+            );
+            let _ = tx_bridge.send(event).await;
+            if should_shutdown {
+                let _ = ops_tx
+                    .send(Submission {
+                        id: "shutdown".to_string(),
+                        op: Op::Shutdown {},
+                    })
+                    .await;
+                child_cancel.cancel();
+                break;
+            }
+        }
+    });
+    rx_bridge
+}
+
+/// Handle an ExecApprovalRequest by consulting the parent session and replying.
+async fn handle_exec_approval(
+    codex: &Codex,
+    id: String,
+    parent_session: &Session,
+    parent_ctx: &TurnContext,
+    event: ExecApprovalRequestEvent,
+) {
+    let decision = parent_session
+        .request_command_approval(
+            parent_ctx,
+            parent_ctx.sub_id.clone(),
+            event.command,
+            event.cwd,
+            event.reason,
+            event.risk,
+        )
+        .await;
+    let _ = codex.submit(Op::ExecApproval { id, decision }).await;
+}
+
+/// Handle an ApplyPatchApprovalRequest by consulting the parent session and replying.
+async fn handle_patch_approval(
+    codex: &Codex,
+    id: String,
+    parent_session: &Session,
+    parent_ctx: &TurnContext,
+    event: ApplyPatchApprovalRequestEvent,
+) {
+    let decision_rx = parent_session
+        .request_patch_approval(
+            parent_ctx,
+            parent_ctx.sub_id.clone(),
+            event.changes,
+            event.reason,
+            event.grant_root,
+        )
+        .await;
+    let _ = codex
+        .submit(Op::PatchApproval {
+            id,
+            decision: decision_rx.await.unwrap_or_default(),
+        })
+        .await;
 }
