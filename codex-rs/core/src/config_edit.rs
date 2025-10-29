@@ -784,17 +784,22 @@ hide_full_access_warning = true
 [mcp_servers.http]
 url = \"https://example.com\"
 bearer_token_env_var = \"TOKEN\"
-http_headers = { \"Z-Header\" = \"z\" }
 enabled = false
 startup_timeout_sec = 5.0
 disabled_tools = [\"forbidden\"]
 
+[mcp_servers.http.http_headers]
+Z-Header = \"z\"
+
 [mcp_servers.stdio]
 command = \"cmd\"
 args = [\"--flag\"]
-env = { \"A\" = \"1\", \"B\" = \"2\" }
 env_vars = [\"FOO\"]
 enabled_tools = [\"one\", \"two\"]
+
+[mcp_servers.stdio.env]
+A = \"1\"
+B = \"2\"
 ";
         assert_eq!(raw, expected);
     }
