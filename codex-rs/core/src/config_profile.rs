@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::protocol::AskForApproval;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
 
 /// Collection of common configuration options that a user can define as a unit
@@ -16,18 +17,19 @@ pub struct ConfigProfile {
     /// [`ModelProviderInfo`] to use.
     pub model_provider: Option<String>,
     pub approval_policy: Option<AskForApproval>,
+    pub sandbox_mode: Option<SandboxMode>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub chatgpt_base_url: Option<String>,
     pub experimental_instructions_file: Option<PathBuf>,
-    pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_exec_command_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
+    pub experimental_sandbox_command_assessment: Option<bool>,
     pub tools_web_search: Option<bool>,
     pub tools_view_image: Option<bool>,
     /// Optional feature toggles scoped to this profile.

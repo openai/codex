@@ -87,7 +87,7 @@ This will push the commit using the tag `rust-v${VERSION}`, which in turn kicks 
 
 If everything looks good in the generated GitHub Release, uncheck the **pre-release** box so it is the latest release.
 
-Create a PR to update [`Formula/c/codex.rb`](https://github.com/Homebrew/homebrew-core/blob/main/Formula/c/codex.rb) on Homebrew.
+Create a PR to update [`Cask/c/codex.rb`](https://github.com/Homebrew/homebrew-cask/blob/main/Formula/c/codex.rb) on Homebrew.
 
 ### Security & responsible AI
 

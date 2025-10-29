@@ -19,8 +19,10 @@ anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 clap_complete = { workspace = true }
 codex-app-server = { workspace = true }
+codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-chatgpt = { workspace = true }
+codex-cloud-tasks = { path = "../cloud-tasks" }
 codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
 codex-exec = { workspace = true }
@@ -28,12 +30,11 @@ codex-login = { workspace = true }
 codex-mcp-server = { workspace = true }
 codex-process-hardening = { workspace = true }
 codex-protocol = { workspace = true }
-codex-app-server-protocol = { workspace = true }
 codex-protocol-ts = { workspace = true }
 codex-responses-api-proxy = { workspace = true }
-codex-tui = { workspace = true }
 codex-rmcp-client = { workspace = true }
-codex-cloud-tasks = { path = "../cloud-tasks" }
+codex-stdio-to-uds = { workspace = true }
+codex-tui = { workspace = true }
 ctor = { workspace = true }
 owo-colors = { workspace = true }
 serde_json = { workspace = true }
@@ -47,8 +48,8 @@ tokio = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
-assert_matches = { workspace = true }
 assert_cmd = { workspace = true }
+assert_matches = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

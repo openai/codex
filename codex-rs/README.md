@@ -11,7 +11,12 @@ npm i -g @openai/codex
 codex
 ```
 
-You can also install via Homebrew (`brew install codex`) or download a platform-specific release directly from our [GitHub Releases](https://github.com/openai/codex/releases).
+You can also install via Homebrew (`brew install --cask codex`) or download a platform-specific release directly from our [GitHub Releases](https://github.com/openai/codex/releases).
+
+## Documentation quickstart
+
+- First run with Codex? Follow the walkthrough in [`docs/getting-started.md`](../docs/getting-started.md) for prompts, keyboard shortcuts, and session management.
+- Already shipping with Codex and want deeper control? Jump to [`docs/advanced.md`](../docs/advanced.md) and the configuration reference at [`docs/config.md`](../docs/config.md).
 
 ## What's new in the Rust CLI
 
@@ -46,30 +51,6 @@ You can enable notifications by configuring a script that is run whenever the ag
 ### `codex exec` to run Codex programmatically/non-interactively
 
 To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the prompt via `stdin`) and Codex will work on your task until it decides that it is done and exits. Output is printed to the terminal directly. You can set the `RUST_LOG` environment variable to see more about what's going on.
-
-### Use `@` for file search
-
-Typing `@` triggers a fuzzy-filename search over the workspace root. Use up/down to select among the results and Tab or Enter to replace the `@` with the selected path. You can use Esc to cancel the search.
-
-### Esc–Esc to edit a previous message
-
-When the chat composer is empty, press Esc to prime “backtrack” mode. Press Esc again to open a transcript preview highlighting the last user message; press Esc repeatedly to step to older user messages. Press Enter to confirm and Codex will fork the conversation from that point, trim the visible transcript accordingly, and pre‑fill the composer with the selected user message so you can edit and resubmit it.
-
-In the transcript preview, the footer shows an `Esc edit prev` hint while editing is active.
-
-### `--cd`/`-C` flag
-
-Sometimes it is not convenient to `cd` to the directory you want Codex to use as the "working root" before running Codex. Fortunately, `codex` supports a `--cd` option so you can specify whatever folder you want. You can confirm that Codex is honoring `--cd` by double-checking the **workdir** it reports in the TUI at the start of a new session.
-
-### Shell completions
-
-Generate shell completion scripts via:
-
-```shell
-codex completion bash
-codex completion zsh
-codex completion fish
-```
 
 ### Experimenting with the Codex Sandbox
 

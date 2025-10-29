@@ -31,18 +31,18 @@ pub enum Feature {
     UnifiedExec,
     /// Use the streamable exec-command/write-stdin tool pair.
     StreamableShell,
-    /// Use the official Rust MCP client (rmcp).
+    /// Enable experimental RMCP features such as OAuth login.
     RmcpClient,
-    /// Include the plan tool.
-    PlanTool,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
     /// Include the view_image tool.
     ViewImageTool,
     /// Allow the model to request web searches.
     WebSearchRequest,
-    /// Automatically approve all approval requests from the harness.
-    ApproveAll,
+    /// Enable the model-based risk assessments for sandboxed commands.
+    SandboxCommandAssessment,
+    /// Create a ghost commit at each turn.
+    GhostCommit,
 }
 
 impl Feature {
@@ -66,24 +66,30 @@ impl Feature {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LegacyFeatureUsage {
+    pub alias: String,
+    pub feature: Feature,
+}
+
 /// Holds the effective set of enabled features.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Features {
     enabled: BTreeSet<Feature>,
+    legacy_usages: BTreeSet<LegacyFeatureUsage>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct FeatureOverrides {
-    pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
     pub web_search_request: Option<bool>,
+    pub experimental_sandbox_command_assessment: Option<bool>,
 }
 
 impl FeatureOverrides {
     fn apply(self, features: &mut Features) {
         LegacyFeatureToggles {
-            include_plan_tool: self.include_plan_tool,
             include_apply_patch_tool: self.include_apply_patch_tool,
             include_view_image_tool: self.include_view_image_tool,
             tools_web_search: self.web_search_request,
@@ -102,7 +108,10 @@ impl Features {
                 set.insert(spec.id);
             }
         }
-        Self { enabled: set }
+        Self {
+            enabled: set,
+            legacy_usages: BTreeSet::new(),
+        }
     }
 
     pub fn enabled(&self, f: Feature) -> bool {
@@ -117,11 +126,34 @@ impl Features {
         self.enabled.remove(&f);
     }
 
+    pub fn record_legacy_usage_force(&mut self, alias: &str, feature: Feature) {
+        self.legacy_usages.insert(LegacyFeatureUsage {
+            alias: alias.to_string(),
+            feature,
+        });
+    }
+
+    pub fn record_legacy_usage(&mut self, alias: &str, feature: Feature) {
+        if alias == feature.key() {
+            return;
+        }
+        self.record_legacy_usage_force(alias, feature);
+    }
+
+    pub fn legacy_feature_usages(&self) -> impl Iterator<Item = (&str, Feature)> + '_ {
+        self.legacy_usages
+            .iter()
+            .map(|usage| (usage.alias.as_str(), usage.feature))
+    }
+
     /// Apply a table of key -> bool toggles (e.g. from TOML).
     pub fn apply_map(&mut self, m: &BTreeMap<String, bool>) {
         for (k, v) in m {
             match feature_for_key(k) {
                 Some(feat) => {
+                    if k != feat.key() {
+                        self.record_legacy_usage(k.as_str(), feat);
+                    }
                     if *v {
                         self.enable(feat);
                     } else {
@@ -143,6 +175,7 @@ impl Features {
         let mut features = Features::with_defaults();
 
         let base_legacy = LegacyFeatureToggles {
+            experimental_sandbox_command_assessment: cfg.experimental_sandbox_command_assessment,
             experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
             experimental_use_exec_command_tool: cfg.experimental_use_exec_command_tool,
             experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
@@ -158,9 +191,10 @@ impl Features {
         }
 
         let profile_legacy = LegacyFeatureToggles {
-            include_plan_tool: config_profile.include_plan_tool,
             include_apply_patch_tool: config_profile.include_apply_patch_tool,
             include_view_image_tool: config_profile.include_view_image_tool,
+            experimental_sandbox_command_assessment: config_profile
+                .experimental_sandbox_command_assessment,
             experimental_use_freeform_apply_patch: config_profile
                 .experimental_use_freeform_apply_patch,
             experimental_use_exec_command_tool: config_profile.experimental_use_exec_command_tool,
@@ -188,6 +222,11 @@ fn feature_for_key(key: &str) -> Option<Feature> {
         }
     }
     legacy::feature_for_key(key)
+}
+
+/// Returns `true` if the provided string matches a known feature toggle key.
+pub fn is_known_feature_key(key: &str) -> bool {
+    feature_for_key(key).is_some()
 }
 
 /// Deserializable features table for TOML.
@@ -226,12 +265,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::PlanTool,
-        key: "plan_tool",
-        stage: Stage::Stable,
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
         stage: Stage::Beta,
@@ -250,8 +283,14 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ApproveAll,
-        key: "approve_all",
+        id: Feature::SandboxCommandAssessment,
+        key: "experimental_sandbox_command_assessment",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::GhostCommit,
+        key: "ghost_commit",
         stage: Stage::Experimental,
         default_enabled: false,
     },

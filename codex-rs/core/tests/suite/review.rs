@@ -13,7 +13,6 @@ use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExitedReviewModeEvent;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewCodeLocation;
 use codex_core::protocol::ReviewFinding;
@@ -22,6 +21,7 @@ use codex_core::protocol::ReviewOutputEvent;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
+use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::skip_if_no_network;
@@ -122,13 +122,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
 
     // Also verify that a user message with the header and a formatted finding
     // was recorded back in the parent session's rollout.
-    codex.submit(Op::GetPath).await.unwrap();
-    let history_event =
-        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ConversationPath(_))).await;
-    let path = match history_event {
-        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path,
-        other => panic!("expected ConversationPath event, got {other:?}"),
-    };
+    let path = codex.rollout_path();
     let text = std::fs::read_to_string(&path).expect("read rollout file");
 
     let mut saw_header = false;
@@ -472,7 +466,8 @@ async fn review_input_isolated_from_parent_history() {
                 "instructions": null,
                 "cwd": ".",
                 "originator": "test_originator",
-                "cli_version": "test_version"
+                "cli_version": "test_version",
+                "model_provider": "test-provider"
             }
         });
         f.write_all(format!("{meta_line}\n").as_bytes())
@@ -579,13 +574,7 @@ async fn review_input_isolated_from_parent_history() {
     assert_eq!(instructions, REVIEW_PROMPT);
 
     // Also verify that a user interruption note was recorded in the rollout.
-    codex.submit(Op::GetPath).await.unwrap();
-    let history_event =
-        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ConversationPath(_))).await;
-    let path = match history_event {
-        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path,
-        other => panic!("expected ConversationPath event, got {other:?}"),
-    };
+    let path = codex.rollout_path();
     let text = std::fs::read_to_string(&path).expect("read rollout file");
     let mut saw_interruption_message = false;
     for line in text.lines() {
@@ -663,7 +652,7 @@ async fn review_history_does_not_leak_into_parent_session() {
     let followup = "back to parent".to_string();
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: followup.clone(),
             }],
         })

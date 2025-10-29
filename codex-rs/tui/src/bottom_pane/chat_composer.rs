@@ -108,7 +108,7 @@ pub(crate) struct ChatComposer {
     custom_prompts: Vec<CustomPrompt>,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
-    context_window_percent: Option<u8>,
+    context_window_percent: Option<i64>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -242,8 +242,7 @@ impl ChatComposer {
         let Some(text) = self.history.on_entry_response(log_id, offset, entry) else {
             return false;
         };
-        self.textarea.set_text(&text);
-        self.textarea.set_cursor(0);
+        self.set_text_content(text);
         true
     }
 
@@ -314,6 +313,17 @@ impl ChatComposer {
         self.textarea.set_cursor(0);
         self.sync_command_popup();
         self.sync_file_search_popup();
+    }
+
+    pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {
+        if self.is_empty() {
+            return None;
+        }
+        let previous = self.current_text();
+        self.set_text_content(String::new());
+        self.history.reset_navigation();
+        self.history.record_local_submission(&previous);
+        Some(previous)
     }
 
     /// Get the current composer text.
@@ -563,6 +573,16 @@ impl ChatComposer {
 
     #[inline]
     fn handle_non_ascii_char(&mut self, input: KeyEvent) -> (InputResult, bool) {
+        if let KeyEvent {
+            code: KeyCode::Char(ch),
+            ..
+        } = input
+        {
+            let now = Instant::now();
+            if self.paste_burst.try_append_char_if_active(ch, now) {
+                return (InputResult::None, true);
+            }
+        }
         if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
             self.handle_paste(pasted);
         }
@@ -852,10 +872,12 @@ impl ChatComposer {
             return (InputResult::None, true);
         }
         if key_event.code == KeyCode::Esc {
-            let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
-            if next_mode != self.footer_mode {
-                self.footer_mode = next_mode;
-                return (InputResult::None, true);
+            if self.is_empty() {
+                let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
+                if next_mode != self.footer_mode {
+                    self.footer_mode = next_mode;
+                    return (InputResult::None, true);
+                }
             }
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
@@ -889,8 +911,7 @@ impl ChatComposer {
                         _ => unreachable!(),
                     };
                     if let Some(text) = replace_text {
-                        self.textarea.set_text(&text);
-                        self.textarea.set_cursor(0);
+                        self.set_text_content(text);
                         return (InputResult::None, true);
                     }
                 }
@@ -1504,7 +1525,7 @@ impl ChatComposer {
         self.is_task_running = running;
     }
 
-    pub(crate) fn set_context_window_percent(&mut self, percent: Option<u8>) {
+    pub(crate) fn set_context_window_percent(&mut self, percent: Option<i64>) {
         if self.context_window_percent != percent {
             self.context_window_percent = percent;
         }
@@ -1793,6 +1814,57 @@ mod tests {
     }
 
     #[test]
+    fn esc_hint_stays_hidden_with_draft_content() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            true,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        type_chars_humanlike(&mut composer, &['d']);
+
+        assert!(!composer.is_empty());
+        assert_eq!(composer.current_text(), "d");
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
+        assert!(matches!(composer.active_popup, ActivePopup::None));
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
+        assert!(!composer.esc_backtrack_hint);
+    }
+
+    #[test]
+    fn clear_for_ctrl_c_records_cleared_draft() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_text_content("draft text".to_string());
+        assert_eq!(composer.clear_for_ctrl_c(), Some("draft text".to_string()));
+        assert!(composer.is_empty());
+
+        assert_eq!(
+            composer.history.navigate_up(&composer.app_event_tx),
+            Some("draft text".to_string())
+        );
+    }
+
+    #[test]
     fn question_mark_only_toggles_on_first_char() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -2004,6 +2076,35 @@ mod tests {
                 result, expected,
                 "Failed for whitespace boundary case: {description} - input: '{input}', cursor: {cursor_pos}",
             );
+        }
+    }
+
+    #[test]
+    fn ascii_prefix_survives_non_ascii_followup() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+        assert!(composer.is_in_paste_burst());
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('あ'), KeyModifiers::NONE));
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted(text) => assert_eq!(text, "1あ"),
+            _ => panic!("expected Submitted"),
         }
     }
 
