@@ -1,6 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use anyhow::Context;
 use anyhow::Result;
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
@@ -223,6 +224,93 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
     let stdout = output_json["output"].as_str().unwrap_or_default();
     let stdout_pattern = r"(?s)^shell ok\n?$";
     assert_regex_match(stdout_pattern, stdout);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sandbox_denied_shell_returns_original_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5-codex".to_string();
+        config.model_family =
+            find_family_for_model("gpt-5-codex").expect("gpt-5-codex model family");
+    });
+    let fixture = builder.build(&server).await?;
+
+    let call_id = "sandbox-denied-shell";
+    let target_path = fixture.workspace_path("sandbox-denied.txt");
+    let sentinel = "sandbox-denied sentinel output";
+    let command = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        format!(
+            "printf {sentinel:?}; printf {content:?} > {path:?}",
+            sentinel = format!("{sentinel}\n"),
+            content = "sandbox denied",
+            path = &target_path
+        ),
+    ];
+    let args = json!({
+        "command": command,
+        "timeout_ms": 1_000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let mock = mount_sse_sequence(&server, responses).await;
+
+    fixture
+        .submit_turn_with_policy(
+            "run a command that should be denied by the read-only sandbox",
+            SandboxPolicy::ReadOnly,
+        )
+        .await?;
+
+    let output_json = mock
+        .function_call_output_text(call_id)
+        .context("shell output present")?;
+    let parsed: Value = serde_json::from_str(&output_json)?;
+    let body = parsed["output"].as_str().context("output body present")?;
+    let exit_code = parsed["metadata"]["exit_code"]
+        .as_i64()
+        .context("exit code present")?;
+
+    let body_lower = body.to_lowercase();
+    assert!(
+        body_lower.contains("permission denied"),
+        "expected sandbox denial details in tool output: {body}"
+    );
+    assert!(
+        body.contains(sentinel),
+        "expected sentinel output from command to reach the model: {body}"
+    );
+    let target_path_str = target_path
+        .to_str()
+        .context("target path string representation")?;
+    assert!(
+        body.contains(target_path_str),
+        "expected sandbox error to mention denied path: {body}"
+    );
+    assert!(
+        !body_lower.contains("failed in sandbox"),
+        "expected original tool output, found fallback message: {body}"
+    );
+    assert_ne!(
+        exit_code, 0,
+        "sandbox denial should surface a non-zero exit code"
+    );
 
     Ok(())
 }
