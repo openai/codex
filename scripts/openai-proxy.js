@@ -4,7 +4,7 @@
 // Features:
 // - Injects real OPENAI_API_KEY server-side; clients can use a dummy key
 // - Allows only /v1/chat/completions and /v1/responses
-// - Adds OpenAI-Beta: responses=experimental for Responses API
+// - Adds OpenAI-Beta: responses=v1 for Responses API
 // - Sets Accept: text/event-stream by default to stabilize streaming
 // - Scrubs sensitive headers from logs; logs are structured JSON
 // - Reuses connections and sets generous timeouts for SSE
@@ -52,7 +52,7 @@ const ALLOWED = ['/v1/chat/completions', '/v1/responses'];
 //   LOG_ERROR_BODY=1      -> Log non-2xx response body (truncated)
 //   LOG_ERROR_BODY_BYTES=1024 -> Max bytes to log from error body
 //   STRICT_HEADERS=1      -> Rebuild upstream headers from a minimal allowlist
-//   RESPONSES_BETA="responses=experimental"|"responses=v1" (override beta header)
+//   RESPONSES_BETA="responses=v1" (override beta header)
 const EXIT_ON_5XX = process.env.EXIT_ON_5XX === '1' || false;
 const READY_FILE = process.env.READY_FILE || '';
 const LOG_DEST = (process.env.LOG_DEST || 'stdout').toLowerCase();
