@@ -534,3 +534,150 @@ fn generate_index_ts(out_dir: &Path) -> Result<PathBuf> {
         .with_context(|| format!("Failed to write {}", index_path.display()))?;
     Ok(index_path)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::PathBuf;
+    use uuid::Uuid;
+
+    #[test]
+    fn generated_ts_omits_undefined_unions_for_optionals() -> Result<()> {
+        let output_dir = std::env::temp_dir().join(format!("codex_ts_types_{}", Uuid::now_v7()));
+        fs::create_dir(&output_dir)?;
+
+        struct TempDirGuard(PathBuf);
+
+        impl Drop for TempDirGuard {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let _guard = TempDirGuard(output_dir.clone());
+
+        generate_ts(&output_dir, None)?;
+
+        let mut undefined_offenders = Vec::new();
+        let mut missing_optional_marker = BTreeSet::new();
+        let mut stack = vec![output_dir];
+        while let Some(dir) = stack.pop() {
+            for entry in fs::read_dir(&dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+
+                if matches!(path.extension().and_then(|ext| ext.to_str()), Some("ts")) {
+                    let contents = fs::read_to_string(&path)?;
+                    if contents.contains("| undefined") {
+                        undefined_offenders.push(path.clone());
+                    }
+
+                    const SKIP_PREFIXES: &[&str] = &[
+                        "const ",
+                        "let ",
+                        "var ",
+                        "export const ",
+                        "export let ",
+                        "export var ",
+                    ];
+
+                    let mut search_start = 0;
+                    while let Some(idx) = contents[search_start..].find("| null") {
+                        let abs_idx = search_start + idx;
+                        let Some(colon_idx) = contents[..abs_idx].rfind(':') else {
+                            search_start = abs_idx + 5;
+                            continue;
+                        };
+
+                        let line_start_idx = contents[..colon_idx]
+                            .rfind('\n')
+                            .map(|i| i + 1)
+                            .unwrap_or(0);
+
+                        let mut segment_start_idx = line_start_idx;
+                        if let Some(rel_idx) = contents[line_start_idx..colon_idx].rfind(',') {
+                            segment_start_idx = segment_start_idx.max(line_start_idx + rel_idx + 1);
+                        }
+                        if let Some(rel_idx) = contents[line_start_idx..colon_idx].rfind('{') {
+                            segment_start_idx = segment_start_idx.max(line_start_idx + rel_idx + 1);
+                        }
+                        if let Some(rel_idx) = contents[line_start_idx..colon_idx].rfind('}') {
+                            segment_start_idx = segment_start_idx.max(line_start_idx + rel_idx + 1);
+                        }
+
+                        let mut field_prefix = contents[segment_start_idx..colon_idx].trim();
+                        if field_prefix.is_empty() {
+                            search_start = abs_idx + 5;
+                            continue;
+                        }
+
+                        if let Some(comment_idx) = field_prefix.rfind("*/") {
+                            field_prefix = field_prefix[comment_idx + 2..].trim_start();
+                        }
+
+                        if field_prefix.is_empty() {
+                            search_start = abs_idx + 5;
+                            continue;
+                        }
+
+                        if SKIP_PREFIXES
+                            .iter()
+                            .any(|prefix| field_prefix.starts_with(prefix))
+                        {
+                            search_start = abs_idx + 5;
+                            continue;
+                        }
+
+                        if field_prefix.contains('(') {
+                            search_start = abs_idx + 5;
+                            continue;
+                        }
+
+                        if field_prefix.chars().rev().find(|c| !c.is_whitespace()) == Some('?') {
+                            search_start = abs_idx + 5;
+                            continue;
+                        }
+
+                        let line_number =
+                            contents[..abs_idx].chars().filter(|c| *c == '\n').count() + 1;
+                        let offending_line_end = contents[line_start_idx..]
+                            .find('\n')
+                            .map(|i| line_start_idx + i)
+                            .unwrap_or(contents.len());
+                        let offending_snippet = contents[line_start_idx..offending_line_end].trim();
+
+                        missing_optional_marker.insert(format!(
+                            "{}:{}: {offending_snippet}",
+                            path.display(),
+                            line_number
+                        ));
+
+                        search_start = abs_idx + 5;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            undefined_offenders.is_empty(),
+            "Generated TypeScript still includes unions with `undefined` in {undefined_offenders:?}"
+        );
+
+        // If this test fails, it means that a struct field that is `Option<T>` in Rust
+        // is being generated as `T | null` in TypeScript, without the optional marker
+        // (`?`). To fix this, add #[ts(optional_fields = nullable)] to the struct definition.
+        assert!(
+            missing_optional_marker.is_empty(),
+            "Generated TypeScript has nullable fields without an optional marker: {missing_optional_marker:?}"
+        );
+
+        Ok(())
+    }
+}
