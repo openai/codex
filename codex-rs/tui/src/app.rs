@@ -92,6 +92,7 @@ impl App {
         initial_images: Vec<PathBuf>,
         resume_selection: ResumeSelection,
         feedback: codex_feedback::CodexFeedback,
+        initial_events: Vec<AppEvent>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -170,11 +171,17 @@ impl App {
             pending_update_action: None,
         };
 
+        for event in initial_events {
+            app.handle_event(tui, event).await?;
+        }
+
+        // TODO(jif) clean this
         #[cfg(not(debug_assertions))]
         if let Some(latest_version) = upgrade_version {
             app.handle_event(
                 tui,
                 AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
+                    crate::version::CODEX_CLI_VERSION,
                     latest_version,
                     crate::updates::get_update_action(),
                 ))),

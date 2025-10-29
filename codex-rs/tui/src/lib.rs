@@ -8,6 +8,7 @@ use app::App;
 pub use app::AppExitInfo;
 use codex_app_server_protocol::AuthMode;
 use codex_auto_updater::Error as AutoUpdateError;
+use codex_auto_updater::UpdateStatus;
 use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::CodexAuth;
@@ -80,6 +81,8 @@ mod wrapping;
 #[cfg(test)]
 pub mod test_backend;
 
+use crate::app_event::AppEvent;
+use crate::history_cell::UpdateAvailableHistoryCell;
 use crate::onboarding::TrustDirectorySelection;
 use crate::onboarding::WSL_INSTRUCTIONS;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
@@ -257,36 +260,30 @@ pub async fn run_main(
             .try_init();
     };
 
+    let mut cached_update_status: Option<UpdateStatus> = None;
+
     match codex_auto_updater::initialize_storage(&config.codex_home) {
         Ok(_) => {
-            let t1 = std::time::Instant::now();
             match codex_auto_updater::read_cached_status() {
-                Ok(Some(status)) if status.update_available => {
-                    let t2 = std::time::Instant::now();
-                    tracing::warn!("Diff: {:?}", t2 - t1);
-                    let current = status.current_version;
-                    let latest = status.latest_version;
-                    tracing::error!(
-                        current_version = current.as_str(),
-                        latest_version = latest.as_str(),
-                        "A newer Codex release is available. Update Codex from {current} to {latest} with `brew upgrade codex`."
-                    );
+                Ok(Some(status)) => {
+                    if status.update_available {
+                        cached_update_status = Some(status);
+                    }
                 }
-                Ok(_) | Err(AutoUpdateError::Unsupported) => {}
+                Ok(None) | Err(AutoUpdateError::Unsupported) => {}
                 Err(err) => {
-                    tracing::error!(error = ?err, "Failed to read cached Codex update status");
+                    error!(error = ?err, "Failed to read cached Codex update status");
                 }
             }
 
             tokio::spawn(async move {
                 if let Err(err) = codex_auto_updater::refresh_status().await {
-                    tracing::error!(error = ?err, "Failed to refresh Codex update status");
+                    error!(error = ?err, "Failed to refresh Codex update status");
                 }
-                error!("Prop done");
             });
         }
         Err(err) => {
-            tracing::error!(
+            error!(
                 error = ?err,
                 "Failed to initialize internal storage for Codex updates"
             );
@@ -300,6 +297,7 @@ pub async fn run_main(
         cli_kv_overrides,
         active_profile,
         feedback,
+        cached_update_status,
     )
     .await
     .map_err(|err| std::io::Error::other(err.to_string()))
@@ -312,8 +310,32 @@ async fn run_ratatui_app(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     active_profile: Option<String>,
     feedback: codex_feedback::CodexFeedback,
+    cached_update_status: Option<UpdateStatus>,
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
+
+    let mut initial_events = Vec::new();
+    if let Some(status) = cached_update_status {
+        if status.update_available {
+            let update_action = {
+                #[cfg(not(debug_assertions))]
+                {
+                    crate::updates::get_update_action()
+                }
+                #[cfg(debug_assertions)]
+                {
+                    None
+                }
+            };
+            initial_events.push(AppEvent::InsertHistoryCell(Box::new(
+                UpdateAvailableHistoryCell::new(
+                    status.current_version,
+                    status.latest_version,
+                    update_action,
+                ),
+            )));
+        }
+    }
 
     // Forward panic reports through tracing so they appear in the UI status
     // line, but do not swallow the default/color-eyre panic handler.
@@ -484,6 +506,7 @@ async fn run_ratatui_app(
         images,
         resume_selection,
         feedback,
+        initial_events,
     )
     .await;
 

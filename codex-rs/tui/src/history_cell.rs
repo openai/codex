@@ -16,7 +16,6 @@ use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::updates::UpdateAction;
-use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
@@ -265,15 +264,21 @@ impl HistoryCell for PlainHistoryCell {
 #[cfg_attr(debug_assertions, allow(dead_code))]
 #[derive(Debug)]
 pub(crate) struct UpdateAvailableHistoryCell {
+    current_version: String,
     latest_version: String,
     update_action: Option<UpdateAction>,
 }
 
 #[cfg_attr(debug_assertions, allow(dead_code))]
 impl UpdateAvailableHistoryCell {
-    pub(crate) fn new(latest_version: String, update_action: Option<UpdateAction>) -> Self {
+    pub(crate) fn new(
+        current_version: impl Into<String>,
+        latest_version: impl Into<String>,
+        update_action: Option<UpdateAction>,
+    ) -> Self {
         Self {
-            latest_version,
+            current_version: current_version.into(),
+            latest_version: latest_version.into(),
             update_action,
         }
     }
@@ -298,7 +303,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
                 padded_emoji("✨").bold().cyan(),
                 "Update available!".bold().cyan(),
                 " ",
-                format!("{CODEX_CLI_VERSION} -> {}", self.latest_version).bold(),
+                format!("{} -> {}", self.current_version, self.latest_version).bold(),
             ],
             update_instruction,
             "",
