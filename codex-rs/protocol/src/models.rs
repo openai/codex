@@ -233,33 +233,43 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                 .into_iter()
                 .map(|c| match c {
                     UserInput::Text { text } => ContentItem::InputText { text },
-
                     UserInput::Image { image_url } => ContentItem::InputImage { image_url },
+                    UserInput::LocalImage { path } => {
+                        let mapped: Option<std::path::PathBuf> = 
+                            if platform::is_running_under_wsl() {
+                                let win_path_str = path.to_string_lossy();
+                                platform::try_map_windows_drive_to_wsl_path(&win_path_str)
+                                    .map(std::path::PathBuf::from)
+                                    .filter(|p| p.exists())
+                            } else {
+                                None
+                            };
 
-                    UserInput::LocalImage { path } => match load_and_resize_to_fit(&path) {
+                            let effective_path: &std::path::Path =
+                                mapped.as_deref().unwrap_or(&path);
+
+                        match load_and_resize_to_fit(effective_path) {
                         Ok(image) => ContentItem::InputImage {
                             image_url: image.into_data_url(),
                         },
-
                         Err(err) => {
-                            // Keep a single return type: always produce a ContentItem.
-                            tracing::warn!("Failed to resize image {}: {}", path.display(), err);
+                            tracing::warn!("Failed to resize image {}: {}", effective_path.display(), err);
                             if matches!(&err, ImageProcessingError::Read { .. }) {
-                                local_image_error_placeholder(&path, &err)
+                                local_image_error_placeholder(effective_path, &err)
                             } else {
-                                match std::fs::read(&path) {
+                                match std::fs::read(effective_path) {
                                     Ok(bytes) => {
-                                        let Some(mime_guess) = mime_guess::from_path(&path).first()
+                                        let Some(mime_guess) = mime_guess::from_path(effective_path).first()
                                         else {
                                             return local_image_error_placeholder(
-                                                &path,
+                                                effective_path,
                                                 "unsupported MIME type (unknown)",
                                             );
                                         };
                                         let mime = mime_guess.essence_str().to_owned();
                                         if !mime.starts_with("image/") {
                                             return local_image_error_placeholder(
-                                                &path,
+                                                effective_path,
                                                 format!("unsupported MIME type `{mime}`"),
                                             );
                                         }
@@ -272,36 +282,11 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                                     Err(read_err) => {
                                         tracing::warn!(
                                             "Skipping image {} – could not read file: {}",
-                                            path.display(),
+                                            effective_path.display(),
                                             read_err
                                         );
-                                        local_image_error_placeholder(&path, &read_err)
+                                        local_image_error_placeholder(effective_path, &read_err)
                                     }
-                            };
-
-                            // If it's a read error under WSL, first try Windows-drive mapping.
-                            if matches!(&err, ImageProcessingError::Read { .. })
-                                && platform::is_running_under_wsl()
-                            {
-                                let win_path_str = path.to_string_lossy();
-                                if let Some(mapped) =
-                                    platform::try_map_windows_drive_to_wsl_path(&win_path_str)
-                                    && let Ok(bytes2) = std::fs::read(&mapped) {
-                                        return try_build_data_url(bytes2, std::path::Path::new(&mapped));
-                                }
-                            }
-
-                            // Direct raw read fallback (returns original image as data URL without resizing).
-                            match std::fs::read(&path) {
-                                Ok(bytes) => try_build_data_url(bytes, &path),
-                                Err(read_err) => {
-                                    tracing::warn!(
-                                        "Skipping image {} – could not read file: {}",
-                                        path.display(),
-                                        read_err
-                                    );
-                                    // Final fallback: placeholder content item (type-stable).
-                                    local_image_error_placeholder(&path, &read_err)
                                 }
                             }
                         }
