@@ -113,7 +113,28 @@ pub(crate) async fn run_codex_conversation_one_shot(
     io.submit(Op::UserInput { items: input }).await?;
 
     // Bridge events so we can observe completion and shut down automatically.
-    let rx_bridge = bridge_until_shutdown(io, child_cancel);
+    let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let ops_tx = io.tx_sub.clone();
+    let io_for_bridge = io;
+    tokio::spawn(async move {
+        while let Ok(event) = io_for_bridge.next_event().await {
+            let should_shutdown = matches!(
+                event.msg,
+                EventMsg::TaskComplete(_) | EventMsg::TurnAborted(_)
+            );
+            let _ = tx_bridge.send(event).await;
+            if should_shutdown {
+                let _ = ops_tx
+                    .send(Submission {
+                        id: "shutdown".to_string(),
+                        op: Op::Shutdown {},
+                    })
+                    .await;
+                child_cancel.cancel();
+                break;
+            }
+        }
+    });
 
     // For one-shot usage, return a closed `tx_sub` so callers cannot submit
     // additional ops after the initial request. Create a channel and drop the
@@ -192,32 +213,6 @@ async fn forward_ops(
         };
         let _ = codex.submit(op).await;
     }
-}
-
-/// Bridge events from `io` to a fresh channel, shutting down on completion.
-fn bridge_until_shutdown(io: Codex, child_cancel: CancellationToken) -> Receiver<Event> {
-    let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
-    let ops_tx = io.tx_sub.clone();
-    tokio::spawn(async move {
-        while let Ok(event) = io.next_event().await {
-            let should_shutdown = matches!(
-                event.msg,
-                EventMsg::TaskComplete(_) | EventMsg::TurnAborted(_)
-            );
-            let _ = tx_bridge.send(event).await;
-            if should_shutdown {
-                let _ = ops_tx
-                    .send(Submission {
-                        id: "shutdown".to_string(),
-                        op: Op::Shutdown {},
-                    })
-                    .await;
-                child_cancel.cancel();
-                break;
-            }
-        }
-    });
-    rx_bridge
 }
 
 /// Handle an ExecApprovalRequest by consulting the parent session and replying.

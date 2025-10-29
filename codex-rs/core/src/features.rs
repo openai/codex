@@ -122,8 +122,9 @@ impl Features {
         self.enabled.insert(f);
     }
 
-    pub fn disable(&mut self, f: Feature) {
+    pub fn disable(&mut self, f: Feature) -> &mut Self {
         self.enabled.remove(&f);
+        self
     }
 
     pub fn record_legacy_usage_force(&mut self, alias: &str, feature: Feature) {

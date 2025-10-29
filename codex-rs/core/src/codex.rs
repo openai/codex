@@ -1621,9 +1621,10 @@ async fn spawn_review_thread(
         .unwrap_or_else(|| parent_turn_context.client.get_model_family());
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = config.features.clone();
-    review_features.disable(crate::features::Feature::WebSearchRequest);
-    review_features.disable(crate::features::Feature::ViewImageTool);
-    review_features.disable(crate::features::Feature::StreamableShell);
+    review_features
+        .disable(crate::features::Feature::WebSearchRequest)
+        .disable(crate::features::Feature::ViewImageTool)
+        .disable(crate::features::Feature::StreamableShell);
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_family: &review_model_family,
         features: &review_features,
