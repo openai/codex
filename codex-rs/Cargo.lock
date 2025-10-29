@@ -983,6 +983,7 @@ dependencies = [
  "codex-rmcp-client",
  "codex-stdio-to-uds",
  "codex-tui",
+ "codex-windows-sandbox",
  "ctor 0.5.0",
  "owo-colors",
  "predicates",
