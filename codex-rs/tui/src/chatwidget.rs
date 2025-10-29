@@ -120,8 +120,8 @@ use codex_file_search::FileMatch;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
-const BANG_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
-const BANG_COMMAND_HELP_HINT: &str = "Example: !ls";
+const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
+const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -1360,8 +1360,8 @@ impl ChatWidget {
             if cmd.is_empty() {
                 self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                     history_cell::new_info_event(
-                        BANG_COMMAND_HELP_TITLE.to_string(),
-                        Some(BANG_COMMAND_HELP_HINT.to_string()),
+                        USER_SHELL_COMMAND_HELP_TITLE.to_string(),
+                        Some(USER_SHELL_COMMAND_HELP_HINT.to_string()),
                     ),
                 )));
                 return;
