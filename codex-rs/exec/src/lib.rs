@@ -24,7 +24,6 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
-use codex_core::protocol::TaskCompleteEvent;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
@@ -323,30 +322,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         });
     }
 
-    // Send images first, if any.
-    if !images.is_empty() {
-        let items: Vec<UserInput> = images
-            .into_iter()
-            .map(|path| UserInput::LocalImage { path })
-            .collect();
-        let initial_images_event_id = conversation.submit(Op::UserInput { items }).await?;
-        info!("Sent images with event ID: {initial_images_event_id}");
-        while let Ok(event) = conversation.next_event().await {
-            if event.id == initial_images_event_id
-                && matches!(
-                    event.msg,
-                    EventMsg::TaskComplete(TaskCompleteEvent {
-                        last_agent_message: _,
-                    })
-                )
-            {
-                break;
-            }
-        }
-    }
-
-    // Send the prompt.
-    let items: Vec<UserInput> = vec![UserInput::Text { text: prompt }];
+    // Package images and prompt into a single user input turn.
+    let mut items: Vec<UserInput> = images
+        .into_iter()
+        .map(|path| UserInput::LocalImage { path })
+        .collect();
+    items.push(UserInput::Text { text: prompt });
     let initial_prompt_task_id = conversation
         .submit(Op::UserTurn {
             items,

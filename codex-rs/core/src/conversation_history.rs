@@ -67,6 +67,15 @@ impl ConversationHistory {
         self.contents()
     }
 
+    // Returns the history prepared for sending to the model.
+    // With extra response items filtered out and GhostCommits removed.
+    pub(crate) fn get_history_for_prompt(&mut self) -> Vec<ResponseItem> {
+        let mut history = self.get_history();
+        Self::remove_ghost_snapshots(&mut history);
+        Self::remove_reasoning_before_last_turn(&mut history);
+        history
+    }
+
     pub(crate) fn remove_first_item(&mut self) {
         if !self.items.is_empty() {
             // Remove the oldest item (front of the list). Items are ordered from
@@ -109,6 +118,29 @@ impl ConversationHistory {
     /// Returns a clone of the contents in the transcript.
     fn contents(&self) -> Vec<ResponseItem> {
         self.items.clone()
+    }
+
+    fn remove_ghost_snapshots(items: &mut Vec<ResponseItem>) {
+        items.retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
+    }
+
+    fn remove_reasoning_before_last_turn(items: &mut Vec<ResponseItem>) {
+        // Responses API drops reasoning items before the last user message.
+        // Sending them is harmless but can lead to validation errors when switching between API organizations.
+        // https://cookbook.openai.com/examples/responses_api/reasoning_items#caching
+        let Some(last_user_index) = items
+            .iter()
+            // Use last user message as the turn boundary.
+            .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
+        else {
+            return;
+        };
+        let mut index = 0usize;
+        items.retain(|item| {
+            let keep = index >= last_user_index || !matches!(item, ResponseItem::Reasoning { .. });
+            index += 1;
+            keep
+        });
     }
 
     fn ensure_call_outputs_present(&mut self) {
@@ -498,6 +530,7 @@ fn is_api_message(message: &ResponseItem) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_git_tooling::GhostCommit;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::models::LocalShellAction;
@@ -512,6 +545,15 @@ mod tests {
             content: vec![ContentItem::OutputText {
                 text: text.to_string(),
             }],
+        }
+    }
+
+    fn reasoning(id: &str) -> ResponseItem {
+        ResponseItem::Reasoning {
+            id: id.to_string(),
+            summary: Vec::new(),
+            content: None,
+            encrypted_content: None,
         }
     }
 
@@ -569,6 +611,50 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn get_history_drops_reasoning_before_last_user_message() {
+        let mut history = ConversationHistory::new();
+        let items = vec![
+            user_msg("initial"),
+            reasoning("first"),
+            assistant_msg("ack"),
+            user_msg("latest"),
+            reasoning("second"),
+            assistant_msg("ack"),
+            reasoning("third"),
+        ];
+        history.record_items(items.iter());
+
+        let filtered = history.get_history_for_prompt();
+        assert_eq!(
+            filtered,
+            vec![
+                user_msg("initial"),
+                assistant_msg("ack"),
+                user_msg("latest"),
+                reasoning("second"),
+                assistant_msg("ack"),
+                reasoning("third"),
+            ]
+        );
+        let reasoning_count = history
+            .contents()
+            .iter()
+            .filter(|item| matches!(item, ResponseItem::Reasoning { .. }))
+            .count();
+        assert_eq!(reasoning_count, 3);
+    }
+
+    #[test]
+    fn get_history_for_prompt_drops_ghost_commits() {
+        let items = vec![ResponseItem::GhostSnapshot {
+            ghost_commit: GhostCommit::new("ghost-1".to_string(), None, Vec::new(), Vec::new()),
+        }];
+        let mut history = create_history_with_items(items);
+        let filtered = history.get_history_for_prompt();
+        assert_eq!(filtered, vec![]);
     }
 
     #[test]

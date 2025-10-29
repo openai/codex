@@ -255,6 +255,9 @@ pub(crate) struct ExecCommandContext {
     pub(crate) apply_patch: Option<ApplyPatchCommandContext>,
     pub(crate) tool_name: String,
     pub(crate) otel_event_manager: OtelEventManager,
+    // TODO(abhisek-oai): Find a better way to track this.
+    // https://github.com/openai/codex/pull/2471/files#r2470352242
+    pub(crate) is_user_shell_command: bool,
 }
 
 #[derive(Clone, Debug)]

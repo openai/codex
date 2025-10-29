@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use super::Session;
 use super::TurnContext;
-use super::filter_model_visible_history;
 use super::get_last_assistant_message_from_turn;
 use crate::Prompt;
 use crate::client_common::ResponseEvent;
@@ -86,10 +85,9 @@ async fn run_compact_task_inner(
     sess.persist_rollout_items(&[rollout_item]).await;
 
     loop {
-        let turn_input = history.get_history();
-        let prompt_input = filter_model_visible_history(turn_input.clone());
+        let turn_input = history.get_history_for_prompt();
         let prompt = Prompt {
-            input: prompt_input.clone(),
+            input: turn_input.clone(),
             ..Default::default()
         };
         let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
@@ -111,7 +109,7 @@ async fn run_compact_task_inner(
                 return;
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
-                if prompt_input.len() > 1 {
+                if turn_input.len() > 1 {
                     // Trim from the beginning to preserve cache (prefix-based) and keep recent messages intact.
                     error!(
                         "Context window exceeded while compacting; removing oldest history item. Error: {e}"
@@ -150,7 +148,7 @@ async fn run_compact_task_inner(
         }
     }
 
-    let history_snapshot = sess.history_snapshot().await;
+    let history_snapshot = sess.clone_history().await.get_history();
     let summary_text = get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
     let user_messages = collect_user_messages(&history_snapshot);
     let initial_context = sess.build_initial_context(turn_context.as_ref());
