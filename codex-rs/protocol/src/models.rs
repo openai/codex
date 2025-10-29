@@ -245,36 +245,37 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             // Keep a single return type: always produce a ContentItem.
                             tracing::warn!("Failed to resize image {}: {}", path.display(), err);
 
-                            // 1) If it's a read error, first try the WSL Windows-path mapping.
-                            // 2) If that fails (or not a read error), try reading the original path as-is.
-                            // 3) If everything fails, return a placeholder item.
-                            let try_build_data_url =
-                                |bytes: Vec<u8>, mime_path: &std::path::Path| {
-                                    let mime = mime_guess::from_path(mime_path)
-                                        .first()
-                                        .map(|m| m.essence_str().to_owned())
-                                        .unwrap_or_else(|| "image".to_string());
-                                    let encoded =
-                                        base64::engine::general_purpose::STANDARD.encode(bytes);
-                                    ContentItem::InputImage {
-                                        image_url: format!("data:{mime};base64,{encoded}"),
-                                    }
+                            // Build a data URL from raw bytes with MIME validation; otherwise return a placeholder.
+                            let try_build_data_url = |bytes: Vec<u8>, mime_path: &std::path::Path| {
+                                let Some(mg) = mime_guess::from_path(mime_path).first() else {
+                                    return local_image_error_placeholder(
+                                        mime_path,
+                                        "unsupported MIME type (unknown)",
+                                    );
                                 };
+                                let mime = mg.essence_str().to_owned();
+                                if !mime.starts_with("image/") {
+                                    return local_image_error_placeholder(
+                                        mime_path,
+                                        format!("unsupported MIME type `{mime}`"),
+                                    );
+                                }
+                                let encoded = 
+                                    base64::engine::general_purpose::STANDARD.encode(bytes);
+                                ContentItem::InputImage {
+                                    image_url: format!("data:{mime};base64,{encoded}"),
+                                }
+                            };
 
-                            // Attempt WSL drive mapping only when relevant.
+                            // If it's a read error under WSL, first try Windows-drive mapping.
                             if matches!(&err, ImageProcessingError::Read { .. })
                                 && platform::is_running_under_wsl()
                             {
                                 let win_path_str = path.to_string_lossy();
-
                                 if let Some(mapped) =
                                     platform::try_map_windows_drive_to_wsl_path(&win_path_str)
-                                    && let Ok(bytes2) = std::fs::read(&mapped)
-                                {
-                                    return try_build_data_url(
-                                        bytes2,
-                                        std::path::Path::new(&mapped),
-                                    );
+                                    && let Ok(bytes2) = std::fs::read(&mapped) {
+                                        return try_build_data_url(bytes2, std::path::Path::new(&mapped));
                                 }
                             }
 
@@ -287,7 +288,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                                         path.display(),
                                         read_err
                                     );
-                                    // Final fallback: placeholder content item (stays type-stable).
+                                    // Final fallback: placeholder content item (type-stable).
                                     local_image_error_placeholder(&path, &read_err)
                                 }
                             }
