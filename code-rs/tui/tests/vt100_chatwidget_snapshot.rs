@@ -1771,7 +1771,7 @@ fn agents_toggle_claude_opus_persists_via_slash_command() {
     harness.show_agent_editor("claude-opus-4.1");
 
     let editor_frame = normalize_output(render_chat_widget_to_vt100(&mut harness, 100, 28));
-    assert!(editor_frame.to_lowercase().contains("active"));
+    assert!(editor_frame.to_lowercase().contains("enabled"));
 
     harness.send_key(make_key(KeyCode::Char(' '), KeyModifiers::NONE));
     let editor_after_toggle = normalize_output(render_chat_widget_to_vt100(&mut harness, 100, 28));
