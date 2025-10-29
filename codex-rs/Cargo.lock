@@ -924,6 +924,7 @@ name = "codex-auto-updater"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "codex-internal-storage",
  "pretty_assertions",
  "semver",
  "serde",
@@ -931,6 +932,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.16",
  "tokio",
+ "tracing",
  "which",
 ]
 
@@ -1237,6 +1239,14 @@ dependencies = [
  "thiserror 2.0.16",
  "ts-rs",
  "walkdir",
+]
+
+[[package]]
+name = "codex-internal-storage"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "thiserror 2.0.16",
 ]
 
 [[package]]

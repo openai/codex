@@ -8,7 +8,6 @@ use app::App;
 pub use app::AppExitInfo;
 use codex_app_server_protocol::AuthMode;
 use codex_auto_updater::Error as AutoUpdateError;
-use codex_auto_updater::update_status;
 use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::CodexAuth;
@@ -258,19 +257,39 @@ pub async fn run_main(
             .try_init();
     };
 
-    match update_status() {
-        Ok(status) if status.update_available => {
-            let current = status.current_version;
-            let latest = status.latest_version;
-            tracing::error!(
-                current_version = current.as_str(),
-                latest_version = latest.as_str(),
-                "A newer Codex release is available. Update Codex from {current} to {latest} with `brew upgrade codex`."
-            );
+    match codex_auto_updater::initialize_storage(&config.codex_home) {
+        Ok(_) => {
+            let t1 = std::time::Instant::now();
+            match codex_auto_updater::read_cached_status() {
+                Ok(Some(status)) if status.update_available => {
+                    let t2 = std::time::Instant::now();
+                    tracing::warn!("Diff: {:?}", t2 - t1);
+                    let current = status.current_version;
+                    let latest = status.latest_version;
+                    tracing::error!(
+                        current_version = current.as_str(),
+                        latest_version = latest.as_str(),
+                        "A newer Codex release is available. Update Codex from {current} to {latest} with `brew upgrade codex`."
+                    );
+                }
+                Ok(_) | Err(AutoUpdateError::Unsupported) => {}
+                Err(err) => {
+                    tracing::error!(error = ?err, "Failed to read cached Codex update status");
+                }
+            }
+
+            tokio::spawn(async move {
+                if let Err(err) = codex_auto_updater::refresh_status().await {
+                    tracing::error!(error = ?err, "Failed to refresh Codex update status");
+                }
+                error!("Prop done");
+            });
         }
-        Ok(_) | Err(AutoUpdateError::Unsupported) => {}
         Err(err) => {
-            tracing::debug!(error = ?err, "Failed to check for Codex updates");
+            tracing::error!(
+                error = ?err,
+                "Failed to initialize internal storage for Codex updates"
+            );
         }
     }
 

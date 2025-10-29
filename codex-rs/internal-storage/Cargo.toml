@@ -1,0 +1,11 @@
+[package]
+name = "codex-internal-storage"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

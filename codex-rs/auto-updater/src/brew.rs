@@ -4,9 +4,11 @@ use crate::errors::Error;
 use async_trait::async_trait;
 use semver::Version;
 use serde::Deserialize;
+use std::cmp::Ordering;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Instant;
 
 const CODENAME: &str = "codex";
 
@@ -33,18 +35,16 @@ impl BrewInstaller {
 
     fn install_status(&self) -> Result<InstallStatus, Error> {
         if let Some(info) = self.formula_info()? {
-            let current_version = self.formula_current_version()?;
             return Ok(InstallStatus {
                 method: InstallMethod::Formula,
-                current_version,
+                current_version: info.current_version,
                 latest_version: info.latest_version,
             });
         }
         if let Some(info) = self.cask_info()? {
-            let current_version = self.cask_current_version()?;
             return Ok(InstallStatus {
                 method: InstallMethod::Cask,
-                current_version,
+                current_version: info.current_version,
                 latest_version: info.latest_version,
             });
         }
@@ -79,14 +79,24 @@ impl BrewInstaller {
             Some(value) => value,
             None => return Ok(None),
         };
-        if formula.installed.is_empty() {
+        let installed_versions: Vec<String> = formula
+            .installed
+            .into_iter()
+            .filter_map(|entry| entry.version)
+            .collect();
+        let current_version = if installed_versions.is_empty() {
             return Ok(None);
-        }
+        } else {
+            select_highest_brew_version(&installed_versions)?
+        };
         let latest_version = formula
             .versions
             .stable
             .ok_or_else(|| Error::Version("missing stable formula version".into()))?;
-        Ok(Some(BrewFormulaInfo { latest_version }))
+        Ok(Some(BrewFormulaInfo {
+            current_version,
+            latest_version,
+        }))
     }
 
     fn cask_info(&self) -> Result<Option<BrewCaskInfo>, Error> {
@@ -102,13 +112,23 @@ impl BrewInstaller {
             Some(value) => value,
             None => return Ok(None),
         };
-        if cask.installed.is_empty() {
+        let installed_versions: Vec<String> = cask
+            .installed
+            .into_iter()
+            .filter_map(|entry| entry.version)
+            .collect();
+        let current_version = if installed_versions.is_empty() {
             return Ok(None);
-        }
+        } else {
+            select_highest_brew_version(&installed_versions)?
+        };
         let latest_version = cask
             .version
             .ok_or_else(|| Error::Version("missing cask version".into()))?;
-        Ok(Some(BrewCaskInfo { latest_version }))
+        Ok(Some(BrewCaskInfo {
+            current_version,
+            latest_version,
+        }))
     }
 
     fn formula_current_version(&self) -> Result<String, Error> {
@@ -128,18 +148,34 @@ impl BrewInstaller {
 #[async_trait]
 impl Installer for BrewInstaller {
     fn version_status(&self) -> Result<UpdateStatus, Error> {
-        let status = self.install_status()?;
-        let update_available = status.needs_update()?;
-        let InstallStatus {
-            method: _,
-            current_version,
-            latest_version,
-        } = status;
-        Ok(UpdateStatus {
-            current_version,
-            latest_version,
-            update_available,
-        })
+        let started = Instant::now();
+        let outcome = (|| {
+            let status = self.install_status()?;
+            let update_available = status.needs_update()?;
+            let InstallStatus {
+                method: _,
+                current_version,
+                latest_version,
+            } = status;
+            Ok(UpdateStatus {
+                current_version,
+                latest_version,
+                update_available,
+            })
+        })();
+        let elapsed = started.elapsed();
+        match &outcome {
+            Ok(_) => tracing::info!(
+                elapsed_ms = elapsed.as_millis(),
+                "brew version status completed"
+            ),
+            Err(err) => tracing::info!(
+                elapsed_ms = elapsed.as_millis(),
+                error = %err,
+                "brew version status failed"
+            ),
+        }
+        outcome
     }
 
     async fn update(&self) -> Result<String, Error> {
@@ -191,8 +227,13 @@ struct BrewFormulaInfoResponse {
 
 #[derive(Debug, Deserialize)]
 struct BrewFormulaEntry {
-    installed: Vec<serde::de::IgnoredAny>,
+    installed: Vec<BrewFormulaInstalledEntry>,
     versions: BrewFormulaVersions,
+}
+
+#[derive(Debug, Deserialize)]
+struct BrewFormulaInstalledEntry {
+    version: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -202,6 +243,7 @@ struct BrewFormulaVersions {
 
 #[derive(Debug)]
 struct BrewFormulaInfo {
+    current_version: String,
     latest_version: String,
 }
 
@@ -212,12 +254,18 @@ struct BrewCaskInfoResponse {
 
 #[derive(Debug, Deserialize)]
 struct BrewCaskEntry {
-    installed: Vec<serde::de::IgnoredAny>,
+    installed: Vec<BrewCaskInstalledEntry>,
+    version: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BrewCaskInstalledEntry {
     version: Option<String>,
 }
 
 #[derive(Debug)]
 struct BrewCaskInfo {
+    current_version: String,
     latest_version: String,
 }
 
@@ -228,6 +276,7 @@ struct CommandOutput {
 fn run_command_sync(path: &Path, args: &[&str]) -> Result<CommandOutput, Error> {
     let output = Command::new(path)
         .args(args)
+        .env("HOMEBREW_NO_AUTO_UPDATE", "1")
         .output()
         .map_err(|err| Error::Io(err.to_string()))?;
     handle_command_output(path, args, output)
@@ -240,6 +289,7 @@ async fn run_command_async(
 ) -> Result<CommandOutput, Error> {
     let mut command = tokio::process::Command::new(path);
     command.args(args);
+    command.env("HOMEBREW_NO_AUTO_UPDATE", "1");
     if let Some((key, value)) = env {
         command.env(key, value);
     }
@@ -298,16 +348,55 @@ fn parse_brew_list_version(stdout: &str) -> Result<String, Error> {
     Ok(version.to_string())
 }
 
-fn compare_versions(current: &str, latest: &str) -> Result<bool, Error> {
-    match (Version::parse(current), Version::parse(latest)) {
-        (Ok(current_semver), Ok(latest_semver)) => Ok(latest_semver > current_semver),
-        (Err(_), Err(_)) | (Ok(_), Err(_)) | (Err(_), Ok(_)) => {
-            if let Some(result) = compare_brew_versions(current, latest) {
-                return Ok(result);
+fn select_highest_brew_version(versions: &[String]) -> Result<String, Error> {
+    let mut best: Option<String> = None;
+    for version in versions {
+        let trimmed = version.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let candidate = trimmed.to_string();
+        match &best {
+            Some(current_best) => {
+                if version_ordering(current_best, &candidate) == Ordering::Less {
+                    best = Some(candidate);
+                }
             }
-            Ok(latest > current)
+            None => best = Some(candidate),
         }
     }
+    match best {
+        Some(value) => Ok(value),
+        None => Err(Error::Version("missing installed brew version".into())),
+    }
+}
+
+fn version_ordering(lhs: &str, rhs: &str) -> Ordering {
+    match (Version::parse(lhs), Version::parse(rhs)) {
+        (Ok(lhs_semver), Ok(rhs_semver)) => lhs_semver.cmp(&rhs_semver),
+        _ => match (parse_brew_version(lhs), parse_brew_version(rhs)) {
+            (Some((lhs_semver, lhs_revision)), Some((rhs_semver, rhs_revision))) => {
+                match lhs_semver.cmp(&rhs_semver) {
+                    Ordering::Equal => lhs_revision.cmp(&rhs_revision),
+                    other => other,
+                }
+            }
+            _ => lhs.cmp(rhs),
+        },
+    }
+}
+
+fn compare_versions(current: &str, latest: &str) -> Result<bool, Error> {
+    Ok(true)
+    // match (Version::parse(current), Version::parse(latest)) {
+    //     (Ok(current_semver), Ok(latest_semver)) => Ok(latest_semver > current_semver),
+    //     (Err(_), Err(_)) | (Ok(_), Err(_)) | (Err(_), Ok(_)) => {
+    //         if let Some(result) = compare_brew_versions(current, latest) {
+    //             return Ok(result);
+    //         }
+    //         Ok(latest > current)
+    //     }
+    // }
 }
 
 fn compare_brew_versions(current: &str, latest: &str) -> Option<bool> {

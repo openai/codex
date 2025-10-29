@@ -41,6 +41,7 @@ members = [
     "utils/string",
     "utils/tokenizer",
     "auto-updater",
+    "internal-storage",
 ]
 resolver = "2"
 
@@ -83,6 +84,7 @@ codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
+codex-internal-storage = { path = "internal-storage" }
 codex-utils-cache = { path = "utils/cache" }
 codex-utils-image = { path = "utils/image" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
