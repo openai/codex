@@ -41,12 +41,22 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Read Rust toolchain channel
         id: rust_toolchain
         shell: bash
         run: |
           set -euo pipefail
-          TOOLCHAIN=$(python3 -c "import pathlib, tomllib; print(tomllib.loads(pathlib.Path('code-rs/rust-toolchain.toml').read_text())['toolchain']['channel'])")
+          TOOLCHAIN=$(python -c "import sys, pathlib; p=pathlib.Path('code-rs/rust-toolchain.toml').read_text();
+          try:
+              import tomllib as tl
+          except ModuleNotFoundError:
+              import tomli as tl
+          print(tl.loads(p)['toolchain']['channel'])")
           echo "channel=$TOOLCHAIN" >> "$GITHUB_OUTPUT"
           echo "RUST_TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
 
@@ -194,12 +204,22 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Read Rust toolchain channel
         id: rust_toolchain
         shell: bash
         run: |
           set -euo pipefail
-          TOOLCHAIN=$(python3 -c "import pathlib, tomllib; print(tomllib.loads(pathlib.Path('code-rs/rust-toolchain.toml').read_text())['toolchain']['channel'])")
+          TOOLCHAIN=$(python -c "import sys, pathlib; p=pathlib.Path('code-rs/rust-toolchain.toml').read_text();
+          try:
+              import tomllib as tl
+          except ModuleNotFoundError:
+              import tomli as tl
+          print(tl.loads(p)['toolchain']['channel'])")
           echo "channel=$TOOLCHAIN" >> "$GITHUB_OUTPUT"
           echo "RUST_TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
 
