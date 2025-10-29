@@ -31,6 +31,8 @@ use super::rate_limits::StatusRateLimitRow;
 use super::rate_limits::compose_rate_limit_data;
 use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_lines;
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
@@ -304,11 +306,33 @@ impl HistoryCell for StatusHistoryCell {
         if self.token_usage.context_window.is_some() {
             push_label(&mut labels, &mut seen, "Context window");
         }
-        push_label(&mut labels, &mut seen, "Note");
         self.collect_rate_limit_labels(&mut seen, &mut labels);
 
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
         let value_width = formatter.value_width(available_inner_width);
+
+        let note_first_line = Line::from(vec![
+            Span::from("Visit ").cyan(),
+            "chatgpt.com/codex/settings/usage".cyan().underlined(),
+            Span::from(" for up-to-date").cyan(),
+        ]);
+        let note_second_line = Line::from(vec![
+            Span::from("information on rate limits and credits").cyan(),
+        ]);
+        let note_initial_indent = Line::from(vec![
+            Span::from(format!("{}ⓘ ", FieldFormatter::INDENT)).cyan(),
+        ]);
+        let note_subsequent_indent = Line::from(vec![
+            Span::from(format!("{}  ", FieldFormatter::INDENT)).cyan(),
+        ]);
+        let note_lines = word_wrap_lines(
+            [note_first_line, note_second_line],
+            RtOptions::new(available_inner_width)
+                .initial_indent(note_initial_indent)
+                .subsequent_indent(note_subsequent_indent),
+        );
+        lines.extend(note_lines);
+        lines.push(Line::from(Vec::<Span<'static>>::new()));
 
         let mut model_spans = vec![Span::from(self.model_name.clone())];
         if !self.model_details.is_empty() {
@@ -342,17 +366,6 @@ impl HistoryCell for StatusHistoryCell {
         if let Some(spans) = self.context_window_spans() {
             lines.push(formatter.line("Context window", spans));
         }
-
-        lines.push(formatter.line(
-            "Note",
-            vec![
-                Span::from("visit "),
-                "chatgpt.com/codex/settings/usage".cyan().underlined(),
-            ],
-        ));
-        lines.push(
-            formatter.continuation(vec![Span::from("for up-to-date rate limits and credits")]),
-        );
 
         lines.extend(self.rate_limit_lines(available_inner_width, &formatter));
 
