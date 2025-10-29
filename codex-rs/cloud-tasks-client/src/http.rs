@@ -131,7 +131,9 @@ mod api {
         pub(crate) async fn list(&self, env: Option<&str>) -> Result<Vec<TaskSummary>> {
             let resp = self
                 .backend
-                .list_tasks(Some(20), Some("current"), env)
+                // Always load tasks from the failing path now that the
+                // speculative review combo flag has been removed.
+                .list_tasks(Some(20), Some("failing"), env)
                 .await
                 .map_err(|e| CloudTaskError::Http(format!("list_tasks failed: {e}")))?;
 
