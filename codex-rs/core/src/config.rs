@@ -448,14 +448,11 @@ pub(crate) fn set_project_trusted_inner(
 /// Patch `CODEX_HOME/config.toml` project state.
 /// Use with caution.
 pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Result<()> {
-    use crate::config_edit::ConfigEdit;
-    use crate::config_edit::apply_blocking as apply_config_blocking;
+    use crate::config_edit::ConfigEditsBuilder;
 
-    apply_config_blocking(
-        codex_home,
-        None,
-        &[ConfigEdit::SetProjectTrusted(project_path.to_path_buf())],
-    )
+    ConfigEditsBuilder::new(codex_home)
+        .set_project_trusted(project_path)
+        .apply_blocking()
 }
 
 /// Apply a single dotted-path override onto a TOML value.

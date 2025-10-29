@@ -2,8 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use codex_core::config::load_global_mcp_servers;
-use codex_core::config_edit::ConfigEdit;
-use codex_core::config_edit::apply_blocking;
+use codex_core::config_edit::ConfigEditsBuilder;
 use codex_core::config_types::McpServerTransportConfig;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
@@ -60,11 +59,9 @@ async fn list_and_get_render_expected_output() -> Result<()> {
         }
         other => panic!("unexpected transport: {other:?}"),
     }
-    apply_blocking(
-        codex_home.path(),
-        None,
-        &[ConfigEdit::ReplaceMcpServers(servers.clone())],
-    )?;
+    ConfigEditsBuilder::new(codex_home.path())
+        .replace_mcp_servers(&servers)
+        .apply_blocking()?;
 
     let mut list_cmd = codex_command(codex_home.path())?;
     let list_output = list_cmd.args(["mcp", "list"]).output()?;
@@ -154,11 +151,9 @@ async fn get_disabled_server_shows_single_line() -> Result<()> {
         .get_mut("docs")
         .expect("docs server should exist after add");
     docs.enabled = false;
-    apply_blocking(
-        codex_home.path(),
-        None,
-        &[ConfigEdit::ReplaceMcpServers(servers.clone())],
-    )?;
+    ConfigEditsBuilder::new(codex_home.path())
+        .replace_mcp_servers(&servers)
+        .apply_blocking()?;
 
     let mut get_cmd = codex_command(codex_home.path())?;
     let get_output = get_cmd.args(["mcp", "get", "docs"]).output()?;

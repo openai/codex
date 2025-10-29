@@ -780,13 +780,23 @@ hide_full_access_warning = true
         .expect("persist");
 
         let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-        let value: TomlValue = toml::from_str(&raw).expect("parse config");
-        let table = value
-            .get("mcp_servers")
-            .and_then(|item| item.as_table())
-            .expect("mcp_servers table");
+        let expected = "\
+[mcp_servers.http]
+url = \"https://example.com\"
+bearer_token_env_var = \"TOKEN\"
+http_headers = { \"Z-Header\" = \"z\" }
+enabled = false
+startup_timeout_sec = 5.0
+disabled_tools = [\"forbidden\"]
 
-        assert_eq!(table.len(), 2);
+[mcp_servers.stdio]
+command = \"cmd\"
+args = [\"--flag\"]
+env = { \"A\" = \"1\", \"B\" = \"2\" }
+env_vars = [\"FOO\"]
+enabled_tools = [\"one\", \"two\"]
+";
+        assert_eq!(raw, expected);
     }
 
     #[test]
@@ -848,7 +858,44 @@ hide_full_access_warning = true
 
         let contents =
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-        assert!(contents.contains("gpt-5-codex"));
+        let expected = r#"model = "gpt-5-codex"
+model_reasoning_effort = "high"
+"#;
+        assert_eq!(contents, expected);
+    }
+
+    #[test]
+    fn blocking_builder_set_model_round_trips_back_and_forth() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+
+        let initial_expected = r#"model = "o4-mini"
+model_reasoning_effort = "low"
+"#;
+        ConfigEditsBuilder::new(codex_home)
+            .set_model(Some("o4-mini"), Some(ReasoningEffort::Low))
+            .apply_blocking()
+            .expect("persist initial");
+        let mut contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        assert_eq!(contents, initial_expected);
+
+        let updated_expected = r#"model = "gpt-5-codex"
+model_reasoning_effort = "high"
+"#;
+        ConfigEditsBuilder::new(codex_home)
+            .set_model(Some("gpt-5-codex"), Some(ReasoningEffort::High))
+            .apply_blocking()
+            .expect("persist update");
+        contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        assert_eq!(contents, updated_expected);
+
+        ConfigEditsBuilder::new(codex_home)
+            .set_model(Some("o4-mini"), Some(ReasoningEffort::Low))
+            .apply_blocking()
+            .expect("persist revert");
+        contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        assert_eq!(contents, initial_expected);
     }
 
     #[test]
