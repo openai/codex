@@ -2038,9 +2038,7 @@ async fn try_run_turn(
                         );
                     }
                     Ok(None) => {
-                        if let Some(turn_item) =
-                            handle_non_tool_response_item(&turn_context, &item).await
-                        {
+                        if let Some(turn_item) = handle_non_tool_response_item(&item).await {
                             if previously_active_item.is_none() {
                                 sess.emit_turn_item_started(&turn_context, &turn_item).await;
                             }
@@ -2094,7 +2092,7 @@ async fn try_run_turn(
                 }
             }
             ResponseEvent::OutputItemAdded(item) => {
-                if let Some(turn_item) = handle_non_tool_response_item(&turn_context, &item).await {
+                if let Some(turn_item) = handle_non_tool_response_item(&item).await {
                     let tracked_item = turn_item.clone();
                     sess.emit_turn_item_started(&turn_context, &turn_item).await;
 
