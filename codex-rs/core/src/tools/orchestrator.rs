@@ -104,7 +104,6 @@ impl ToolOrchestrator {
                 }
                 // Under `Never` or `OnRequest`, do not retry without sandbox; surface a concise
                 // sandbox denial that preserves the original output.
-                let output = output;
                 if !tool.wants_no_sandbox_approval(approval_policy) {
                     return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                         output,
