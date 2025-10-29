@@ -201,7 +201,7 @@ impl ModelProviderInfo {
 
         self.base_url
             .as_ref()
-            .and_then(|base| url::Url::parse(base).ok())
+            .and_then(|base| reqwest::Url::parse(base).ok())
             .and_then(|parsed| parsed.host_str().map(|host| host.eq_ignore_ascii_case("api.openai.com")))
             .unwrap_or(true)
     }

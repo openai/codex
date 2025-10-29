@@ -215,7 +215,7 @@ impl ModelProviderInfo {
         // upstream server, which causes handshake failures. By setting
         // Host to the authority derived from the final URL here, we ensure
         // the proxy sees the correct host and can forward/SNI appropriately.
-        if let Ok(parsed) = url::Url::parse(&url) {
+        if let Ok(parsed) = reqwest::Url::parse(&url) {
             if let Some(host) = parsed.host_str() {
                 let authority = match parsed.port() {
                     Some(port) => format!("{host}:{port}"),
@@ -315,7 +315,7 @@ impl ModelProviderInfo {
 
         self.base_url
             .as_ref()
-            .and_then(|base| url::Url::parse(base).ok())
+            .and_then(|base| reqwest::Url::parse(base).ok())
             .and_then(|parsed| parsed.host_str().map(|host| host.eq_ignore_ascii_case("api.openai.com")))
             .unwrap_or(true)
     }
