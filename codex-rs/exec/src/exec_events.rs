@@ -1,5 +1,7 @@
+use mcp_types::ContentBlock as McpContentBlock;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 use ts_rs::TS;
 
 /// Top-level JSONL events emitted by codex exec
@@ -195,11 +197,34 @@ pub enum McpToolCallStatus {
     Failed,
 }
 
+/// Result payload produced by an MCP tool invocation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct McpToolCallItemResult {
+    pub content: Vec<McpContentBlock>,
+    #[serde(rename = "structuredContent")]
+    #[ts(rename = "structuredContent")]
+    pub structured_content: JsonValue,
+}
+
+impl Eq for McpToolCallItemResult {}
+
+/// Error details reported by a failed MCP tool invocation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct McpToolCallItemError {
+    pub message: String,
+}
+
 /// A call to an MCP tool.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct McpToolCallItem {
     pub server: String,
     pub tool: String,
+    #[serde(default)]
+    pub arguments: JsonValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<McpToolCallItemResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<McpToolCallItemError>,
     pub status: McpToolCallStatus,
 }
 
