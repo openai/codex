@@ -16,6 +16,7 @@ use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -120,10 +121,13 @@ use codex_file_search::FileMatch;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
+const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
+const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
+    is_user_shell_command: bool,
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
@@ -660,6 +664,12 @@ impl ChatWidget {
         debug!("TurnDiffEvent: {unified_diff}");
     }
 
+    fn on_deprecation_notice(&mut self, event: DeprecationNoticeEvent) {
+        let DeprecationNoticeEvent { summary, details } = event;
+        self.add_to_history(history_cell::new_deprecation_notice(summary, details));
+        self.request_redraw();
+    }
+
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
     }
@@ -771,9 +781,9 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
-        let (command, parsed) = match running {
-            Some(rc) => (rc.command, rc.parsed_cmd),
-            None => (vec![ev.call_id.clone()], Vec::new()),
+        let (command, parsed, is_user_shell_command) = match running {
+            Some(rc) => (rc.command, rc.parsed_cmd, rc.is_user_shell_command),
+            None => (vec![ev.call_id.clone()], Vec::new(), false),
         };
 
         let needs_new = self
@@ -787,6 +797,7 @@ impl ChatWidget {
                 ev.call_id.clone(),
                 command,
                 parsed,
+                is_user_shell_command,
             )));
         }
 
@@ -865,6 +876,7 @@ impl ChatWidget {
             RunningCommand {
                 command: ev.command.clone(),
                 parsed_cmd: ev.parsed_cmd.clone(),
+                is_user_shell_command: ev.is_user_shell_command,
             },
         );
         if let Some(cell) = self
@@ -875,6 +887,7 @@ impl ChatWidget {
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd.clone(),
+                ev.is_user_shell_command,
             )
         {
             *cell = new_exec;
@@ -885,6 +898,7 @@ impl ChatWidget {
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd,
+                ev.is_user_shell_command,
             )));
         }
 
@@ -1347,6 +1361,24 @@ impl ChatWidget {
 
         let mut items: Vec<UserInput> = Vec::new();
 
+        // Special-case: "!cmd" executes a local shell command instead of sending to the model.
+        if let Some(stripped) = text.strip_prefix('!') {
+            let cmd = stripped.trim();
+            if cmd.is_empty() {
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_info_event(
+                        USER_SHELL_COMMAND_HELP_TITLE.to_string(),
+                        Some(USER_SHELL_COMMAND_HELP_HINT.to_string()),
+                    ),
+                )));
+                return;
+            }
+            self.submit_op(Op::RunUserShellCommand {
+                command: cmd.to_string(),
+            });
+            return;
+        }
+
         if !text.is_empty() {
             items.push(UserInput::Text { text: text.clone() });
         }
@@ -1471,6 +1503,7 @@ impl ChatWidget {
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
+            EventMsg::DeprecationNotice(ev) => self.on_deprecation_notice(ev),
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 self.on_background_event(message)
             }

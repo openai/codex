@@ -66,10 +66,17 @@ impl Feature {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LegacyFeatureUsage {
+    pub alias: String,
+    pub feature: Feature,
+}
+
 /// Holds the effective set of enabled features.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Features {
     enabled: BTreeSet<Feature>,
+    legacy_usages: BTreeSet<LegacyFeatureUsage>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -101,7 +108,10 @@ impl Features {
                 set.insert(spec.id);
             }
         }
-        Self { enabled: set }
+        Self {
+            enabled: set,
+            legacy_usages: BTreeSet::new(),
+        }
     }
 
     pub fn enabled(&self, f: Feature) -> bool {
@@ -116,11 +126,34 @@ impl Features {
         self.enabled.remove(&f);
     }
 
+    pub fn record_legacy_usage_force(&mut self, alias: &str, feature: Feature) {
+        self.legacy_usages.insert(LegacyFeatureUsage {
+            alias: alias.to_string(),
+            feature,
+        });
+    }
+
+    pub fn record_legacy_usage(&mut self, alias: &str, feature: Feature) {
+        if alias == feature.key() {
+            return;
+        }
+        self.record_legacy_usage_force(alias, feature);
+    }
+
+    pub fn legacy_feature_usages(&self) -> impl Iterator<Item = (&str, Feature)> + '_ {
+        self.legacy_usages
+            .iter()
+            .map(|usage| (usage.alias.as_str(), usage.feature))
+    }
+
     /// Apply a table of key -> bool toggles (e.g. from TOML).
     pub fn apply_map(&mut self, m: &BTreeMap<String, bool>) {
         for (k, v) in m {
             match feature_for_key(k) {
                 Some(feat) => {
+                    if k != feat.key() {
+                        self.record_legacy_usage(k.as_str(), feat);
+                    }
                     if *v {
                         self.enable(feat);
                     } else {
