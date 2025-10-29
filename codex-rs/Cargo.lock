@@ -1247,6 +1247,7 @@ version = "0.0.0"
 dependencies = [
  "serde_json",
  "thiserror 2.0.16",
+ "tokio",
 ]
 
 [[package]]

@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync"] }
 
 [lints]
 workspace = true
