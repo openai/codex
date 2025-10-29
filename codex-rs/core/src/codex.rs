@@ -106,7 +106,6 @@ use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
-use crate::tasks::UserShellCommandTask;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
@@ -1223,19 +1222,6 @@ impl Session {
         &self.services.user_shell
     }
 
-    pub async fn spawn_user_shell_command(
-        self: &Arc<Self>,
-        turn_context: Arc<TurnContext>,
-        command: String,
-    ) {
-        self.spawn_task(
-            Arc::clone(&turn_context),
-            Vec::new(),
-            UserShellCommandTask::new(command),
-        )
-        .await;
-    }
-
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
     }
@@ -1336,6 +1322,7 @@ mod handlers {
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
+    use crate::tasks::UserShellCommandTask;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -1420,8 +1407,12 @@ mod handlers {
         let turn_context = sess
             .new_turn_with_sub_id(sub_id, SessionSettingsUpdate::default())
             .await;
-        sess.spawn_user_shell_command(Arc::clone(&turn_context), command)
-            .await;
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            Vec::new(),
+            UserShellCommandTask::new(command),
+        )
+        .await;
         *previous_context = Some(turn_context);
     }
 
