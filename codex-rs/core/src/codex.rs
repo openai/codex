@@ -1287,6 +1287,15 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Compact => {
                 handlers::compact(&sess, sub.id.clone()).await;
             }
+            Op::RunUserShellCommand { command } => {
+                handlers::run_user_shell_command(
+                    &sess,
+                    sub.id.clone(),
+                    command,
+                    &mut previous_context,
+                )
+                .await;
+            }
             Op::Shutdown => {
                 if handlers::shutdown(&sess, sub.id.clone()).await {
                     break;
@@ -1313,6 +1322,7 @@ mod handlers {
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
+    use crate::tasks::UserShellCommandTask;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -1386,6 +1396,24 @@ mod handlers {
                 .await;
             *previous_context = Some(current_context);
         }
+    }
+
+    pub async fn run_user_shell_command(
+        sess: &Arc<Session>,
+        sub_id: String,
+        command: String,
+        previous_context: &mut Option<Arc<TurnContext>>,
+    ) {
+        let turn_context = sess
+            .new_turn_with_sub_id(sub_id, SessionSettingsUpdate::default())
+            .await;
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            Vec::new(),
+            UserShellCommandTask::new(command),
+        )
+        .await;
+        *previous_context = Some(turn_context);
     }
 
     pub async fn exec_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
