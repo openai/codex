@@ -23,6 +23,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
+use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -987,8 +988,11 @@ impl Session {
 
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
         for item in items {
-            self.send_event(turn_context, EventMsg::RawResponseItem(item.clone()))
-                .await;
+            self.send_event(
+                turn_context,
+                EventMsg::RawResponseItem(RawResponseItemEvent { item: item.clone() }),
+            )
+            .await;
         }
     }
 

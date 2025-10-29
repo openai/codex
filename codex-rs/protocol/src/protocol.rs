@@ -542,10 +542,15 @@ pub enum EventMsg {
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
 
-    RawResponseItem(ResponseItem),
+    RawResponseItem(RawResponseItemEvent),
 
     ItemStarted(ItemStartedEvent),
     ItemCompleted(ItemCompletedEvent),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct RawResponseItemEvent {
+    pub item: ResponseItem,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
