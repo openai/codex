@@ -335,7 +335,7 @@ pub(crate) struct SessionConfiguration {
     cwd: PathBuf,
 
     /// Set of feature flags for this session
-    pub features: Features,
+    features: Features,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -1004,10 +1004,15 @@ impl Session {
 
         let mut history = state.clone_history();
         let prompt_items = history.get_history_for_prompt();
+        let last_message_id = prompt_items
+            .iter()
+            .rev()
+            .find_map(crate::state::response_item_id)
+            .map(ToString::to_string);
 
         state.set_responses_api_chain(ResponsesApiChainState {
             last_response_id: Some(response_id),
-            last_prompt_items: prompt_items,
+            last_message_id,
         });
     }
 

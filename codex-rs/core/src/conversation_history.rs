@@ -29,7 +29,7 @@ pub(crate) struct ConversationHistory {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResponsesApiChainState {
     pub last_response_id: Option<String>,
-    pub last_prompt_items: Vec<ResponseItem>,
+    pub last_message_id: Option<String>,
 }
 
 impl ConversationHistory {

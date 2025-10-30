@@ -83,39 +83,49 @@ impl SessionState {
         let mut prompt = Prompt::default();
         prompt.store_response = supports_responses_api_chaining;
 
-        let mut prompt_items = self.history.get_history_for_prompt();
+        let prompt_items = self.history.get_history_for_prompt();
         if !supports_responses_api_chaining {
             self.reset_responses_api_chain();
             prompt.input = prompt_items;
             return prompt;
         }
 
-        let mut previous_response_id = None;
         if let Some(chain_state) = self.history.responses_api_chain() {
-            if let Some(prev_id) = chain_state.last_response_id {
-                let prefix = common_prefix_len(&chain_state.last_prompt_items, &prompt_items);
-                let matches_previous_prompt = prefix == chain_state.last_prompt_items.len();
-                if matches_previous_prompt {
-                    previous_response_id = Some(prev_id);
-                    if prefix > 0 {
-                        prompt_items.drain(..prefix);
-                    }
-                } else if !chain_state.last_prompt_items.is_empty() {
-                    self.reset_responses_api_chain();
+            let previous_response_id = chain_state.last_response_id.clone();
+            if let Some(last_message_id) = chain_state.last_message_id.as_ref() {
+                if let Some(position) = prompt_items
+                    .iter()
+                    .position(|item| response_item_id(item) == Some(last_message_id))
+                {
+                    prompt.previous_response_id = previous_response_id;
+                    prompt.input = prompt_items.iter().skip(position + 1).cloned().collect();
+                    return prompt;
                 }
+                // Cache marker no longer present; fall back to full prompt and clear chain info.
+                self.reset_responses_api_chain();
+                prompt.input = prompt_items;
+                return prompt;
             }
+
+            prompt.previous_response_id = previous_response_id;
+            prompt.input = prompt_items;
+            return prompt;
         }
 
-        prompt.previous_response_id = previous_response_id;
         prompt.input = prompt_items;
 
         prompt
     }
 }
 
-fn common_prefix_len(lhs: &[ResponseItem], rhs: &[ResponseItem]) -> usize {
-    lhs.iter()
-        .zip(rhs.iter())
-        .take_while(|(left, right)| left == right)
-        .count()
+pub(crate) fn response_item_id(item: &ResponseItem) -> Option<&str> {
+    match item {
+        ResponseItem::Message { id: Some(id), .. }
+        | ResponseItem::Reasoning { id, .. }
+        | ResponseItem::LocalShellCall { id: Some(id), .. }
+        | ResponseItem::FunctionCall { id: Some(id), .. }
+        | ResponseItem::CustomToolCall { id: Some(id), .. }
+        | ResponseItem::WebSearchCall { id: Some(id), .. } => Some(id.as_str()),
+        _ => None,
+    }
 }
