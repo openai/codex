@@ -1,0 +1,20 @@
+- identify dependencies for app-server
+    - vsce
+    - codex web
+    - xcode
+    - jetbrains
+    - ... sdk?
+- project plan
+    - split into v1 and v2
+        - message handler
+        - requests (client->codex, codex->client)
+        - events
+    - events, emit both v1 and v2
+        - or, can we emit just one or the other via a param in register conversation listener?
+        - find the thread where people discussed getting rid of register conversation listener
+- sequencing
+    - create v1 vs. v2 scaffolding in codebase
+    - implement pavel's remaining items
+    - emit v2 events
+    - v2 RPCs
+    - update app-server readme as we go
