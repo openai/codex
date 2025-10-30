@@ -160,6 +160,9 @@ pub struct Config {
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
 
+    /// When `true`, the TUI streams agent reasoning chunks live instead of buffering them.
+    pub stream_reasoning_live: bool,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -1170,6 +1173,11 @@ impl Config {
                 .as_ref()
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
+            stream_reasoning_live: cfg
+                .tui
+                .as_ref()
+                .and_then(|t| t.stream_reasoning_live)
+                .unwrap_or(false),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -2912,6 +2920,7 @@ model_verbosity = "high"
                 notices: Default::default(),
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
+                stream_reasoning_live: false,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -2984,6 +2993,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            stream_reasoning_live: false,
             otel: OtelConfig::default(),
         };
 
@@ -3071,6 +3081,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            stream_reasoning_live: false,
             otel: OtelConfig::default(),
         };
 
@@ -3144,6 +3155,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            stream_reasoning_live: false,
             otel: OtelConfig::default(),
         };
 

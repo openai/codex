@@ -157,32 +157,51 @@ impl ReasoningSummaryCell {
     }
 
     fn lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        append_markdown(
-            &self.content,
-            Some((width as usize).saturating_sub(2)),
-            &mut lines,
-        );
-        let summary_style = Style::default().dim().italic();
-        let summary_lines = lines
-            .into_iter()
-            .map(|mut line| {
-                line.spans = line
-                    .spans
-                    .into_iter()
-                    .map(|span| span.patch_style(summary_style))
-                    .collect();
-                line
-            })
-            .collect::<Vec<_>>();
-
-        word_wrap_lines(
-            &summary_lines,
-            RtOptions::new(width as usize)
-                .initial_indent("• ".dim().into())
-                .subsequent_indent("  ".into()),
-        )
+        format_reasoning_summary_lines(&self.content, width)
     }
+
+    pub(crate) fn push_content(&mut self, content: &str) {
+        if content.is_empty() {
+            return;
+        }
+        self.content.push_str(content);
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.content.trim().is_empty()
+    }
+}
+
+fn format_reasoning_summary_lines(content: &str, width: u16) -> Vec<Line<'static>> {
+    if content.trim().is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    append_markdown(
+        content,
+        Some((width as usize).saturating_sub(2)),
+        &mut lines,
+    );
+    let summary_style = Style::default().dim().italic();
+    let summary_lines = lines
+        .into_iter()
+        .map(|mut line| {
+            line.spans = line
+                .spans
+                .into_iter()
+                .map(|span| span.patch_style(summary_style))
+                .collect();
+            line
+        })
+        .collect::<Vec<_>>();
+
+    word_wrap_lines(
+        &summary_lines,
+        RtOptions::new(width as usize)
+            .initial_indent("• ".dim().into())
+            .subsequent_indent("  ".into()),
+    )
 }
 
 impl HistoryCell for ReasoningSummaryCell {

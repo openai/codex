@@ -726,6 +726,20 @@ Example:
 show_raw_agent_reasoning = true  # defaults to false
 ```
 
+### tui.stream_reasoning_live
+
+Streams the agent’s reasoning output into the TUI as chunks arrive instead of
+waiting to render the entire block at the end of the reasoning phase. The final
+recorded transcript remains identical to the buffered mode, and this setting
+still respects `hide_agent_reasoning`.
+
+Example:
+
+```toml
+[tui]
+stream_reasoning_live = true  # defaults to false
+```
+
 ## Profiles and overrides
 
 ### profiles
@@ -914,6 +928,7 @@ Valid values:
 | `file_opener`                                    | `vscode` \| `vscode-insiders` \| `windsurf` \| `cursor` \| `none` | URI scheme for clickable citations (default: `vscode`).                                                                    |
 | `tui`                                            | table                                                             | TUI‑specific options.                                                                                                      |
 | `tui.notifications`                              | boolean \| array<string>                                          | Enable desktop notifications in the tui (default: false).                                                                  |
+| `tui.stream_reasoning_live`                      | boolean                                                           | Stream agent reasoning chunks live in the TUI instead of buffering (default: false).                                       |
 | `hide_agent_reasoning`                           | boolean                                                           | Hide model reasoning events.                                                                                               |
 | `show_raw_agent_reasoning`                       | boolean                                                           | Show raw reasoning (when available).                                                                                       |
 | `model_reasoning_effort`                         | `minimal` \| `low` \| `medium` \| `high`                          | Responses API reasoning effort.                                                                                            |

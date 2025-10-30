@@ -1,6 +1,7 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::history_cell::ReasoningSummaryCell;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
@@ -288,6 +289,8 @@ fn make_chatwidget_manual() -> (
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
+        live_reasoning_active: false,
+        reasoning_redraw_deadline: None,
         current_status_header: String::from("Working"),
         retry_status_header: None,
         conversation_id: None,
@@ -2477,6 +2480,118 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     let first_idx = combined.find("First message").unwrap();
     let second_idx = combined.find("Second message").unwrap();
     assert!(first_idx < second_idx, "messages out of order: {combined}");
+}
+
+#[test]
+fn live_reasoning_streams_incrementally_when_enabled() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    chat.config.stream_reasoning_live = true;
+
+    chat.handle_codex_event(Event {
+        id: "r1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "First chunk.".into(),
+        }),
+    });
+
+    let live_cell = chat
+        .active_cell
+        .as_ref()
+        .and_then(|cell| cell.as_any().downcast_ref::<ReasoningSummaryCell>())
+        .expect("live reasoning cell present");
+    let first_live = lines_to_single_string(&live_cell.display_lines(80));
+    assert!(first_live.contains("First chunk."));
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.handle_codex_event(Event {
+        id: "r1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: " Second step.".into(),
+        }),
+    });
+
+    let live_cell = chat
+        .active_cell
+        .as_ref()
+        .and_then(|cell| cell.as_any().downcast_ref::<ReasoningSummaryCell>())
+        .expect("live reasoning cell after second delta");
+    let combined_live = lines_to_single_string(&live_cell.display_lines(80));
+    assert!(combined_live.contains("First chunk."));
+    assert!(combined_live.contains("Second step."));
+    let first_idx = combined_live
+        .find("First chunk.")
+        .expect("first chunk present");
+    let second_idx = combined_live
+        .find("Second step.")
+        .expect("second chunk present");
+    assert!(
+        first_idx < second_idx,
+        "reasoning chunks out of order: {combined_live}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "r1".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "unused final text".into(),
+        }),
+    });
+
+    let mut history_text: Option<String> = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event
+            && let Some(reasoning_cell) = cell.as_any().downcast_ref::<ReasoningSummaryCell>()
+        {
+            let lines = reasoning_cell.transcript_lines(80);
+            history_text = Some(lines_to_single_string(&lines));
+        }
+    }
+    let history_text = history_text.expect("expected reasoning summary cell");
+    assert!(
+        history_text.contains("First chunk."),
+        "missing first chunk: {history_text}"
+    );
+    assert!(
+        history_text.contains("Second step."),
+        "missing second chunk: {history_text}"
+    );
+    assert_eq!(history_text.trim(), combined_live.trim());
+    assert!(
+        chat.active_cell.is_none(),
+        "live reasoning cell should be cleared"
+    );
+}
+
+#[test]
+fn live_reasoning_respects_hide_flag() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    chat.config.stream_reasoning_live = true;
+    chat.config.hide_agent_reasoning = true;
+
+    chat.handle_codex_event(Event {
+        id: "r2".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "Hidden chunk.".into(),
+        }),
+    });
+
+    assert!(
+        chat.active_cell
+            .as_ref()
+            .and_then(|cell| cell.as_any().downcast_ref::<ReasoningSummaryCell>())
+            .is_none()
+    );
+
+    chat.handle_codex_event(Event {
+        id: "r2".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "unused final text".into(),
+        }),
+    });
+
+    let history_cells = drain_insert_history(&mut rx);
+    assert!(history_cells.iter().all(std::vec::Vec::is_empty));
+    assert!(chat.active_cell.is_none());
 }
 
 #[test]

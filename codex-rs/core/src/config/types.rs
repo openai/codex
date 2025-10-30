@@ -349,6 +349,10 @@ pub struct Tui {
     /// Defaults to `false`.
     #[serde(default)]
     pub notifications: Notifications,
+
+    /// When `true`, stream agent reasoning chunks live instead of buffering them.
+    #[serde(default)]
+    pub stream_reasoning_live: Option<bool>,
 }
 
 /// Settings for notices we display to users via the tui and app-server clients

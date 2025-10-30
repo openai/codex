@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
 use codex_core::config::Config;
 use codex_core::config::types::Notifications;
@@ -59,6 +61,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Text;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
@@ -88,6 +91,7 @@ use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
+use crate::history_cell::ReasoningSummaryCell;
 use crate::markdown::append_markdown;
 #[cfg(target_os = "windows")]
 use crate::onboarding::WSL_INSTRUCTIONS;
@@ -131,6 +135,7 @@ struct RunningCommand {
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
+const REASONING_STREAM_FRAME_INTERVAL: Duration = Duration::from_millis(60);
 
 #[derive(Default)]
 struct RateLimitWarningState {
@@ -251,6 +256,10 @@ pub(crate) struct ChatWidget {
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
+    // Tracks whether the active cell is showing live reasoning content
+    live_reasoning_active: bool,
+    // Throttle state for live reasoning redraws
+    reasoning_redraw_deadline: Option<Instant>,
     // Current status header shown in the status indicator.
     current_status_header: String,
     // Previous status header to restore after a transient stream retry.
@@ -401,7 +410,11 @@ impl ChatWidget {
         } else {
             // Fallback while we don't yet have a bold header: leave existing header as-is.
         }
-        self.request_redraw();
+        if self.config.stream_reasoning_live && !self.config.hide_agent_reasoning {
+            self.update_live_reasoning(&delta);
+        } else {
+            self.request_redraw();
+        }
     }
 
     fn on_agent_reasoning_final(&mut self) {
@@ -416,6 +429,9 @@ impl ChatWidget {
         }
         self.reasoning_buffer.clear();
         self.full_reasoning_buffer.clear();
+        if self.config.stream_reasoning_live && !self.config.hide_agent_reasoning {
+            self.clear_live_reasoning();
+        }
         self.request_redraw();
     }
 
@@ -424,6 +440,9 @@ impl ChatWidget {
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         self.full_reasoning_buffer.push_str("\n\n");
         self.reasoning_buffer.clear();
+        if self.config.stream_reasoning_live && !self.config.hide_agent_reasoning {
+            self.update_live_reasoning("\n\n");
+        }
     }
 
     // Raw reasoning uses the same flow as summarized reasoning
@@ -436,12 +455,14 @@ impl ChatWidget {
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
+        self.clear_live_reasoning();
         self.request_redraw();
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>) {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
+        self.clear_live_reasoning();
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
@@ -779,6 +800,63 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn schedule_live_reasoning_redraw(&mut self) {
+        let now = Instant::now();
+        if let Some(deadline) = self.reasoning_redraw_deadline
+            && now < deadline {
+                self.frame_requester
+                    .schedule_frame_in(deadline.saturating_duration_since(now));
+                return;
+            }
+        self.frame_requester.schedule_frame();
+        self.reasoning_redraw_deadline = Some(now + REASONING_STREAM_FRAME_INTERVAL);
+    }
+
+    fn update_live_reasoning(&mut self, appended: &str) {
+        if !self.config.stream_reasoning_live || self.config.hide_agent_reasoning {
+            return;
+        }
+
+        if self.live_reasoning_active {
+            if let Some(cell) = self
+                .active_cell
+                .as_mut()
+                .and_then(|c| c.as_any_mut().downcast_mut::<ReasoningSummaryCell>())
+            {
+                cell.push_content(appended);
+            }
+            self.schedule_live_reasoning_redraw();
+            return;
+        }
+
+        if self.full_reasoning_buffer.is_empty() && self.reasoning_buffer.trim().is_empty() {
+            return;
+        }
+
+        self.flush_active_cell();
+        let mut cell = ReasoningSummaryCell::new(String::new(), String::new(), false);
+        if !self.full_reasoning_buffer.is_empty() {
+            cell.push_content(&self.full_reasoning_buffer);
+        }
+        if !self.reasoning_buffer.is_empty() {
+            cell.push_content(&self.reasoning_buffer);
+        }
+        if cell.is_empty() {
+            return;
+        }
+        self.live_reasoning_active = true;
+        self.active_cell = Some(Box::new(cell));
+        self.schedule_live_reasoning_redraw();
+    }
+
+    fn clear_live_reasoning(&mut self) {
+        if self.live_reasoning_active {
+            self.active_cell = None;
+        }
+        self.live_reasoning_active = false;
+        self.reasoning_redraw_deadline = None;
+    }
+
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
         let (command, parsed, is_user_shell_command) = match running {
@@ -1013,6 +1091,8 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            live_reasoning_active: false,
+            reasoning_redraw_deadline: None,
             current_status_header: String::from("Working"),
             retry_status_header: None,
             conversation_id: None,
@@ -1079,6 +1159,8 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            live_reasoning_active: false,
+            reasoning_redraw_deadline: None,
             current_status_header: String::from("Working"),
             retry_status_header: None,
             conversation_id: None,
@@ -1343,6 +1425,12 @@ impl ChatWidget {
     }
 
     fn flush_active_cell(&mut self) {
+        if self.live_reasoning_active {
+            self.active_cell = None;
+            self.live_reasoning_active = false;
+            self.reasoning_redraw_deadline = None;
+            return;
+        }
         if let Some(active) = self.active_cell.take() {
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
@@ -2366,7 +2454,13 @@ impl WidgetRef for &ChatWidget {
                 exec.render_ref(area, buf);
             } else if let Some(tool) = cell.as_any().downcast_ref::<McpToolCallCell>() {
                 tool.render_ref(area, buf);
-            }
+            } else if self.live_reasoning_active
+                && let Some(reasoning) = cell.as_any().downcast_ref::<ReasoningSummaryCell>() {
+                    let lines = reasoning.display_lines(area.width);
+                    Paragraph::new(Text::from(lines))
+                        .wrap(Wrap { trim: false })
+                        .render(area, buf);
+                }
         }
         self.last_rendered_width.set(Some(area.width as usize));
     }
