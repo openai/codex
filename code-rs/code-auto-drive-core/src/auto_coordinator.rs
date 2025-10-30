@@ -1346,13 +1346,13 @@ fn build_schema(active_agents: &[String], features: SchemaFeatures) -> Value {
                 "context": {
                     "type": ["string", "null"],
                     "maxLength": 1500,
-                    "description": "Only use if there is information the CLI does not have in its history. Specifically; messages sent to you by the user or context gathered before a compaction."
+                    "description": "ONLY use if there is information the CLI does not have in its history. Specifically; messages sent to you by the user or context gathered before a compaction."
                 },
                 "prompt": {
                     "type": "string",
                     "minLength": 4,
                     "maxLength": 600,
-                    "description": "1–2 sentences. No step lists. Work WITH the CLI like a peer and give the CLI autonomy while working. Simple prompts like \"Continue the next task you identified\", \"Work on feature A now\", or \"What are the next steps?\" keep guidance high level. The CLI has much more context and tools than you do."
+                    "description": "Instruction for the CLI. 1–2 sentences. No step lists. Give the CLI autonomy while working. Simple prompts keep guidance high level. The CLI has much more context and tools than you do."
                 }
             },
             "required": ["prompt", "context"]
@@ -1375,7 +1375,7 @@ fn build_schema(active_agents: &[String], features: SchemaFeatures) -> Value {
                     },
                     "list": {
                         "type": "array",
-                        "maxItems": 3,
+                        "maxItems": 5,
                         "items": {
                             "type": "object",
                             "additionalProperties": false,
