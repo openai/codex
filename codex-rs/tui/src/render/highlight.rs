@@ -106,20 +106,31 @@ fn push_segment(lines: &mut Vec<Line<'static>>, segment: &str, style: Option<Sty
     }
 }
 
+fn plain_text_lines(script: &str) -> Vec<Line<'static>> {
+    if script.is_empty() {
+        vec![Line::from("")]
+    } else {
+        script
+            .split('\n')
+            .map(|s| Line::from(s.to_string()))
+            .collect()
+    }
+}
+
 /// Convert a bash script into per-line styled content using tree-sitter's
 /// bash highlight query. The highlighter is streamed so multi-line content is
 /// split into `Line`s while preserving style boundaries.
 pub(crate) fn highlight_bash_to_lines(script: &str) -> Vec<Line<'static>> {
     // Runtime gate: on Windows, skip bash-specific highlighting and return plain text.
     if cfg!(target_os = "windows") {
-        return vec![script.to_string().into()];
+        return plain_text_lines(script);
     }
 
     let mut highlighter = Highlighter::new();
     let iterator =
         match highlighter.highlight(highlight_config(), script.as_bytes(), None, |_| None) {
             Ok(iter) => iter,
-            Err(_) => return vec![script.to_string().into()],
+            Err(_) => return plain_text_lines(script),
         };
 
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
@@ -138,7 +149,7 @@ pub(crate) fn highlight_bash_to_lines(script: &str) -> Vec<Line<'static>> {
                 let style = highlight_stack.last().map(|h| highlight_for(*h).style());
                 push_segment(&mut lines, &script[start..end], style);
             }
-            Err(_) => return vec![script.to_string().into()],
+            Err(_) => return plain_text_lines(script),
         }
     }
 
