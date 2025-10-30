@@ -296,11 +296,9 @@ impl serde::Serialize for Text {
     {
         use serde::ser::SerializeMap;
         let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("verbosity", &self.verbosity)?;
         if let Some(fmt) = &self.format {
-            // When a structured format is present, omit `verbosity` per API expectations.
             map.serialize_entry("format", fmt)?;
-        } else {
-            map.serialize_entry("verbosity", &self.verbosity)?;
         }
         map.end()
     }

@@ -378,7 +378,7 @@ impl ModelClient {
         // Build `text` parameter with conditional verbosity and optional format.
         // - Omit entirely for ChatGPT auth unless a `text.format` or output schema is present.
         // - Only include `text.verbosity` for GPT-5 family models; warn and ignore otherwise.
-        // - When a structured `format` is present, omit `verbosity` in serialization.
+        // - When a structured `format` is present, still include `verbosity` so GPT-5 can honor it.
         let want_format = prompt.text_format.clone().or_else(|| {
             prompt.output_schema.as_ref().map(|schema| crate::client_common::TextFormat {
                 r#type: "json_schema".to_string(),

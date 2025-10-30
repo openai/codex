@@ -5,7 +5,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{anyhow, Context, Result};
 use code_core::config::Config;
-use code_core::config_types::{AutoDriveSettings, ReasoningEffort};
+use code_core::config_types::{AutoDriveSettings, ReasoningEffort, TextVerbosity};
 use code_core::debug_logger::DebugLogger;
 use code_core::model_family::{derive_default_model_family, find_family_for_model};
 use code_core::openai_model_info::get_model_info;
@@ -824,6 +824,10 @@ fn run_auto_loop(
     cancel_token: CancellationToken,
     derive_goal_from_history: bool,
 ) -> Result<()> {
+    let mut config = config;
+    config.model_reasoning_effort = ReasoningEffort::High;
+    config.model_text_verbosity = TextVerbosity::Low;
+
     let preferred_auth = if config.using_chatgpt_auth {
         code_protocol::mcp_protocol::AuthMode::ChatGPT
     } else {
@@ -847,7 +851,7 @@ fn run_auto_loop(
         Some(auth_mgr),
         None,
         model_provider,
-        ReasoningEffort::Medium,
+        config.model_reasoning_effort,
         model_reasoning_summary,
         model_text_verbosity,
         Uuid::new_v4(),
