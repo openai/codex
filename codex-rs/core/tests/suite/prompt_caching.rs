@@ -41,11 +41,11 @@ fn text_user_input(text: String) -> serde_json::Value {
 }
 
 fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
-    let system_date = Local::now().format("%Y-%m-%d").to_string();
+    let local_date = Local::now().format("%Y-%m-%d %:z").to_string();
     format!(
         r#"<environment_context>
   <cwd>{}</cwd>
-  <system_date>{system_date}</system_date>
+  <local_date>{local_date}</local_date>
   <approval_policy>on-request</approval_policy>
   <sandbox_mode>read-only</sandbox_mode>
   <network_access>restricted</network_access>
@@ -348,11 +348,11 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     let shell = default_user_shell().await;
 
     let expected_env_text = {
-        let system_date = Local::now().format("%Y-%m-%d").to_string();
+        let local_date = Local::now().format("%Y-%m-%d %:z").to_string();
         format!(
             r#"<environment_context>
   <cwd>{}</cwd>
-  <system_date>{system_date}</system_date>
+  <local_date>{local_date}</local_date>
   <approval_policy>on-request</approval_policy>
   <sandbox_mode>read-only</sandbox_mode>
   <network_access>restricted</network_access>

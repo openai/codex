@@ -268,7 +268,7 @@ pub(crate) struct TurnContext {
     /// the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
     pub(crate) cwd: PathBuf,
-    pub(crate) system_date: Option<String>,
+    pub(crate) local_date_with_timezone: Option<String>,
     pub(crate) developer_instructions: Option<String>,
     pub(crate) base_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
@@ -425,7 +425,7 @@ impl Session {
             sub_id,
             client,
             cwd: session_configuration.cwd.clone(),
-            system_date: Some(Local::now().format("%Y-%m-%d").to_string()),
+            local_date_with_timezone: Some(Local::now().format("%Y-%m-%d %:z").to_string()),
             developer_instructions: session_configuration.developer_instructions.clone(),
             base_instructions: session_configuration.base_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
@@ -1010,7 +1010,7 @@ impl Session {
         }
         items.push(ResponseItem::from(EnvironmentContext::new(
             Some(turn_context.cwd.clone()),
-            turn_context.system_date.clone(),
+            turn_context.local_date_with_timezone.clone(),
             Some(turn_context.approval_policy),
             Some(turn_context.sandbox_policy.clone()),
             Some(self.user_shell().clone()),
@@ -1696,7 +1696,7 @@ async fn spawn_review_thread(
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
-        system_date: parent_turn_context.system_date.clone(),
+        local_date_with_timezone: parent_turn_context.local_date_with_timezone.clone(),
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),

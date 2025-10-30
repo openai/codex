@@ -24,7 +24,7 @@ pub enum NetworkAccess {
 #[serde(rename = "environment_context", rename_all = "snake_case")]
 pub(crate) struct EnvironmentContext {
     pub cwd: Option<PathBuf>,
-    pub system_date: Option<String>,
+    pub local_date: Option<String>,
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
     pub network_access: Option<NetworkAccess>,
@@ -35,14 +35,14 @@ pub(crate) struct EnvironmentContext {
 impl EnvironmentContext {
     pub fn new(
         cwd: Option<PathBuf>,
-        system_date: Option<String>,
+        local_date: Option<String>,
         approval_policy: Option<AskForApproval>,
         sandbox_policy: Option<SandboxPolicy>,
         shell: Option<Shell>,
     ) -> Self {
         Self {
             cwd,
-            system_date,
+            local_date,
             approval_policy,
             sandbox_mode: match sandbox_policy {
                 Some(SandboxPolicy::DangerFullAccess) => Some(SandboxMode::DangerFullAccess),
@@ -82,7 +82,7 @@ impl EnvironmentContext {
     pub fn equals_except_shell(&self, other: &EnvironmentContext) -> bool {
         let EnvironmentContext {
             cwd,
-            system_date,
+            local_date,
             approval_policy,
             sandbox_mode,
             network_access,
@@ -92,7 +92,7 @@ impl EnvironmentContext {
         } = other;
 
         self.cwd == *cwd
-            && self.system_date == *system_date
+            && self.local_date == *local_date
             && self.approval_policy == *approval_policy
             && self.sandbox_mode == *sandbox_mode
             && self.network_access == *network_access
@@ -105,8 +105,8 @@ impl EnvironmentContext {
         } else {
             None
         };
-        let system_date = if before.system_date != after.system_date {
-            after.system_date.clone()
+        let local_date = if before.local_date_with_timezone != after.local_date_with_timezone {
+            after.local_date_with_timezone.clone()
         } else {
             None
         };
@@ -120,7 +120,7 @@ impl EnvironmentContext {
         } else {
             None
         };
-        EnvironmentContext::new(cwd, system_date, approval_policy, sandbox_policy, None)
+        EnvironmentContext::new(cwd, local_date, approval_policy, sandbox_policy, None)
     }
 }
 
@@ -128,7 +128,7 @@ impl From<&TurnContext> for EnvironmentContext {
     fn from(turn_context: &TurnContext) -> Self {
         Self::new(
             Some(turn_context.cwd.clone()),
-            turn_context.system_date.clone(),
+            turn_context.local_date_with_timezone.clone(),
             Some(turn_context.approval_policy),
             Some(turn_context.sandbox_policy.clone()),
             // Shell is not configurable from turn to turn
@@ -145,6 +145,7 @@ impl EnvironmentContext {
     /// ```xml
     /// <environment_context>
     ///   <cwd>...</cwd>
+    ///   <local_date>...</local_date>
     ///   <approval_policy>...</approval_policy>
     ///   <sandbox_mode>...</sandbox_mode>
     ///   <writable_roots>...</writable_roots>
@@ -157,8 +158,8 @@ impl EnvironmentContext {
         if let Some(cwd) = self.cwd {
             lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
         }
-        if let Some(system_date) = self.system_date {
-            lines.push(format!("  <system_date>{system_date}</system_date>"));
+        if let Some(local_date) = self.local_date {
+            lines.push(format!("  <local_date>{local_date}</local_date>"));
         }
         if let Some(approval_policy) = self.approval_policy {
             lines.push(format!(
@@ -226,7 +227,7 @@ mod tests {
     fn serialize_workspace_write_environment_context() {
         let context = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some("2025-01-01".to_string()),
+            Some("2025-01-01 +00:00".to_string()),
             Some(AskForApproval::OnRequest),
             Some(workspace_write_policy(vec!["/repo", "/tmp"], false)),
             None,
@@ -234,7 +235,7 @@ mod tests {
 
         let expected = r#"<environment_context>
   <cwd>/repo</cwd>
-  <system_date>2025-01-01</system_date>
+  <local_date>2025-01-01 +00:00</local_date>
   <approval_policy>on-request</approval_policy>
   <sandbox_mode>workspace-write</sandbox_mode>
   <network_access>restricted</network_access>
@@ -251,14 +252,14 @@ mod tests {
     fn serialize_read_only_environment_context() {
         let context = EnvironmentContext::new(
             None,
-            Some("2025-01-01".to_string()),
+            Some("2025-01-01 +00:00".to_string()),
             Some(AskForApproval::Never),
             Some(SandboxPolicy::ReadOnly),
             None,
         );
 
         let expected = r#"<environment_context>
-  <system_date>2025-01-01</system_date>
+  <local_date>2025-01-01 +00:00</local_date>
   <approval_policy>never</approval_policy>
   <sandbox_mode>read-only</sandbox_mode>
   <network_access>restricted</network_access>
@@ -271,14 +272,14 @@ mod tests {
     fn serialize_full_access_environment_context() {
         let context = EnvironmentContext::new(
             None,
-            Some("2025-01-01".to_string()),
+            Some("2025-01-01 +00:00".to_string()),
             Some(AskForApproval::OnFailure),
             Some(SandboxPolicy::DangerFullAccess),
             None,
         );
 
         let expected = r#"<environment_context>
-  <system_date>2025-01-01</system_date>
+  <local_date>2025-01-01 +00:00</local_date>
   <approval_policy>on-failure</approval_policy>
   <sandbox_mode>danger-full-access</sandbox_mode>
   <network_access>enabled</network_access>
@@ -292,14 +293,14 @@ mod tests {
         // Approval policy
         let context1 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some("2025-01-01".to_string()),
+            Some("2025-01-01 +00:00".to_string()),
             Some(AskForApproval::OnRequest),
             Some(workspace_write_policy(vec!["/repo"], false)),
             None,
         );
         let context2 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some("2025-01-01".to_string()),
+            Some("2025-01-01 +00:00".to_string()),
             Some(AskForApproval::Never),
             Some(workspace_write_policy(vec!["/repo"], true)),
             None,
@@ -311,14 +312,14 @@ mod tests {
     fn equals_except_shell_compares_sandbox_policy() {
         let context1 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some("2025-01-01".to_string()),
+            Some("2025-01-01 +00:00".to_string()),
             Some(AskForApproval::OnRequest),
             Some(SandboxPolicy::new_read_only_policy()),
             None,
         );
         let context2 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some("2025-01-01".to_string()),
+            Some("2025-01-01 +00:00".to_string()),
             Some(AskForApproval::OnRequest),
             Some(SandboxPolicy::new_workspace_write_policy()),
             None,
@@ -331,14 +332,14 @@ mod tests {
     fn equals_except_shell_compares_workspace_write_policy() {
         let context1 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some("2025-01-01".to_string()),
+            Some("2025-01-01 +00:00".to_string()),
             Some(AskForApproval::OnRequest),
             Some(workspace_write_policy(vec!["/repo", "/tmp", "/var"], false)),
             None,
         );
         let context2 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some("2025-01-01".to_string()),
+            Some("2025-01-01 +00:00".to_string()),
             Some(AskForApproval::OnRequest),
             Some(workspace_write_policy(vec!["/repo", "/tmp"], true)),
             None,
@@ -351,7 +352,7 @@ mod tests {
     fn equals_except_shell_ignores_shell() {
         let context1 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some("2025-01-01".to_string()),
+            Some("2025-01-01 +00:00".to_string()),
             Some(AskForApproval::OnRequest),
             Some(workspace_write_policy(vec!["/repo"], false)),
             Some(Shell::Bash(BashShell {
@@ -361,7 +362,7 @@ mod tests {
         );
         let context2 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some("2025-01-01".to_string()),
+            Some("2025-01-01 +00:00".to_string()),
             Some(AskForApproval::OnRequest),
             Some(workspace_write_policy(vec!["/repo"], false)),
             Some(Shell::Zsh(ZshShell {
