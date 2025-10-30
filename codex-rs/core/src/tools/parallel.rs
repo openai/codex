@@ -61,7 +61,6 @@ impl ToolCallRuntime {
             AbortOnDropHandle::new(tokio::spawn(async move {
                 tokio::select! {
                     _ = cancellation_token.cancelled() => {
-                        // Include wall clock wait time so the model knows how long the user waited.
                         let secs = started.elapsed().as_secs_f32().round();
                         Ok(Self::aborted_response(&call, secs))
                     },
