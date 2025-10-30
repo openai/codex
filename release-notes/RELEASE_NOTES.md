@@ -1,4 +1,4 @@
-## @just-every/code v0.4.4
+## @just-every/code v0.4.5
 
 This release tightens chat handoffs, makes MCP configuration smoother, and tidies session management for better day-to-day UX.
 
@@ -15,4 +15,4 @@ npm install -g @just-every/code@latest
 code
 ```
 
-Compare: https://github.com/just-every/code/compare/v0.4.3...v0.4.4
+Compare: https://github.com/just-every/code/compare/v0.4.4...v0.4.5
