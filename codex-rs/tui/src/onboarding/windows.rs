@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use codex_core::config_edit::ConfigEditsBuilder;
+use codex_core::config::edit::ConfigEditsBuilder;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
