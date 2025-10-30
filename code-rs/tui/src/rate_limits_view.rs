@@ -69,6 +69,26 @@ pub(crate) struct LimitsView {
     grid: GridConfig,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RateLimitDisplayConfig {
+    pub(crate) show_usage_sections: bool,
+    pub(crate) show_chart: bool,
+}
+
+impl Default for RateLimitDisplayConfig {
+    fn default() -> Self {
+        Self {
+            show_usage_sections: true,
+            show_chart: true,
+        }
+    }
+}
+
+pub(crate) const DEFAULT_DISPLAY_CONFIG: RateLimitDisplayConfig = RateLimitDisplayConfig {
+    show_usage_sections: true,
+    show_chart: true,
+};
+
 impl LimitsView {
     pub(crate) fn lines_for_width(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines = self.summary_lines.clone();
@@ -96,7 +116,7 @@ pub(crate) struct GridConfig {
 pub(crate) struct RateLimitResetInfo {
     pub(crate) primary_next_reset: Option<DateTime<Utc>>,
     pub(crate) secondary_next_reset: Option<DateTime<Utc>>,
-    pub(crate) session_tokens_used: Option<u64>,
+    pub(crate) auto_compact_tokens_used: Option<u64>,
     pub(crate) auto_compact_limit: Option<u64>,
     pub(crate) overflow_auto_compact: bool,
     pub(crate) context_window: Option<u64>,
@@ -113,9 +133,10 @@ pub(crate) fn build_limits_view(
     snapshot: &RateLimitSnapshotEvent,
     reset_info: RateLimitResetInfo,
     grid_config: GridConfig,
+    display_config: RateLimitDisplayConfig,
 ) -> LimitsView {
     let metrics = RateLimitMetrics::from_snapshot(snapshot);
-    let grid_state = if gauge_inputs_available(snapshot) {
+    let grid_state = if display_config.show_chart && gauge_inputs_available(snapshot) {
         extract_capacity_fraction(snapshot)
             .and_then(|fraction| compute_grid_state(&metrics, fraction))
             .map(|state| scale_grid_state(state, grid_config))
@@ -124,7 +145,7 @@ pub(crate) fn build_limits_view(
     };
 
     LimitsView {
-        summary_lines: build_summary_lines(&metrics, snapshot, &reset_info),
+        summary_lines: build_summary_lines(&metrics, snapshot, &reset_info, display_config),
         legend_lines: build_legend_lines(grid_state.is_some()),
         footer_lines: build_footer_lines(&metrics),
         grid_state,
@@ -175,50 +196,57 @@ fn build_summary_lines(
     metrics: &RateLimitMetrics,
     snapshot: &RateLimitSnapshotEvent,
     reset_info: &RateLimitResetInfo,
+    display: RateLimitDisplayConfig,
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push("/limits".magenta().into());
     lines.push("".into());
 
-    lines.push(section_header("Hourly Limit"));
-    lines.push(build_bar_line(
-        "Used",
-        metrics.hourly_used,
-        "",
-        Style::default().fg(colors::text()),
-    ));
-    lines.push(build_hourly_window_line(
-        metrics,
-        reset_info.primary_next_reset,
-    ));
-    lines.push(build_hourly_reset_line(
-        snapshot.primary_window_minutes,
-        reset_info.primary_next_reset,
-    ));
+    if display.show_usage_sections {
+        lines.push(section_header("Hourly Limit"));
+        lines.push(build_bar_line(
+            "Used",
+            metrics.hourly_used,
+            "",
+            Style::default().fg(colors::text()),
+        ));
+        lines.push(build_hourly_window_line(
+            metrics,
+            reset_info.primary_next_reset,
+        ));
+        lines.push(build_hourly_reset_line(
+            snapshot.primary_window_minutes,
+            reset_info.primary_next_reset,
+        ));
 
-    lines.push("".into());
+        lines.push("".into());
 
-    lines.push(section_header("Weekly Limit"));
-    lines.push(build_bar_line(
-        "Usage",
-        metrics.weekly_used,
-        "",
-        Style::default().fg(colors::text()),
-    ));
-    lines.push(build_weekly_window_line(
-        metrics.weekly_window_minutes,
-        reset_info.secondary_next_reset,
-    ));
-    lines.push(build_weekly_reset_line(
-        snapshot.secondary_window_minutes,
-        reset_info.secondary_next_reset,
-    ));
+        lines.push(section_header("Weekly Limit"));
+        lines.push(build_bar_line(
+            "Usage",
+            metrics.weekly_used,
+            "",
+            Style::default().fg(colors::text()),
+        ));
+        lines.push(build_weekly_window_line(
+            metrics.weekly_window_minutes,
+            reset_info.secondary_next_reset,
+        ));
+        lines.push(build_weekly_reset_line(
+            snapshot.secondary_window_minutes,
+            reset_info.secondary_next_reset,
+        ));
 
-    lines.push("".into());
+        lines.push("".into());
+    }
+
     lines.extend(build_compact_lines(reset_info));
 
-    lines.push("".into());
-    lines.push(section_header("Chart"));
+    if display.show_chart {
+        lines.push("".into());
+        lines.push(section_header("Chart"));
+    }
+
     lines
 }
 
@@ -423,16 +451,15 @@ fn build_weekly_reset_line(
 }
 
 fn build_compact_lines(reset_info: &RateLimitResetInfo) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(section_header("Compact Limit"));
+    let mut detail_lines: Vec<Line<'static>> = Vec::new();
 
     match reset_info.auto_compact_limit {
         Some(limit) => {
-            if let Some(used) = reset_info.session_tokens_used {
-                lines.push(build_compact_tokens_line(used, limit));
-                lines.push(build_compact_status_line(used, limit));
+            if let Some(used) = reset_info.auto_compact_tokens_used {
+                detail_lines.push(build_compact_tokens_line(used, limit));
+                detail_lines.push(build_compact_status_line(used, limit));
             } else {
-                lines.push(Line::from(vec![Span::styled(
+                detail_lines.push(Line::from(vec![Span::styled(
                     label_text("Session usage updating…"),
                     Style::default().fg(colors::dim()),
                 )]));
@@ -442,26 +469,30 @@ fn build_compact_lines(reset_info: &RateLimitResetInfo) -> Vec<Line<'static>> {
             if let (Some(window), Some(used)) =
                 (reset_info.context_window, reset_info.context_tokens_used)
             {
-                lines.push(build_context_tokens_line(used, window));
-                lines.push(build_context_status_line(
+                detail_lines.push(build_context_tokens_line(used, window));
+                detail_lines.push(build_context_status_line(
                     used,
                     window,
                     reset_info.overflow_auto_compact,
                 ));
             } else if reset_info.overflow_auto_compact {
-                lines.push(Line::from(vec![Span::styled(
+                detail_lines.push(Line::from(vec![Span::styled(
                     label_text("Auto-compaction runs after overflow errors"),
                     Style::default().fg(colors::dim()),
                 )]));
             } else {
-                lines.push(Line::from(vec![Span::styled(
-                    label_text("Auto-compaction unavailable"),
-                    Style::default().fg(colors::dim()),
-                )]));
+                // No compact data available for this snapshot (likely a historic account view).
+                // Hide the section entirely instead of rendering the "unavailable" placeholder.
+                return Vec::new();
             }
         }
     }
 
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if !detail_lines.is_empty() {
+        lines.push(section_header("Compact Limit"));
+        lines.extend(detail_lines);
+    }
     lines
 }
 
@@ -857,16 +888,32 @@ fn format_minutes_round_units(minutes: u64) -> String {
 
 fn extract_capacity_fraction(snapshot: &RateLimitSnapshotEvent) -> Option<f64> {
     let ratio = snapshot.primary_to_secondary_ratio_percent;
-    if !ratio.is_finite() || ratio <= 0.0 {
-        return None;
+    if ratio.is_finite() && ratio > 0.0 {
+        return Some((ratio / 100.0).clamp(0.0, 1.0));
     }
 
-    Some((ratio / 100.0).clamp(0.0, 1.0))
+    // Fallback: derive a plausible capacity fraction from the rolling window
+    // lengths when the upstream ratio header is unavailable. This keeps the
+    // chart visible even on older accounts that do not yet expose the ratio.
+    let primary = snapshot.primary_window_minutes;
+    let secondary = snapshot.secondary_window_minutes;
+    if primary == 0 || secondary == 0 {
+        return None;
+    }
+    if primary >= secondary {
+        return Some(1.0);
+    }
+
+    let derived = (primary as f64 / secondary as f64).clamp(0.0, 1.0);
+    if derived > 0.0 && derived.is_finite() {
+        Some(derived)
+    } else {
+        None
+    }
 }
 
 fn gauge_inputs_available(snapshot: &RateLimitSnapshotEvent) -> bool {
-    let ratio = snapshot.primary_to_secondary_ratio_percent;
-    if !ratio.is_finite() || ratio <= 0.0 {
+    if extract_capacity_fraction(snapshot).is_none() {
         return false;
     }
 
@@ -896,6 +943,77 @@ fn compute_grid_state(metrics: &RateLimitMetrics, capacity_fraction: f64) -> Opt
         weekly_used_ratio,
         hourly_remaining_ratio,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plain_text(line: &Line<'static>) -> String {
+        let mut text = String::new();
+        for span in &line.spans {
+            text.push_str(span.content.as_ref());
+        }
+        text
+    }
+
+    fn base_snapshot() -> RateLimitSnapshotEvent {
+        RateLimitSnapshotEvent {
+            primary_used_percent: 10.0,
+            secondary_used_percent: 15.0,
+            primary_to_secondary_ratio_percent: 0.0,
+            primary_window_minutes: 15,
+            secondary_window_minutes: 60,
+            primary_reset_after_seconds: Some(900),
+            secondary_reset_after_seconds: Some(3600),
+        }
+    }
+
+    #[test]
+    fn extract_capacity_fraction_falls_back_to_window_ratio() {
+        let snapshot = base_snapshot();
+        let fraction = extract_capacity_fraction(&snapshot).expect("fraction");
+        assert!((fraction - 0.25).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn compact_limit_uses_context_tokens() {
+        let info = RateLimitResetInfo {
+            auto_compact_limit: Some(350_000),
+            auto_compact_tokens_used: Some(42_972),
+            ..RateLimitResetInfo::default()
+        };
+        let lines = build_compact_lines(&info);
+        assert!(lines.len() >= 3, "expected section header + two rows");
+        let tokens_line = plain_text(&lines[1]);
+        assert!(
+            tokens_line.contains("42,972 / 350,000"),
+            "compact tokens line should show context usage: {tokens_line}"
+        );
+    }
+
+    #[test]
+    fn hides_usage_sections_when_disabled() {
+        let snapshot = base_snapshot();
+        let view = build_limits_view(
+            &snapshot,
+            RateLimitResetInfo::default(),
+            DEFAULT_GRID_CONFIG,
+            RateLimitDisplayConfig {
+                show_usage_sections: false,
+                show_chart: false,
+            },
+        );
+        let rendered: Vec<String> = view
+            .summary_lines
+            .iter()
+            .map(plain_text)
+            .collect();
+        assert!(rendered.iter().all(|line| !line.contains("Hourly Limit")));
+        assert!(rendered.iter().all(|line| !line.contains("Weekly Limit")));
+        assert!(rendered.iter().all(|line| !line.contains("Chart")));
+        assert!(view.gauge_lines(80).is_empty());
+    }
 }
 
 fn scale_grid_state(state: GridState, grid: GridConfig) -> GridState {
@@ -1026,4 +1144,3 @@ struct GridCellCounts {
     dark_cells: isize,
     green_cells: isize,
 }
-

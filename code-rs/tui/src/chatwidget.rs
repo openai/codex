@@ -391,7 +391,6 @@ const STATUS_LABEL_INDENT: &str = "   ";
 const STATUS_LABEL_TARGET_WIDTH: usize = 7;
 const STATUS_LABEL_GAP: usize = 2;
 const STATUS_CONTENT_PREFIX: &str = "    ";
-const STATUS_TOKENS_PREFIX: &str = "             ";
 const RESUME_PLACEHOLDER_MESSAGE: &str = "Resuming previous session...";
 const RESUME_NO_HISTORY_NOTICE: &str =
     "No saved messages for this session. Start typing to continue.";
@@ -428,10 +427,6 @@ fn status_field_prefix(label: &str) -> String {
 
 fn status_content_prefix() -> String {
     STATUS_CONTENT_PREFIX.to_string()
-}
-
-fn status_tokens_prefix() -> &'static str {
-    STATUS_TOKENS_PREFIX
 }
 
 fn describe_cloud_error(err: &CloudTaskError) -> String {
@@ -540,7 +535,10 @@ use code_protocol::models::ResponseItem;
 use code_core::config_types::{validation_tool_category, ValidationCategory};
 use code_core::protocol::RateLimitSnapshotEvent;
 use code_core::protocol::ValidationGroup;
-use crate::rate_limits_view::{build_limits_view, RateLimitResetInfo, DEFAULT_GRID_CONFIG};
+use crate::rate_limits_view::{
+    build_limits_view, RateLimitDisplayConfig, RateLimitResetInfo, DEFAULT_DISPLAY_CONFIG,
+    DEFAULT_GRID_CONFIG,
+};
 use crate::session_log;
 use code_core::review_format::format_review_findings_block;
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, Local, TimeZone, Timelike, Utc};
@@ -5693,8 +5691,18 @@ impl ChatWidget<'_> {
                 .or_else(|| active_id.clone())
                 .unwrap_or_else(|| "Current session".to_string());
             let header = Self::account_header_lines(account_ref, snapshot_ref, summary_ref);
-            let extra = Self::usage_history_lines(summary_ref);
-            let view = build_limits_view(&snapshot, current_reset, DEFAULT_GRID_CONFIG);
+            let is_api_key_account = matches!(
+                account_ref.map(|acc| acc.mode),
+                Some(McpAuthMode::ApiKey)
+            );
+            let extra = Self::usage_history_lines(summary_ref, is_api_key_account);
+            let display = Self::rate_limit_display_config_for_account(account_ref);
+            let view = build_limits_view(
+                &snapshot,
+                current_reset,
+                DEFAULT_GRID_CONFIG,
+                display,
+            );
             tabs.push(LimitsTab::view(title, header, view, extra));
 
             if let Some(active_id) = active_id.as_ref() {
@@ -5751,20 +5759,36 @@ impl ChatWidget<'_> {
                             secondary_next_reset: record.secondary_next_reset_at,
                             ..RateLimitResetInfo::default()
                         };
+                        let display = Self::rate_limit_display_config_for_account(account);
                         let view = build_limits_view(
                             &view_snapshot,
                             view_reset,
                             DEFAULT_GRID_CONFIG,
+                            display,
                         );
                         let header = Self::account_header_lines(
                             account,
                             Some(&record),
                             usage_summary.as_ref(),
                         );
-                        let extra = Self::usage_history_lines(usage_summary.as_ref());
+                        let is_api_key_account = matches!(
+                            account.map(|acc| acc.mode),
+                            Some(McpAuthMode::ApiKey)
+                        );
+                        let extra = Self::usage_history_lines(
+                            usage_summary.as_ref(),
+                            is_api_key_account,
+                        );
                         tabs.push(LimitsTab::view(title, header, view, extra));
                     } else {
-                        let mut lines = Self::usage_history_lines(usage_summary.as_ref());
+                        let is_api_key_account = matches!(
+                            account.map(|acc| acc.mode),
+                            Some(McpAuthMode::ApiKey)
+                        );
+                        let mut lines = Self::usage_history_lines(
+                            usage_summary.as_ref(),
+                            is_api_key_account,
+                        );
                         lines.push(Self::dim_line(
                             " Rate limit snapshot not yet available.",
                         ));
@@ -5777,7 +5801,14 @@ impl ChatWidget<'_> {
                     }
                 }
                 None => {
-                    let mut lines = Self::usage_history_lines(usage_summary.as_ref());
+                    let is_api_key_account = matches!(
+                        account.map(|acc| acc.mode),
+                        Some(McpAuthMode::ApiKey)
+                    );
+                    let mut lines = Self::usage_history_lines(
+                        usage_summary.as_ref(),
+                        is_api_key_account,
+                    );
                     lines.push(Self::dim_line(
                         " Rate limit snapshot not yet available.",
                     ));
@@ -5792,7 +5823,7 @@ impl ChatWidget<'_> {
         }
 
         if tabs.is_empty() {
-            let mut lines = Self::usage_history_lines(None);
+            let mut lines = Self::usage_history_lines(None, false);
             lines.push(Self::dim_line(
                 " Rate limit snapshot not yet available.",
             ));
@@ -5901,14 +5932,15 @@ impl ChatWidget<'_> {
             RtSpan::raw(status_field_prefix("Plan")),
             RtSpan::styled(plan.to_string(), value_style),
         ]));
+        let tokens_prefix = status_field_prefix("Tokens");
         let tokens_summary = format!("{formatted_total} total {cost_suffix}");
         lines.push(RtLine::from(vec![
-            RtSpan::raw(status_field_prefix("Tokens")),
+            RtSpan::raw(tokens_prefix.clone()),
             RtSpan::styled(tokens_summary, value_style),
         ]));
 
-        let indent = status_tokens_prefix();
-        let mut counts = vec![
+        let indent = " ".repeat(tokens_prefix.len());
+        let counts = [
             (format_with_separators(cached_input), "cached"),
             (format_with_separators(non_cached_input), "input"),
             (format_with_separators(output_tokens), "output"),
@@ -5919,20 +5951,21 @@ impl ChatWidget<'_> {
             .map(|(count, _)| count.len())
             .max()
             .unwrap_or(0);
-        for (count, label) in counts.drain(..) {
-            let line_text = format!(
-                "{indent}{count:>width$} {label}",
-                indent = indent,
-                count = count,
-                label = label,
-                width = max_width
-            );
-            lines.push(RtLine::from(vec![RtSpan::styled(line_text, value_style)]));
+        for (count, label) in counts.iter() {
+            let number = format!("{count:>width$}", count = count, width = max_width);
+            lines.push(RtLine::from(vec![
+                RtSpan::raw(indent.clone()),
+                RtSpan::styled(number, value_style),
+                RtSpan::styled(format!(" {label}"), value_style),
+            ]));
         }
         lines
     }
 
-    fn hourly_usage_lines(summary: Option<&StoredUsageSummary>) -> Vec<RtLine<'static>> {
+    fn hourly_usage_lines(
+        summary: Option<&StoredUsageSummary>,
+        is_api_key_account: bool,
+    ) -> Vec<RtLine<'static>> {
         const WIDTH: usize = 14;
         let now = Local::now();
         let anchor = now
@@ -5971,17 +6004,48 @@ impl ChatWidget<'_> {
             .map(|(_, totals)| format_with_separators(totals.total_tokens).len())
             .max()
             .unwrap_or(0);
+        let cached_width = series
+            .iter()
+            .map(|(_, totals)| format_with_separators(totals.cached_input_tokens).len())
+            .max()
+            .unwrap_or(0);
+        let cost_width = series
+            .iter()
+            .map(|(_, totals)| Self::format_usd(Self::usage_cost_usd_from_totals(totals)).len())
+            .max()
+            .unwrap_or(0);
+        let column_divider = RtSpan::styled(
+            " │ ",
+            Style::default().fg(crate::colors::text_dim()),
+        );
         for (dt, totals) in series.iter() {
             let label = Self::format_hour_label(*dt);
             let bar = Self::bar_segment(totals.total_tokens, max_total, WIDTH);
             let tokens = format_with_separators(totals.total_tokens);
             let padding = tokens_width.saturating_sub(tokens.len());
             let formatted_tokens = format!("{space}{tokens}", space = " ".repeat(padding), tokens = tokens);
-            let cost_text = Self::format_usd(Self::usage_cost_usd_from_totals(totals));
-            let cost_span = RtSpan::styled(
-                format!(" ({cost_text})"),
-                Style::default().fg(crate::colors::text_dim()),
+            let cached_tokens = format_with_separators(totals.cached_input_tokens);
+            let cached_padding = cached_width.saturating_sub(cached_tokens.len());
+            let cached_display = format!(
+                "{space}{cached_tokens}",
+                space = " ".repeat(cached_padding),
+                cached_tokens = cached_tokens
             );
+            let cost_text = Self::format_usd(Self::usage_cost_usd_from_totals(totals));
+            let cost_display = if is_api_key_account {
+                format!(
+                    "{space}{cost_text}",
+                    space = " ".repeat(cost_width.saturating_sub(cost_text.len())),
+                    cost_text = cost_text
+                )
+            } else {
+                let saved = Self::format_usd(Self::usage_cost_usd_from_totals(totals));
+                format!(
+                    "{space}{saved}",
+                    space = " ".repeat(cost_width.saturating_sub(saved.len())),
+                    saved = saved
+                )
+            };
             lines.push(RtLine::from(vec![
                 RtSpan::raw(prefix.clone()),
                 RtSpan::styled(
@@ -5991,13 +6055,28 @@ impl ChatWidget<'_> {
                 RtSpan::styled("│ ", Style::default().fg(crate::colors::text_dim())),
                 RtSpan::styled(bar, Style::default().fg(crate::colors::primary())),
                 RtSpan::raw(format!(" {formatted_tokens} tokens")),
-                cost_span,
+                column_divider.clone(),
+                RtSpan::styled(
+                    format!("{cached_display} cached"),
+                    Style::default().fg(crate::colors::text_dim()),
+                ),
+                column_divider.clone(),
+                RtSpan::styled(
+                    format!(
+                        "{cost_display} {}",
+                        if is_api_key_account { "cost" } else { "saved" }
+                    ),
+                    Style::default().fg(crate::colors::text_dim()),
+                ),
             ]));
         }
         lines
     }
 
-    fn daily_usage_lines(summary: Option<&StoredUsageSummary>) -> Vec<RtLine<'static>> {
+    fn daily_usage_lines(
+        summary: Option<&StoredUsageSummary>,
+        is_api_key_account: bool,
+    ) -> Vec<RtLine<'static>> {
         const WIDTH: usize = 14;
         let today = Local::now().date_naive();
         let day_totals = Self::aggregate_daily_totals(summary);
@@ -6026,18 +6105,49 @@ impl ChatWidget<'_> {
             .map(|(_, totals)| format_with_separators(totals.total_tokens).len())
             .max()
             .unwrap_or(0);
+        let cached_width = daily
+            .iter()
+            .map(|(_, totals)| format_with_separators(totals.cached_input_tokens).len())
+            .max()
+            .unwrap_or(0);
+        let cost_width = daily
+            .iter()
+            .map(|(_, totals)| Self::format_usd(Self::usage_cost_usd_from_totals(totals)).len())
+            .max()
+            .unwrap_or(0);
+        let column_divider = RtSpan::styled(
+            " │ ",
+            Style::default().fg(crate::colors::text_dim()),
+        );
         for (day, totals) in daily.iter() {
             let label = Self::format_daily_label(*day);
             let bar = Self::bar_segment(totals.total_tokens, max_total, WIDTH);
             let tokens = format_with_separators(totals.total_tokens);
             let padding = tokens_width.saturating_sub(tokens.len());
             let formatted_tokens = format!("{space}{tokens}", space = " ".repeat(padding), tokens = tokens);
+            let cached_tokens = format_with_separators(totals.cached_input_tokens);
+            let cached_padding = cached_width.saturating_sub(cached_tokens.len());
+            let cached_display = format!(
+                "{space}{cached_tokens}",
+                space = " ".repeat(cached_padding),
+                cached_tokens = cached_tokens
+            );
             let daily_cost = Self::usage_cost_usd_from_totals(totals);
             let cost_text = Self::format_usd(daily_cost);
-            let cost_span = RtSpan::styled(
-                format!(" ({cost_text})"),
-                Style::default().fg(crate::colors::text_dim()),
-            );
+            let cost_display = if is_api_key_account {
+                format!(
+                    "{space}{cost_text}",
+                    space = " ".repeat(cost_width.saturating_sub(cost_text.len())),
+                    cost_text = cost_text
+                )
+            } else {
+                let saved = Self::format_usd(Self::usage_cost_usd_from_totals(totals));
+                format!(
+                    "{space}{saved}",
+                    space = " ".repeat(cost_width.saturating_sub(saved.len())),
+                    saved = saved
+                )
+            };
             lines.push(RtLine::from(vec![
                 RtSpan::raw(prefix.clone()),
                 RtSpan::styled(
@@ -6047,7 +6157,19 @@ impl ChatWidget<'_> {
                 RtSpan::styled("│ ", Style::default().fg(crate::colors::text_dim())),
                 RtSpan::styled(bar, Style::default().fg(crate::colors::primary())),
                 RtSpan::raw(format!(" {formatted_tokens} tokens")),
-                cost_span,
+                column_divider.clone(),
+                RtSpan::styled(
+                    format!("{cached_display} cached"),
+                    Style::default().fg(crate::colors::text_dim()),
+                ),
+                column_divider.clone(),
+                RtSpan::styled(
+                    format!(
+                        "{cost_display} {}",
+                        if is_api_key_account { "cost" } else { "saved" }
+                    ),
+                    Style::default().fg(crate::colors::text_dim()),
+                ),
             ]));
         }
         lines
@@ -6076,14 +6198,20 @@ impl ChatWidget<'_> {
         format!("{} {:>2}{}", dt.format("%a"), hour, meridiem)
     }
 
-    fn usage_history_lines(summary: Option<&StoredUsageSummary>) -> Vec<RtLine<'static>> {
-        let mut lines = Self::hourly_usage_lines(summary);
-        lines.extend(Self::daily_usage_lines(summary));
-        lines.extend(Self::six_month_usage_lines(summary));
+    fn usage_history_lines(
+        summary: Option<&StoredUsageSummary>,
+        is_api_key_account: bool,
+    ) -> Vec<RtLine<'static>> {
+        let mut lines = Self::hourly_usage_lines(summary, is_api_key_account);
+        lines.extend(Self::daily_usage_lines(summary, is_api_key_account));
+        lines.extend(Self::six_month_usage_lines(summary, is_api_key_account));
         lines
     }
 
-    fn six_month_usage_lines(summary: Option<&StoredUsageSummary>) -> Vec<RtLine<'static>> {
+    fn six_month_usage_lines(
+        summary: Option<&StoredUsageSummary>,
+        is_api_key_account: bool,
+    ) -> Vec<RtLine<'static>> {
         const WIDTH: usize = 14;
         const MONTHS: usize = 6;
 
@@ -6129,17 +6257,48 @@ impl ChatWidget<'_> {
             .map(|(_, totals)| format_with_separators(totals.total_tokens).len())
             .max()
             .unwrap_or(0);
+        let cached_width = months
+            .iter()
+            .map(|(_, totals)| format_with_separators(totals.cached_input_tokens).len())
+            .max()
+            .unwrap_or(0);
+        let cost_width = months
+            .iter()
+            .map(|(_, totals)| Self::format_usd(Self::usage_cost_usd_from_totals(totals)).len())
+            .max()
+            .unwrap_or(0);
+        let column_divider = RtSpan::styled(
+            " │ ",
+            Style::default().fg(crate::colors::text_dim()),
+        );
         for (start, totals) in months.iter() {
             let label = start.format("%b %Y").to_string();
             let bar = Self::bar_segment(totals.total_tokens, max_total, WIDTH);
             let tokens = format_with_separators(totals.total_tokens);
             let padding = tokens_width.saturating_sub(tokens.len());
             let formatted_tokens = format!("{space}{tokens}", space = " ".repeat(padding), tokens = tokens);
-            let cost_text = Self::format_usd(Self::usage_cost_usd_from_totals(totals));
-            let cost_span = RtSpan::styled(
-                format!(" ({cost_text})"),
-                Style::default().fg(crate::colors::text_dim()),
+            let cached_tokens = format_with_separators(totals.cached_input_tokens);
+            let cached_padding = cached_width.saturating_sub(cached_tokens.len());
+            let cached_display = format!(
+                "{space}{cached_tokens}",
+                space = " ".repeat(cached_padding),
+                cached_tokens = cached_tokens
             );
+            let cost_text = Self::format_usd(Self::usage_cost_usd_from_totals(totals));
+            let cost_display = if is_api_key_account {
+                format!(
+                    "{space}{cost_text}",
+                    space = " ".repeat(cost_width.saturating_sub(cost_text.len())),
+                    cost_text = cost_text
+                )
+            } else {
+                let saved = Self::format_usd(Self::usage_cost_usd_from_totals(totals));
+                format!(
+                    "{space}{saved}",
+                    space = " ".repeat(cost_width.saturating_sub(saved.len())),
+                    saved = saved
+                )
+            };
             lines.push(RtLine::from(vec![
                 RtSpan::raw(prefix.clone()),
                 RtSpan::styled(
@@ -6149,7 +6308,19 @@ impl ChatWidget<'_> {
                 RtSpan::styled("│ ", Style::default().fg(crate::colors::text_dim())),
                 RtSpan::styled(bar, Style::default().fg(crate::colors::primary())),
                 RtSpan::raw(format!(" {formatted_tokens} tokens")),
-                cost_span,
+                column_divider.clone(),
+                RtSpan::styled(
+                    format!("{cached_display} cached"),
+                    Style::default().fg(crate::colors::text_dim()),
+                ),
+                column_divider.clone(),
+                RtSpan::styled(
+                    format!(
+                        "{cost_display} {}",
+                        if is_api_key_account { "cost" } else { "saved" }
+                    ),
+                    Style::default().fg(crate::colors::text_dim()),
+                ),
             ]));
         }
         lines
@@ -11908,22 +12079,35 @@ impl ChatWidget<'_> {
             .config
             .model_auto_compact_token_limit
             .and_then(|limit| (limit > 0).then_some(limit as u64));
-        let session_tokens_used = if auto_compact_limit.is_some() {
-            Some(self.total_token_usage.total_tokens)
-        } else {
-            None
-        };
+        let auto_compact_tokens_used = auto_compact_limit.map(|_| {
+            // Use the latest turn's context footprint, which best matches when
+            // auto-compaction triggers, instead of the lifetime session total.
+            self.last_token_usage.tokens_in_context_window()
+        });
         let context_window = self.config.model_context_window;
         let context_tokens_used = context_window.map(|_| self.last_token_usage.tokens_in_context_window());
 
         RateLimitResetInfo {
             primary_next_reset: self.rate_limit_primary_next_reset_at,
             secondary_next_reset: self.rate_limit_secondary_next_reset_at,
-            session_tokens_used,
+            auto_compact_tokens_used,
             auto_compact_limit,
             overflow_auto_compact: true,
             context_window,
             context_tokens_used,
+        }
+    }
+
+    fn rate_limit_display_config_for_account(
+        account: Option<&StoredAccount>,
+    ) -> RateLimitDisplayConfig {
+        if matches!(account.map(|acc| acc.mode), Some(McpAuthMode::ApiKey)) {
+            RateLimitDisplayConfig {
+                show_usage_sections: false,
+                show_chart: false,
+            }
+        } else {
+            DEFAULT_DISPLAY_CONFIG
         }
     }
 

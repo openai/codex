@@ -732,7 +732,7 @@ impl LimitsSettingsContent {
         };
 
         Paragraph::new(viewport)
-            .wrap(Wrap { trim: true })
+            .wrap(Wrap { trim: false })
             .style(Style::default().bg(crate::colors::background()).fg(crate::colors::text()))
             .render(area, buf);
     }
