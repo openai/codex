@@ -1428,6 +1428,19 @@ mod tests {
     }
 
     #[test]
+    fn test_try_parse_retry_after_azure() {
+        let err = Error {
+            r#type: None,
+            message: Some("Rate limit exceeded. Try again in 35 seconds.".to_string()),
+            code: Some("rate_limit_exceeded".to_string()),
+            plan_type: None,
+            resets_at: None,
+        };
+        let delay = try_parse_retry_after(&err);
+        assert_eq!(delay, Some(Duration::from_secs(35)));
+    }
+
+    #[test]
     fn error_response_deserializes_schema_known_plan_type_and_serializes_back() {
         use crate::token_data::KnownPlan;
         use crate::token_data::PlanType;
