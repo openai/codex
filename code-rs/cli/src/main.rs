@@ -36,6 +36,13 @@ mod mcp_cmd;
 use crate::mcp_cmd::McpCli;
 
 const CLI_COMMAND_NAME: &str = "code";
+
+fn login_api_key_deprecation_warning(command: &str) -> String {
+    format!(
+        "warning: the --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | {command} login --with-api-key`."
+    )
+}
+
 pub(crate) const CODEX_SECURE_MODE_ENV_VAR: &str = "CODEX_SECURE_MODE";
 
 /// As early as possible in the process lifecycle, apply hardening measures
@@ -373,7 +380,8 @@ async fn cli_main(code_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()>
                         .await;
                     } else if login_cli.api_key.is_some() {
                         eprintln!(
-                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`."
+                            "{}",
+                            login_api_key_deprecation_warning(CLI_COMMAND_NAME)
                         );
                         std::process::exit(1);
                     } else if login_cli.with_api_key {
@@ -1315,5 +1323,17 @@ mod tests {
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn login_api_key_deprecation_warning_matches_copy() {
+        let command = super::CLI_COMMAND_NAME;
+        let message = super::login_api_key_deprecation_warning(command);
+        let expected = format!(
+            "warning: the --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | {command} login --with-api-key`."
+        );
+        assert_eq!(message, expected);
+        assert!(message.starts_with("warning:"));
+        assert!(!message.ends_with('\n'));
     }
 }
