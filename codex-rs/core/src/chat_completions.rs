@@ -350,10 +350,13 @@ pub(crate) async fn stream_chat_completions(
 
         // Include subagent header only for subagent sessions.
         if let SessionSource::SubAgent(sub) = session_source.clone() {
-            let subagent = match sub {
-                SubAgentSource::Review => "review".to_string(),
-                SubAgentSource::Compact => "compact".to_string(),
-                SubAgentSource::Other(label) => label,
+            let subagent = if let SubAgentSource::Other(label) = sub {
+                label
+            } else {
+                serde_json::to_value(&sub)
+                    .ok()
+                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
+                    .unwrap_or_else(|| "other".to_string())
             };
             req_builder = req_builder.header("x-openai-subagent", subagent);
         }

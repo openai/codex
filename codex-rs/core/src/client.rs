@@ -305,10 +305,13 @@ impl ModelClient {
 
         // Include subagent header only for subagent sessions.
         if let SessionSource::SubAgent(sub) = &self.session_source {
-            let subagent = match sub {
-                crate::protocol::SubAgentSource::Review => "review".to_string(),
-                crate::protocol::SubAgentSource::Compact => "compact".to_string(),
-                crate::protocol::SubAgentSource::Other(label) => label.clone(),
+            let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
+                label.clone()
+            } else {
+                serde_json::to_value(sub)
+                    .ok()
+                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
+                    .unwrap_or_else(|| "other".to_string())
             };
             req_builder = req_builder.header("x-openai-subagent", subagent);
         }
