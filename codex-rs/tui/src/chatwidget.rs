@@ -1862,7 +1862,10 @@ impl ChatWidget {
                 current_approval == preset.approval && current_sandbox == preset.sandbox;
             let name = preset.label.to_string();
             let description_text = preset.description;
-            let description = if cfg!(target_os = "windows") && preset.id == "auto" {
+            let description = if cfg!(target_os = "windows")
+                && preset.id == "auto"
+                && codex_core::get_platform_sandbox().is_none()
+            {
                 Some(format!(
                     "{description_text}\nRequires Windows Subsystem for Linux (WSL). Show installation instructions..."
                 ))
@@ -1882,7 +1885,10 @@ impl ChatWidget {
                         preset: preset_clone.clone(),
                     });
                 })]
-            } else if cfg!(target_os = "windows") && preset.id == "auto" {
+            } else if cfg!(target_os = "windows")
+                && preset.id == "auto"
+                && codex_core::get_platform_sandbox().is_none()
+            {
                 vec![Box::new(|tx| {
                     tx.send(AppEvent::ShowWindowsAutoModeInstructions);
                 })]

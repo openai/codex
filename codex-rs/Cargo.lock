@@ -983,6 +983,7 @@ dependencies = [
  "codex-rmcp-client",
  "codex-stdio-to-uds",
  "codex-tui",
+ "codex-windows-sandbox",
  "ctor 0.5.0",
  "owo-colors",
  "predicates",
@@ -1072,6 +1073,7 @@ dependencies = [
  "codex-utils-readiness",
  "codex-utils-string",
  "codex-utils-tokenizer",
+ "codex-windows-sandbox",
  "core-foundation 0.9.4",
  "core_test_support",
  "dirs",
@@ -1549,6 +1551,18 @@ dependencies = [
  "pretty_assertions",
  "thiserror 2.0.16",
  "tiktoken-rs",
+]
+
+[[package]]
+name = "codex-windows-sandbox"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs-next",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
