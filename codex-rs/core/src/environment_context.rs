@@ -135,6 +135,7 @@ impl EnvironmentContext {
     /// <environment_context>
     ///   <cwd>...</cwd>
     ///   <approval_policy>...</approval_policy>
+    ///   <interactive_mode>...</interactive_mode>
     ///   <sandbox_mode>...</sandbox_mode>
     ///   <writable_roots>...</writable_roots>
     ///   <network_access>...</network_access>
@@ -150,6 +151,12 @@ impl EnvironmentContext {
             lines.push(format!(
                 "  <approval_policy>{approval_policy}</approval_policy>"
             ));
+            match approval_policy {
+                AskForApproval::Never => {
+                    lines.push("  <interactive_mode>false</interactive_mode>".to_string());
+                }
+                _ => lines.push("  <interactive_mode>true</interactive_mode>".to_string()),
+            };
         }
         if let Some(sandbox_mode) = self.sandbox_mode {
             lines.push(format!("  <sandbox_mode>{sandbox_mode}</sandbox_mode>"));
@@ -220,6 +227,7 @@ mod tests {
         let expected = r#"<environment_context>
   <cwd>/repo</cwd>
   <approval_policy>on-request</approval_policy>
+  <interactive_mode>true</interactive_mode>
   <sandbox_mode>workspace-write</sandbox_mode>
   <network_access>restricted</network_access>
   <writable_roots>
@@ -242,6 +250,7 @@ mod tests {
 
         let expected = r#"<environment_context>
   <approval_policy>never</approval_policy>
+  <interactive_mode>false</interactive_mode>
   <sandbox_mode>read-only</sandbox_mode>
   <network_access>restricted</network_access>
 </environment_context>"#;
@@ -260,6 +269,7 @@ mod tests {
 
         let expected = r#"<environment_context>
   <approval_policy>on-failure</approval_policy>
+  <interactive_mode>true</interactive_mode>
   <sandbox_mode>danger-full-access</sandbox_mode>
   <network_access>enabled</network_access>
 </environment_context>"#;

@@ -44,6 +44,7 @@ fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
         r#"<environment_context>
   <cwd>{}</cwd>
   <approval_policy>on-request</approval_policy>
+  <interactive_mode>true</interactive_mode>
   <sandbox_mode>read-only</sandbox_mode>
   <network_access>restricted</network_access>
 {}</environment_context>"#,
@@ -348,6 +349,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
         r#"<environment_context>
   <cwd>{}</cwd>
   <approval_policy>on-request</approval_policy>
+  <interactive_mode>true</interactive_mode>
   <sandbox_mode>read-only</sandbox_mode>
   <network_access>restricted</network_access>
 {}</environment_context>"#,
@@ -503,6 +505,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
     let expected_env_text_2 = format!(
         r#"<environment_context>
   <approval_policy>never</approval_policy>
+  <interactive_mode>false</interactive_mode>
   <sandbox_mode>workspace-write</sandbox_mode>
   <network_access>enabled</network_access>
   <writable_roots>
@@ -626,6 +629,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() {
         r#"<environment_context>
   <cwd>{}</cwd>
   <approval_policy>never</approval_policy>
+  <interactive_mode>false</interactive_mode>
   <sandbox_mode>workspace-write</sandbox_mode>
   <network_access>enabled</network_access>
   <writable_roots>
@@ -871,6 +875,7 @@ async fn send_user_turn_with_changes_sends_environment_context() {
     let expected_env_msg_2 = text_user_input(
         r#"<environment_context>
   <approval_policy>never</approval_policy>
+  <interactive_mode>false</interactive_mode>
   <sandbox_mode>danger-full-access</sandbox_mode>
   <network_access>enabled</network_access>
 </environment_context>"#
