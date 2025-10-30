@@ -1,3 +1,5 @@
-model = "gpt-5"
-
-# Consider setting [mcp_servers] here!
+[core]
+model = "gpt-5-mini"
+auto_context = true
+allow_file_edits = true
+allow_terminal = true
