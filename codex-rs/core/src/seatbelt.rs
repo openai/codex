@@ -105,7 +105,24 @@ pub(crate) fn create_seatbelt_command_args(
 
     // TODO(mbolin): apply_patch calls must also honor the SandboxPolicy.
     let network_policy = if sandbox_policy.has_full_network_access() {
-        "(allow network-outbound)\n(allow network-inbound)\n(allow system-socket)"
+        // Ref: https://source.chromium.org/chromium/chromium/src/+/main:sandbox/policy/mac/network.sb;l=97-105;drc=f8f264d5e4e7509c913f4c60c2639d15905a07e4
+        r#"(allow network-outbound)
+(allow network-inbound)
+(allow system-socket)
+(allow mach-lookup
+    ; Communicate with the security server for TLS certificate information.
+    (global-name "com.apple.SecurityServer")
+    (global-name "com.apple.networkd")
+    (global-name "com.apple.ocspd")
+    (global-name "com.apple.trustd.agent")
+    ; Read network configuration.
+    (global-name "com.apple.SystemConfiguration.DNSConfiguration")
+    (global-name "com.apple.SystemConfiguration.configd")
+    (global-name "com.apple.SystemConfiguration.SystemConfiguration")
+)
+(allow sysctl-read
+  (sysctl-name-regex #"^net.routetable")
+)"#
     } else {
         ""
     };
