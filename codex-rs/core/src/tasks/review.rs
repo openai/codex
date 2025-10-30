@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::codex_delegate::SubAgentRunParams;
 use crate::codex_delegate::run_codex_conversation_one_shot;
 use crate::review_format::format_review_findings_block;
 use crate::state::TaskKind;
@@ -82,12 +83,16 @@ async fn start_review_conversation(
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
     (run_codex_conversation_one_shot(
-        sub_agent_config,
-        session.auth_manager(),
+        SubAgentRunParams {
+            config: sub_agent_config,
+            auth_manager: session.auth_manager(),
+            initial_history: None,
+            sub_source: codex_protocol::protocol::SubAgentSource::Review,
+            parent_session: session.clone_session(),
+            parent_ctx: ctx.clone(),
+            cancel_token: cancellation_token,
+        },
         input,
-        session.clone_session(),
-        ctx.clone(),
-        cancellation_token,
     )
     .await)
         .ok()

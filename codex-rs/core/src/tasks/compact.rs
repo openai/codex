@@ -5,13 +5,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex::TurnContext;
 use crate::codex::compact;
-use crate::codex_delegate::run_codex_conversation_one_shot_with;
+use crate::codex_delegate::SubAgentRunParams;
+use crate::codex_delegate::run_codex_conversation_one_shot;
 use crate::protocol::EventMsg;
 use crate::protocol::SubAgentSource;
 use crate::state::TaskKind;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
-use std::sync::Arc;
 
 use super::SessionTask;
 use super::SessionTaskContext;
@@ -51,15 +52,17 @@ impl SessionTask for CompactTask {
 
         // Start sub-agent one-shot conversation for summarization.
         let config = ctx.client.config().as_ref().clone();
-        let io = run_codex_conversation_one_shot_with(
-            config,
-            session.auth_manager(),
-            codex_protocol::protocol::InitialHistory::Forked(forked),
-            SubAgentSource::Compact,
+        let io = run_codex_conversation_one_shot(
+            SubAgentRunParams {
+                config,
+                auth_manager: session.auth_manager(),
+                initial_history: Some(codex_protocol::protocol::InitialHistory::Forked(forked)),
+                sub_source: SubAgentSource::Compact,
+                parent_session: session.clone_session(),
+                parent_ctx: ctx.clone(),
+                cancel_token: cancellation_token.clone(),
+            },
             input,
-            session.clone_session(),
-            ctx.clone(),
-            cancellation_token.clone(),
         )
         .await;
 
@@ -80,7 +83,8 @@ impl SessionTask for CompactTask {
 
         // Apply compaction into the parent session if we captured a summary.
         if let Some(summary_text) = summary_text {
-            compact::apply_compaction(session.clone_session(), ctx.clone(), &summary_text).await;
+            let parent_sess = session.clone_session();
+            compact::apply_compaction(&parent_sess, &ctx, &summary_text).await;
             // Inform users that compaction finished.
             session
                 .clone_session()

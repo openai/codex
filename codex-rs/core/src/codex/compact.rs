@@ -43,15 +43,17 @@ pub(crate) async fn run_inline_auto_compact_task(
     // Launch sub-agent one-shot; drain to completion and capture summary.
     let config = turn_context.client.config().as_ref().clone();
     let cancel = tokio_util::sync::CancellationToken::new();
-    if let Ok(io) = crate::codex_delegate::run_codex_conversation_one_shot_with(
-        config,
-        sess.services.auth_manager.clone(),
-        codex_protocol::protocol::InitialHistory::Forked(forked),
-        codex_protocol::protocol::SubAgentSource::Compact,
+    if let Ok(io) = crate::codex_delegate::run_codex_conversation_one_shot(
+        crate::codex_delegate::SubAgentRunParams {
+            config,
+            auth_manager: sess.services.auth_manager.clone(),
+            initial_history: Some(codex_protocol::protocol::InitialHistory::Forked(forked)),
+            sub_source: codex_protocol::protocol::SubAgentSource::Compact,
+            parent_session: Arc::clone(&sess),
+            parent_ctx: Arc::clone(&turn_context),
+            cancel_token: cancel,
+        },
         input,
-        Arc::clone(&sess),
-        Arc::clone(&turn_context),
-        cancel,
     )
     .await
     {
@@ -66,7 +68,7 @@ pub(crate) async fn run_inline_auto_compact_task(
             }
         }
         if let Some(summary) = summary_text {
-            apply_compaction(sess, turn_context, &summary).await;
+            apply_compaction(&sess, &turn_context, &summary).await;
             let event =
                 crate::protocol::EventMsg::AgentMessage(crate::protocol::AgentMessageEvent {
                     message: "Compact task completed".to_string(),
@@ -160,8 +162,8 @@ fn build_compacted_history_with_limit(
 /// conversation with a bridge message, preserve ghost snapshots, persist the
 /// Compacted rollout entry, and replace history.
 pub(crate) async fn apply_compaction(
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
     summary_text: &str,
 ) {
     let history_snapshot = sess.clone_history().await.get_history();

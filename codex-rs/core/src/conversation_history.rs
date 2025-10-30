@@ -77,18 +77,6 @@ impl ConversationHistory {
         history
     }
 
-    pub(crate) fn remove_first_item(&mut self) {
-        if !self.items.is_empty() {
-            // Remove the oldest item (front of the list). Items are ordered from
-            // oldest → newest, so index 0 is the first entry recorded.
-            let removed = self.items.remove(0);
-            // If the removed item participates in a call/output pair, also remove
-            // its corresponding counterpart to keep the invariants intact without
-            // running a full normalization pass.
-            self.remove_corresponding_for(&removed);
-        }
-    }
-
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
     }
@@ -310,75 +298,6 @@ impl ConversationHistory {
                 | ResponseItem::CustomToolCallOutput { call_id, .. } => !ids.contains(call_id),
                 _ => true,
             });
-        }
-    }
-
-    /// Removes the corresponding paired item for the provided `item`, if any.
-    ///
-    /// Pairs:
-    /// - FunctionCall <-> FunctionCallOutput
-    /// - CustomToolCall <-> CustomToolCallOutput
-    /// - LocalShellCall(call_id: Some) <-> FunctionCallOutput
-    fn remove_corresponding_for(&mut self, item: &ResponseItem) {
-        match item {
-            ResponseItem::FunctionCall { call_id, .. } => {
-                self.remove_first_matching(|i| match i {
-                    ResponseItem::FunctionCallOutput {
-                        call_id: existing, ..
-                    } => existing == call_id,
-                    _ => false,
-                });
-            }
-            ResponseItem::CustomToolCall { call_id, .. } => {
-                self.remove_first_matching(|i| match i {
-                    ResponseItem::CustomToolCallOutput {
-                        call_id: existing, ..
-                    } => existing == call_id,
-                    _ => false,
-                });
-            }
-            ResponseItem::LocalShellCall {
-                call_id: Some(call_id),
-                ..
-            } => {
-                self.remove_first_matching(|i| match i {
-                    ResponseItem::FunctionCallOutput {
-                        call_id: existing, ..
-                    } => existing == call_id,
-                    _ => false,
-                });
-            }
-            ResponseItem::FunctionCallOutput { call_id, .. } => {
-                self.remove_first_matching(|i| match i {
-                    ResponseItem::FunctionCall {
-                        call_id: existing, ..
-                    } => existing == call_id,
-                    ResponseItem::LocalShellCall {
-                        call_id: Some(existing),
-                        ..
-                    } => existing == call_id,
-                    _ => false,
-                });
-            }
-            ResponseItem::CustomToolCallOutput { call_id, .. } => {
-                self.remove_first_matching(|i| match i {
-                    ResponseItem::CustomToolCall {
-                        call_id: existing, ..
-                    } => existing == call_id,
-                    _ => false,
-                });
-            }
-            _ => {}
-        }
-    }
-
-    /// Remove the first item matching the predicate.
-    fn remove_first_matching<F>(&mut self, predicate: F)
-    where
-        F: FnMut(&ResponseItem) -> bool,
-    {
-        if let Some(pos) = self.items.iter().position(predicate) {
-            self.items.remove(pos);
         }
     }
 
@@ -647,98 +566,6 @@ mod tests {
         let mut history = create_history_with_items(items);
         let filtered = history.get_history_for_prompt();
         assert_eq!(filtered, vec![]);
-    }
-
-    #[test]
-    fn remove_first_item_removes_matching_output_for_function_call() {
-        let items = vec![
-            ResponseItem::FunctionCall {
-                id: None,
-                name: "do_it".to_string(),
-                arguments: "{}".to_string(),
-                call_id: "call-1".to_string(),
-            },
-            ResponseItem::FunctionCallOutput {
-                call_id: "call-1".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: "ok".to_string(),
-                    ..Default::default()
-                },
-            },
-        ];
-        let mut h = create_history_with_items(items);
-        h.remove_first_item();
-        assert_eq!(h.contents(), vec![]);
-    }
-
-    #[test]
-    fn remove_first_item_removes_matching_call_for_output() {
-        let items = vec![
-            ResponseItem::FunctionCallOutput {
-                call_id: "call-2".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: "ok".to_string(),
-                    ..Default::default()
-                },
-            },
-            ResponseItem::FunctionCall {
-                id: None,
-                name: "do_it".to_string(),
-                arguments: "{}".to_string(),
-                call_id: "call-2".to_string(),
-            },
-        ];
-        let mut h = create_history_with_items(items);
-        h.remove_first_item();
-        assert_eq!(h.contents(), vec![]);
-    }
-
-    #[test]
-    fn remove_first_item_handles_local_shell_pair() {
-        let items = vec![
-            ResponseItem::LocalShellCall {
-                id: None,
-                call_id: Some("call-3".to_string()),
-                status: LocalShellStatus::Completed,
-                action: LocalShellAction::Exec(LocalShellExecAction {
-                    command: vec!["echo".to_string(), "hi".to_string()],
-                    timeout_ms: None,
-                    working_directory: None,
-                    env: None,
-                    user: None,
-                }),
-            },
-            ResponseItem::FunctionCallOutput {
-                call_id: "call-3".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: "ok".to_string(),
-                    ..Default::default()
-                },
-            },
-        ];
-        let mut h = create_history_with_items(items);
-        h.remove_first_item();
-        assert_eq!(h.contents(), vec![]);
-    }
-
-    #[test]
-    fn remove_first_item_handles_custom_tool_pair() {
-        let items = vec![
-            ResponseItem::CustomToolCall {
-                id: None,
-                status: None,
-                call_id: "tool-1".to_string(),
-                name: "my_tool".to_string(),
-                input: "{}".to_string(),
-            },
-            ResponseItem::CustomToolCallOutput {
-                call_id: "tool-1".to_string(),
-                output: "ok".to_string(),
-            },
-        ];
-        let mut h = create_history_with_items(items);
-        h.remove_first_item();
-        assert_eq!(h.contents(), vec![]);
     }
 
     #[test]
