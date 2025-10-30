@@ -1798,7 +1798,12 @@ pub(crate) async fn run_task(
                         break;
                     }
                     auto_compact_recently_attempted = true;
-                    compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
+                    compact::run_inline_auto_compact_task(
+                        sess.clone(),
+                        turn_context.clone(),
+                        cancellation_token.child_token(),
+                    )
+                    .await;
                     continue;
                 }
 

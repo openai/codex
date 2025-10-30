@@ -11,6 +11,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
+use tokio_util::sync::CancellationToken;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
@@ -25,6 +26,7 @@ struct HistoryBridgeTemplate<'a> {
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    cancellation_token: CancellationToken,
 ) {
     persist_turn_context_rollout(&sess, &turn_context).await;
 
@@ -42,7 +44,6 @@ pub(crate) async fn run_inline_auto_compact_task(
 
     // Launch sub-agent one-shot; drain to completion and capture summary.
     let config = turn_context.client.config().as_ref().clone();
-    let cancel = tokio_util::sync::CancellationToken::new();
     if let Ok(io) = crate::codex_delegate::run_codex_conversation_one_shot(
         crate::codex_delegate::SubAgentRunParams {
             config,
@@ -51,7 +52,7 @@ pub(crate) async fn run_inline_auto_compact_task(
             sub_source: codex_protocol::protocol::SubAgentSource::Compact,
             parent_session: Arc::clone(&sess),
             parent_ctx: Arc::clone(&turn_context),
-            cancel_token: cancel,
+            cancel_token: cancellation_token.child_token(),
         },
         input,
     )
