@@ -625,6 +625,10 @@ impl Session {
         Ok(sess)
     }
 
+    pub(crate) fn get_prompt_cache_key(&self) -> String {
+        self.prompt_cache_key.clone()
+    }
+
     pub(crate) fn get_conversation_id(&self) -> ConversationId {
         self.conversation_id
     }
