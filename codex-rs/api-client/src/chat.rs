@@ -17,6 +17,7 @@ use eventsource_stream::Eventsource;
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
+use serde_json::Value;
 use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -355,12 +356,20 @@ impl ChatCompletionsApiClient {
                     }));
                 }
                 ResponseItem::LocalShellCall {
-                    call_id, action, ..
+                    id,
+                    call_id,
+                    action,
+                    ..
                 } => {
+                    let tool_id = call_id
+                        .clone()
+                        .filter(|value| !value.is_empty())
+                        .or_else(|| id.clone())
+                        .unwrap_or_default();
                     messages.push(json!({
                         "role": "assistant",
                         "tool_calls": [{
-                            "id": call_id.clone().unwrap_or_default(),
+                            "id": tool_id,
                             "type": "function",
                             "function": {
                                 "name": "shell",
@@ -382,7 +391,7 @@ impl ChatCompletionsApiClient {
                             "type": "function",
                             "function": {
                                 "name": name,
-                                "arguments": json!(input).to_string(),
+                                "arguments": input,
                             },
                         }],
                     }));
@@ -836,14 +845,20 @@ fn create_tools_json_for_chat_completions_api(
                 return None;
             }
 
-            tool.as_object().map(|map| {
+            let function_value = if let Some(function) = tool.get("function") {
+                function.clone()
+            } else if let Some(map) = tool.as_object() {
                 let mut function = map.clone();
                 function.remove("type");
-                json!({
-                    "type": "function",
-                    "function": function,
-                })
-            })
+                Value::Object(function)
+            } else {
+                return None;
+            };
+
+            Some(json!({
+                "type": "function",
+                "function": function_value,
+            }))
         })
         .collect::<Vec<serde_json::Value>>();
     Ok(tools_json)

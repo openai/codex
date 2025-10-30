@@ -941,15 +941,15 @@ impl Session {
         let mut previous_response_id = None;
         let mut request_items = full_prompt_items.clone();
 
-        if let Some(chain) = state.responses_api_chain() {
-            if let Some(prev_id) = chain.last_response_id {
-                let prefix = common_prefix_len(&chain.last_prompt_items, &full_prompt_items);
-                if prefix == 0 && !chain.last_prompt_items.is_empty() {
-                    state.reset_responses_api_chain();
-                } else {
-                    previous_response_id = Some(prev_id);
-                    request_items = full_prompt_items[prefix..].to_vec();
-                }
+        if let Some(chain) = state.responses_api_chain()
+            && let Some(prev_id) = chain.last_response_id
+        {
+            let prefix = common_prefix_len(&chain.last_prompt_items, &full_prompt_items);
+            if prefix == 0 && !chain.last_prompt_items.is_empty() {
+                state.reset_responses_api_chain();
+            } else {
+                previous_response_id = Some(prev_id);
+                request_items = full_prompt_items[prefix..].to_vec();
             }
         }
 
@@ -1949,14 +1949,16 @@ async fn run_turn(
         .get_model_family()
         .supports_parallel_tool_calls;
     let parallel_tool_calls = model_supports_parallel;
-    let mut prompt = Prompt::default();
-    prompt.instructions = instructions.clone();
-    prompt.input = request_items;
-    prompt.tools = tools_json;
-    prompt.parallel_tool_calls = parallel_tool_calls;
-    prompt.output_schema = turn_context.final_output_json_schema.clone();
-    prompt.store_response = store_response;
-    prompt.previous_response_id = previous_response_id.clone();
+    let prompt = Prompt {
+        instructions: instructions.clone(),
+        input: request_items,
+        tools: tools_json,
+        parallel_tool_calls,
+        output_schema: turn_context.final_output_json_schema.clone(),
+        store_response,
+        previous_response_id: previous_response_id.clone(),
+        ..Default::default()
+    };
 
     let payload = StreamPayload { prompt };
 
