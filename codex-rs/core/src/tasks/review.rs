@@ -4,11 +4,13 @@ use async_trait::async_trait;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::SandboxPolicy;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
@@ -81,6 +83,8 @@ async fn start_review_conversation(
         .disable(crate::features::Feature::StreamableShell);
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
+    sub_agent_config.sandbox_policy = SandboxPolicy::ReadOnly;
+    sub_agent_config.approval_policy = AskForApproval::Never;
     (run_codex_conversation_one_shot(
         sub_agent_config,
         session.auth_manager(),
