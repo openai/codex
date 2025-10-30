@@ -418,6 +418,11 @@ async fn run_ratatui_app(
             &mut tui,
             &config.codex_home,
             &config.model_provider_id,
+            if cli.resume_cwd_only {
+                Some(config.cwd.clone())
+            } else {
+                None
+            },
         )
         .await?
         {

@@ -22,6 +22,11 @@ Key flags: `--model/-m`, `--ask-for-approval/-a`.
 - Resume most recent: `codex resume --last`
 - Resume by id: `codex resume <SESSION_ID>` (You can get session ids from /status or `~/.codex/sessions/`)
 
+Filtering sessions by current directory
+
+- Only show sessions started in the current working directory (picker): `codex resume --cwd-only`
+- Note: `--cwd-only` is only supported in interactive resume (the picker) and conflicts with `--last`.
+
 Examples:
 
 ```shell

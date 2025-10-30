@@ -69,6 +69,7 @@ pub async fn run_resume_picker(
     tui: &mut Tui,
     codex_home: &Path,
     default_provider: &str,
+    cwd_filter: Option<PathBuf>,
 ) -> Result<ResumeSelection> {
     let alt = AltScreenGuard::enter(tui);
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
@@ -102,6 +103,7 @@ pub async fn run_resume_picker(
         alt.tui.frame_requester(),
         page_loader,
         default_provider.clone(),
+        cwd_filter,
     );
     state.load_initial_page().await?;
     state.request_frame();
@@ -177,6 +179,7 @@ struct PickerState {
     page_loader: PageLoader,
     view_rows: Option<usize>,
     default_provider: String,
+    cwd_filter: Option<PathBuf>,
 }
 
 struct PaginationState {
@@ -242,6 +245,7 @@ impl PickerState {
         requester: FrameRequester,
         page_loader: PageLoader,
         default_provider: String,
+        cwd_filter: Option<PathBuf>,
     ) -> Self {
         Self {
             codex_home,
@@ -264,6 +268,7 @@ impl PickerState {
             page_loader,
             view_rows: None,
             default_provider,
+            cwd_filter,
         }
     }
 
@@ -407,7 +412,7 @@ impl PickerState {
             self.pagination.reached_scan_cap = true;
         }
 
-        let rows = rows_from_items(page.items);
+        let rows = rows_from_items_filtered(page.items, self.cwd_filter.as_ref());
         for row in rows {
             if self.seen_paths.insert(row.path.clone()) {
                 self.all_rows.push(row);
@@ -590,8 +595,21 @@ impl PickerState {
     }
 }
 
-fn rows_from_items(items: Vec<ConversationItem>) -> Vec<Row> {
-    items.into_iter().map(|item| head_to_row(&item)).collect()
+fn rows_from_items_filtered(
+    items: Vec<ConversationItem>,
+    cwd_filter: Option<&PathBuf>,
+) -> Vec<Row> {
+    items
+        .into_iter()
+        .filter(|item| match cwd_filter {
+            None => true,
+            Some(dir) => match extract_meta_cwd(&item.head) {
+                Some(path) => &path == dir,
+                None => false,
+            },
+        })
+        .map(|item| head_to_row(&item))
+        .collect()
 }
 
 fn head_to_row(item: &ConversationItem) -> Row {
@@ -617,6 +635,33 @@ fn head_to_row(item: &ConversationItem) -> Row {
         created_at,
         updated_at,
     }
+}
+
+pub(crate) fn extract_meta_cwd(head: &[serde_json::Value]) -> Option<PathBuf> {
+    let first = head.first()?;
+    let cwd_str = first
+        .get("cwd")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            first
+                .get("meta")
+                .and_then(|meta| meta.get("cwd"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            first
+                .get("payload")
+                .and_then(|payload| payload.get("cwd"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            first
+                .get("payload")
+                .and_then(|payload| payload.get("meta"))
+                .and_then(|meta| meta.get("cwd"))
+                .and_then(serde_json::Value::as_str)
+        })?;
+    Some(PathBuf::from(cwd_str))
 }
 
 fn parse_timestamp_str(ts: &str) -> Option<DateTime<Utc>> {
@@ -924,6 +969,7 @@ mod tests {
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::future::Future;
     use std::path::PathBuf;
@@ -952,6 +998,42 @@ mod tests {
             created_at: Some(ts.to_string()),
             updated_at: Some(ts.to_string()),
         }
+    }
+
+    fn rows_from_items(items: Vec<ConversationItem>) -> Vec<Row> {
+        super::rows_from_items_filtered(items, None)
+    }
+
+    #[test]
+    fn extract_meta_cwd_handles_flattened_and_nested_shapes() {
+        let expected = PathBuf::from("/tmp/project");
+
+        let flattened = vec![json!({
+            "id": "conv-1",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "cwd": "/tmp/project",
+            "originator": "cli",
+            "cli_version": "1.0.0",
+        })];
+        assert_eq!(extract_meta_cwd(&flattened), Some(expected.clone()));
+
+        let nested_meta = vec![json!({
+            "meta": {
+                "cwd": "/tmp/project",
+                "other": "value"
+            }
+        })];
+        assert_eq!(extract_meta_cwd(&nested_meta), Some(expected.clone()));
+
+        let payload = vec![json!({
+            "payload": {
+                "cwd": "/tmp/project",
+                "meta": {
+                    "cwd": "/tmp/project"
+                }
+            }
+        })];
+        assert_eq!(extract_meta_cwd(&payload), Some(expected));
     }
 
     fn cursor_from_str(repr: &str) -> Cursor {
@@ -1088,6 +1170,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            None,
         );
 
         let now = Utc::now();
@@ -1148,6 +1231,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            None,
         );
 
         state.reset_pagination();
@@ -1214,6 +1298,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            None,
         );
         state.reset_pagination();
         state.ingest_page(page(
@@ -1243,6 +1328,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            None,
         );
 
         let mut items = Vec::new();
@@ -1291,6 +1377,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            None,
         );
 
         let mut items = Vec::new();
@@ -1335,6 +1422,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            None,
         );
         state.reset_pagination();
         state.ingest_page(page(

@@ -132,6 +132,13 @@ struct ResumeCommand {
     #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
     last: bool,
 
+    /// Only show or resume sessions that were started in the current working directory.
+    /// In picker mode, the list will be filtered to sessions whose SessionMeta.cwd equals the
+    /// effective working directory. With --last, Codex will search for the most recent session
+    /// matching the current directory and model provider.
+    #[arg(long = "cwd-only", default_value_t = false, conflicts_with = "last")]
+    cwd_only: bool,
+
     #[clap(flatten)]
     config_overrides: TuiCli,
 }
@@ -389,6 +396,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::Resume(ResumeCommand {
             session_id,
             last,
+            cwd_only,
             config_overrides,
         })) => {
             interactive = finalize_resume_interactive(
@@ -397,6 +405,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 session_id,
                 last,
                 config_overrides,
+                cwd_only,
             );
             let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
             handle_app_exit(exit_info)?;
@@ -539,6 +548,7 @@ fn finalize_resume_interactive(
     session_id: Option<String>,
     last: bool,
     resume_cli: TuiCli,
+    cwd_only: bool,
 ) -> TuiCli {
     // Start with the parsed interactive CLI so resume shares the same
     // configuration surface area as `codex` without additional flags.
@@ -546,6 +556,7 @@ fn finalize_resume_interactive(
     interactive.resume_picker = resume_session_id.is_none() && !last;
     interactive.resume_last = last;
     interactive.resume_session_id = resume_session_id;
+    interactive.resume_cwd_only = cwd_only;
 
     // Merge resume-scoped flags and overrides with highest precedence.
     merge_resume_cli_flags(&mut interactive, resume_cli);
@@ -629,13 +640,21 @@ mod tests {
         let Subcommand::Resume(ResumeCommand {
             session_id,
             last,
+            cwd_only,
             config_overrides: resume_cli,
         }) = subcommand.expect("resume present")
         else {
             unreachable!()
         };
 
-        finalize_resume_interactive(interactive, root_overrides, session_id, last, resume_cli)
+        finalize_resume_interactive(
+            interactive,
+            root_overrides,
+            session_id,
+            last,
+            resume_cli,
+            cwd_only,
+        )
     }
 
     fn sample_exit_info(conversation: Option<&str>) -> AppExitInfo {

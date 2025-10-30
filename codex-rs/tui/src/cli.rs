@@ -28,6 +28,13 @@ pub struct Cli {
     #[clap(skip)]
     pub resume_session_id: Option<String>,
 
+    /// Internal: when true, resume picker and --last should limit to sessions
+    /// that were started in the current working directory. Set by the
+    /// top-level `codex resume --cwd-only` wrapper; not exposed as a public flag
+    /// on the base `codex` command.
+    #[clap(skip)]
+    pub resume_cwd_only: bool,
+
     /// Model the agent should use.
     #[arg(long, short = 'm')]
     pub model: Option<String>,
