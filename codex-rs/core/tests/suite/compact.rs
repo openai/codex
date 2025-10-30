@@ -12,6 +12,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
+use std::collections::HashSet;
 use tempfile::TempDir;
 
 use codex_core::codex::compact::SUMMARIZATION_PROMPT;
@@ -163,7 +164,7 @@ async fn summarize_context_three_requests_and_instructions() {
         "expected summarize trigger, got `{text2}`"
     );
 
-    // Third request must contain the refreshed instructions, bridge summary message and new user msg.
+    // Third request must contain the refreshed instructions, compacted user history, and new user message.
     let input3 = body3.get("input").and_then(|v| v.as_array()).unwrap();
 
     assert!(
@@ -171,16 +172,58 @@ async fn summarize_context_three_requests_and_instructions() {
         "expected refreshed context and new user message in third request"
     );
 
-    // Collect all (role, text) message tuples.
     let mut messages: Vec<(String, String)> = Vec::new();
+    let mut compactor_call_ids: HashSet<String> = HashSet::new();
+    let mut compactor_output: Option<String> = None;
+
     for item in input3 {
-        if item["type"].as_str() == Some("message") {
-            let role = item["role"].as_str().unwrap_or_default().to_string();
-            let text = item["content"][0]["text"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
-            messages.push((role, text));
+        match item.get("type").and_then(|v| v.as_str()) {
+            Some("message") => {
+                let role = item
+                    .get("role")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let text = item
+                    .get("content")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|entry| entry.get("text"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                messages.push((role, text));
+            }
+            Some("custom_tool_call") => {
+                let name = item
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                if name == "compactor" {
+                    let call_id = item
+                        .get("call_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    compactor_call_ids.insert(call_id);
+                }
+            }
+            Some("custom_tool_call_output") => {
+                let output = item
+                    .get("output")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let call_id = item
+                    .get("call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                if compactor_call_ids.contains(&call_id) && compactor_output.is_none() {
+                    compactor_output = Some(output);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -193,22 +236,18 @@ async fn summarize_context_three_requests_and_instructions() {
             .any(|(r, t)| r == "user" && t == THIRD_USER_MSG),
         "third request should include the new user message"
     );
-    let Some((_, bridge_text)) = messages.iter().find(|(role, text)| {
-        role == "user"
-            && (text.contains("Here were the user messages")
-                || text.contains("Here are all the user messages"))
-            && text.contains(SUMMARY_TEXT)
-    }) else {
-        panic!("expected a bridge message containing the summary");
-    };
     assert!(
-        bridge_text.contains("hello world"),
-        "bridge should capture earlier user messages"
+        messages
+            .iter()
+            .any(|(r, t)| r == "user" && t == "hello world"),
+        "third request should include the original user message"
     );
     assert!(
-        !bridge_text.contains(SUMMARIZATION_PROMPT),
-        "bridge text should not echo the summarize trigger"
+        !compactor_call_ids.is_empty(),
+        "expected a compactor tool call"
     );
+    let compactor_output = compactor_output.expect("expected a compactor tool call output");
+    assert_eq!(compactor_output, SUMMARY_TEXT);
     assert!(
         !messages
             .iter()

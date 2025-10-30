@@ -102,6 +102,38 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
 
     // 3. Capture the requests to the model and validate the history slices.
     let requests = gather_request_bodies(&server).await;
+    for (idx, request) in requests.iter().enumerate() {
+        if let Some(input) = request.get("input").and_then(|v| v.as_array()) {
+            println!("request {idx}:");
+            for item in input {
+                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("<unknown>");
+                let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let text_full = item
+                    .get("content")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|entry| entry.get("text"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let text = if text_full.len() > 60 {
+                    format!("{}…", &text_full[..60])
+                } else {
+                    text_full.to_string()
+                };
+                let output_full = item.get("output").and_then(|v| v.as_str()).unwrap_or("");
+                let output = if output_full.len() > 60 {
+                    format!("{}…", &output_full[..60])
+                } else {
+                    output_full.to_string()
+                };
+                let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+                println!(
+                    "  type={item_type} role={role} name={name} call_id={call_id} text={text:?} output={output:?}"
+                );
+            }
+        }
+    }
 
     // input after compact is a prefix of input after resume/fork
     let input_after_compact = json!(requests[requests.len() - 3]["input"]);
@@ -155,6 +187,37 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .unwrap_or_default()
         .to_string();
     let expected_model = OPENAI_DEFAULT_MODEL;
+    let extract_compactor_items = |request: &Value| -> (Value, Value) {
+        let mut call = None;
+        let mut output = None;
+        if let Some(input) = request.get("input").and_then(|v| v.as_array()) {
+            for item in input {
+                match item.get("type").and_then(|v| v.as_str()) {
+                    Some("custom_tool_call")
+                        if item
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            == Some("compactor") =>
+                    {
+                        call = Some(item.clone());
+                    }
+                    Some("custom_tool_call_output") => {
+                        output = Some(item.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let call = call.expect("expected compactor call");
+        let output = output.expect("expected compactor output");
+        (call, output)
+    };
+    let (compactor_call_after_compact, compactor_output_after_compact) =
+        extract_compactor_items(&requests[2]);
+    let (compactor_call_after_resume, compactor_output_after_resume) =
+        extract_compactor_items(&requests[3]);
+    let (compactor_call_after_fork, compactor_output_after_fork) =
+        extract_compactor_items(&requests[4]);
     let user_turn_1 = json!(
     {
       "model": expected_model,
@@ -304,16 +367,12 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
           "content": [
             {
               "type": "input_text",
-              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:
-
-hello world
-
-Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:
-
-SUMMARY_ONLY_CONTEXT"
+              "text": "hello world"
             }
           ]
         },
+        compactor_call_after_compact.clone(),
+        compactor_output_after_compact.clone(),
         {
           "type": "message",
           "role": "user",
@@ -369,16 +428,12 @@ SUMMARY_ONLY_CONTEXT"
           "content": [
             {
               "type": "input_text",
-              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:
-
-hello world
-
-Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:
-
-SUMMARY_ONLY_CONTEXT"
+              "text": "hello world"
             }
           ]
         },
+        compactor_call_after_resume.clone(),
+        compactor_output_after_resume.clone(),
         {
           "type": "message",
           "role": "user",
@@ -454,16 +509,12 @@ SUMMARY_ONLY_CONTEXT"
           "content": [
             {
               "type": "input_text",
-              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:
-
-hello world
-
-Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:
-
-SUMMARY_ONLY_CONTEXT"
+              "text": "hello world"
             }
           ]
         },
+        compactor_call_after_fork.clone(),
+        compactor_output_after_fork.clone(),
         {
           "type": "message",
           "role": "user",
