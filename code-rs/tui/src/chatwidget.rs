@@ -19485,7 +19485,11 @@ Have we met every part of this goal and is there no further work to do?"#
                         "The primary goal has not been met. Please continue working on this.\nPrimary Goal: {goal}\nExplanation: {explanation}",
                         explanation = check.explanation
                     );
-                    let conversation = self.rebuild_auto_history();
+                    let mut conversation = self.rebuild_auto_history();
+                    if let Some(user_item) = Self::auto_drive_make_user_message(follow_up.clone()) {
+                        conversation.push(user_item.clone());
+                        self.auto_history.append_raw(std::slice::from_ref(&user_item));
+                    }
                     self.auto_state.pending_stop_message = None;
                     let dispatched = self.auto_send_user_prompt_to_coordinator(follow_up, conversation);
                     self.auto_state.pending_stop_message = None;
