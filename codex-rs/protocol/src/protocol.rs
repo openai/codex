@@ -661,7 +661,6 @@ impl HasLegacyEvent for EventMsg {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct ExitedReviewModeEvent {
     pub review_output: Option<ReviewOutputEvent>,
 }
@@ -674,13 +673,11 @@ pub struct ErrorEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct TaskCompleteEvent {
     pub last_agent_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct TaskStartedEvent {
     pub model_context_window: Option<i64>,
 }
@@ -700,11 +697,9 @@ pub struct TokenUsage {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
-    #[ts(optional = nullable)]
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
 }
@@ -765,30 +760,25 @@ impl TokenUsageInfo {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
     pub rate_limits: Option<RateLimitSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct RateLimitWindow {
     /// Percentage (0-100) of the window that has been consumed.
     pub used_percent: f64,
     /// Rolling window duration, in minutes.
-    #[ts(optional = nullable)]
     #[ts(type = "number | null")]
     pub window_minutes: Option<i64>,
     /// Unix timestamp (seconds since epoch) when the window resets.
-    #[ts(optional = nullable)]
     #[ts(type = "number | null")]
     pub resets_at: Option<i64>,
 }
@@ -902,7 +892,6 @@ pub struct AgentMessageEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct UserMessageEvent {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -938,7 +927,6 @@ pub struct AgentReasoningDeltaEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
-#[ts(optional_fields = nullable)]
 pub struct McpInvocation {
     /// Name of the MCP server as defined in the config.
     pub server: String,
@@ -1067,7 +1055,6 @@ pub enum SubAgentSource {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct SessionMeta {
     pub id: ConversationId,
     pub timestamp: String,
@@ -1096,7 +1083,6 @@ impl Default for SessionMeta {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct SessionMetaLine {
     #[serde(flatten)]
     pub meta: SessionMeta,
@@ -1132,7 +1118,6 @@ impl From<CompactedItem> for ResponseItem {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct TurnContextItem {
     pub cwd: PathBuf,
     pub approval_policy: AskForApproval,
@@ -1151,7 +1136,6 @@ pub struct RolloutLine {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct GitInfo {
     /// Current commit hash (SHA)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1285,7 +1269,6 @@ pub struct BackgroundEventEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct DeprecationNoticeEvent {
     /// Concise summary of what is deprecated.
     pub summary: String,
@@ -1295,14 +1278,12 @@ pub struct DeprecationNoticeEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct UndoStartedEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct UndoCompletedEvent {
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1347,7 +1328,6 @@ pub struct TurnDiffEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct GetHistoryEntryResponseEvent {
     pub offset: usize,
     pub log_id: u64,
@@ -1397,7 +1377,6 @@ pub struct ListCustomPromptsResponseEvent {
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct SessionConfiguredEvent {
     /// Name left as session_id instead of conversation_id for backwards compatibility.
     pub session_id: ConversationId,
@@ -1458,7 +1437,6 @@ pub enum FileChange {
     },
     Update {
         unified_diff: String,
-        #[ts(optional = nullable)]
         move_path: Option<PathBuf>,
     },
 }
