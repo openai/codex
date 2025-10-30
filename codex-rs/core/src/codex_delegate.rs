@@ -37,14 +37,39 @@ pub(crate) async fn run_codex_conversation_interactive(
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
 ) -> Result<Codex, CodexErr> {
+    run_codex_conversation_interactive_with_history(
+        config,
+        auth_manager,
+        InitialHistory::New,
+        SubAgentSource::Review,
+        parent_session,
+        parent_ctx,
+        cancel_token,
+    )
+    .await
+}
+
+/// Start an interactive sub-Codex conversation with a provided initial history and source.
+///
+/// Mirrors `run_codex_conversation_interactive` but allows the caller to seed history and
+/// specify a sub-agent source label for rollout provenance.
+pub(crate) async fn run_codex_conversation_interactive_with_history(
+    config: Config,
+    auth_manager: Arc<AuthManager>,
+    initial_history: InitialHistory,
+    sub_source: SubAgentSource,
+    parent_session: Arc<Session>,
+    parent_ctx: Arc<TurnContext>,
+    cancel_token: CancellationToken,
+) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
 
     let CodexSpawnOk { codex, .. } = Codex::spawn(
         config,
         auth_manager,
-        InitialHistory::New,
-        SessionSource::SubAgent(SubAgentSource::Review),
+        initial_history,
+        SessionSource::SubAgent(sub_source),
     )
     .await?;
     let codex = Arc::new(codex);
@@ -94,12 +119,38 @@ pub(crate) async fn run_codex_conversation_one_shot(
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
 ) -> Result<Codex, CodexErr> {
+    run_codex_conversation_with_history_one_shot(
+        config,
+        auth_manager,
+        InitialHistory::New,
+        SubAgentSource::Review,
+        input,
+        parent_session,
+        parent_ctx,
+        cancel_token,
+    )
+    .await
+}
+
+/// Convenience wrapper for one-time use with initial history and explicit sub-agent source.
+pub(crate) async fn run_codex_conversation_with_history_one_shot(
+    config: Config,
+    auth_manager: Arc<AuthManager>,
+    initial_history: InitialHistory,
+    sub_source: SubAgentSource,
+    input: Vec<UserInput>,
+    parent_session: Arc<Session>,
+    parent_ctx: Arc<TurnContext>,
+    cancel_token: CancellationToken,
+) -> Result<Codex, CodexErr> {
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
     let child_cancel = cancel_token.child_token();
-    let io = run_codex_conversation_interactive(
+    let io = run_codex_conversation_interactive_with_history(
         config,
         auth_manager,
+        initial_history,
+        sub_source,
         parent_session,
         parent_ctx,
         child_cancel.clone(),

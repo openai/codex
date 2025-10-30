@@ -146,7 +146,20 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .unwrap_or_default()
         .to_string();
     let tool_calls = json!(requests[0]["tools"].as_array());
-    let prompt_cache_key = requests[0]["prompt_cache_key"]
+    // Allow sub-agent runs to use a distinct prompt_cache_key; capture per-index keys.
+    let pk0 = requests[0]["prompt_cache_key"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let pk1 = requests[1]["prompt_cache_key"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let pk2 = requests[2]["prompt_cache_key"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let pk3 = requests[3]["prompt_cache_key"]
         .as_str()
         .unwrap_or_default()
         .to_string();
@@ -202,7 +215,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "include": [
         "reasoning.encrypted_content"
       ],
-      "prompt_cache_key": prompt_cache_key
+      "prompt_cache_key": pk0
     });
     let compact_1 = json!(
     {
@@ -271,7 +284,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "include": [
         "reasoning.encrypted_content"
       ],
-      "prompt_cache_key": prompt_cache_key
+      "prompt_cache_key": pk1
     });
     let user_turn_2_after_compact = json!(
     {
@@ -336,7 +349,7 @@ SUMMARY_ONLY_CONTEXT"
       "include": [
         "reasoning.encrypted_content"
       ],
-      "prompt_cache_key": prompt_cache_key
+      "prompt_cache_key": pk2
     });
     let usert_turn_3_after_resume = json!(
     {
@@ -421,7 +434,7 @@ SUMMARY_ONLY_CONTEXT"
       "include": [
         "reasoning.encrypted_content"
       ],
-      "prompt_cache_key": prompt_cache_key
+      "prompt_cache_key": pk3
     });
     let user_turn_3_after_fork = json!(
     {
