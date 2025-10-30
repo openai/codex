@@ -100,7 +100,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
     let mut prompt = Prompt::default();
     prompt.input = input;
 
-    let mut stream = match client.stream(&prompt).await {
+    let mut stream = match client.stream_for_test(prompt).await {
         Ok(s) => s,
         Err(e) => panic!("stream chat failed: {e}"),
     };

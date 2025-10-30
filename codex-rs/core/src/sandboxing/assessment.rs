@@ -7,6 +7,7 @@ use std::time::Instant;
 use crate::AuthManager;
 use crate::ModelProviderInfo;
 use crate::client::ModelClient;
+use crate::client::StreamPayload;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
@@ -120,16 +121,31 @@ pub(crate) async fn assess_command(
         .trim()
         .to_string();
 
-    let prompt = Prompt {
-        input: vec![ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText { text: user_prompt }],
-        }],
-        tools: Vec::new(),
-        parallel_tool_calls: false,
-        base_instructions_override: Some(system_prompt),
-        output_schema: Some(sandbox_assessment_schema()),
+    let mut prompt_items = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText { text: user_prompt }],
+    }];
+    crate::conversation_history::format_prompt_items(&mut prompt_items, false);
+
+    let prompt = Prompt::new(
+        prompt_items,
+        Vec::new(),
+        false,
+        Some(sandbox_assessment_schema()),
+    );
+    let instructions = crate::client_common::compute_full_instructions(
+        Some(system_prompt.as_str()),
+        &config.model_family,
+        false,
+    )
+    .into_owned();
+
+    let payload = StreamPayload {
+        prompt,
+        instructions,
+        store_response: false,
+        previous_response_id: None,
     };
 
     let child_otel =
@@ -148,7 +164,7 @@ pub(crate) async fn assess_command(
 
     let start = Instant::now();
     let assessment_result = timeout(SANDBOX_ASSESSMENT_TIMEOUT, async move {
-        let mut stream = client.stream(&prompt).await?;
+        let mut stream = client.stream(&payload).await?;
         let mut last_json: Option<String> = None;
         while let Some(event) = stream.next().await {
             match event {

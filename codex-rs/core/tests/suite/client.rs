@@ -15,6 +15,7 @@ use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::error::CodexErr;
+use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -609,6 +610,98 @@ async fn includes_user_instructions_message_in_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_api_chaining_sets_store_and_previous_id() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let first_response = responses::sse(vec![
+        responses::ev_response_created("resp-first"),
+        responses::ev_assistant_message("m1", "hi there"),
+        responses::ev_completed("resp-first"),
+    ]);
+    let second_response = responses::sse(vec![
+        responses::ev_response_created("resp-second"),
+        responses::ev_assistant_message("m2", "second reply"),
+        responses::ev_completed("resp-second"),
+    ]);
+    let response_mock =
+        responses::mount_sse_sequence(&server, vec![first_response, second_response]).await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider = model_provider;
+    config.features.enable(Feature::ResponsesApiChaining);
+
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create new conversation")
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "first turn".into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "second turn".into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = response_mock.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected two responses API calls for two turns"
+    );
+
+    let first_body = requests[0].body_json();
+    assert_eq!(first_body["store"], serde_json::Value::Bool(true));
+    assert!(
+        first_body.get("previous_response_id").is_none(),
+        "first request should not set previous_response_id"
+    );
+
+    let second_body = requests[1].body_json();
+    assert_eq!(second_body["store"], serde_json::Value::Bool(true));
+    assert_eq!(
+        second_body["previous_response_id"].as_str(),
+        Some("resp-first")
+    );
+
+    let second_input = requests[1].input();
+    assert_eq!(
+        second_input.len(),
+        1,
+        "second request should only send new user input items"
+    );
+    let user_item = &second_input[0];
+    assert_eq!(user_item["type"].as_str(), Some("message"));
+    assert_eq!(user_item["role"].as_str(), Some("user"));
+    let content = user_item["content"][0]["text"]
+        .as_str()
+        .expect("missing user message text");
+    assert_eq!(content, "second turn");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn azure_responses_request_includes_store_and_reasoning_ids() {
     skip_if_no_network!();
 
@@ -730,7 +823,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     });
 
     let mut stream = client
-        .stream(&prompt)
+        .stream_for_test(prompt)
         .await
         .expect("responses stream to start");
 

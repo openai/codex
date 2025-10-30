@@ -830,6 +830,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-api-client"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "futures",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "codex-app-server"
 version = "0.0.0"
 dependencies = [
@@ -1059,6 +1070,7 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "codex-api-client",
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-async-utils",

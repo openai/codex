@@ -36,7 +36,6 @@ use crate::chat_completions::stream_chat_completions;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
-use crate::client_common::ResponsesApiRequest;
 use crate::client_common::create_reasoning_param_for_request;
 use crate::client_common::create_text_param_for_request;
 use crate::config::Config;
@@ -49,6 +48,7 @@ use crate::error::Result;
 use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
 use crate::error::UsageLimitReachedError;
+use crate::features::Feature;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_family::ModelFamily;
 use crate::model_provider_info::ModelProviderInfo;
@@ -58,7 +58,6 @@ use crate::protocol::RateLimitSnapshot;
 use crate::protocol::RateLimitWindow;
 use crate::protocol::TokenUsage;
 use crate::token_data::PlanType;
-use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::util::backoff;
 
 #[derive(Debug, Deserialize)]
@@ -88,6 +87,14 @@ pub struct ModelClient {
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
+}
+
+#[derive(Debug, Clone)]
+pub struct StreamPayload {
+    pub prompt: Prompt,
+    pub instructions: String,
+    pub store_response: bool,
+    pub previous_response_id: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -139,13 +146,18 @@ impl ModelClient {
         &self.provider
     }
 
-    pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
+    pub fn supports_responses_api_chaining(&self) -> bool {
+        self.provider.wire_api == WireApi::Responses
+            && self.config.features.enabled(Feature::ResponsesApiChaining)
+    }
+
+    pub async fn stream(&self, payload: &StreamPayload) -> Result<ResponseStream> {
         match self.provider.wire_api {
-            WireApi::Responses => self.stream_responses(prompt).await,
+            WireApi::Responses => self.stream_responses(payload).await,
             WireApi::Chat => {
                 // Create the raw streaming connection first.
                 let response_stream = stream_chat_completions(
-                    prompt,
+                    payload,
                     &self.config.model_family,
                     &self.client,
                     &self.provider,
@@ -182,8 +194,22 @@ impl ModelClient {
         }
     }
 
+    pub async fn stream_for_test(&self, mut prompt: Prompt) -> Result<ResponseStream> {
+        crate::conversation_history::format_prompt_items(&mut prompt.input, false);
+        let instructions =
+            crate::client_common::compute_full_instructions(None, &self.config.model_family, false)
+                .into_owned();
+        let payload = StreamPayload {
+            prompt,
+            instructions,
+            store_response: false,
+            previous_response_id: None,
+        };
+        self.stream(&payload).await
+    }
+
     /// Implementation for the OpenAI *Responses* experimental API.
-    async fn stream_responses(&self, prompt: &Prompt) -> Result<ResponseStream> {
+    async fn stream_responses(&self, payload: &StreamPayload) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             // short circuit for tests
             warn!(path, "Streaming from fixture");
@@ -197,8 +223,8 @@ impl ModelClient {
 
         let auth_manager = self.auth_manager.clone();
 
-        let full_instructions = prompt.get_full_instructions(&self.config.model_family);
-        let tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
+        let prompt = &payload.prompt;
+        let tools_json = prompt.tools.clone();
         let reasoning = create_reasoning_param_for_request(
             &self.config.model_family,
             self.effort,
@@ -211,7 +237,7 @@ impl ModelClient {
             vec![]
         };
 
-        let input_with_instructions = prompt.get_formatted_input();
+        let input_with_instructions = prompt.input.clone();
 
         let verbosity = if self.config.model_family.support_verbosity {
             self.config.model_verbosity
@@ -235,24 +261,49 @@ impl ModelClient {
         // For Azure, we send `store: true` and preserve reasoning item IDs.
         let azure_workaround = self.provider.is_azure_responses_endpoint();
 
-        let payload = ResponsesApiRequest {
-            model: &self.config.model,
-            instructions: &full_instructions,
-            input: &input_with_instructions,
-            tools: &tools_json,
-            tool_choice: "auto",
-            parallel_tool_calls: prompt.parallel_tool_calls,
-            reasoning,
-            store: azure_workaround,
-            stream: true,
-            include,
-            prompt_cache_key: Some(self.conversation_id.to_string()),
-            text,
-        };
+        let mut payload_json = serde_json::json!({
+            "model": self.config.model,
+            "instructions": payload.instructions,
+            "input": input_with_instructions,
+            "tools": tools_json,
+            "tool_choice": "auto",
+            "parallel_tool_calls": prompt.parallel_tool_calls,
+            "store": azure_workaround || payload.store_response,
+            "stream": true,
+            "include": include,
+            "prompt_cache_key": self.conversation_id.to_string(),
+        });
 
-        let mut payload_json = serde_json::to_value(&payload)?;
+        if let Some(reasoning) = reasoning {
+            payload_json
+                .as_object_mut()
+                .expect("payload object")
+                .insert("reasoning".to_string(), serde_json::to_value(reasoning)?);
+        }
+
+        if let Some(text) = text {
+            payload_json
+                .as_object_mut()
+                .expect("payload object")
+                .insert("text".to_string(), serde_json::to_value(text)?);
+        }
+
+        if let Some(previous) = payload.previous_response_id.as_ref() {
+            payload_json
+                .as_object_mut()
+                .expect("payload object")
+                .insert(
+                    "previous_response_id".to_string(),
+                    serde_json::Value::String(previous.clone()),
+                );
+        }
+
         if azure_workaround {
-            attach_item_ids(&mut payload_json, &input_with_instructions);
+            if let Some(input_value) = payload_json.get_mut("input")
+                && let Some(array) = input_value.as_array_mut()
+            {
+                attach_item_ids_array(array, &prompt.input);
+            }
         }
 
         let max_attempts = self.provider.request_max_retries();
@@ -588,14 +639,7 @@ struct ResponseCompletedOutputTokensDetails {
     reasoning_tokens: i64,
 }
 
-fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
-    let Some(input_value) = payload_json.get_mut("input") else {
-        return;
-    };
-    let serde_json::Value::Array(items) = input_value else {
-        return;
-    };
-
+fn attach_item_ids_array(items: &mut [Value], original_items: &[ResponseItem]) {
     for (value, item) in items.iter_mut().zip(original_items.iter()) {
         if let ResponseItem::Reasoning { id, .. }
         | ResponseItem::Message { id: Some(id), .. }

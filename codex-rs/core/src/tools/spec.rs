@@ -1,5 +1,3 @@
-use crate::client_common::tools::ResponsesApiTool;
-use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::model_family::ModelFamily;
@@ -20,6 +18,52 @@ pub enum ConfigShellToolType {
     Default,
     Local,
     Streamable,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(tag = "type")]
+pub(crate) enum ToolSpec {
+    #[serde(rename = "function")]
+    Function(ResponsesApiTool),
+    #[serde(rename = "local_shell")]
+    LocalShell {},
+    #[serde(rename = "web_search")]
+    WebSearch {},
+    #[serde(rename = "custom")]
+    Freeform(FreeformTool),
+}
+
+impl ToolSpec {
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            ToolSpec::Function(tool) => tool.name.as_str(),
+            ToolSpec::LocalShell {} => "local_shell",
+            ToolSpec::WebSearch {} => "web_search",
+            ToolSpec::Freeform(tool) => tool.name.as_str(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FreeformTool {
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) format: FreeformToolFormat,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FreeformToolFormat {
+    pub(crate) r#type: String,
+    pub(crate) syntax: String,
+    pub(crate) definition: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ResponsesApiTool {
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) strict: bool,
+    pub(crate) parameters: JsonSchema,
 }
 
 #[derive(Debug, Clone)]
@@ -681,32 +725,38 @@ pub fn create_tools_json_for_responses_api(
 
     Ok(tools_json)
 }
+
+pub fn tools_metadata_for_prompt(
+    tools: &[ToolSpec],
+) -> crate::error::Result<(Vec<serde_json::Value>, bool)> {
+    let tools_json = create_tools_json_for_responses_api(tools)?;
+    let has_freeform_apply_patch = tools.iter().any(|tool| match tool {
+        ToolSpec::Freeform(freeform) => freeform.name == "apply_patch",
+        _ => false,
+    });
+    Ok((tools_json, has_freeform_apply_patch))
+}
 /// Returns JSON values that are compatible with Function Calling in the
 /// Chat Completions API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=chat
 pub(crate) fn create_tools_json_for_chat_completions_api(
-    tools: &[ToolSpec],
+    tools: &[serde_json::Value],
 ) -> crate::error::Result<Vec<serde_json::Value>> {
-    // We start with the JSON for the Responses API and than rewrite it to match
-    // the chat completions tool call format.
-    let responses_api_tools_json = create_tools_json_for_responses_api(tools)?;
-    let tools_json = responses_api_tools_json
-        .into_iter()
-        .filter_map(|mut tool| {
+    let tools_json = tools
+        .iter()
+        .filter_map(|tool| {
             if tool.get("type") != Some(&serde_json::Value::String("function".to_string())) {
                 return None;
             }
 
-            if let Some(map) = tool.as_object_mut() {
-                // Remove "type" field as it is not needed in chat completions.
-                map.remove("type");
-                Some(json!({
+            tool.as_object().map(|map| {
+                let mut function = map.clone();
+                function.remove("type");
+                json!({
                     "type": "function",
-                    "function": map,
-                }))
-            } else {
-                None
-            }
+                    "function": function,
+                })
+            })
         })
         .collect::<Vec<serde_json::Value>>();
     Ok(tools_json)
@@ -1002,7 +1052,6 @@ pub(crate) fn build_specs(
 
 #[cfg(test)]
 mod tests {
-    use crate::client_common::tools::FreeformTool;
     use crate::model_family::find_family_for_model;
     use crate::tools::registry::ConfiguredToolSpec;
     use mcp_types::ToolInputSchema;

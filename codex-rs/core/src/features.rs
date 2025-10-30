@@ -43,6 +43,8 @@ pub enum Feature {
     SandboxCommandAssessment,
     /// Create a ghost commit at each turn.
     GhostCommit,
+    /// Enable chaining Responses API calls via previous response IDs.
+    ResponsesApiChaining,
 }
 
 impl Feature {
@@ -292,6 +294,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GhostCommit,
         key: "ghost_commit",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResponsesApiChaining,
+        key: "responses_api_chaining",
         stage: Stage::Experimental,
         default_enabled: false,
     },

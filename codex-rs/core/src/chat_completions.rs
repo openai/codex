@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::ModelProviderInfo;
-use crate::client_common::Prompt;
+use crate::client::StreamPayload;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::default_client::CodexHttpClient;
@@ -38,14 +38,14 @@ use tracing::trace;
 
 /// Implementation for the classic Chat Completions API.
 pub(crate) async fn stream_chat_completions(
-    prompt: &Prompt,
+    payload: &StreamPayload,
     model_family: &ModelFamily,
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     otel_event_manager: &OtelEventManager,
     session_source: &SessionSource,
 ) -> Result<ResponseStream> {
-    if prompt.output_schema.is_some() {
+    if payload.prompt.output_schema.is_some() {
         return Err(CodexErr::UnsupportedOperation(
             "output_schema is not supported for Chat Completions API".to_string(),
         ));
@@ -54,10 +54,9 @@ pub(crate) async fn stream_chat_completions(
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
 
-    let full_instructions = prompt.get_full_instructions(model_family);
-    messages.push(json!({"role": "system", "content": full_instructions}));
+    messages.push(json!({"role": "system", "content": payload.instructions}));
 
-    let input = prompt.get_formatted_input();
+    let input = payload.prompt.input.clone();
 
     // Pre-scan: map Reasoning blocks to the adjacent assistant anchor after the last user.
     // - If the last emitted message is a user message, drop all reasoning.
@@ -327,7 +326,7 @@ pub(crate) async fn stream_chat_completions(
         }
     }
 
-    let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
+    let tools_json = create_tools_json_for_chat_completions_api(&payload.prompt.tools)?;
     let payload = json!({
         "model": model_family.slug,
         "messages": messages,

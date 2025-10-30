@@ -7,6 +7,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_utils_string::take_bytes_at_char_boundary;
 use codex_utils_string::take_last_bytes_at_char_boundary;
+use std::collections::HashSet;
 use std::ops::Deref;
 
 // Model-formatting limits: clients get full streams; only content sent to the model is truncated.
@@ -22,6 +23,13 @@ pub(crate) struct ConversationHistory {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
+    responses_api_chain: Option<ResponsesApiChainState>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ResponsesApiChainState {
+    pub last_response_id: Option<String>,
+    pub last_prompt_items: Vec<ResponseItem>,
 }
 
 impl ConversationHistory {
@@ -29,6 +37,7 @@ impl ConversationHistory {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
+            responses_api_chain: None,
         }
     }
 
@@ -91,6 +100,7 @@ impl ConversationHistory {
 
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
+        self.reset_responses_api_chain();
     }
 
     pub(crate) fn update_token_info(
@@ -429,6 +439,18 @@ impl ConversationHistory {
             | ResponseItem::Other => item.clone(),
         }
     }
+
+    pub(crate) fn responses_api_chain(&self) -> Option<ResponsesApiChainState> {
+        self.responses_api_chain.clone()
+    }
+
+    pub(crate) fn reset_responses_api_chain(&mut self) {
+        self.responses_api_chain = None;
+    }
+
+    pub(crate) fn set_responses_api_chain(&mut self, chain: ResponsesApiChainState) {
+        self.responses_api_chain = Some(chain);
+    }
 }
 
 pub(crate) fn format_output_for_model_body(content: &str) -> String {
@@ -516,6 +538,102 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::WebSearchCall { .. } => true,
         ResponseItem::GhostSnapshot { .. } => false,
         ResponseItem::Other => false,
+    }
+}
+
+fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
+    let mut shell_call_ids: HashSet<String> = HashSet::new();
+    items.iter_mut().for_each(|item| match item {
+        ResponseItem::LocalShellCall { call_id, id, .. } => {
+            if let Some(identifier) = call_id.clone().or_else(|| id.clone()) {
+                shell_call_ids.insert(identifier);
+            }
+        }
+        ResponseItem::CustomToolCall { call_id, name, .. } => {
+            if name == "apply_patch" {
+                shell_call_ids.insert(call_id.clone());
+            }
+        }
+        ResponseItem::CustomToolCallOutput { call_id, output } => {
+            if shell_call_ids.remove(call_id)
+                && let Some(structured) = parse_structured_shell_output(output)
+            {
+                *output = structured;
+            }
+        }
+        ResponseItem::FunctionCall { name, call_id, .. }
+            if name == "shell" || name == "container.exec" || name == "apply_patch" =>
+        {
+            shell_call_ids.insert(call_id.clone());
+        }
+        ResponseItem::FunctionCallOutput { call_id, output } => {
+            if shell_call_ids.remove(call_id)
+                && let Some(structured) = parse_structured_shell_output(&output.content)
+            {
+                output.content = structured;
+            }
+        }
+        _ => {}
+    });
+}
+
+#[derive(serde::Deserialize)]
+struct ExecOutputJson {
+    output: String,
+    metadata: ExecOutputMetadataJson,
+}
+
+#[derive(serde::Deserialize)]
+struct ExecOutputMetadataJson {
+    exit_code: i32,
+    duration_seconds: f32,
+}
+
+fn parse_structured_shell_output(raw: &str) -> Option<String> {
+    let parsed: ExecOutputJson = serde_json::from_str(raw).ok()?;
+    Some(build_structured_output(&parsed))
+}
+
+fn build_structured_output(parsed: &ExecOutputJson) -> String {
+    let mut sections = Vec::new();
+    sections.push(format!("Exit code: {}", parsed.metadata.exit_code));
+    sections.push(format!(
+        "Wall time: {} seconds",
+        parsed.metadata.duration_seconds
+    ));
+
+    let mut output = parsed.output.clone();
+    if let Some(total_lines) = extract_total_output_lines(&parsed.output) {
+        sections.push(format!("Total output lines: {total_lines}"));
+        if let Some(stripped) = strip_total_output_header(&output) {
+            output = stripped.to_string();
+        }
+    }
+
+    sections.push("Output:".to_string());
+    sections.push(output);
+
+    sections.join("\n")
+}
+
+fn extract_total_output_lines(output: &str) -> Option<u32> {
+    let marker_start = output.find("[... omitted ")?;
+    let marker = &output[marker_start..];
+    let (_, after_of) = marker.split_once(" of ")?;
+    let (total_segment, _) = after_of.split_once(' ')?;
+    total_segment.parse::<u32>().ok()
+}
+
+fn strip_total_output_header(output: &str) -> Option<&str> {
+    let after_prefix = output.strip_prefix("Total output lines: ")?;
+    let (_, remainder) = after_prefix.split_once('\n')?;
+    let remainder = remainder.strip_prefix('\n').unwrap_or(remainder);
+    Some(remainder)
+}
+
+pub(crate) fn format_prompt_items(items: &mut [ResponseItem], has_freeform_apply_patch: bool) {
+    if has_freeform_apply_patch {
+        reserialize_shell_outputs(items);
     }
 }
 

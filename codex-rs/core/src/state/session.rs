@@ -4,6 +4,7 @@ use codex_protocol::models::ResponseItem;
 
 use crate::codex::SessionConfiguration;
 use crate::conversation_history::ConversationHistory;
+use crate::conversation_history::ResponsesApiChainState;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
@@ -40,6 +41,18 @@ impl SessionState {
 
     pub(crate) fn replace_history(&mut self, items: Vec<ResponseItem>) {
         self.history.replace(items);
+    }
+
+    pub(crate) fn reset_responses_api_chain(&mut self) {
+        self.history.reset_responses_api_chain();
+    }
+
+    pub(crate) fn set_responses_api_chain(&mut self, chain: ResponsesApiChainState) {
+        self.history.set_responses_api_chain(chain);
+    }
+
+    pub(crate) fn responses_api_chain(&self) -> Option<ResponsesApiChainState> {
+        self.history.responses_api_chain()
     }
 
     // Token/rate limit helpers

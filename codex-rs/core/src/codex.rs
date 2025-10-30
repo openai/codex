@@ -53,6 +53,7 @@ use tracing::warn;
 
 use crate::ModelProviderInfo;
 use crate::client::ModelClient;
+use crate::client::StreamPayload;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
@@ -66,6 +67,7 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 // Removed: legacy executor wiring replaced by ToolOrchestrator flows.
 // legacy normalize_exec_result no longer used after orchestrator migration
+use crate::conversation_history::ResponsesApiChainState;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_family::find_family_for_model;
@@ -921,6 +923,39 @@ impl Session {
         self.send_raw_response_items(turn_context, items).await;
     }
 
+    async fn prepare_prompt_items(
+        &self,
+        turn_context: &TurnContext,
+    ) -> (Vec<ResponseItem>, Vec<ResponseItem>, Option<String>, bool) {
+        let use_chain = turn_context.client.supports_responses_api_chaining();
+        let mut history = self.clone_history().await;
+        let full_prompt_items = history.get_history_for_prompt();
+
+        if !use_chain {
+            let mut state = self.state.lock().await;
+            state.reset_responses_api_chain();
+            return (full_prompt_items.clone(), full_prompt_items, None, false);
+        }
+
+        let mut state = self.state.lock().await;
+        let mut previous_response_id = None;
+        let mut request_items = full_prompt_items.clone();
+
+        if let Some(chain) = state.responses_api_chain() {
+            if let Some(prev_id) = chain.last_response_id {
+                let prefix = common_prefix_len(&chain.last_prompt_items, &full_prompt_items);
+                if prefix == 0 && !chain.last_prompt_items.is_empty() {
+                    state.reset_responses_api_chain();
+                } else {
+                    previous_response_id = Some(prev_id);
+                    request_items = full_prompt_items[prefix..].to_vec();
+                }
+            }
+        }
+
+        (request_items, full_prompt_items, previous_response_id, true)
+    }
+
     fn reconstruct_history_from_rollout(
         &self,
         turn_context: &TurnContext,
@@ -957,6 +992,29 @@ impl Session {
     pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
         let mut state = self.state.lock().await;
         state.replace_history(items);
+    }
+
+    async fn update_responses_api_chain_state(
+        &self,
+        chaining_intent: bool,
+        response_id: Option<String>,
+        prompt_items: Vec<ResponseItem>,
+    ) {
+        let mut state = self.state.lock().await;
+        if !chaining_intent {
+            state.reset_responses_api_chain();
+            return;
+        }
+
+        let Some(response_id) = response_id.filter(|id| !id.is_empty()) else {
+            state.reset_responses_api_chain();
+            return;
+        };
+
+        state.set_responses_api_chain(ResponsesApiChainState {
+            last_response_id: Some(response_id),
+            last_prompt_items: prompt_items,
+        });
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
@@ -1737,30 +1795,34 @@ pub(crate) async fn run_task(
             .collect::<Vec<ResponseItem>>();
 
         // Construct the input that we will send to the model.
-        let turn_input: Vec<ResponseItem> = {
-            sess.record_conversation_items(&turn_context, &pending_input)
-                .await;
-            sess.clone_history().await.get_history_for_prompt()
-        };
+        sess.record_conversation_items(&turn_context, &pending_input)
+            .await;
+        let (request_items, full_prompt_items, previous_response_id, store_response) =
+            sess.prepare_prompt_items(&turn_context).await;
 
-        let turn_input_messages: Vec<String> = turn_input
-            .iter()
-            .filter_map(|item| match item {
-                ResponseItem::Message { content, .. } => Some(content),
-                _ => None,
-            })
-            .flat_map(|content| {
-                content.iter().filter_map(|item| match item {
-                    ContentItem::OutputText { text } => Some(text.clone()),
+        let turn_input_messages: Vec<String> = {
+            full_prompt_items
+                .iter()
+                .filter_map(|item| match item {
+                    ResponseItem::Message { content, .. } => Some(content),
                     _ => None,
                 })
-            })
-            .collect();
+                .flat_map(|content| {
+                    content.iter().filter_map(|item| match item {
+                        ContentItem::OutputText { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                })
+                .collect()
+        };
         match run_turn(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
-            turn_input,
+            request_items,
+            full_prompt_items,
+            previous_response_id,
+            store_response,
             cancellation_token.child_token(),
         )
         .await
@@ -1841,12 +1903,21 @@ pub(crate) async fn run_task(
 
     last_agent_message
 }
+fn common_prefix_len(lhs: &[ResponseItem], rhs: &[ResponseItem]) -> usize {
+    lhs.iter()
+        .zip(rhs.iter())
+        .take_while(|(l, r)| l == r)
+        .count()
+}
 
 async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
-    input: Vec<ResponseItem>,
+    mut request_items: Vec<ResponseItem>,
+    mut full_prompt_items: Vec<ResponseItem>,
+    previous_response_id: Option<String>,
+    store_response: bool,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
     let mcp_tools = sess.services.mcp_connection_manager.list_all_tools();
@@ -1855,27 +1926,54 @@ async fn run_turn(
         Some(mcp_tools),
     ));
 
+    let tool_specs = router.specs();
+    let (tools_json, has_freeform_apply_patch) =
+        crate::tools::spec::tools_metadata_for_prompt(&tool_specs)?;
+    crate::conversation_history::format_prompt_items(&mut request_items, has_freeform_apply_patch);
+    crate::conversation_history::format_prompt_items(
+        &mut full_prompt_items,
+        has_freeform_apply_patch,
+    );
+
+    let apply_patch_present = tool_specs.iter().any(|spec| spec.name() == "apply_patch");
+
+    let instructions = crate::client_common::compute_full_instructions(
+        turn_context.base_instructions.as_deref(),
+        &turn_context.client.get_model_family(),
+        apply_patch_present,
+    )
+    .into_owned();
+
     let model_supports_parallel = turn_context
         .client
         .get_model_family()
         .supports_parallel_tool_calls;
     let parallel_tool_calls = model_supports_parallel;
-    let prompt = Prompt {
-        input,
-        tools: router.specs(),
+    let prompt = Prompt::new(
+        request_items,
+        tools_json,
         parallel_tool_calls,
-        base_instructions_override: turn_context.base_instructions.clone(),
-        output_schema: turn_context.final_output_json_schema.clone(),
+        turn_context.final_output_json_schema.clone(),
+    );
+
+    let payload = StreamPayload {
+        prompt,
+        instructions,
+        store_response,
+        previous_response_id,
     };
 
     let mut retries = 0;
     loop {
+        let attempt_payload = payload.clone();
+        let attempt_full_items = full_prompt_items.clone();
         match try_run_turn(
             Arc::clone(&router),
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
-            &prompt,
+            attempt_payload,
+            attempt_full_items,
             cancellation_token.child_token(),
         )
         .await
@@ -1956,9 +2054,12 @@ async fn try_run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
-    prompt: &Prompt,
+    payload: StreamPayload,
+    full_prompt_items: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
+    let chaining_intent = payload.store_response;
+
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
@@ -1972,7 +2073,7 @@ async fn try_run_turn(
     let mut stream = turn_context
         .client
         .clone()
-        .stream(prompt)
+        .stream(&payload)
         .or_cancel(&cancellation_token)
         .await??;
 
@@ -2105,7 +2206,7 @@ async fn try_run_turn(
                 sess.update_rate_limits(&turn_context, snapshot).await;
             }
             ResponseEvent::Completed {
-                response_id: _,
+                response_id,
                 token_usage,
             } => {
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
@@ -2115,6 +2216,17 @@ async fn try_run_turn(
                     let mut tracker = turn_diff_tracker.lock().await;
                     tracker.get_unified_diff()
                 };
+                let prompt_items_for_chain = if chaining_intent {
+                    full_prompt_items
+                } else {
+                    Vec::new()
+                };
+                sess.update_responses_api_chain_state(
+                    chaining_intent,
+                    Some(response_id.clone()),
+                    prompt_items_for_chain,
+                )
+                .await;
                 if let Ok(Some(unified_diff)) = unified_diff {
                     let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
                     sess.send_event(&turn_context, msg).await;

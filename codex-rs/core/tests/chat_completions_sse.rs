@@ -106,7 +106,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         }],
     }];
 
-    let mut stream = match client.stream(&prompt).await {
+    let mut stream = match client.stream_for_test(prompt).await {
         Ok(s) => s,
         Err(e) => panic!("stream chat failed: {e}"),
     };

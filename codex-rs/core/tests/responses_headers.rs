@@ -91,7 +91,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         }],
     }];
 
-    let mut stream = client.stream(&prompt).await.expect("stream failed");
+    let mut stream = client.stream_for_test(prompt).await.expect("stream failed");
     while let Some(event) = stream.next().await {
         if matches!(event, Ok(ResponseEvent::Completed { .. })) {
             break;
@@ -181,7 +181,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         }],
     }];
 
-    let mut stream = client.stream(&prompt).await.expect("stream failed");
+    let mut stream = client.stream_for_test(prompt).await.expect("stream failed");
     while let Some(event) = stream.next().await {
         if matches!(event, Ok(ResponseEvent::Completed { .. })) {
             break;

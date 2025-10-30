@@ -6,11 +6,11 @@ use async_trait::async_trait;
 use codex_protocol::models::ResponseInputItem;
 use tracing::warn;
 
-use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::spec::ToolSpec;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ToolKind {

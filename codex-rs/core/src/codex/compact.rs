@@ -4,6 +4,7 @@ use super::Session;
 use super::TurnContext;
 use super::get_last_assistant_message_from_turn;
 use crate::Prompt;
+use crate::client::StreamPayload;
 use crate::client_common::ResponseEvent;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -84,12 +85,23 @@ async fn run_compact_task_inner(
     sess.persist_rollout_items(&[rollout_item]).await;
 
     loop {
-        let turn_input = history.get_history_for_prompt();
-        let prompt = Prompt {
-            input: turn_input.clone(),
-            ..Default::default()
+        let mut turn_input = history.get_history_for_prompt();
+        let turn_input_len = turn_input.len();
+        crate::conversation_history::format_prompt_items(&mut turn_input, false);
+        let prompt = Prompt::new(turn_input, Vec::new(), false, None);
+        let instructions = crate::client_common::compute_full_instructions(
+            turn_context.base_instructions.as_deref(),
+            &turn_context.client.get_model_family(),
+            false,
+        )
+        .into_owned();
+        let payload = StreamPayload {
+            prompt,
+            instructions,
+            store_response: false,
+            previous_response_id: None,
         };
-        let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
+        let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), payload).await;
 
         match attempt_result {
             Ok(()) => {
@@ -108,7 +120,7 @@ async fn run_compact_task_inner(
                 return;
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
-                if turn_input.len() > 1 {
+                if turn_input_len > 1 {
                     // Trim from the beginning to preserve cache (prefix-based) and keep recent messages intact.
                     error!(
                         "Context window exceeded while compacting; removing oldest history item. Error: {e}"
@@ -252,9 +264,9 @@ fn build_compacted_history_with_limit(
 async fn drain_to_completed(
     sess: &Session,
     turn_context: &TurnContext,
-    prompt: &Prompt,
+    payload: StreamPayload,
 ) -> CodexResult<()> {
-    let mut stream = turn_context.client.clone().stream(prompt).await?;
+    let mut stream = turn_context.client.clone().stream(&payload).await?;
     loop {
         let maybe_event = stream.next().await;
         let Some(event) = maybe_event else {
