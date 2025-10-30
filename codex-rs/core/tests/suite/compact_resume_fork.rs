@@ -106,7 +106,10 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         if let Some(input) = request.get("input").and_then(|v| v.as_array()) {
             println!("request {idx}:");
             for item in input {
-                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("<unknown>");
+                let item_type = item
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<unknown>");
                 let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("");
                 let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let text_full = item
@@ -194,10 +197,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
             for item in input {
                 match item.get("type").and_then(|v| v.as_str()) {
                     Some("custom_tool_call")
-                        if item
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            == Some("compactor") =>
+                        if item.get("name").and_then(|v| v.as_str()) == Some("compactor") =>
                     {
                         call = Some(item.clone());
                     }
