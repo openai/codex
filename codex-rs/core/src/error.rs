@@ -4,6 +4,7 @@ use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
 use crate::truncate::truncate_middle;
 use chrono::DateTime;
+use chrono::Datelike;
 use chrono::Local;
 use chrono::Utc;
 use codex_async_utils::CancelErr;
@@ -308,9 +309,24 @@ fn format_retry_timestamp(resets_at: &DateTime<Utc>) -> String {
     let local_reset = resets_at.with_timezone(&Local);
     let local_now = now_for_retry().with_timezone(&Local);
     if local_reset.date_naive() == local_now.date_naive() {
-        local_reset.format("%H:%M:%S").to_string()
+        local_reset.format("%-I:%M %p").to_string()
     } else {
-        local_reset.format("%Y-%m-%d %H:%M").to_string()
+        let suffix = day_suffix(local_reset.day());
+        local_reset
+            .format(&format!("%b %-d{suffix}, %Y %-I:%M %p"))
+            .to_string()
+    }
+}
+
+fn day_suffix(day: u32) -> &'static str {
+    match day {
+        11 | 12 | 13 => "th",
+        _ => match day % 10 {
+            1 => "st",
+            2 => "nd",
+            3 => "rd",
+            _ => "th",
+        },
     }
 }
 
