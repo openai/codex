@@ -371,8 +371,8 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
             }
           ]
         },
-        compactor_call_after_compact.clone(),
-        compactor_output_after_compact.clone(),
+        compactor_call_after_compact,
+        compactor_output_after_compact,
         {
           "type": "message",
           "role": "user",
@@ -432,8 +432,8 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
             }
           ]
         },
-        compactor_call_after_resume.clone(),
-        compactor_output_after_resume.clone(),
+        compactor_call_after_resume,
+        compactor_output_after_resume,
         {
           "type": "message",
           "role": "user",
@@ -513,8 +513,8 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
             }
           ]
         },
-        compactor_call_after_fork.clone(),
-        compactor_output_after_fork.clone(),
+        compactor_call_after_fork,
+        compactor_output_after_fork,
         {
           "type": "message",
           "role": "user",
