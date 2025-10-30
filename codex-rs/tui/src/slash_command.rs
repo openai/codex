@@ -24,7 +24,7 @@ pub enum SlashCommand {
     Status,
     Mcp,
     Logout,
-    #[strum(serialize = "exit", serialize = "e")]
+    #[strum(serialize = "exit")]
     Quit,
     Feedback,
     Rollout,
