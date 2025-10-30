@@ -13,6 +13,7 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use tempfile::TempDir;
 
 use codex_core::codex::compact::SUMMARIZATION_PROMPT;
@@ -59,6 +60,23 @@ fn structured_auto_summary(intent: &str, summary: &str) -> String {
         "summary": summary,
     })
     .to_string()
+}
+
+fn drop_call_id(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(obj) => {
+            obj.retain(|k, _| k != "call_id");
+            for v in obj.values_mut() {
+                drop_call_id(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                drop_call_id(v);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -868,6 +886,220 @@ async fn manual_compact_retries_after_context_window_error() {
     } else {
         panic!("expected non-empty compact inputs");
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_compact_twice_replaces_history_with_latest_intent() {
+    skip_if_no_network!();
+
+    let first_user_message = "first manual turn";
+    let second_user_message = "second manual turn";
+    let final_user_message = "post compact follow-up";
+    let first_intent = "FIRST_MANUAL_INTENT";
+    let second_intent = "SECOND_MANUAL_INTENT";
+    let first_summary = "FIRST_MANUAL_SUMMARY";
+    let second_summary = "SECOND_MANUAL_SUMMARY";
+
+    let server = start_mock_server().await;
+
+    let first_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed("r1"),
+    ]);
+    let first_compact = sse(vec![
+        ev_assistant_message("m2", &structured_auto_summary(first_intent, first_summary)),
+        ev_completed("r2"),
+    ]);
+    let second_turn = sse(vec![
+        ev_assistant_message("m3", SECOND_LARGE_REPLY),
+        ev_completed("r3"),
+    ]);
+    let second_compact = sse(vec![
+        ev_assistant_message(
+            "m4",
+            &structured_auto_summary(second_intent, second_summary),
+        ),
+        ev_completed("r4"),
+    ]);
+    let final_turn = sse(vec![
+        ev_assistant_message("m5", FINAL_REPLY),
+        ev_completed("r5"),
+    ]);
+
+    let responses_mock = mount_sse_sequence(
+        &server,
+        vec![
+            first_turn,
+            first_compact,
+            second_turn,
+            second_compact,
+            final_turn,
+        ],
+    )
+    .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    let codex = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"))
+        .new_conversation(config)
+        .await
+        .unwrap()
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: first_user_message.into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex.submit(Op::Compact).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: second_user_message.into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex.submit(Op::Compact).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: final_user_message.into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = responses_mock.requests();
+    assert_eq!(
+        requests.len(),
+        5,
+        "expected exactly 5 requests (user turn, compact, user turn, compact, final turn)"
+    );
+    let contains_user_text = |input: &[serde_json::Value], expected: &str| -> bool {
+        input.iter().any(|item| {
+            item.get("type").and_then(|v| v.as_str()) == Some("message")
+                && item.get("role").and_then(|v| v.as_str()) == Some("user")
+                && item
+                    .get("content")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter().any(|entry| {
+                            entry.get("text").and_then(|v| v.as_str()) == Some(expected)
+                        })
+                    })
+                    .unwrap_or(false)
+        })
+    };
+
+    let first_turn_input = requests[0].input();
+    assert!(
+        contains_user_text(&first_turn_input, first_user_message),
+        "first turn request missing first user message"
+    );
+    assert!(
+        !contains_user_text(&first_turn_input, SUMMARIZATION_PROMPT),
+        "first turn request should not include summarization prompt"
+    );
+
+    let first_compact_input = requests[1].input();
+    assert!(
+        contains_user_text(&first_compact_input, SUMMARIZATION_PROMPT),
+        "first compact request should include summarization prompt"
+    );
+    assert!(
+        contains_user_text(&first_compact_input, first_user_message),
+        "first compact request should include history before compaction"
+    );
+
+    let second_turn_input = requests[2].input();
+    assert!(
+        contains_user_text(&second_turn_input, second_user_message),
+        "second turn request missing second user message"
+    );
+    assert!(
+        contains_user_text(&second_turn_input, first_intent),
+        "second turn request should include the compacted intent"
+    );
+
+    let second_compact_input = requests[3].input();
+    assert!(
+        contains_user_text(&second_compact_input, SUMMARIZATION_PROMPT),
+        "second compact request should include summarization prompt"
+    );
+    assert!(
+        contains_user_text(&second_compact_input, second_user_message),
+        "second compact request should include latest history"
+    );
+
+    let mut final_output = requests
+        .last()
+        .unwrap_or_else(|| panic!("final turn request missing for {final_user_message}"))
+        .input()
+        .into_iter()
+        .collect::<VecDeque<_>>();
+
+    // System prompt
+    final_output.pop_front();
+    // Developer instructions
+    final_output.pop_front();
+
+    let _ = final_output
+        .iter_mut()
+        .map(drop_call_id)
+        .collect::<Vec<_>>();
+
+    let expected = vec![
+        json!({
+            "content": vec![
+                json!({
+                    "text": "SECOND_MANUAL_INTENT",
+                    "type": "input_text",
+                }),
+            ],
+            "role": "user",
+            "type": "message",
+        }),
+        json!({
+            "input": "",
+            "name": "compactor",
+            "status": "completed",
+            "type": "custom_tool_call",
+        }),
+        json!({
+            "output": "SECOND_MANUAL_SUMMARY",
+            "type": "custom_tool_call_output",
+        }),
+        json!({
+            "content": vec![
+                json!({
+                    "text": "post compact follow-up",
+                    "type": "input_text",
+                }),
+            ],
+            "role": "user",
+            "type": "message",
+        }),
+    ];
+    assert_eq!(final_output, expected);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -102,41 +102,6 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
 
     // 3. Capture the requests to the model and validate the history slices.
     let requests = gather_request_bodies(&server).await;
-    for (idx, request) in requests.iter().enumerate() {
-        if let Some(input) = request.get("input").and_then(|v| v.as_array()) {
-            println!("request {idx}:");
-            for item in input {
-                let item_type = item
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("<unknown>");
-                let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("");
-                let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let text_full = item
-                    .get("content")
-                    .and_then(|v| v.as_array())
-                    .and_then(|arr| arr.first())
-                    .and_then(|entry| entry.get("text"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let text = if text_full.len() > 60 {
-                    format!("{}…", &text_full[..60])
-                } else {
-                    text_full.to_string()
-                };
-                let output_full = item.get("output").and_then(|v| v.as_str()).unwrap_or("");
-                let output = if output_full.len() > 60 {
-                    format!("{}…", &output_full[..60])
-                } else {
-                    output_full.to_string()
-                };
-                let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
-                println!(
-                    "  type={item_type} role={role} name={name} call_id={call_id} text={text:?} output={output:?}"
-                );
-            }
-        }
-    }
 
     // input after compact is a prefix of input after resume/fork
     let input_after_compact = json!(requests[requests.len() - 3]["input"]);
