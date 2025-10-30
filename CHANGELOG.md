@@ -7,6 +7,12 @@
 
 - (none)
 
+## [0.4.6] - 2025-10-30
+
+- Build: keep release notes version in sync during `build-fast` to stop false release failures. (862851d)
+- Build: drop the release notes gate so `build-fast` runs cleanly in CI. (b0bfd1f)
+- CLI: publish the v0.4.6 package metadata for all platform bundles. (ceccd4b)
+
 ## [0.4.4] - 2025-10-29
 
 - TUI: Interrupts in-flight runs when `/new` starts a fresh chat so responses never bleed between sessions. (0421f643)
