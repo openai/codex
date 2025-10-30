@@ -303,13 +303,18 @@ impl ModelClient {
             .await
             .map_err(StreamAttemptError::Fatal)?;
 
-        // Include session source for backend telemetry and routing.
-        let task_type = match serde_json::to_value(&self.session_source) {
-            Ok(serde_json::Value::String(s)) => s,
-            Ok(other) => other.to_string(),
-            Err(_) => "unknown".to_string(),
-        };
-        req_builder = req_builder.header("Codex-Task-Type", task_type);
+        // Include subagent header only for subagent sessions.
+        if let SessionSource::SubAgent(sub) = &self.session_source {
+            let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
+                label.clone()
+            } else {
+                serde_json::to_value(sub)
+                    .ok()
+                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
+                    .unwrap_or_else(|| "other".to_string())
+            };
+            req_builder = req_builder.header("x-openai-subagent", subagent);
+        }
 
         req_builder = req_builder
             // Send session_id for compatibility.

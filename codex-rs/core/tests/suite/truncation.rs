@@ -219,8 +219,8 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
         config.features.enable(Feature::RmcpClient);
         config.mcp_servers.insert(
             server_name.to_string(),
-            codex_core::config_types::McpServerConfig {
-                transport: codex_core::config_types::McpServerTransportConfig::Stdio {
+            codex_core::config::types::McpServerConfig {
+                transport: codex_core::config::types::McpServerTransportConfig::Stdio {
                     command: rmcp_test_server_bin,
                     args: Vec::new(),
                     env: None,

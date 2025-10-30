@@ -767,7 +767,7 @@ pub struct Tools {
     pub view_image: Option<bool>,
 }
 
-/// MCP representation of a [`codex_core::config_types::SandboxWorkspaceWrite`].
+/// MCP representation of a [`codex_core::config::types::SandboxWorkspaceWrite`].
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
 #[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase")]

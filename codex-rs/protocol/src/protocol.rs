@@ -1058,6 +1058,8 @@ pub enum SessionSource {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
 pub enum SubAgentSource {
     Review,
     Compact,

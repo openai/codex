@@ -21,6 +21,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use eventsource_stream::Eventsource;
 use futures::Stream;
 use futures::StreamExt;
@@ -347,13 +348,18 @@ pub(crate) async fn stream_chat_completions(
 
         let mut req_builder = provider.create_request_builder(client, &None).await?;
 
-        // Include session source for backend telemetry and routing.
-        let task_type = match serde_json::to_value(session_source) {
-            Ok(serde_json::Value::String(s)) => s,
-            Ok(other) => other.to_string(),
-            Err(_) => "unknown".to_string(),
-        };
-        req_builder = req_builder.header("Codex-Task-Type", task_type);
+        // Include subagent header only for subagent sessions.
+        if let SessionSource::SubAgent(sub) = session_source.clone() {
+            let subagent = if let SubAgentSource::Other(label) = sub {
+                label
+            } else {
+                serde_json::to_value(&sub)
+                    .ok()
+                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
+                    .unwrap_or_else(|| "other".to_string())
+            };
+            req_builder = req_builder.header("x-openai-subagent", subagent);
+        }
 
         let res = otel_event_manager
             .log_request(attempt, || {

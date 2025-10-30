@@ -1,23 +1,22 @@
 use crate::auth::AuthCredentialsStoreMode;
+use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
+use crate::config::types::History;
+use crate::config::types::McpServerConfig;
+use crate::config::types::Notice;
+use crate::config::types::Notifications;
+use crate::config::types::OtelConfig;
+use crate::config::types::OtelConfigToml;
+use crate::config::types::OtelExporterKind;
+use crate::config::types::ReasoningSummaryFormat;
+use crate::config::types::SandboxWorkspaceWrite;
+use crate::config::types::ShellEnvironmentPolicy;
+use crate::config::types::ShellEnvironmentPolicyToml;
+use crate::config::types::Tui;
+use crate::config::types::UriBasedFileOpener;
 use crate::config_loader::LoadedConfigLayers;
-pub use crate::config_loader::load_config_as_toml;
+use crate::config_loader::load_config_as_toml;
 use crate::config_loader::load_config_layers_with_overrides;
 use crate::config_loader::merge_toml_values;
-use crate::config_profile::ConfigProfile;
-use crate::config_types::DEFAULT_OTEL_ENVIRONMENT;
-use crate::config_types::History;
-use crate::config_types::McpServerConfig;
-use crate::config_types::Notice;
-use crate::config_types::Notifications;
-use crate::config_types::OtelConfig;
-use crate::config_types::OtelConfigToml;
-use crate::config_types::OtelExporterKind;
-use crate::config_types::ReasoningSummaryFormat;
-use crate::config_types::SandboxWorkspaceWrite;
-use crate::config_types::ShellEnvironmentPolicy;
-use crate::config_types::ShellEnvironmentPolicyToml;
-use crate::config_types::Tui;
-use crate::config_types::UriBasedFileOpener;
 use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
@@ -51,8 +50,13 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::config::profile::ConfigProfile;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
+
+pub mod edit;
+pub mod profile;
+pub mod types;
 
 #[cfg(target_os = "windows")]
 pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
@@ -265,7 +269,7 @@ pub struct Config {
     pub disable_paste_burst: bool,
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
-    pub otel: crate::config_types::OtelConfig,
+    pub otel: crate::config::types::OtelConfig,
 }
 
 impl Config {
@@ -448,7 +452,7 @@ pub(crate) fn set_project_trusted_inner(
 /// Patch `CODEX_HOME/config.toml` project state.
 /// Use with caution.
 pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Result<()> {
-    use crate::config_edit::ConfigEditsBuilder;
+    use crate::config::edit::ConfigEditsBuilder;
 
     ConfigEditsBuilder::new(codex_home)
         .set_project_trusted(project_path)
@@ -629,13 +633,13 @@ pub struct ConfigToml {
     pub disable_paste_burst: Option<bool>,
 
     /// OTEL configuration.
-    pub otel: Option<crate::config_types::OtelConfigToml>,
+    pub otel: Option<crate::config::types::OtelConfigToml>,
 
     /// Tracks whether the Windows onboarding screen has been acknowledged.
     pub windows_wsl_setup_acknowledged: Option<bool>,
 
     /// Collection of in-product notices (different from notifications)
-    /// See [`crate::config_types::Notices`] for more details
+    /// See [`crate::config::types::Notices`] for more details
     pub notice: Option<Notice>,
 
     /// Legacy, now use features
@@ -1244,12 +1248,12 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use crate::config_edit::ConfigEdit;
-    use crate::config_edit::ConfigEditsBuilder;
-    use crate::config_edit::apply_blocking;
-    use crate::config_types::HistoryPersistence;
-    use crate::config_types::McpServerTransportConfig;
-    use crate::config_types::Notifications;
+    use crate::config::edit::ConfigEdit;
+    use crate::config::edit::ConfigEditsBuilder;
+    use crate::config::edit::apply_blocking;
+    use crate::config::types::HistoryPersistence;
+    use crate::config::types::McpServerTransportConfig;
+    use crate::config::types::Notifications;
     use crate::features::Feature;
 
     use super::*;
@@ -3174,7 +3178,7 @@ trust_level = "trusted"
 
 #[cfg(test)]
 mod notifications_tests {
-    use crate::config_types::Notifications;
+    use crate::config::types::Notifications;
     use assert_matches::assert_matches;
     use serde::Deserialize;
 
