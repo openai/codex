@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use chrono::Local;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
@@ -40,9 +41,11 @@ fn text_user_input(text: String) -> serde_json::Value {
 }
 
 fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
+    let system_date = Local::now().format("%Y-%m-%d").to_string();
     format!(
         r#"<environment_context>
   <cwd>{}</cwd>
+  <system_date>{system_date}</system_date>
   <approval_policy>on-request</approval_policy>
   <sandbox_mode>read-only</sandbox_mode>
   <network_access>restricted</network_access>
@@ -344,19 +347,23 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
     let shell = default_user_shell().await;
 
-    let expected_env_text = format!(
-        r#"<environment_context>
+    let expected_env_text = {
+        let system_date = Local::now().format("%Y-%m-%d").to_string();
+        format!(
+            r#"<environment_context>
   <cwd>{}</cwd>
+  <system_date>{system_date}</system_date>
   <approval_policy>on-request</approval_policy>
   <sandbox_mode>read-only</sandbox_mode>
   <network_access>restricted</network_access>
 {}</environment_context>"#,
-        cwd.path().to_string_lossy(),
-        match shell.name() {
-            Some(name) => format!("  <shell>{name}</shell>\n"),
-            None => String::new(),
-        }
-    );
+            cwd.path().to_string_lossy(),
+            match shell.name() {
+                Some(name) => format!("  <shell>{name}</shell>\n"),
+                None => String::new(),
+            }
+        )
+    };
     let expected_ui_text =
         "<user_instructions>\n\nbe consistent and helpful\n\n</user_instructions>";
 
