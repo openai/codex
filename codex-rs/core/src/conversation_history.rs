@@ -422,9 +422,8 @@ impl ConversationHistory {
 ///
 /// - Concatenates all text segments from `items`.
 /// - Applies `format_output_for_model_body` once to the combined text.
-/// - Rebuilds the vector preserving image order and replacing the first text
-///   occurrence with the globally truncated text; subsequent text items are
-///   omitted to avoid duplicating content.
+/// - Rebuilds the vector and replacing the text
+///   occurrence with the globally truncated text.
 fn globally_truncate_function_output_items(
     items: &[FunctionCallOutputContentItem],
 ) -> Vec<FunctionCallOutputContentItem> {
