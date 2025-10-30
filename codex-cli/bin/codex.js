@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Unified entry point for the Codex CLI.
 
+import { spawn } from "node:child_process";
+import { existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -40,10 +42,10 @@ switch (platform) {
   case "win32":
     switch (arch) {
       case "x64":
-        targetTriple = "x86_64-pc-windows-msvc.exe";
+        targetTriple = "x86_64-pc-windows-msvc";
         break;
       case "arm64":
-        targetTriple = "aarch64-pc-windows-msvc.exe";
+        targetTriple = "aarch64-pc-windows-msvc";
         break;
       default:
         break;
@@ -57,31 +59,16 @@ if (!targetTriple) {
   throw new Error(`Unsupported platform: ${platform} (${arch})`);
 }
 
-const binaryPath = path.join(__dirname, "..", "bin", `codex-${targetTriple}`);
+const vendorRoot = path.join(__dirname, "..", "vendor");
+const archRoot = path.join(vendorRoot, targetTriple);
+const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
+const binaryPath = path.join(archRoot, "codex", codexBinaryName);
 
 // Use an asynchronous spawn instead of spawnSync so that Node is able to
 // respond to signals (e.g. Ctrl-C / SIGINT) while the native binary is
 // executing. This allows us to forward those signals to the child process
 // and guarantees that when either the child terminates or the parent
 // receives a fatal signal, both processes exit in a predictable manner.
-const { spawn } = await import("child_process");
-
-async function tryImport(moduleName) {
-  try {
-    // eslint-disable-next-line node/no-unsupported-features/es-syntax
-    return await import(moduleName);
-  } catch (err) {
-    return null;
-  }
-}
-
-async function resolveRgDir() {
-  const ripgrep = await tryImport("@vscode/ripgrep");
-  if (!ripgrep?.rgPath) {
-    return null;
-  }
-  return path.dirname(ripgrep.rgPath);
-}
 
 function getUpdatedPath(newDirs) {
   const pathSep = process.platform === "win32" ? ";" : ":";
@@ -93,16 +80,49 @@ function getUpdatedPath(newDirs) {
   return updatedPath;
 }
 
+/**
+ * Use heuristics to detect the package manager that was used to install Codex
+ * in order to give the user a hint about how to update it.
+ */
+function detectPackageManager() {
+  const userAgent = process.env.npm_config_user_agent || "";
+  if (/\bbun\//.test(userAgent)) {
+    return "bun";
+  }
+
+  const execPath = process.env.npm_execpath || "";
+  if (execPath.includes("bun")) {
+    return "bun";
+  }
+
+  if (
+    process.env.BUN_INSTALL ||
+    process.env.BUN_INSTALL_GLOBAL_DIR ||
+    process.env.BUN_INSTALL_BIN_DIR
+  ) {
+    return "bun";
+  }
+
+  return userAgent ? "npm" : null;
+}
+
 const additionalDirs = [];
-const rgDir = await resolveRgDir();
-if (rgDir) {
-  additionalDirs.push(rgDir);
+const pathDir = path.join(archRoot, "path");
+if (existsSync(pathDir)) {
+  additionalDirs.push(pathDir);
 }
 const updatedPath = getUpdatedPath(additionalDirs);
 
+const env = { ...process.env, PATH: updatedPath };
+const packageManagerEnvVar =
+  detectPackageManager() === "bun"
+    ? "CODEX_MANAGED_BY_BUN"
+    : "CODEX_MANAGED_BY_NPM";
+env[packageManagerEnvVar] = "1";
+
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",
-  env: { ...process.env, PATH: updatedPath, CODEX_MANAGED_BY_NPM: "1" },
+  env,
 });
 
 child.on("error", (err) => {

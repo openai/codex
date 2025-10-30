@@ -22,14 +22,14 @@ pub fn format_review_findings_block(
     selection: Option<&[bool]>,
 ) -> String {
     let mut lines: Vec<String> = Vec::new();
+    lines.push(String::new());
 
     // Header
-    let header = if findings.len() > 1 {
-        "Full review comments:"
+    if findings.len() > 1 {
+        lines.push("Full review comments:".to_string());
     } else {
-        "Review comment:"
-    };
-    lines.push(header.to_string());
+        lines.push("Review comment:".to_string());
+    }
 
     for (idx, item) in findings.iter().enumerate() {
         lines.push(String::new());

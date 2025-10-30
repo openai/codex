@@ -8,9 +8,9 @@ name = "codex_ansi_escape"
 path = "src/lib.rs"
 
 [dependencies]
-ansi-to-tui = "7.0.0"
-ratatui = { version = "0.29.0", features = [
+ansi-to-tui = { workspace = true }
+ratatui = { workspace = true, features = [
     "unstable-rendered-line-info",
     "unstable-widget-ref",
 ] }
-tracing = { version = "0.1.41", features = ["log"] }
+tracing = { workspace = true, features = ["log"] }

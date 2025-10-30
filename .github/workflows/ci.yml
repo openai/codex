@@ -1,7 +1,7 @@
 name: ci
 
 on:
-  pull_request: { branches: [main] }
+  pull_request: {}
   push: { branches: [main] }
 
 jobs:
@@ -27,12 +27,29 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Run all tasks using workspace filters
+      # stage_npm_packages.py requires DotSlash when staging releases.
+      - uses: facebook/install-dotslash@v2
 
-      - name: Ensure staging a release works.
+      - name: Stage npm package
+        id: stage_npm_package
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./codex-cli/scripts/stage_release.sh
+        run: |
+          set -euo pipefail
+          CODEX_VERSION=0.40.0
+          OUTPUT_DIR="${RUNNER_TEMP}"
+          python3 ./scripts/stage_npm_packages.py \
+            --release-version "$CODEX_VERSION" \
+            --package codex \
+            --output-dir "$OUTPUT_DIR"
+          PACK_OUTPUT="${OUTPUT_DIR}/codex-npm-${CODEX_VERSION}.tgz"
+          echo "pack_output=$PACK_OUTPUT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload staged npm package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-npm-staging
+          path: ${{ steps.stage_npm_package.outputs.pack_output }}
 
       - name: Ensure root README.md contains only ASCII and certain Unicode code points
         run: ./scripts/asciicheck.py README.md
@@ -43,3 +60,6 @@ jobs:
         run: ./scripts/asciicheck.py codex-cli/README.md
       - name: Check codex-cli/README ToC
         run: python3 scripts/readme_toc.py codex-cli/README.md
+
+      - name: Prettier (run `pnpm run format:fix` to fix)
+        run: pnpm run format

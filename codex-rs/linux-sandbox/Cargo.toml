@@ -15,15 +15,15 @@ path = "src/lib.rs"
 workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-clap = { version = "4", features = ["derive"] }
-codex-core = { path = "../core" }
-landlock = "0.4.1"
-libc = "0.2.175"
-seccompiler = "0.5.0"
+clap = { workspace = true, features = ["derive"] }
+codex-core = { workspace = true }
+landlock = { workspace = true }
+libc = { workspace = true }
+seccompiler = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-tempfile = "3"
-tokio = { version = "1", features = [
+tempfile = { workspace = true }
+tokio = { workspace = true, features = [
     "io-std",
     "macros",
     "process",

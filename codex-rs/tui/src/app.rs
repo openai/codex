@@ -1,27 +1,33 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
+use crate::diff_render::DiffSummary;
+use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
+use crate::history_cell::HistoryCell;
 use crate::pager_overlay::Overlay;
+use crate::render::highlight::highlight_bash_to_lines;
 use crate::resume_picker::ResumeSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
+use crate::updates::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
-use codex_core::config::persist_model_selection;
+use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::model_family::find_family_for_model;
+use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use std::path::PathBuf;
@@ -32,12 +38,15 @@ use std::thread;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
-// use uuid::Uuid;
+
+#[cfg(not(debug_assertions))]
+use crate::history_cell::UpdateAvailableHistoryCell;
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub conversation_id: Option<ConversationId>,
+    pub update_action: Option<UpdateAction>,
 }
 
 pub(crate) struct App {
@@ -52,7 +61,7 @@ pub(crate) struct App {
 
     pub(crate) file_search: FileSearchManager,
 
-    pub(crate) transcript_lines: Vec<Line<'static>>,
+    pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -66,9 +75,13 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
+    pub(crate) feedback: codex_feedback::CodexFeedback,
+    /// Set when the user confirms an update; propagated on exit.
+    pub(crate) pending_update_action: Option<UpdateAction>,
 }
 
 impl App {
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
         auth_manager: Arc<AuthManager>,
@@ -77,14 +90,18 @@ impl App {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         resume_selection: ResumeSelection,
+        feedback: codex_feedback::CodexFeedback,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
-        let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
+        let conversation_manager = Arc::new(ConversationManager::new(
+            auth_manager.clone(),
+            SessionSource::Cli,
+        ));
 
-        let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
+        let enhanced_keys_supported = tui.enhanced_keys_supported();
 
         let chat_widget = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
@@ -96,6 +113,7 @@ impl App {
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
+                    feedback: feedback.clone(),
                 };
                 ChatWidget::new(init, conversation_manager.clone())
             }
@@ -118,6 +136,7 @@ impl App {
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
+                    feedback: feedback.clone(),
                 };
                 ChatWidget::new_from_existing(
                     init,
@@ -128,6 +147,8 @@ impl App {
         };
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        #[cfg(not(debug_assertions))]
+        let upgrade_version = crate::updates::get_upgrade_version(&config);
 
         let mut app = Self {
             server: conversation_manager,
@@ -138,13 +159,27 @@ impl App {
             active_profile,
             file_search,
             enhanced_keys_supported,
-            transcript_lines: Vec::new(),
+            transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            feedback: feedback.clone(),
+            pending_update_action: None,
         };
+
+        #[cfg(not(debug_assertions))]
+        if let Some(latest_version) = upgrade_version {
+            app.handle_event(
+                tui,
+                AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
+                    latest_version,
+                    crate::updates::get_update_action(),
+                ))),
+            )
+            .await?;
+        }
 
         let tui_events = tui.event_stream();
         tokio::pin!(tui_events);
@@ -163,6 +198,7 @@ impl App {
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
             conversation_id: app.chat_widget.conversation_id(),
+            update_action: app.pending_update_action,
         })
     }
 
@@ -220,20 +256,18 @@ impl App {
                     initial_images: Vec::new(),
                     enhanced_keys_supported: self.enhanced_keys_supported,
                     auth_manager: self.auth_manager.clone(),
+                    feedback: self.feedback.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryCell(cell) => {
-                let mut cell_transcript = cell.transcript_lines();
-                if !cell.is_stream_continuation() && !self.transcript_lines.is_empty() {
-                    cell_transcript.insert(0, Line::from(""));
-                }
+                let cell: Arc<dyn HistoryCell> = cell.into();
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_lines(cell_transcript.clone());
+                    t.insert_cell(cell.clone());
                     tui.frame_requester().schedule_frame();
                 }
-                self.transcript_lines.extend(cell_transcript.clone());
+                self.transcript_cells.push(cell.clone());
                 let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
                 if !display.is_empty() {
                     // Only insert a separating blank line for new cells that are not
@@ -295,7 +329,7 @@ impl App {
                 } else {
                     text.lines().map(ansi_escape_line).collect()
                 };
-                self.overlay = Some(Overlay::new_static_with_title(
+                self.overlay = Some(Overlay::new_static_with_lines(
                     pager_lines,
                     "D I F F".to_string(),
                 ));
@@ -319,20 +353,48 @@ impl App {
                     self.config.model_family = family;
                 }
             }
+            AppEvent::OpenReasoningPopup { model } => {
+                self.chat_widget.open_reasoning_popup(model);
+            }
+            AppEvent::OpenFullAccessConfirmation { preset } => {
+                self.chat_widget.open_full_access_confirmation(preset);
+            }
+            AppEvent::OpenFeedbackNote {
+                category,
+                include_logs,
+            } => {
+                self.chat_widget.open_feedback_note(category, include_logs);
+            }
+            AppEvent::OpenFeedbackConsent { category } => {
+                self.chat_widget.open_feedback_consent(category);
+            }
+            AppEvent::ShowWindowsAutoModeInstructions => {
+                self.chat_widget.open_windows_auto_mode_instructions();
+            }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
-                match persist_model_selection(&self.config.codex_home, profile, &model, effort)
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .set_model(Some(model.as_str()), effort)
+                    .apply()
                     .await
                 {
                     Ok(()) => {
+                        let effort_label = effort
+                            .map(|eff| format!(" with {eff} reasoning"))
+                            .unwrap_or_else(|| " with default reasoning".to_string());
                         if let Some(profile) = profile {
                             self.chat_widget.add_info_message(
-                                format!("Model changed to {model} for {profile} profile"),
+                                format!(
+                                    "Model changed to {model}{effort_label} for {profile} profile"
+                                ),
                                 None,
                             );
                         } else {
-                            self.chat_widget
-                                .add_info_message(format!("Model changed to {model}"), None);
+                            self.chat_widget.add_info_message(
+                                format!("Model changed to {model}{effort_label}"),
+                                None,
+                            );
                         }
                     }
                     Err(err) => {
@@ -357,6 +419,55 @@ impl App {
             AppEvent::UpdateSandboxPolicy(policy) => {
                 self.chat_widget.set_sandbox_policy(policy);
             }
+            AppEvent::UpdateFullAccessWarningAcknowledged(ack) => {
+                self.chat_widget.set_full_access_warning_acknowledged(ack);
+            }
+            AppEvent::PersistFullAccessWarningAcknowledged => {
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_hide_full_access_warning(true)
+                    .apply()
+                    .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist full access warning acknowledgement"
+                    );
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save full access confirmation preference: {err}"
+                    ));
+                }
+            }
+            AppEvent::OpenApprovalsPopup => {
+                self.chat_widget.open_approvals_popup();
+            }
+            AppEvent::OpenReviewBranchPicker(cwd) => {
+                self.chat_widget.show_review_branch_picker(&cwd).await;
+            }
+            AppEvent::OpenReviewCommitPicker(cwd) => {
+                self.chat_widget.show_review_commit_picker(&cwd).await;
+            }
+            AppEvent::OpenReviewCustomPrompt => {
+                self.chat_widget.show_review_custom_prompt();
+            }
+            AppEvent::FullScreenApprovalRequest(request) => match request {
+                ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
+                    let _ = tui.enter_alt_screen();
+                    let diff_summary = DiffSummary::new(changes, cwd);
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![diff_summary.into()],
+                        "P A T C H".to_string(),
+                    ));
+                }
+                ApprovalRequest::Exec { command, .. } => {
+                    let _ = tui.enter_alt_screen();
+                    let full_cmd = strip_bash_lc_and_escape(&command);
+                    let full_cmd_lines = highlight_bash_to_lines(&full_cmd);
+                    self.overlay = Some(Overlay::new_static_with_lines(
+                        full_cmd_lines,
+                        "E X E C".to_string(),
+                    ));
+                }
+            },
         }
         Ok(true)
     }
@@ -380,12 +491,13 @@ impl App {
             } => {
                 // Enter alternate screen and set viewport to full size.
                 let _ = tui.enter_alt_screen();
-                self.overlay = Some(Overlay::new_transcript(self.transcript_lines.clone()));
+                self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
                 tui.frame_requester().schedule_frame();
             }
             // Esc primes/advances backtracking only in normal (not working) mode
-            // with an empty composer. In any other state, forward Esc so the
-            // active UI (e.g. status indicator, modals, popups) handles it.
+            // with the composer focused and empty. In any other state, forward
+            // Esc so the active UI (e.g. status indicator, modals, popups)
+            // handles it.
             KeyEvent {
                 code: KeyCode::Esc,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
@@ -405,7 +517,7 @@ impl App {
                 kind: KeyEventKind::Press,
                 ..
             } if self.backtrack.primed
-                && self.backtrack.count > 0
+                && self.backtrack.nth_user_message != usize::MAX
                 && self.chat_widget.composer_is_empty() =>
             {
                 // Delegate to helper for clarity; preserves behavior.
@@ -434,12 +546,20 @@ impl App {
 mod tests {
     use super::*;
     use crate::app_backtrack::BacktrackState;
+    use crate::app_backtrack::user_count;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::file_search::FileSearchManager;
+    use crate::history_cell::AgentMessageCell;
+    use crate::history_cell::HistoryCell;
+    use crate::history_cell::UserHistoryCell;
+    use crate::history_cell::new_session_info;
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
-    use ratatui::text::Line;
+    use codex_core::protocol::SessionConfiguredEvent;
+    use codex_protocol::ConversationId;
+    use ratatui::prelude::Line;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
@@ -462,13 +582,15 @@ mod tests {
             config,
             active_profile: None,
             file_search,
-            transcript_lines: Vec::<Line<'static>>::new(),
+            transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            feedback: codex_feedback::CodexFeedback::new(),
+            pending_update_action: None,
         }
     }
 
@@ -489,5 +611,67 @@ mod tests {
             app.chat_widget.config_ref().model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
         );
+    }
+
+    #[test]
+    fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
+        let mut app = make_test_app();
+
+        let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
+            Arc::new(UserHistoryCell {
+                message: text.to_string(),
+            }) as Arc<dyn HistoryCell>
+        };
+        let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from(text.to_string())],
+                true,
+            )) as Arc<dyn HistoryCell>
+        };
+
+        let make_header = |is_first| {
+            let event = SessionConfiguredEvent {
+                session_id: ConversationId::new(),
+                model: "gpt-test".to_string(),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: PathBuf::new(),
+            };
+            Arc::new(new_session_info(
+                app.chat_widget.config_ref(),
+                event,
+                is_first,
+            )) as Arc<dyn HistoryCell>
+        };
+
+        // Simulate the transcript after trimming for a fork, replaying history, and
+        // appending the edited turn. The session header separates the retained history
+        // from the forked conversation's replayed turns.
+        app.transcript_cells = vec![
+            make_header(true),
+            user_cell("first question"),
+            agent_cell("answer first"),
+            user_cell("follow-up"),
+            agent_cell("answer follow-up"),
+            make_header(false),
+            user_cell("first question"),
+            agent_cell("answer first"),
+            user_cell("follow-up (edited)"),
+            agent_cell("answer edited"),
+        ];
+
+        assert_eq!(user_count(&app.transcript_cells), 2);
+
+        app.backtrack.base_id = Some(ConversationId::new());
+        app.backtrack.primed = true;
+        app.backtrack.nth_user_message = user_count(&app.transcript_cells).saturating_sub(1);
+
+        app.confirm_backtrack_from_main();
+
+        let (_, nth, prefill) = app.backtrack.pending.clone().expect("pending backtrack");
+        assert_eq!(nth, 1);
+        assert_eq!(prefill, "follow-up (edited)");
     }
 }

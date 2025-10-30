@@ -4,27 +4,39 @@ use codex_core::spawn::StdioPolicy;
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitStatus;
+use tokio::fs::create_dir_all;
 use tokio::process::Child;
 
 #[cfg(target_os = "macos")]
 async fn spawn_command_under_sandbox(
     command: Vec<String>,
+    command_cwd: PathBuf,
     sandbox_policy: &SandboxPolicy,
-    cwd: PathBuf,
+    sandbox_cwd: &Path,
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
     use codex_core::seatbelt::spawn_command_under_seatbelt;
-    spawn_command_under_seatbelt(command, sandbox_policy, cwd, stdio_policy, env).await
+    spawn_command_under_seatbelt(
+        command,
+        command_cwd,
+        sandbox_policy,
+        sandbox_cwd,
+        stdio_policy,
+        env,
+    )
+    .await
 }
 
 #[cfg(target_os = "linux")]
 async fn spawn_command_under_sandbox(
     command: Vec<String>,
+    command_cwd: PathBuf,
     sandbox_policy: &SandboxPolicy,
-    cwd: PathBuf,
+    sandbox_cwd: &Path,
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
@@ -33,8 +45,9 @@ async fn spawn_command_under_sandbox(
     spawn_command_under_linux_sandbox(
         codex_linux_sandbox_exe,
         command,
+        command_cwd,
         sandbox_policy,
-        cwd,
+        sandbox_cwd,
         stdio_policy,
         env,
     )
@@ -43,6 +56,7 @@ async fn spawn_command_under_sandbox(
 
 #[tokio::test]
 async fn python_multiprocessing_lock_works_under_sandbox() {
+    core_test_support::skip_if_sandbox!();
     #[cfg(target_os = "macos")]
     let writable_roots = Vec::<PathBuf>::new();
 
@@ -74,14 +88,17 @@ if __name__ == '__main__':
     p.join()
 "#;
 
+    let command_cwd = std::env::current_dir().expect("should be able to get current dir");
+    let sandbox_cwd = command_cwd.clone();
     let mut child = spawn_command_under_sandbox(
         vec![
             "python3".to_string(),
             "-c".to_string(),
             python_code.to_string(),
         ],
+        command_cwd,
         &policy,
-        std::env::current_dir().expect("should be able to get current dir"),
+        sandbox_cwd.as_path(),
         StdioPolicy::Inherit,
         HashMap::new(),
     )
@@ -90,6 +107,89 @@ if __name__ == '__main__':
 
     let status = child.wait().await.expect("should wait for child process");
     assert!(status.success(), "python exited with {status:?}");
+}
+
+#[tokio::test]
+async fn sandbox_distinguishes_command_and_policy_cwds() {
+    core_test_support::skip_if_sandbox!();
+    let temp = tempfile::tempdir().expect("should be able to create temp dir");
+    let sandbox_root = temp.path().join("sandbox");
+    let command_root = temp.path().join("command");
+    create_dir_all(&sandbox_root).await.expect("mkdir");
+    create_dir_all(&command_root).await.expect("mkdir");
+    let canonical_sandbox_root = tokio::fs::canonicalize(&sandbox_root)
+        .await
+        .expect("canonicalize sandbox root");
+    let canonical_allowed_path = canonical_sandbox_root.join("allowed.txt");
+
+    let disallowed_path = command_root.join("forbidden.txt");
+
+    // Note writable_roots is empty: verify that `canonical_allowed_path` is
+    // writable only because it is under the sandbox policy cwd, not because it
+    // is under a writable root.
+    let policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+
+    // Attempt to write inside the command cwd, which is outside of the sandbox policy cwd.
+    let mut child = spawn_command_under_sandbox(
+        vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "echo forbidden > forbidden.txt".to_string(),
+        ],
+        command_root.clone(),
+        &policy,
+        canonical_sandbox_root.as_path(),
+        StdioPolicy::Inherit,
+        HashMap::new(),
+    )
+    .await
+    .expect("should spawn command writing to forbidden path");
+
+    let status = child
+        .wait()
+        .await
+        .expect("should wait for forbidden command");
+    assert!(
+        !status.success(),
+        "sandbox unexpectedly allowed writing to command cwd: {status:?}"
+    );
+    let forbidden_exists = tokio::fs::try_exists(&disallowed_path)
+        .await
+        .expect("try_exists failed");
+    assert!(
+        !forbidden_exists,
+        "forbidden path should not have been created"
+    );
+
+    // Writing to the sandbox policy cwd after changing directories into it should succeed.
+    let mut child = spawn_command_under_sandbox(
+        vec![
+            "/usr/bin/touch".to_string(),
+            canonical_allowed_path.to_string_lossy().into_owned(),
+        ],
+        command_root,
+        &policy,
+        canonical_sandbox_root.as_path(),
+        StdioPolicy::Inherit,
+        HashMap::new(),
+    )
+    .await
+    .expect("should spawn command writing to sandbox root");
+
+    let status = child.wait().await.expect("should wait for allowed command");
+    assert!(
+        status.success(),
+        "sandbox blocked allowed write: {status:?}"
+    );
+    let allowed_exists = tokio::fs::try_exists(&canonical_allowed_path)
+        .await
+        .expect("try_exists allowed failed");
+    assert!(allowed_exists, "allowed path should exist");
 }
 
 fn unix_sock_body() {
@@ -200,10 +300,13 @@ where
         cmds.push(test_selector.into());
 
         // Your existing launcher:
+        let command_cwd = std::env::current_dir().expect("should be able to get current dir");
+        let sandbox_cwd = command_cwd.clone();
         let mut child = spawn_command_under_sandbox(
             cmds,
+            command_cwd,
             policy,
-            std::env::current_dir().expect("should be able to get current dir"),
+            sandbox_cwd.as_path(),
             stdio_policy,
             HashMap::from([("IN_SANDBOX".into(), "1".into())]),
         )
