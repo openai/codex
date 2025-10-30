@@ -396,6 +396,13 @@ impl SessionManager {
     }
 }
 
+#[cfg(test)]
+impl SessionManager {
+    pub(crate) async fn active_session_count(&self) -> usize {
+        self.sessions.lock().await.len()
+    }
+}
+
 /// Spawn PTY and child process per spawn_exec_command_session logic.
 async fn create_exec_command_session(
     params: ExecCommandParams,

@@ -13,6 +13,7 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 use std::sync::Weak;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::thread;
 use std::time::Duration;
 
 use async_channel::Receiver;
@@ -41,6 +42,7 @@ use mcp_types::CallToolResult;
 use serde::Serialize;
 use serde_json;
 use serde_json::json;
+use tokio::runtime::{Handle, Runtime};
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 use tracing::debug;
@@ -970,7 +972,7 @@ pub(crate) struct Session {
     mcp_connection_manager: McpConnectionManager,
     client_tools: Option<ClientTools>,
     #[allow(dead_code)]
-    session_manager: ExecSessionManager,
+    session_manager: Arc<ExecSessionManager>,
 
     /// Configuration for available agent models
     agents: Vec<crate::config_types::AgentConfig>,
@@ -1281,6 +1283,20 @@ impl Session {
         let mut state = self.state.lock().unwrap();
         state.wait_interrupt_epoch = state.wait_interrupt_epoch.saturating_add(1);
         state.wait_interrupt_reason = Some(reason);
+    }
+
+    fn spawn_kill_exec_sessions(manager: Arc<ExecSessionManager>) {
+        if let Ok(handle) = Handle::try_current() {
+            handle.spawn(async move {
+                manager.kill_all().await;
+            });
+        } else {
+            thread::spawn(move || {
+                if let Ok(runtime) = Runtime::new() {
+                    runtime.block_on(async { manager.kill_all().await });
+                }
+            });
+        }
     }
 
     fn wait_interrupt_snapshot(&self) -> (u64, Option<WaitInterruptReason>) {
@@ -2699,6 +2715,8 @@ impl Session {
 
         self.mark_all_running_execs_as_cancelled();
 
+        Self::spawn_kill_exec_sessions(Arc::clone(&self.session_manager));
+
         let mut state = self.state.lock().unwrap();
         state.pending_approvals.clear();
         // Do not clear `pending_input` here. When a user submits a new message
@@ -2753,6 +2771,185 @@ impl Drop for Session {
     fn drop(&mut self) {
         // Interrupt any running turn when the session is dropped.
         self.abort();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use async_channel::unbounded;
+    use code_app_server_protocol::ConversationId as OtelConversationId;
+    use crate::exec_command::exec_command_params::{ExecCommandParams, WriteStdinParams};
+    use crate::exec_command::session_manager::SessionManager;
+    use tempfile::TempDir;
+    use tokio::time::{sleep, timeout, Duration};
+    use super::*;
+
+    #[cfg(all(unix, not(miri)))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn abort_kills_foreground_exec_session() {
+        let session_manager = Arc::new(SessionManager::default());
+        let cmd = r#"python3 - <<'PY'
+import time
+while True:
+    time.sleep(1)
+PY"#
+            .to_string();
+
+        let params = ExecCommandParams {
+            cmd,
+            yield_time_ms: 500,
+            max_output_tokens: 128,
+            shell: "/bin/bash".to_string(),
+            login: false,
+        };
+
+        let initial_output = match session_manager
+            .handle_exec_command_request(params)
+            .await
+        {
+            Ok(output) => output,
+            Err(e) => {
+                if e.contains("openpty") || e.contains("Operation not permitted") {
+                    eprintln!("skipping test due to restricted PTY: {e}");
+                    return;
+                }
+                panic!("exec request failed unexpectedly: {e}");
+            }
+        };
+
+        let session_id = match initial_output.exit_status {
+            ExitStatus::Ongoing(id) => id,
+            other => {
+                eprintln!(
+                    "skipping test: command exited early: {other:?} output={}",
+                    initial_output.output
+                );
+                return;
+            }
+        };
+
+        assert_eq!(session_manager.active_session_count().await, 1);
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = Arc::new(
+            Config::load_from_base_config_with_overrides(
+                ConfigToml::default(),
+                ConfigOverrides::default(),
+                temp_dir.path().to_path_buf(),
+            )
+            .expect("load config"),
+        );
+
+        let provider = config.model_provider.clone();
+        let effort = config.model_reasoning_effort;
+        let summary = config.model_reasoning_summary;
+        let verbosity = config.model_text_verbosity;
+        let debug_logger = Arc::new(Mutex::new(DebugLogger::new(false).expect("debug logger")));
+        let otel_manager = OtelEventManager::new(
+            OtelConversationId::default(),
+            config.model.as_str(),
+            config.model_family.slug.as_str(),
+            None,
+            None,
+            config.otel.log_user_prompt,
+            "test".to_string(),
+        );
+
+        let client = ModelClient::new(
+            Arc::clone(&config),
+            None,
+            Some(otel_manager),
+            provider,
+            effort,
+            summary,
+            verbosity,
+            Uuid::new_v4(),
+            Arc::clone(&debug_logger),
+        );
+
+        let tools_config = client.build_tools_config();
+        let (tx_event, _rx_event) = unbounded();
+
+        let approval_policy = config.approval_policy;
+        let sandbox_policy = config.sandbox_policy.clone();
+        let shell_environment_policy = config.shell_environment_policy.clone();
+        let disable_response_storage = config.disable_response_storage;
+        let client_tools = config.experimental_client_tools.clone();
+        let agents = config.agents.clone();
+        let notify = config.notify.clone();
+        let code_linux_sandbox_exe = config.code_linux_sandbox_exe.clone();
+        let show_raw_agent_reasoning = config.show_raw_agent_reasoning;
+        let confirm_guard = ConfirmGuardRuntime::from_config(&config.confirm_guard);
+        let project_hooks = config.project_hooks.clone();
+        let project_commands = config.project_commands.clone();
+        let github_cfg = config.github.clone();
+        let validation_cfg = config.validation.clone();
+        let tx_event_clone = tx_event.clone();
+        let session_manager_clone = Arc::clone(&session_manager);
+
+        let session = Arc::new_cyclic(|weak| Session {
+            id: Uuid::new_v4(),
+            client,
+            tx_event: tx_event_clone,
+            cwd: temp_dir.path().to_path_buf(),
+            base_instructions: None,
+            user_instructions: None,
+            approval_policy,
+            sandbox_policy,
+            shell_environment_policy,
+            _writable_roots: Vec::new(),
+            disable_response_storage,
+            tools_config,
+            mcp_connection_manager: McpConnectionManager::default(),
+            client_tools,
+            session_manager: session_manager_clone,
+            agents,
+            notify,
+            rollout: Mutex::new(None),
+            state: Mutex::new(State::default()),
+            code_linux_sandbox_exe,
+            user_shell: shell::Shell::Unknown,
+            show_raw_agent_reasoning,
+            pending_browser_screenshots: Mutex::new(Vec::new()),
+            last_system_status: Mutex::new(None),
+            last_screenshot_info: Mutex::new(None),
+            confirm_guard,
+            project_hooks,
+            project_commands,
+            hook_guard: AtomicBool::new(false),
+            github: Arc::new(RwLock::new(github_cfg)),
+            validation: Arc::new(RwLock::new(validation_cfg)),
+            self_handle: weak.clone(),
+            active_review: Mutex::new(None),
+            next_turn_text_format: Mutex::new(None),
+        });
+
+        session.abort();
+
+        timeout(Duration::from_secs(3), async {
+            loop {
+                if session_manager.active_session_count().await == 0 {
+                    break;
+                }
+                sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("exec sessions should stop promptly");
+
+        let write_err = session_manager
+            .handle_write_stdin_request(WriteStdinParams {
+                session_id,
+                chars: String::new(),
+                yield_time_ms: 100,
+                max_output_tokens: 8,
+            })
+            .await
+            .expect_err("session should be gone after abort");
+        assert!(
+            write_err.contains("session"),
+            "unexpected error message: {write_err}"
+        );
     }
 }
 
@@ -3549,7 +3746,7 @@ async fn submission_loop(
                     _writable_roots: writable_roots,
             mcp_connection_manager,
             client_tools: config.experimental_client_tools.clone(),
-            session_manager: crate::exec_command::ExecSessionManager::default(),
+                    session_manager: Arc::new(crate::exec_command::ExecSessionManager::default()),
                     agents: config.agents.clone(),
                     notify,
                     state: Mutex::new(state),
