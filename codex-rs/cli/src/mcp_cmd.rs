@@ -347,9 +347,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         .context("failed to load configuration")?;
 
     if !config.features.enabled(Feature::RmcpClient) {
-        bail!(
-            "OAuth login is only supported when experimental_use_rmcp_client is true in config.toml."
-        );
+        bail!("OAuth login is only supported when [feature].rmcp_client is true in config.toml.");
     }
 
     let LoginArgs { name, scopes } = login_args;
