@@ -80,40 +80,12 @@ impl SessionState {
     }
 
     pub(crate) fn prompt_for_turn(&mut self, supports_responses_api_chaining: bool) -> Prompt {
-        let mut prompt = Prompt::default();
-        prompt.store_response = supports_responses_api_chaining;
-
         let prompt_items = self.history.get_history_for_prompt();
-        if !supports_responses_api_chaining {
+        let chain_state = self.history.responses_api_chain();
+        let (prompt, reset_chain) = build_prompt_from_items(prompt_items, chain_state.as_ref());
+        if reset_chain {
             self.reset_responses_api_chain();
-            prompt.input = prompt_items;
-            return prompt;
         }
-
-        if let Some(chain_state) = self.history.responses_api_chain() {
-            let previous_response_id = chain_state.last_response_id.clone();
-            if let Some(last_message_id) = chain_state.last_message_id.as_ref() {
-                if let Some(position) = prompt_items
-                    .iter()
-                    .position(|item| response_item_id(item) == Some(last_message_id))
-                {
-                    prompt.previous_response_id = previous_response_id;
-                    prompt.input = prompt_items.iter().skip(position + 1).cloned().collect();
-                    return prompt;
-                }
-                // Cache marker no longer present; fall back to full prompt and clear chain info.
-                self.reset_responses_api_chain();
-                prompt.input = prompt_items;
-                return prompt;
-            }
-
-            prompt.previous_response_id = previous_response_id;
-            prompt.input = prompt_items;
-            return prompt;
-        }
-
-        prompt.input = prompt_items;
-
         prompt
     }
 }
@@ -128,4 +100,38 @@ pub(crate) fn response_item_id(item: &ResponseItem) -> Option<&str> {
         | ResponseItem::WebSearchCall { id: Some(id), .. } => Some(id.as_str()),
         _ => None,
     }
+}
+
+pub(crate) fn build_prompt_from_items(
+    prompt_items: Vec<ResponseItem>,
+    chain_state: Option<&ResponsesApiChainState>,
+) -> (Prompt, bool) {
+    let mut prompt = Prompt::default();
+    prompt.store_response = chain_state.is_some();
+
+    if let Some(state) = chain_state {
+        if let Some(last_message_id) = state.last_message_id.as_ref() {
+            if let Some(position) = prompt_items
+                .iter()
+                .position(|item| response_item_id(item) == Some(last_message_id.as_str()))
+            {
+                if let Some(previous_response_id) = state.last_response_id.clone() {
+                    prompt.previous_response_id = Some(previous_response_id);
+                }
+                prompt.input = prompt_items.into_iter().skip(position + 1).collect();
+                return (prompt, false);
+            }
+            prompt.input = prompt_items;
+            return (prompt, true);
+        }
+
+        if let Some(previous_response_id) = state.last_response_id.clone() {
+            prompt.previous_response_id = Some(previous_response_id);
+        }
+        prompt.input = prompt_items;
+        return (prompt, false);
+    }
+
+    prompt.input = prompt_items;
+    (prompt, false)
 }

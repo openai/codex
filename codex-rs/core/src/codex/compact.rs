@@ -3,7 +3,6 @@ use std::sync::Arc;
 use super::Session;
 use super::TurnContext;
 use super::get_last_assistant_message_from_turn;
-use crate::Prompt;
 use crate::client::StreamPayload;
 use crate::client_common::ResponseEvent;
 use crate::error::CodexErr;
@@ -84,28 +83,9 @@ async fn run_compact_task_inner(
     sess.persist_rollout_items(&[rollout_item]).await;
 
     loop {
-        let mut turn_input = history.get_history_for_prompt();
+        let turn_input = history.get_history_for_prompt();
         let turn_input_len = turn_input.len();
-        crate::conversation_history::format_prompt_items(&mut turn_input, false);
-        let prompt = Prompt {
-            input: turn_input,
-            tools: Vec::new(),
-            parallel_tool_calls: false,
-            output_schema: None,
-            store_response: false,
-            ..Default::default()
-        };
-        let instructions = crate::client_common::compute_full_instructions(
-            turn_context.base_instructions.as_deref(),
-            &turn_context.client.get_model_family(),
-            false,
-        )
-        .into_owned();
-        let prompt = Prompt {
-            instructions: instructions.clone(),
-            previous_response_id: None,
-            ..prompt
-        };
+        let (prompt, _) = crate::state::build_prompt_from_items(turn_input, None);
         let payload = StreamPayload { prompt };
         let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), payload).await;
 

@@ -7,7 +7,6 @@ use std::time::Instant;
 use crate::AuthManager;
 use crate::client::ModelClient;
 use crate::client::StreamPayload;
-use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
 use crate::protocol::SandboxPolicy;
@@ -121,32 +120,19 @@ pub(crate) async fn assess_command(
         .trim()
         .to_string();
 
-    let mut prompt_items = vec![ResponseItem::Message {
+    let prompt_items = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText { text: user_prompt }],
     }];
-    crate::conversation_history::format_prompt_items(&mut prompt_items, false);
-
-    let prompt = Prompt {
-        input: prompt_items,
-        tools: Vec::new(),
-        parallel_tool_calls: false,
-        output_schema: Some(sandbox_assessment_schema()),
-        store_response: false,
-        ..Default::default()
-    };
-    let instructions = crate::client_common::compute_full_instructions(
+    let (mut prompt, _) = crate::state::build_prompt_from_items(prompt_items, None);
+    prompt.output_schema = Some(sandbox_assessment_schema());
+    prompt.instructions = crate::client_common::compute_full_instructions(
         Some(system_prompt.as_str()),
         &config.model_family,
         false,
     )
     .into_owned();
-
-    let prompt = Prompt {
-        instructions: instructions.clone(),
-        ..prompt
-    };
     let payload = StreamPayload { prompt };
 
     let child_otel =
