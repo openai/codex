@@ -27,12 +27,14 @@ use core_test_support::responses::sse;
 use core_test_support::responses::sse_failed;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 // --- Test helpers -----------------------------------------------------------
 
 pub(super) const FIRST_REPLY: &str = "FIRST_REPLY";
 pub(super) const SUMMARY_TEXT: &str = "SUMMARY_ONLY_CONTEXT";
 const THIRD_USER_MSG: &str = "next turn";
 const AUTO_SUMMARY_TEXT: &str = "AUTO_SUMMARY";
+const AUTO_INTENT_TEXT: &str = "AUTO_INTENT";
 const FIRST_AUTO_MSG: &str = "token limit start";
 const SECOND_AUTO_MSG: &str = "token limit push";
 const STILL_TOO_BIG_REPLY: &str = "STILL_TOO_BIG";
@@ -40,12 +42,24 @@ const MULTI_AUTO_MSG: &str = "multi auto";
 const SECOND_LARGE_REPLY: &str = "SECOND_LARGE_REPLY";
 const FIRST_AUTO_SUMMARY: &str = "FIRST_AUTO_SUMMARY";
 const SECOND_AUTO_SUMMARY: &str = "SECOND_AUTO_SUMMARY";
+const FIRST_AUTO_INTENT: &str = "FIRST_AUTO_INTENT";
+const SECOND_AUTO_INTENT: &str = "SECOND_AUTO_INTENT";
+const SUMMARY_INTENT: &str = "SUMMARY_INTENT";
 const FINAL_REPLY: &str = "FINAL_REPLY";
 const CONTEXT_LIMIT_MESSAGE: &str =
     "Your input exceeds the context window of this model. Please adjust your input and try again.";
 const DUMMY_FUNCTION_NAME: &str = "unsupported_tool";
 const DUMMY_CALL_ID: &str = "call-multi-auto";
 const FUNCTION_CALL_LIMIT_MSG: &str = "function call limit push";
+const POST_AUTO_USER_MSG: &str = "post auto follow-up";
+
+fn structured_auto_summary(intent: &str, summary: &str) -> String {
+    json!({
+        "intent_user_message": intent,
+        "summary": summary,
+    })
+    .to_string()
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn summarize_context_three_requests_and_instructions() {
@@ -318,9 +332,14 @@ async fn auto_compact_runs_after_token_limit_hit() {
         ev_completed_with_tokens("r2", 330_000),
     ]);
 
+    let auto_summary_payload = structured_auto_summary(AUTO_INTENT_TEXT, AUTO_SUMMARY_TEXT);
     let sse3 = sse(vec![
-        ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
+        ev_assistant_message("m3", &auto_summary_payload),
         ev_completed_with_tokens("r3", 200),
+    ]);
+    let sse4 = sse(vec![
+        ev_assistant_message("m4", FINAL_REPLY),
+        ev_completed_with_tokens("r4", 120),
     ]);
 
     let first_matcher = |req: &wiremock::Request| {
@@ -344,6 +363,13 @@ async fn auto_compact_runs_after_token_limit_hit() {
         body.contains("You have exceeded the maximum number of tokens")
     };
     mount_sse_once_match(&server, third_matcher, sse3).await;
+
+    let fourth_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(POST_AUTO_USER_MSG)
+            && !body.contains("You have exceeded the maximum number of tokens")
+    };
+    mount_sse_once_match(&server, fourth_matcher, sse4).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -382,12 +408,23 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-    // wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: POST_AUTO_USER_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     let requests = server.received_requests().await.unwrap();
-    assert!(
-        requests.len() >= 3,
-        "auto compact should add at least a third request, got {}",
+    assert_eq!(
+        requests.len(),
+        4,
+        "expected user turns, one auto compact request, and the follow-up turn; got {}",
         requests.len()
     );
     let is_auto_compact = |req: &wiremock::Request| {
@@ -414,6 +451,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     let body3 = requests[auto_compact_index]
         .body_json::<serde_json::Value>()
         .unwrap();
+    let body4 = requests[3].body_json::<serde_json::Value>().unwrap();
     let instructions = body3
         .get("instructions")
         .and_then(|v| v.as_str())
@@ -445,6 +483,46 @@ async fn auto_compact_runs_after_token_limit_hit() {
         last_text, SUMMARIZATION_PROMPT,
         "auto compact should send the summarization prompt as a user message",
     );
+
+    let input4 = body4.get("input").and_then(|v| v.as_array()).unwrap();
+    let user_texts: Vec<String> = input4
+        .iter()
+        .filter(|item| item.get("type").and_then(|v| v.as_str()) == Some("message"))
+        .filter(|item| item.get("role").and_then(|v| v.as_str()) == Some("user"))
+        .filter_map(|item| {
+            item.get("content")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|entry| entry.get("text"))
+                .and_then(|v| v.as_str())
+                .map(std::string::ToString::to_string)
+        })
+        .collect();
+    assert!(
+        user_texts.iter().any(|text| text == AUTO_INTENT_TEXT),
+        "auto compact follow-up request should include the intent user message"
+    );
+    assert!(
+        user_texts.iter().any(|text| text == POST_AUTO_USER_MSG),
+        "auto compact follow-up request should include the new user message"
+    );
+    assert!(
+        !user_texts
+            .iter()
+            .any(|text| text == FIRST_AUTO_MSG || text == SECOND_AUTO_MSG),
+        "original user messages should be replaced by the intent message after compaction"
+    );
+    let compactor_output = input4
+        .iter()
+        .find(|item| item.get("type").and_then(|v| v.as_str()) == Some("custom_tool_call_output"))
+        .and_then(|item| item.get("output"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(
+        compactor_output, AUTO_SUMMARY_TEXT,
+        "compactor tool output should contain the structured summary field"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -463,8 +541,9 @@ async fn auto_compact_persists_rollout_entries() {
         ev_completed_with_tokens("r2", 330_000),
     ]);
 
+    let auto_summary_payload = structured_auto_summary(AUTO_INTENT_TEXT, AUTO_SUMMARY_TEXT);
     let sse3 = sse(vec![
-        ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
+        ev_assistant_message("m3", &auto_summary_payload),
         ev_completed_with_tokens("r3", 200),
     ]);
 
@@ -571,8 +650,9 @@ async fn auto_compact_stops_after_failed_attempt() {
         ev_completed_with_tokens("r1", 500),
     ]);
 
+    let summary_payload = structured_auto_summary(SUMMARY_INTENT, SUMMARY_TEXT);
     let sse2 = sse(vec![
-        ev_assistant_message("m2", SUMMARY_TEXT),
+        ev_assistant_message("m2", &summary_payload),
         ev_completed_with_tokens("r2", 50),
     ]);
 
@@ -800,8 +880,9 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         ev_assistant_message("m1", FIRST_REPLY),
         ev_completed_with_tokens("r1", 500),
     ]);
+    let first_summary_payload = structured_auto_summary(FIRST_AUTO_INTENT, FIRST_AUTO_SUMMARY);
     let sse2 = sse(vec![
-        ev_assistant_message("m2", FIRST_AUTO_SUMMARY),
+        ev_assistant_message("m2", &first_summary_payload),
         ev_completed_with_tokens("r2", 50),
     ]);
     let sse3 = sse(vec![
@@ -812,8 +893,9 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         ev_assistant_message("m4", SECOND_LARGE_REPLY),
         ev_completed_with_tokens("r4", 450),
     ]);
+    let second_summary_payload = structured_auto_summary(SECOND_AUTO_INTENT, SECOND_AUTO_SUMMARY);
     let sse5 = sse(vec![
-        ev_assistant_message("m5", SECOND_AUTO_SUMMARY),
+        ev_assistant_message("m5", &second_summary_payload),
         ev_completed_with_tokens("r5", 60),
     ]);
     let sse6 = sse(vec![
@@ -920,8 +1002,9 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
         ev_assistant_message("m2", FINAL_REPLY),
         ev_completed_with_tokens("r2", over_limit_tokens),
     ]);
+    let auto_summary_payload = structured_auto_summary(AUTO_INTENT_TEXT, AUTO_SUMMARY_TEXT);
     let auto_compact_turn = sse(vec![
-        ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
+        ev_assistant_message("m3", &auto_summary_payload),
         ev_completed_with_tokens("r3", 10),
     ]);
     let post_auto_compact_turn = sse(vec![ev_completed_with_tokens("r4", 10)]);

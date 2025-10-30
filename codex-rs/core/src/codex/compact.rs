@@ -22,7 +22,11 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
+use serde::Deserialize;
+use serde_json::Value as JsonValue;
+use serde_json::json;
 use tracing::error;
+use tracing::warn;
 use uuid::Uuid;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
@@ -57,6 +61,7 @@ async fn run_compact_task_inner(
     input: Vec<UserInput>,
 ) {
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
+    let output_schema = structured_summary::schema();
 
     let mut history = sess.clone_history().await;
     history.record_items(&[initial_input_for_turn.into()]);
@@ -80,6 +85,7 @@ async fn run_compact_task_inner(
         let turn_input = history.get_history_for_prompt();
         let prompt = Prompt {
             input: turn_input.clone(),
+            output_schema: Some(output_schema.clone()),
             ..Default::default()
         };
         let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
@@ -141,8 +147,22 @@ async fn run_compact_task_inner(
     }
 
     let history_snapshot = sess.clone_history().await.get_history();
-    let summary_text = get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
-    let user_messages = collect_user_messages(&history_snapshot);
+    let structured_summary = structured_summary::parse(&history_snapshot);
+    let (summary_text, user_messages) = match structured_summary {
+        Some(structured) => {
+            let structured_summary::Summary {
+                intent_user_message,
+                summary,
+            } = structured;
+            (summary, vec![intent_user_message])
+        }
+        None => {
+            let summary =
+                get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
+            let users = collect_user_messages(&history_snapshot);
+            (summary, users)
+        }
+    };
     let initial_context = sess.build_initial_context(turn_context.as_ref());
     let mut new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
     let ghost_snapshots: Vec<ResponseItem> = history_snapshot
@@ -293,6 +313,56 @@ async fn drain_to_completed(
     }
 }
 
+mod structured_summary {
+    use super::*;
+
+    #[derive(Debug, Deserialize)]
+    pub struct Summary {
+        pub(crate) intent_user_message: String,
+        pub(crate) summary: String,
+    }
+
+    pub fn schema() -> JsonValue {
+        json!({
+            "type": "object",
+            "properties": {
+                "intent_user_message": {
+                    "type": "string",
+                    "description": "One consolidated user message capturing the user's current goal or request."
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "A concise status summary describing progress and next steps."
+                }
+            },
+            "required": ["intent_user_message", "summary"],
+            "additionalProperties": false
+        })
+    }
+
+    pub fn parse(responses: &[ResponseItem]) -> Option<Summary> {
+        let text = get_last_assistant_message_from_turn(responses)?;
+        let parsed: Summary = match serde_json::from_str(text.trim()) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                warn!(?err, "Failed to parse structured compact summary");
+                return None;
+            }
+        };
+
+        let intent = parsed.intent_user_message.trim();
+        if intent.is_empty() {
+            warn!("Structured compact summary missing intent_user_message");
+            return None;
+        }
+
+        Some(Summary {
+            intent_user_message: intent.to_string(),
+            summary: parsed.summary.trim().to_string(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,6 +452,41 @@ mod tests {
         let collected = collect_user_messages(&items);
 
         assert_eq!(vec!["real user message".to_string()], collected);
+    }
+
+    #[test]
+    fn parse_auto_compact_summary_extracts_trimmed_fields() {
+        let payload = r#"
+        {
+            "intent_user_message": "  intent summary ",
+            "summary": " status note "
+        }
+        "#;
+        let responses = vec![ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: payload.to_string(),
+            }],
+        }];
+
+        let parsed = structured_summary::parse(&responses).expect("structured summary expected");
+        assert_eq!(parsed.intent_user_message, "intent summary");
+        assert_eq!(parsed.summary, "status note");
+    }
+
+    #[test]
+    fn parse_auto_compact_summary_requires_intent() {
+        let payload = r#"{"intent_user_message":"   ","summary":"just text"}"#;
+        let responses = vec![ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: payload.to_string(),
+            }],
+        }];
+
+        assert!(structured_summary::parse(&responses).is_none());
     }
 
     #[test]
