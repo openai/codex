@@ -15,17 +15,14 @@ use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
-use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::wait_for_event;
-use serde_json::json;
 
 async fn apply_patch_harness() -> Result<TestCodexHarness> {
     apply_patch_harness_with(|_| {}).await
@@ -49,12 +46,12 @@ async fn mount_apply_patch(
 ) {
     mount_sse_sequence(
         harness.server(),
-        apply_patch_responses(call_id, patch, assistant_msg),
+        freeform_apply_patch_responses(call_id, patch, assistant_msg),
     )
     .await;
 }
 
-fn apply_patch_responses(call_id: &str, patch: &str, assistant_msg: &str) -> Vec<String> {
+fn freeform_apply_patch_responses(call_id: &str, patch: &str, assistant_msg: &str) -> Vec<String> {
     vec![
         sse(vec![
             ev_response_created("resp-1"),
@@ -721,7 +718,7 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff() -> Result<()> {
     let patch = format!("*** Begin Patch\n*** Add File: {file}\n+hello\n*** End Patch\n");
     let first = sse(vec![
         ev_response_created("resp-1"),
-        ev_apply_patch_function_call(call_id, &patch),
+        ev_apply_patch_custom_tool_call(call_id, &patch),
         ev_completed("resp-1"),
     ]);
     let second = sse(vec![
@@ -783,7 +780,7 @@ async fn apply_patch_turn_diff_for_rename_with_content_change() -> Result<()> {
     let patch = "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n@@\n-old\n+new\n*** End Patch";
     let first = sse(vec![
         ev_response_created("resp-1"),
-        ev_apply_patch_function_call(call_id, patch),
+        ev_apply_patch_custom_tool_call(call_id, patch),
         ev_completed("resp-1"),
     ]);
     let second = sse(vec![
@@ -846,12 +843,12 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
 
     let s1 = sse(vec![
         ev_response_created("resp-1"),
-        ev_apply_patch_function_call(call1, patch1),
+        ev_apply_patch_custom_tool_call(call1, patch1),
         ev_completed("resp-1"),
     ]);
     let s2 = sse(vec![
         ev_response_created("resp-2"),
-        ev_apply_patch_function_call(call2, patch2),
+        ev_apply_patch_custom_tool_call(call2, patch2),
         ev_completed("resp-2"),
     ]);
     let s3 = sse(vec![
