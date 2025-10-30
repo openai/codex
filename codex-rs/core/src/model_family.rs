@@ -1,4 +1,4 @@
-use crate::config_types::ReasoningSummaryFormat;
+use crate::config::types::ReasoningSummaryFormat;
 use crate::tools::handlers::apply_patch::ApplyPatchToolType;
 
 /// The `instructions` field in the payload sent to a model should always start
