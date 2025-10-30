@@ -1,6 +1,7 @@
+use ratatui::text::Line;
+
 use ratatui::style::Style;
 use ratatui::style::Stylize;
-use ratatui::text::Line;
 use ratatui::text::Span;
 use std::sync::OnceLock;
 use tree_sitter_highlight::Highlight;
@@ -109,6 +110,11 @@ fn push_segment(lines: &mut Vec<Line<'static>>, segment: &str, style: Option<Sty
 /// bash highlight query. The highlighter is streamed so multi-line content is
 /// split into `Line`s while preserving style boundaries.
 pub(crate) fn highlight_bash_to_lines(script: &str) -> Vec<Line<'static>> {
+    // Runtime gate: on Windows, skip bash-specific highlighting and return plain text.
+    if cfg!(target_os = "windows") {
+        return vec![script.to_string().into()];
+    }
+
     let mut highlighter = Highlighter::new();
     let iterator =
         match highlighter.highlight(highlight_config(), script.as_bytes(), None, |_| None) {
@@ -147,8 +153,11 @@ pub(crate) fn highlight_bash_to_lines(script: &str) -> Vec<Line<'static>> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[cfg(not(target_os = "windows"))]
     use ratatui::style::Modifier;
 
+    #[cfg(not(target_os = "windows"))]
     fn reconstructed(lines: &[Line<'static>]) -> String {
         lines
             .iter()
@@ -162,6 +171,7 @@ mod tests {
             .join("\n")
     }
 
+    #[cfg(not(target_os = "windows"))]
     fn dimmed_tokens(lines: &[Line<'static>]) -> Vec<String> {
         lines
             .iter()
@@ -173,6 +183,7 @@ mod tests {
             .collect()
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn dims_expected_bash_operators() {
         let s = "echo foo && bar || baz | qux & (echo hi)";
@@ -185,6 +196,7 @@ mod tests {
         assert!(!dimmed.contains(&"echo".to_string()));
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn dims_redirects_and_strings() {
         let s = "echo \"hi\" > out.txt; echo 'ok'";
@@ -197,6 +209,7 @@ mod tests {
         assert!(dimmed.contains(&"'ok'".to_string()));
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn highlights_command_and_strings() {
         let s = "echo \"hi\"";
@@ -219,6 +232,7 @@ mod tests {
         assert!(string_style.add_modifier.contains(Modifier::DIM));
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn highlights_heredoc_body_as_string() {
         let s = "cat <<EOF\nheredoc body\nEOF";
@@ -232,5 +246,16 @@ mod tests {
         }
         let body_style = body_style.expect("missing heredoc span");
         assert!(body_style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn highlights_curl() {
+        let s = "curl https://example.com";
+        let lines = highlight_bash_to_lines(s);
+        let reconstructed_first: String = lines
+            .get(0)
+            .map(|l| l.spans.iter().map(|sp| sp.content.clone()).collect::<String>())
+            .unwrap_or_default();
+        assert!(reconstructed_first.contains("curl https://example.com"));
     }
 }
