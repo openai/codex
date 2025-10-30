@@ -94,6 +94,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         effort,
         summary,
         conversation_id,
+        codex_protocol::protocol::SessionSource::Exec,
     );
 
     let mut prompt = Prompt::default();
@@ -170,19 +171,24 @@ async fn streams_text_without_reasoning() {
     );
 
     let events = run_stream(sse).await;
-    assert_eq!(events.len(), 3, "unexpected events: {events:?}");
+    assert_eq!(events.len(), 4, "unexpected events: {events:?}");
 
     match &events[0] {
+        ResponseEvent::OutputItemAdded(ResponseItem::Message { .. }) => {}
+        other => panic!("expected initial assistant item, got {other:?}"),
+    }
+
+    match &events[1] {
         ResponseEvent::OutputTextDelta(text) => assert_eq!(text, "hi"),
         other => panic!("expected text delta, got {other:?}"),
     }
 
-    match &events[1] {
+    match &events[2] {
         ResponseEvent::OutputItemDone(item) => assert_message(item, "hi"),
         other => panic!("expected terminal message, got {other:?}"),
     }
 
-    assert_matches!(events[2], ResponseEvent::Completed { .. });
+    assert_matches!(events[3], ResponseEvent::Completed { .. });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -201,29 +207,39 @@ async fn streams_reasoning_from_string_delta() {
     );
 
     let events = run_stream(sse).await;
-    assert_eq!(events.len(), 5, "unexpected events: {events:?}");
+    assert_eq!(events.len(), 7, "unexpected events: {events:?}");
 
     match &events[0] {
+        ResponseEvent::OutputItemAdded(ResponseItem::Reasoning { .. }) => {}
+        other => panic!("expected initial reasoning item, got {other:?}"),
+    }
+
+    match &events[1] {
         ResponseEvent::ReasoningContentDelta(text) => assert_eq!(text, "think1"),
         other => panic!("expected reasoning delta, got {other:?}"),
     }
 
-    match &events[1] {
+    match &events[2] {
+        ResponseEvent::OutputItemAdded(ResponseItem::Message { .. }) => {}
+        other => panic!("expected initial message item, got {other:?}"),
+    }
+
+    match &events[3] {
         ResponseEvent::OutputTextDelta(text) => assert_eq!(text, "ok"),
         other => panic!("expected text delta, got {other:?}"),
     }
 
-    match &events[2] {
+    match &events[4] {
         ResponseEvent::OutputItemDone(item) => assert_reasoning(item, "think1"),
-        other => panic!("expected reasoning item, got {other:?}"),
+        other => panic!("expected terminal reasoning, got {other:?}"),
     }
 
-    match &events[3] {
+    match &events[5] {
         ResponseEvent::OutputItemDone(item) => assert_message(item, "ok"),
-        other => panic!("expected message item, got {other:?}"),
+        other => panic!("expected terminal message, got {other:?}"),
     }
 
-    assert_matches!(events[4], ResponseEvent::Completed { .. });
+    assert_matches!(events[6], ResponseEvent::Completed { .. });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -243,34 +259,44 @@ async fn streams_reasoning_from_object_delta() {
     );
 
     let events = run_stream(sse).await;
-    assert_eq!(events.len(), 6, "unexpected events: {events:?}");
+    assert_eq!(events.len(), 8, "unexpected events: {events:?}");
 
     match &events[0] {
+        ResponseEvent::OutputItemAdded(ResponseItem::Reasoning { .. }) => {}
+        other => panic!("expected initial reasoning item, got {other:?}"),
+    }
+
+    match &events[1] {
         ResponseEvent::ReasoningContentDelta(text) => assert_eq!(text, "partA"),
         other => panic!("expected reasoning delta, got {other:?}"),
     }
 
-    match &events[1] {
+    match &events[2] {
         ResponseEvent::ReasoningContentDelta(text) => assert_eq!(text, "partB"),
         other => panic!("expected reasoning delta, got {other:?}"),
     }
 
-    match &events[2] {
+    match &events[3] {
+        ResponseEvent::OutputItemAdded(ResponseItem::Message { .. }) => {}
+        other => panic!("expected initial message item, got {other:?}"),
+    }
+
+    match &events[4] {
         ResponseEvent::OutputTextDelta(text) => assert_eq!(text, "answer"),
         other => panic!("expected text delta, got {other:?}"),
     }
 
-    match &events[3] {
+    match &events[5] {
         ResponseEvent::OutputItemDone(item) => assert_reasoning(item, "partApartB"),
-        other => panic!("expected reasoning item, got {other:?}"),
+        other => panic!("expected terminal reasoning, got {other:?}"),
     }
 
-    match &events[4] {
+    match &events[6] {
         ResponseEvent::OutputItemDone(item) => assert_message(item, "answer"),
-        other => panic!("expected message item, got {other:?}"),
+        other => panic!("expected terminal message, got {other:?}"),
     }
 
-    assert_matches!(events[5], ResponseEvent::Completed { .. });
+    assert_matches!(events[7], ResponseEvent::Completed { .. });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -285,19 +311,24 @@ async fn streams_reasoning_from_final_message() {
     let sse = "data: {\"choices\":[{\"message\":{\"reasoning\":\"final-cot\"},\"finish_reason\":\"stop\"}]}\n\n";
 
     let events = run_stream(sse).await;
-    assert_eq!(events.len(), 3, "unexpected events: {events:?}");
+    assert_eq!(events.len(), 4, "unexpected events: {events:?}");
 
     match &events[0] {
+        ResponseEvent::OutputItemAdded(ResponseItem::Reasoning { .. }) => {}
+        other => panic!("expected initial reasoning item, got {other:?}"),
+    }
+
+    match &events[1] {
         ResponseEvent::ReasoningContentDelta(text) => assert_eq!(text, "final-cot"),
         other => panic!("expected reasoning delta, got {other:?}"),
     }
 
-    match &events[1] {
+    match &events[2] {
         ResponseEvent::OutputItemDone(item) => assert_reasoning(item, "final-cot"),
         other => panic!("expected reasoning item, got {other:?}"),
     }
 
-    assert_matches!(events[2], ResponseEvent::Completed { .. });
+    assert_matches!(events[3], ResponseEvent::Completed { .. });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -315,19 +346,24 @@ async fn streams_reasoning_before_tool_call() {
     );
 
     let events = run_stream(sse).await;
-    assert_eq!(events.len(), 4, "unexpected events: {events:?}");
+    assert_eq!(events.len(), 5, "unexpected events: {events:?}");
 
     match &events[0] {
+        ResponseEvent::OutputItemAdded(ResponseItem::Reasoning { .. }) => {}
+        other => panic!("expected initial reasoning item, got {other:?}"),
+    }
+
+    match &events[1] {
         ResponseEvent::ReasoningContentDelta(text) => assert_eq!(text, "pre-tool"),
         other => panic!("expected reasoning delta, got {other:?}"),
     }
 
-    match &events[1] {
+    match &events[2] {
         ResponseEvent::OutputItemDone(item) => assert_reasoning(item, "pre-tool"),
         other => panic!("expected reasoning item, got {other:?}"),
     }
 
-    match &events[2] {
+    match &events[3] {
         ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
             name,
             arguments,
@@ -341,7 +377,7 @@ async fn streams_reasoning_before_tool_call() {
         other => panic!("expected function call, got {other:?}"),
     }
 
-    assert_matches!(events[3], ResponseEvent::Completed { .. });
+    assert_matches!(events[4], ResponseEvent::Completed { .. });
 }
 
 #[tokio::test]

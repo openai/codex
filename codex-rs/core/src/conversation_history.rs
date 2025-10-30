@@ -1,12 +1,13 @@
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+
+use crate::util::error_or_panic;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_utils_string::take_bytes_at_char_boundary;
 use codex_utils_string::take_last_bytes_at_char_boundary;
 use std::ops::Deref;
-use tracing::error;
 
 // Model-formatting limits: clients get full streams; only content sent to the model is truncated.
 pub(crate) const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
@@ -499,15 +500,6 @@ fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
     result.push_str(tail_part);
 
     result
-}
-
-#[inline]
-fn error_or_panic(message: String) {
-    if cfg!(debug_assertions) || env!("CARGO_PKG_VERSION").contains("alpha") {
-        panic!("{message}");
-    } else {
-        error!("{message}");
-    }
 }
 
 /// Anything that is not a system message or "reasoning" message is considered

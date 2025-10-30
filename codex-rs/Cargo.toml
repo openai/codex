@@ -122,8 +122,9 @@ escargot = "0.5"
 eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
 http = "1.3.1"
-icu_decimal = "2.0.0"
-icu_locale_core = "2.0.0"
+icu_decimal = "2.1"
+icu_provider = { version = "2.1", features = ["sync"] }
+icu_locale_core = "2.1"
 ignore = "0.4.23"
 image = { version = "^0.25.8", default-features = false }
 indexmap = "2.6.0"
@@ -253,7 +254,7 @@ unwrap_used = "deny"
 # cargo-shear cannot see the platform-specific openssl-sys usage, so we
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
-ignored = ["openssl-sys", "codex-utils-readiness", "codex-utils-tokenizer"]
+ignored = ["icu_provider", "openssl-sys", "codex-utils-readiness", "codex-utils-tokenizer"]
 
 [profile.release]
 lto = "fat"

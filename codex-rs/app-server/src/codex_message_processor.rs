@@ -74,9 +74,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 use codex_core::config::load_config_as_toml;
-use codex_core::config_edit::CONFIG_KEY_EFFORT;
-use codex_core::config_edit::CONFIG_KEY_MODEL;
-use codex_core::config_edit::persist_overrides_and_clear_if_none;
+use codex_core::config_edit::ConfigEditsBuilder;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
@@ -689,19 +687,12 @@ impl CodexMessageProcessor {
             model,
             reasoning_effort,
         } = params;
-        let effort_str = reasoning_effort.map(|effort| effort.to_string());
 
-        let overrides: [(&[&str], Option<&str>); 2] = [
-            (&[CONFIG_KEY_MODEL], model.as_deref()),
-            (&[CONFIG_KEY_EFFORT], effort_str.as_deref()),
-        ];
-
-        match persist_overrides_and_clear_if_none(
-            &self.config.codex_home,
-            self.config.active_profile.as_deref(),
-            &overrides,
-        )
-        .await
+        match ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_profile(self.config.active_profile.as_deref())
+            .set_model(model.as_deref(), reasoning_effort)
+            .apply()
+            .await
         {
             Ok(()) => {
                 let response = SetDefaultModelResponse {};
@@ -710,7 +701,7 @@ impl CodexMessageProcessor {
             Err(err) => {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to persist overrides: {err}"),
+                    message: format!("failed to persist model selection: {err}"),
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;

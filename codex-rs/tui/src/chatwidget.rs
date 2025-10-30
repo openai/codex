@@ -1521,7 +1521,10 @@ impl ChatWidget {
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
-            | EventMsg::ItemCompleted(_) => {}
+            | EventMsg::ItemCompleted(_)
+            | EventMsg::AgentMessageContentDelta(_)
+            | EventMsg::ReasoningContentDelta(_)
+            | EventMsg::ReasoningRawContentDelta(_) => {}
         }
     }
 
