@@ -36,6 +36,7 @@ pub(crate) async fn run_codex_conversation_interactive(
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
+    initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -43,7 +44,7 @@ pub(crate) async fn run_codex_conversation_interactive(
     let CodexSpawnOk { codex, .. } = Codex::spawn(
         config,
         auth_manager,
-        InitialHistory::New,
+        initial_history.unwrap_or(InitialHistory::New),
         SessionSource::SubAgent(SubAgentSource::Review),
     )
     .await?;
@@ -93,6 +94,7 @@ pub(crate) async fn run_codex_conversation_one_shot(
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
+    initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
@@ -103,6 +105,7 @@ pub(crate) async fn run_codex_conversation_one_shot(
         parent_session,
         parent_ctx,
         child_cancel.clone(),
+        initial_history,
     )
     .await?;
 
