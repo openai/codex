@@ -1,6 +1,6 @@
 use crate::config::CONFIG_TOML_FILE;
-use crate::config_types::McpServerConfig;
-use crate::config_types::Notice;
+use crate::config::types::McpServerConfig;
+use crate::config::types::Notice;
 use anyhow::Context;
 use codex_protocol::config_types::ReasoningEffort;
 use std::collections::BTreeMap;
@@ -41,8 +41,8 @@ pub enum ConfigEdit {
 
 // TODO(jif) move to a dedicated file
 mod document_helpers {
-    use crate::config_types::McpServerConfig;
-    use crate::config_types::McpServerTransportConfig;
+    use crate::config::types::McpServerConfig;
+    use crate::config::types::McpServerTransportConfig;
     use toml_edit::Array as TomlArray;
     use toml_edit::InlineTable;
     use toml_edit::Item as TomlItem;
@@ -509,7 +509,7 @@ impl ConfigEditsBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_types::McpServerTransportConfig;
+    use crate::config::types::McpServerTransportConfig;
     use codex_protocol::config_types::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;

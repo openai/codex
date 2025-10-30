@@ -1,23 +1,22 @@
 use crate::auth::AuthCredentialsStoreMode;
 use crate::config_loader::LoadedConfigLayers;
-pub use crate::config_loader::load_config_as_toml;
+use crate::config_loader::load_config_as_toml;
 use crate::config_loader::load_config_layers_with_overrides;
 use crate::config_loader::merge_toml_values;
-use crate::config_profile::ConfigProfile;
-use crate::config_types::DEFAULT_OTEL_ENVIRONMENT;
-use crate::config_types::History;
-use crate::config_types::McpServerConfig;
-use crate::config_types::Notice;
-use crate::config_types::Notifications;
-use crate::config_types::OtelConfig;
-use crate::config_types::OtelConfigToml;
-use crate::config_types::OtelExporterKind;
-use crate::config_types::ReasoningSummaryFormat;
-use crate::config_types::SandboxWorkspaceWrite;
-use crate::config_types::ShellEnvironmentPolicy;
-use crate::config_types::ShellEnvironmentPolicyToml;
-use crate::config_types::Tui;
-use crate::config_types::UriBasedFileOpener;
+use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
+use crate::config::types::History;
+use crate::config::types::McpServerConfig;
+use crate::config::types::Notice;
+use crate::config::types::Notifications;
+use crate::config::types::OtelConfig;
+use crate::config::types::OtelConfigToml;
+use crate::config::types::OtelExporterKind;
+use crate::config::types::ReasoningSummaryFormat;
+use crate::config::types::SandboxWorkspaceWrite;
+use crate::config::types::ShellEnvironmentPolicy;
+use crate::config::types::ShellEnvironmentPolicyToml;
+use crate::config::types::Tui;
+use crate::config::types::UriBasedFileOpener;
 use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
@@ -53,6 +52,11 @@ use std::path::PathBuf;
 
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
+use crate::config::profile::ConfigProfile;
+
+pub mod edit;
+pub mod profile;
+pub mod types;
 
 #[cfg(target_os = "windows")]
 pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
@@ -265,7 +269,7 @@ pub struct Config {
     pub disable_paste_burst: bool,
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
-    pub otel: crate::config_types::OtelConfig,
+    pub otel: crate::config::types::OtelConfig,
 }
 
 impl Config {
@@ -280,7 +284,7 @@ impl Config {
             cli_overrides,
             crate::config_loader::LoaderOverrides::default(),
         )
-        .await?;
+            .await?;
 
         let cfg: ConfigToml = root_value.try_into().map_err(|e| {
             tracing::error!("Failed to deserialize overridden config: {e}");
@@ -300,7 +304,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
         cli_overrides,
         crate::config_loader::LoaderOverrides::default(),
     )
-    .await?;
+        .await?;
 
     let cfg: ConfigToml = root_value.try_into().map_err(|e| {
         tracing::error!("Failed to deserialize overridden config: {e}");
@@ -428,9 +432,9 @@ pub(crate) fn set_project_trusted_inner(
     // is not a table (e.g., an inline table), replace it with an explicit table.
     let needs_proj_table = !projects_tbl.contains_key(project_key.as_str())
         || projects_tbl
-            .get(project_key.as_str())
-            .and_then(|i| i.as_table())
-            .is_none();
+        .get(project_key.as_str())
+        .and_then(|i| i.as_table())
+        .is_none();
     if needs_proj_table {
         projects_tbl.insert(project_key.as_str(), toml_edit::table());
     }
@@ -448,7 +452,7 @@ pub(crate) fn set_project_trusted_inner(
 /// Patch `CODEX_HOME/config.toml` project state.
 /// Use with caution.
 pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Result<()> {
-    use crate::config_edit::ConfigEditsBuilder;
+    use crate::config::edit::ConfigEditsBuilder;
 
     ConfigEditsBuilder::new(codex_home)
         .set_project_trusted(project_path)
@@ -629,13 +633,13 @@ pub struct ConfigToml {
     pub disable_paste_burst: Option<bool>,
 
     /// OTEL configuration.
-    pub otel: Option<crate::config_types::OtelConfigToml>,
+    pub otel: Option<crate::config::types::OtelConfigToml>,
 
     /// Tracks whether the Windows onboarding screen has been acknowledged.
     pub windows_wsl_setup_acknowledged: Option<bool>,
 
     /// Collection of in-product notices (different from notifications)
-    /// See [`crate::config_types::Notices`] for more details
+    /// See [`crate::config::types::Notices`] for more details
     pub notice: Option<Notice>,
 
     /// Legacy, now use features
@@ -737,11 +741,11 @@ impl ConfigToml {
             SandboxMode::ReadOnly => SandboxPolicy::new_read_only_policy(),
             SandboxMode::WorkspaceWrite => match self.sandbox_workspace_write.as_ref() {
                 Some(SandboxWorkspaceWrite {
-                    writable_roots,
-                    network_access,
-                    exclude_tmpdir_env_var,
-                    exclude_slash_tmp,
-                }) => SandboxPolicy::WorkspaceWrite {
+                         writable_roots,
+                         network_access,
+                         exclude_tmpdir_env_var,
+                         exclude_slash_tmp,
+                     }) => SandboxPolicy::WorkspaceWrite {
                     writable_roots: writable_roots.clone(),
                     network_access: *network_access,
                     exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
@@ -778,7 +782,7 @@ impl ConfigToml {
         // worktrees inherit trust from the main project.
         if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd)
             && let Some(project_config_for_root) =
-                projects.get(&repo_root.to_string_lossy().to_string_lossy().to_string())
+            projects.get(&repo_root.to_string_lossy().to_string_lossy().to_string())
         {
             return Some(project_config_for_root.clone());
         }
@@ -1244,12 +1248,12 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use crate::config_edit::ConfigEdit;
-    use crate::config_edit::ConfigEditsBuilder;
-    use crate::config_edit::apply_blocking;
-    use crate::config_types::HistoryPersistence;
-    use crate::config_types::McpServerTransportConfig;
-    use crate::config_types::Notifications;
+    use crate::config::edit::ConfigEdit;
+    use crate::config::edit::ConfigEditsBuilder;
+    use crate::config::edit::apply_blocking;
+    use crate::config::types::HistoryPersistence;
+    use crate::config::types::McpServerTransportConfig;
+    use crate::config::types::Notifications;
     use crate::features::Feature;
 
     use super::*;
@@ -1861,7 +1865,7 @@ trust_level = "trusted"
             vec![("model".to_string(), TomlValue::String("cli".to_string()))],
             overrides,
         )
-        .await?;
+            .await?;
 
         let cfg: ConfigToml = root_value.try_into().map_err(|e| {
             tracing::error!("Failed to deserialize overridden config: {e}");
@@ -2306,7 +2310,7 @@ url = "https://example.com/mcp"
 
     #[tokio::test]
     async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers()
-    -> anyhow::Result<()> {
+        -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
         let config_path = codex_home.path().join(CONFIG_TOML_FILE);
 
@@ -2532,7 +2536,7 @@ model_reasoning_effort = "medium"
 model = "gpt-4.1"
 "#,
         )
-        .await?;
+            .await?;
 
         ConfigEditsBuilder::new(codex_home.path())
             .set_model(Some("o4-mini"), Some(ReasoningEffort::High))
@@ -2598,7 +2602,7 @@ model_reasoning_effort = "medium"
 model = "gpt-5-codex"
 "#,
         )
-        .await?;
+            .await?;
 
         ConfigEditsBuilder::new(codex_home.path())
             .with_profile(Some("dev"))
@@ -3139,7 +3143,7 @@ trust_level = "trusted"
 
     #[test]
     fn test_set_project_trusted_migrates_top_level_inline_projects_preserving_entries()
-    -> anyhow::Result<()> {
+        -> anyhow::Result<()> {
         let initial = r#"toplevel = "baz"
 projects = { "/Users/mbolin/code/codex4" = { trust_level = "trusted", foo = "bar" } , "/Users/mbolin/code/codex3" = { trust_level = "trusted" } }
 model = "foo""#;
@@ -3174,7 +3178,7 @@ trust_level = "trusted"
 
 #[cfg(test)]
 mod notifications_tests {
-    use crate::config_types::Notifications;
+    use crate::config::types::Notifications;
     use assert_matches::assert_matches;
     use serde::Deserialize;
 

@@ -6,7 +6,7 @@
 //! container attached to `Config`.
 
 use crate::config::ConfigToml;
-use crate::config_profile::ConfigProfile;
+use crate::config::profile::ConfigProfile;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
