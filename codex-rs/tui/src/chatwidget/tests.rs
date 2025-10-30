@@ -863,7 +863,6 @@ fn slash_undo_sends_op() {
     }
 }
 
-#[cfg(debug_assertions)]
 #[test]
 fn slash_rollout_displays_current_path() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
@@ -881,7 +880,6 @@ fn slash_rollout_displays_current_path() {
     );
 }
 
-#[cfg(debug_assertions)]
 #[test]
 fn slash_rollout_handles_missing_path() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
