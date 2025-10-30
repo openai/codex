@@ -1410,12 +1410,8 @@ fn build_schema(active_agents: &[String], features: SchemaFeatures) -> Value {
 
     let mut schema = serde_json::Map::new();
     schema.insert(
-        "$schema".to_string(),
-        Value::String("https://json-schema.org/draft/2020-12/schema".to_string()),
-    );
-    schema.insert(
         "title".to_string(),
-        Value::String("Coordinator Turn (CLI-first; agents + review background)".to_string()),
+        Value::String("Coordinator Turn".to_string()),
     );
     schema.insert("type".to_string(), Value::String("object".to_string()));
     schema.insert("additionalProperties".to_string(), Value::Bool(false));
@@ -1740,6 +1736,7 @@ fn build_user_turn_prompt(
     auto_instructions: Option<&str>,
 ) -> Prompt {
     let mut prompt = Prompt::default();
+    prompt.include_additional_instructions = false;
     prompt.store = true;
     prompt.session_id_override = Some(Uuid::new_v4());
     if let Some(instructions) = auto_instructions {
