@@ -1,3 +1,4 @@
+use chrono::Local;
 use os_info::Type as OsType;
 use os_info::Version;
 use serde::Deserialize;
@@ -33,6 +34,7 @@ pub(crate) struct EnvironmentContext {
     pub operating_system: Option<OperatingSystemInfo>,
     pub common_tools: Option<Vec<String>>,
     pub shell: Option<Shell>,
+    pub current_date: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -145,6 +147,7 @@ impl EnvironmentContext {
             operating_system: detect_operating_system_info(),
             common_tools: detect_common_tools(),
             shell,
+            current_date: Some(Local::now().format("%Y-%m-%d").to_string()),
         }
     }
 
@@ -161,6 +164,7 @@ impl EnvironmentContext {
             writable_roots,
             operating_system,
             common_tools,
+            current_date,
             // should compare all fields except shell
             shell: _,
         } = other;
@@ -172,6 +176,7 @@ impl EnvironmentContext {
             && self.writable_roots == *writable_roots
             && self.operating_system == *operating_system
             && self.common_tools == *common_tools
+            && self.current_date == *current_date
     }
 }
 
@@ -248,6 +253,9 @@ impl EnvironmentContext {
                 }
                 lines.push("  </common_tools>".to_string());
             }
+        }
+        if let Some(current_date) = self.current_date {
+            lines.push(format!("  <current_date>{current_date}</current_date>"));
         }
         if let Some(shell) = self.shell
             && let Some(shell_name) = shell.name()
@@ -360,6 +368,7 @@ mod tests {
         );
         context.operating_system = None;
         context.common_tools = None;
+        context.current_date = Some("2025-01-02".to_string());
 
         let expected = r#"<environment_context>
   <cwd>/repo</cwd>
@@ -370,6 +379,7 @@ mod tests {
     <root>/repo</root>
     <root>/tmp</root>
   </writable_roots>
+  <current_date>2025-01-02</current_date>
 </environment_context>"#;
 
         assert_eq!(context.serialize_to_xml(), expected);
@@ -385,11 +395,13 @@ mod tests {
         );
         context.operating_system = None;
         context.common_tools = None;
+        context.current_date = Some("2025-01-02".to_string());
 
         let expected = r#"<environment_context>
   <approval_policy>never</approval_policy>
   <sandbox_mode>read-only</sandbox_mode>
   <network_access>restricted</network_access>
+  <current_date>2025-01-02</current_date>
 </environment_context>"#;
 
         assert_eq!(context.serialize_to_xml(), expected);
@@ -405,11 +417,13 @@ mod tests {
         );
         context.operating_system = None;
         context.common_tools = None;
+        context.current_date = Some("2025-01-02".to_string());
 
         let expected = r#"<environment_context>
   <approval_policy>on-failure</approval_policy>
   <sandbox_mode>danger-full-access</sandbox_mode>
   <network_access>enabled</network_access>
+  <current_date>2025-01-02</current_date>
 </environment_context>"#;
 
         assert_eq!(context.serialize_to_xml(), expected);
@@ -429,6 +443,7 @@ mod tests {
             architecture: Some("aarch64".to_string()),
         });
         context.common_tools = Some(vec!["rg".to_string(), "git".to_string()]);
+        context.current_date = Some("2025-01-02".to_string());
 
         let xml = context.serialize_to_xml();
         assert!(xml.contains("<operating_system>"));
@@ -438,6 +453,7 @@ mod tests {
         assert!(xml.contains("<common_tools>"));
         assert!(xml.contains("<tool>rg</tool>"));
         assert!(xml.contains("<tool>git</tool>"));
+        assert!(xml.contains("<current_date>2025-01-02</current_date>"));
     }
 
     #[test]
@@ -455,6 +471,12 @@ mod tests {
             Some(workspace_write_policy(vec!["/repo"], true)),
             None,
         );
+        // ensure current_date doesn't influence this comparison
+        let fixed_date = Some("2025-01-02".to_string());
+        let mut context1 = context1;
+        context1.current_date = fixed_date.clone();
+        let mut context2 = context2;
+        context2.current_date = fixed_date;
         assert!(!context1.equals_except_shell(&context2));
     }
 
@@ -472,6 +494,10 @@ mod tests {
             Some(SandboxPolicy::new_workspace_write_policy()),
             None,
         );
+        let mut context1 = context1;
+        context1.current_date = Some("2025-01-02".to_string());
+        let mut context2 = context2;
+        context2.current_date = Some("2025-01-02".to_string());
 
         assert!(!context1.equals_except_shell(&context2));
     }
@@ -490,6 +516,10 @@ mod tests {
             Some(workspace_write_policy(vec!["/repo", "/tmp"], true)),
             None,
         );
+        let mut context1 = context1;
+        context1.current_date = Some("2025-01-02".to_string());
+        let mut context2 = context2;
+        context2.current_date = Some("2025-01-02".to_string());
 
         assert!(!context1.equals_except_shell(&context2));
     }
@@ -514,7 +544,31 @@ mod tests {
                 zshrc_path: "/home/user/.zshrc".into(),
             })),
         );
+        let mut context1 = context1;
+        context1.current_date = Some("2025-01-02".to_string());
+        let mut context2 = context2;
+        context2.current_date = Some("2025-01-02".to_string());
 
         assert!(context1.equals_except_shell(&context2));
+    }
+
+    #[test]
+    fn serialize_environment_context_includes_current_date() {
+        let mut context = EnvironmentContext::new(None, None, None, None);
+        context.current_date = Some("2025-01-02".to_string());
+
+        let xml = context.serialize_to_xml();
+        assert!(xml.contains("<current_date>2025-01-02</current_date>"));
+    }
+
+    #[test]
+    fn current_date_format_is_iso8601() {
+        let context = EnvironmentContext::new(None, None, None, None);
+        let date = context
+            .current_date
+            .expect("current_date should be populated");
+        assert_eq!(date.len(), 10);
+        assert_eq!(date.chars().nth(4), Some('-'));
+        assert_eq!(date.chars().nth(7), Some('-'));
     }
 }

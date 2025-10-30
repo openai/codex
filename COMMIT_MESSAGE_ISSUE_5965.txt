@@ -1,0 +1,5 @@
+feat(core): include current date in environment context (#5965)
+
+- add optional `current_date` field to `EnvironmentContext` so turn context carries ISO dates
+- serialize `<current_date>` tags and extend comparisons/tests to tolerate deterministic values
+- cover default date formatting with new unit tests
