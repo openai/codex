@@ -1,18 +1,15 @@
-## @just-every/code v0.4.5
-
-This release tightens chat handoffs, makes MCP configuration smoother, and tidies session management for better day-to-day UX.
+## @just-every/code v0.4.6
+This release polishes the build pipeline and publishes the refreshed CLI package.
 
 ### Changes
-- TUI: Interrupts in-flight runs when `/new` starts a fresh chat so responses never bleed between sessions.
-- TUI/MCP: Keeps the selected MCP row visible while scrolling large server lists.
-- Agents: Refreshes the Enabled toggle UX and persists state immediately in history.
-- Config: Surfaces legacy `~/.codex/prompts` directories so custom prompts load automatically.
-- Rollout: Sorts session history by latest activity to make resume picks faster.
+- Build: keep release notes version in sync during `build-fast` to stop false release failures.
+- Build: drop the release notes gate so `build-fast` runs cleanly in CI.
+- CLI: publish the v0.4.6 package metadata for all platform bundles.
 
 ### Install
-```bash
+```
 npm install -g @just-every/code@latest
 code
 ```
 
-Compare: https://github.com/just-every/code/compare/v0.4.4...v0.4.5
+Compare: https://github.com/just-every/code/compare/v0.4.5...v0.4.6
