@@ -146,7 +146,19 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .unwrap_or_default()
         .to_string();
     let tool_calls = json!(requests[0]["tools"].as_array());
-    let prompt_cache_key = requests[0]["prompt_cache_key"]
+    let prompt_cache_key_first = requests[0]["prompt_cache_key"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let prompt_cache_key_compact = requests[1]["prompt_cache_key"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let prompt_cache_key_after_compact = requests[2]["prompt_cache_key"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let prompt_cache_key_after_resume = requests[3]["prompt_cache_key"]
         .as_str()
         .unwrap_or_default()
         .to_string();
@@ -202,7 +214,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "include": [
         "reasoning.encrypted_content"
       ],
-      "prompt_cache_key": prompt_cache_key
+      "prompt_cache_key": prompt_cache_key_first
     });
     let compact_1 = json!(
     {
@@ -271,7 +283,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "include": [
         "reasoning.encrypted_content"
       ],
-      "prompt_cache_key": prompt_cache_key
+      "prompt_cache_key": prompt_cache_key_compact
     });
     let user_turn_2_after_compact = json!(
     {
@@ -336,7 +348,7 @@ SUMMARY_ONLY_CONTEXT"
       "include": [
         "reasoning.encrypted_content"
       ],
-      "prompt_cache_key": prompt_cache_key
+      "prompt_cache_key": prompt_cache_key_after_compact
     });
     let usert_turn_3_after_resume = json!(
     {
@@ -421,7 +433,7 @@ SUMMARY_ONLY_CONTEXT"
       "include": [
         "reasoning.encrypted_content"
       ],
-      "prompt_cache_key": prompt_cache_key
+      "prompt_cache_key": prompt_cache_key_after_resume
     });
     let user_turn_3_after_fork = json!(
     {

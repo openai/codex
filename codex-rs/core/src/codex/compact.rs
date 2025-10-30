@@ -2,28 +2,15 @@ use std::sync::Arc;
 
 use super::Session;
 use super::TurnContext;
-use super::get_last_assistant_message_from_turn;
-use crate::Prompt;
-use crate::client_common::ResponseEvent;
-use crate::error::CodexErr;
-use crate::error::Result as CodexResult;
-use crate::protocol::AgentMessageEvent;
 use crate::protocol::CompactedItem;
-use crate::protocol::ErrorEvent;
-use crate::protocol::EventMsg;
-use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
 use crate::truncate::truncate_middle;
-use crate::util::backoff;
 use askama::Template;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
-use futures::prelude::*;
-use tracing::error;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
@@ -39,136 +26,54 @@ pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) {
+    persist_turn_context_rollout(&sess, &turn_context).await;
+
     let input = vec![UserInput::Text {
         text: SUMMARIZATION_PROMPT.to_string(),
     }];
-    run_compact_task_inner(sess, turn_context, input).await;
-}
 
-pub(crate) async fn run_compact_task(
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-    input: Vec<UserInput>,
-) -> Option<String> {
-    let start_event = EventMsg::TaskStarted(TaskStartedEvent {
-        model_context_window: turn_context.client.get_model_context_window(),
-    });
-    sess.send_event(&turn_context, start_event).await;
-    run_compact_task_inner(sess.clone(), turn_context, input).await;
-    None
-}
+    // Build forked history from parent to seed sub-agent.
+    let history_snapshot = sess.clone_history().await.get_history();
+    let forked: Vec<RolloutItem> = history_snapshot
+        .iter()
+        .cloned()
+        .map(RolloutItem::ResponseItem)
+        .collect();
 
-async fn run_compact_task_inner(
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-    input: Vec<UserInput>,
-) {
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-
-    let mut history = sess.clone_history().await;
-    history.record_items(&[initial_input_for_turn.into()]);
-
-    let mut truncated_count = 0usize;
-
-    let max_retries = turn_context.client.get_provider().stream_max_retries();
-    let mut retries = 0;
-
-    let rollout_item = RolloutItem::TurnContext(TurnContextItem {
-        cwd: turn_context.cwd.clone(),
-        approval_policy: turn_context.approval_policy,
-        sandbox_policy: turn_context.sandbox_policy.clone(),
-        model: turn_context.client.get_model(),
-        effort: turn_context.client.get_reasoning_effort(),
-        summary: turn_context.client.get_reasoning_summary(),
-    });
-    sess.persist_rollout_items(&[rollout_item]).await;
-
-    loop {
-        let turn_input = history.get_history_for_prompt();
-        let prompt = Prompt {
-            input: turn_input.clone(),
-            ..Default::default()
-        };
-        let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
-
-        match attempt_result {
-            Ok(()) => {
-                if truncated_count > 0 {
-                    sess.notify_background_event(
-                        turn_context.as_ref(),
-                        format!(
-                            "Trimmed {truncated_count} older conversation item(s) before compacting so the prompt fits the model context window."
-                        ),
-                    )
-                    .await;
-                }
+    // Launch sub-agent one-shot; drain to completion and capture summary.
+    let config = turn_context.client.config().as_ref().clone();
+    let cancel = tokio_util::sync::CancellationToken::new();
+    if let Ok(io) = crate::codex_delegate::run_codex_conversation_one_shot_with(
+        config,
+        sess.services.auth_manager.clone(),
+        codex_protocol::protocol::InitialHistory::Forked(forked),
+        codex_protocol::protocol::SubAgentSource::Compact,
+        input,
+        Arc::clone(&sess),
+        Arc::clone(&turn_context),
+        cancel,
+    )
+    .await
+    {
+        let mut summary_text: Option<String> = None;
+        while let Ok(event) = io.next_event().await {
+            if let crate::protocol::EventMsg::TaskComplete(tc) = event.msg {
+                summary_text = tc.last_agent_message;
                 break;
             }
-            Err(CodexErr::Interrupted) => {
-                return;
-            }
-            Err(e @ CodexErr::ContextWindowExceeded) => {
-                if turn_input.len() > 1 {
-                    // Trim from the beginning to preserve cache (prefix-based) and keep recent messages intact.
-                    error!(
-                        "Context window exceeded while compacting; removing oldest history item. Error: {e}"
-                    );
-                    history.remove_first_item();
-                    truncated_count += 1;
-                    retries = 0;
-                    continue;
-                }
-                sess.set_total_tokens_full(turn_context.as_ref()).await;
-                let event = EventMsg::Error(ErrorEvent {
-                    message: e.to_string(),
-                });
-                sess.send_event(&turn_context, event).await;
-                return;
-            }
-            Err(e) => {
-                if retries < max_retries {
-                    retries += 1;
-                    let delay = backoff(retries);
-                    sess.notify_stream_error(
-                        turn_context.as_ref(),
-                        format!("Reconnecting... {retries}/{max_retries}"),
-                    )
-                    .await;
-                    tokio::time::sleep(delay).await;
-                    continue;
-                } else {
-                    let event = EventMsg::Error(ErrorEvent {
-                        message: e.to_string(),
-                    });
-                    sess.send_event(&turn_context, event).await;
-                    return;
-                }
+            if matches!(event.msg, crate::protocol::EventMsg::TurnAborted(_)) {
+                break;
             }
         }
+        if let Some(summary) = summary_text {
+            apply_compaction(sess, turn_context, &summary).await;
+            let event =
+                crate::protocol::EventMsg::AgentMessage(crate::protocol::AgentMessageEvent {
+                    message: "Compact task completed".to_string(),
+                });
+            sess.send_event(&Arc::clone(&turn_context), event).await;
+        }
     }
-
-    let history_snapshot = sess.clone_history().await.get_history();
-    let summary_text = get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
-    let user_messages = collect_user_messages(&history_snapshot);
-    let initial_context = sess.build_initial_context(turn_context.as_ref());
-    let mut new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
-    let ghost_snapshots: Vec<ResponseItem> = history_snapshot
-        .iter()
-        .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
-        .cloned()
-        .collect();
-    new_history.extend(ghost_snapshots);
-    sess.replace_history(new_history).await;
-
-    let rollout_item = RolloutItem::Compacted(CompactedItem {
-        message: summary_text.clone(),
-    });
-    sess.persist_rollout_items(&[rollout_item]).await;
-
-    let event = EventMsg::AgentMessage(AgentMessageEvent {
-        message: "Compact task completed".to_string(),
-    });
-    sess.send_event(&turn_context, event).await;
 }
 
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
@@ -249,36 +154,45 @@ fn build_compacted_history_with_limit(
     history
 }
 
-async fn drain_to_completed(
-    sess: &Session,
-    turn_context: &TurnContext,
-    prompt: &Prompt,
-) -> CodexResult<()> {
-    let mut stream = turn_context.client.clone().stream(prompt).await?;
-    loop {
-        let maybe_event = stream.next().await;
-        let Some(event) = maybe_event else {
-            return Err(CodexErr::Stream(
-                "stream closed before response.completed".into(),
-                None,
-            ));
-        };
-        match event {
-            Ok(ResponseEvent::OutputItemDone(item)) => {
-                sess.record_into_history(std::slice::from_ref(&item)).await;
-            }
-            Ok(ResponseEvent::RateLimits(snapshot)) => {
-                sess.update_rate_limits(turn_context, snapshot).await;
-            }
-            Ok(ResponseEvent::Completed { token_usage, .. }) => {
-                sess.update_token_usage_info(turn_context, token_usage.as_ref())
-                    .await;
-                return Ok(());
-            }
-            Ok(_) => continue,
-            Err(e) => return Err(e),
-        }
-    }
+// streaming helpers removed; compact now uses the Codex delegate for sampling.
+
+/// Apply compaction to the parent session given a summary text: rebuild the
+/// conversation with a bridge message, preserve ghost snapshots, persist the
+/// Compacted rollout entry, and replace history.
+pub(crate) async fn apply_compaction(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    summary_text: &str,
+) {
+    let history_snapshot = sess.clone_history().await.get_history();
+    let user_messages = collect_user_messages(&history_snapshot);
+    let initial_context = sess.build_initial_context(turn_context.as_ref());
+    let mut new_history = build_compacted_history(initial_context, &user_messages, summary_text);
+    let ghost_snapshots: Vec<ResponseItem> = history_snapshot
+        .iter()
+        .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
+        .cloned()
+        .collect();
+    new_history.extend(ghost_snapshots);
+    sess.replace_history(new_history).await;
+
+    let rollout_item = RolloutItem::Compacted(CompactedItem {
+        message: summary_text.to_string(),
+    });
+    sess.persist_rollout_items(&[rollout_item]).await;
+}
+
+/// Persist a TurnContext rollout entry capturing the model/session context.
+pub(crate) async fn persist_turn_context_rollout(sess: &Session, turn_context: &TurnContext) {
+    let rollout_item = RolloutItem::TurnContext(TurnContextItem {
+        cwd: turn_context.cwd.clone(),
+        approval_policy: turn_context.approval_policy,
+        sandbox_policy: turn_context.sandbox_policy.clone(),
+        model: turn_context.client.get_model(),
+        effort: turn_context.client.get_reasoning_effort(),
+        summary: turn_context.client.get_reasoning_summary(),
+    });
+    sess.persist_rollout_items(&[rollout_item]).await;
 }
 
 #[cfg(test)]
