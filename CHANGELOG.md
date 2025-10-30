@@ -7,6 +7,11 @@
 
 - (none)
 
+## [0.4.7] - 2025-10-30
+
+- TUI/Auto Drive: Keep router answers visible in the transcript so automation context stays complete. (cf17fc1)
+- TUI/Auto Drive: Persist diagnostics follow-up prompts when resuming runs to avoid lost context. (d1e634d)
+
 ## [0.4.6] - 2025-10-30
 
 - Build: keep release notes version in sync during `build-fast` to stop false release failures. (862851d)

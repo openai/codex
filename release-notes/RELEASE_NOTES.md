@@ -1,10 +1,10 @@
-## @just-every/code v0.4.6
-This release polishes the build pipeline and publishes the refreshed CLI package.
+## @just-every/code v0.4.7
+
+This release polishes Auto Drive transcripts to keep automation context intact.
 
 ### Changes
-- Build: keep release notes version in sync during `build-fast` to stop false release failures.
-- Build: drop the release notes gate so `build-fast` runs cleanly in CI.
-- CLI: publish the v0.4.6 package metadata for all platform bundles.
+- TUI/Auto Drive: Keep router answers visible in the transcript so automation context stays complete.
+- TUI/Auto Drive: Persist diagnostics follow-up prompts when resuming runs to avoid lost context.
 
 ### Install
 ```
@@ -12,4 +12,4 @@ npm install -g @just-every/code@latest
 code
 ```
 
-Compare: https://github.com/just-every/code/compare/v0.4.5...v0.4.6
+Compare: https://github.com/just-every/code/compare/v0.4.6...v0.4.7
