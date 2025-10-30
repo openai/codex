@@ -174,6 +174,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         model_provider,
         codex_linux_sandbox_exe,
         base_instructions: None,
+        developer_instructions: None,
         compact_prompt: None,
         include_apply_patch_tool: None,
         include_view_image_tool: None,

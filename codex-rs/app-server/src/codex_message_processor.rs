@@ -1760,6 +1760,7 @@ async fn derive_config_from_params(
         sandbox: sandbox_mode,
         config: cli_overrides,
         base_instructions,
+        developer_instructions,
         compact_prompt,
         include_apply_patch_tool,
     } = params;
@@ -1773,6 +1774,7 @@ async fn derive_config_from_params(
         model_provider,
         codex_linux_sandbox_exe,
         base_instructions,
+        developer_instructions,
         compact_prompt,
         include_apply_patch_tool,
         include_view_image_tool: None,
