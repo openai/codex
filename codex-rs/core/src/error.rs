@@ -320,10 +320,10 @@ fn format_retry_timestamp(resets_at: &DateTime<Utc>) -> String {
 
 fn day_suffix(day: u32) -> &'static str {
     match day {
-        11 | 12 | 13 => "th",
+        11..=13 => "th",
         _ => match day % 10 {
             1 => "st",
-            2 => "nd",
+            2 => "nd", // codespell:ignore
             3 => "rd",
             _ => "th",
         },
