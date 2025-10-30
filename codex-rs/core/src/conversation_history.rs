@@ -418,38 +418,47 @@ impl ConversationHistory {
     }
 }
 
-/// Apply a single truncation across all text items, preserving images.
-///
-/// - Concatenates all text segments from `items`.
-/// - Applies `format_output_for_model_body` once to the combined text.
-/// - Rebuilds the vector and replacing the text
-///   occurrence with the globally truncated text.
 fn globally_truncate_function_output_items(
     items: &[FunctionCallOutputContentItem],
 ) -> Vec<FunctionCallOutputContentItem> {
-    // Collect all text into one buffer.
-    let mut combined_text = String::new();
-    for it in items {
-        if let FunctionCallOutputContentItem::InputText { text } = it {
-            combined_text.push_str(text);
-        }
-    }
-
-    // Start with a single truncated text item when any text exists.
     let mut out: Vec<FunctionCallOutputContentItem> = Vec::with_capacity(items.len());
-    if !combined_text.is_empty() {
-        out.push(FunctionCallOutputContentItem::InputText {
-            text: format_output_for_model_body(&combined_text),
-        });
+    let mut remaining = MODEL_FORMAT_MAX_BYTES;
+    let mut omitted_text_items = 0usize;
+
+    for it in items {
+        match it {
+            FunctionCallOutputContentItem::InputText { text } => {
+                if remaining == 0 {
+                    omitted_text_items += 1;
+                    continue;
+                }
+
+                let len = text.len();
+                if len <= remaining {
+                    out.push(FunctionCallOutputContentItem::InputText { text: text.clone() });
+                    remaining -= len;
+                } else {
+                    let slice = take_bytes_at_char_boundary(text, remaining);
+                    if !slice.is_empty() {
+                        out.push(FunctionCallOutputContentItem::InputText {
+                            text: slice.to_string(),
+                        });
+                    }
+                    remaining = 0;
+                }
+            }
+            FunctionCallOutputContentItem::InputImage { image_url } => {
+                out.push(FunctionCallOutputContentItem::InputImage {
+                    image_url: image_url.clone(),
+                });
+            }
+        }
     }
 
-    // Append images.
-    for it in items {
-        if let FunctionCallOutputContentItem::InputImage { image_url } = it {
-            out.push(FunctionCallOutputContentItem::InputImage {
-                image_url: image_url.clone(),
-            });
-        }
+    if omitted_text_items > 0 {
+        out.push(FunctionCallOutputContentItem::InputText {
+            text: format!("[... omitted {omitted_text_items} text items ...]"),
+        });
     }
 
     out
@@ -944,28 +953,35 @@ mod tests {
     }
 
     #[test]
-    fn collapses_multiple_text_items_and_appends_images() {
-        // Arrange: text, image, text, image, text
+    fn truncates_across_multiple_under_limit_texts_and_reports_omitted() {
+        // Arrange: several text items, none exceeding per-item limit, but total exceeds budget.
+        let budget = MODEL_FORMAT_MAX_BYTES;
+        let t1_len = (budget / 2).saturating_sub(10);
+        let t2_len = (budget / 2).saturating_sub(10);
+        let remaining_after_t1_t2 = budget.saturating_sub(t1_len + t2_len);
+        let t3_len = 50; // gets truncated to remaining_after_t1_t2
+        let t4_len = 5; // omitted
+        let t5_len = 7; // omitted
+
+        let t1 = "a".repeat(t1_len);
+        let t2 = "b".repeat(t2_len);
+        let t3 = "c".repeat(t3_len);
+        let t4 = "d".repeat(t4_len);
+        let t5 = "e".repeat(t5_len);
+
         let item = ResponseItem::FunctionCallOutput {
-            call_id: "call-merge".to_string(),
+            call_id: "call-omit".to_string(),
             output: FunctionCallOutputPayload {
                 content: "irrelevant".to_string(),
                 content_items: Some(vec![
-                    FunctionCallOutputContentItem::InputText {
-                        text: "alpha-".to_string(),
-                    },
+                    FunctionCallOutputContentItem::InputText { text: t1 },
+                    FunctionCallOutputContentItem::InputText { text: t2 },
                     FunctionCallOutputContentItem::InputImage {
-                        image_url: "img:1".to_string(),
+                        image_url: "img:mid".to_string(),
                     },
-                    FunctionCallOutputContentItem::InputText {
-                        text: "beta-".to_string(),
-                    },
-                    FunctionCallOutputContentItem::InputImage {
-                        image_url: "img:2".to_string(),
-                    },
-                    FunctionCallOutputContentItem::InputText {
-                        text: "gamma".to_string(),
-                    },
+                    FunctionCallOutputContentItem::InputText { text: t3 },
+                    FunctionCallOutputContentItem::InputText { text: t4 },
+                    FunctionCallOutputContentItem::InputText { text: t5 },
                 ]),
                 success: Some(true),
             },
@@ -976,98 +992,39 @@ mod tests {
         assert_eq!(history.items.len(), 1);
         let json = serde_json::to_value(&history.items[0]).expect("serialize to json");
 
-        // Expect output as an array: [text(alpha-beta-gamma), image(img:1), image(img:2)]
         let output = json
             .get("output")
             .expect("output field")
             .as_array()
             .expect("array output");
 
-        assert_eq!(output.len(), 3);
-        assert_eq!(
-            output[0],
-            serde_json::json!({"type": "input_text", "text": "alpha-beta-gamma"})
-        );
-        assert_eq!(
-            output[1],
-            serde_json::json!({"type": "input_image", "image_url": "img:1"})
-        );
+        // Expect: t1 (full), t2 (full), image, t3 (truncated), summary mentioning 2 omitted.
+        assert_eq!(output.len(), 5);
+
+        let first = output[0].as_object().expect("first obj");
+        assert_eq!(first.get("type").unwrap(), "input_text");
+        let first_text = first.get("text").unwrap().as_str().unwrap();
+        assert_eq!(first_text.len(), t1_len);
+
+        let second = output[1].as_object().expect("second obj");
+        assert_eq!(second.get("type").unwrap(), "input_text");
+        let second_text = second.get("text").unwrap().as_str().unwrap();
+        assert_eq!(second_text.len(), t2_len);
+
         assert_eq!(
             output[2],
-            serde_json::json!({"type": "input_image", "image_url": "img:2"})
-        );
-    }
-
-    #[test]
-    fn globally_truncates_combined_text_and_appends_images() {
-        // Build many lines of text split across two items, with images around them.
-        let total_lines = MODEL_FORMAT_MAX_LINES + 120; // exceed line limit
-        let part1: String = (0..(total_lines / 2))
-            .map(|i| format!("p1-{i}\n"))
-            .collect();
-        let part2: String = ((total_lines / 2)..total_lines)
-            .map(|i| format!("p2-{i}\n"))
-            .collect();
-
-        let item = ResponseItem::FunctionCallOutput {
-            call_id: "call-trunc".to_string(),
-            output: FunctionCallOutputPayload {
-                content: "irrelevant".to_string(),
-                content_items: Some(vec![
-                    FunctionCallOutputContentItem::InputImage {
-                        image_url: "img:first".to_string(),
-                    },
-                    FunctionCallOutputContentItem::InputText { text: part1 },
-                    FunctionCallOutputContentItem::InputImage {
-                        image_url: "img:middle".to_string(),
-                    },
-                    FunctionCallOutputContentItem::InputText { text: part2 },
-                ]),
-                success: Some(true),
-            },
-        };
-
-        let mut history = ConversationHistory::new();
-        history.record_items([&item]);
-        assert_eq!(history.items.len(), 1);
-        let json = serde_json::to_value(&history.items[0]).expect("serialize to json");
-        let output = json
-            .get("output")
-            .expect("output field")
-            .as_array()
-            .expect("array output");
-
-        // Order should be: combined truncated text, then images
-        assert_eq!(output.len(), 3);
-
-        let text_obj = output[0].as_object().expect("text obj");
-        assert_eq!(text_obj.get("type").unwrap(), "input_text");
-        let text_val = text_obj.get("text").unwrap().as_str().unwrap();
-        // Asserts that truncation header and omitted marker exist.
-        let expected_header = format!("Total output lines: {}", (MODEL_FORMAT_MAX_LINES + 120));
-        assert!(
-            text_val.starts_with(&expected_header),
-            "missing header: {text_val}"
-        );
-        let omitted = (MODEL_FORMAT_MAX_LINES + 120) - MODEL_FORMAT_MAX_LINES;
-        let expected_marker = format!(
-            "[... omitted {} of {} lines ...]",
-            omitted,
-            MODEL_FORMAT_MAX_LINES + 120
-        );
-        assert!(
-            text_val.contains(&expected_marker),
-            "missing omitted marker: {text_val}"
+            serde_json::json!({"type": "input_image", "image_url": "img:mid"})
         );
 
-        assert_eq!(
-            output[1],
-            serde_json::json!({"type": "input_image", "image_url": "img:first"})
-        );
-        assert_eq!(
-            output[2],
-            serde_json::json!({"type": "input_image", "image_url": "img:middle"})
-        );
+        let fourth = output[3].as_object().expect("fourth obj");
+        assert_eq!(fourth.get("type").unwrap(), "input_text");
+        let fourth_text = fourth.get("text").unwrap().as_str().unwrap();
+        assert_eq!(fourth_text.len(), remaining_after_t1_t2);
+
+        let summary = output[4].as_object().expect("summary obj");
+        assert_eq!(summary.get("type").unwrap(), "input_text");
+        let summary_text = summary.get("text").unwrap().as_str().unwrap();
+        assert!(summary_text.contains("omitted 2 text items"));
     }
 
     //TODO(aibrahim): run CI in release mode.
