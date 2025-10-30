@@ -151,9 +151,10 @@ pub(crate) fn highlight_bash_to_lines(script: &str) -> Vec<Line<'static>> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_os = "windows"))]
     use super::*;
+    #[cfg(not(target_os = "windows"))]
     use pretty_assertions::assert_eq;
-
     #[cfg(not(target_os = "windows"))]
     use ratatui::style::Modifier;
 
