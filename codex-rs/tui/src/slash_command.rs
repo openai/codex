@@ -27,6 +27,8 @@ pub enum SlashCommand {
     Quit,
     Feedback,
     #[cfg(debug_assertions)]
+    Rollout,
+    #[cfg(debug_assertions)]
     TestApproval,
 }
 
@@ -48,6 +50,8 @@ impl SlashCommand {
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
+            #[cfg(debug_assertions)]
+            SlashCommand::Rollout => "print the rollout file path",
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "test approval request",
         }
@@ -77,6 +81,8 @@ impl SlashCommand {
             | SlashCommand::Feedback
             | SlashCommand::Quit => true,
 
+            #[cfg(debug_assertions)]
+            SlashCommand::Rollout => true,
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => true,
         }
