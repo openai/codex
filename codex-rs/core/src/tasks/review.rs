@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
@@ -112,10 +113,13 @@ async fn process_review_events(
                 }
                 prev_agent_message = Some(event);
             }
-            // Suppress ItemCompleted for assistant messages: forwarding it would
-            // trigger legacy AgentMessage via as_legacy_events(), which this
+            // Suppress ItemCompleted only for assistant messages: forwarding it
+            // would trigger legacy AgentMessage via as_legacy_events(), which this
             // review flow intentionally hides in favor of structured output.
-            EventMsg::ItemCompleted(ItemCompletedEvent { .. })
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::AgentMessage(_),
+                ..
+            })
             | EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { .. })
             | EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent { .. }) => {}
             EventMsg::TaskComplete(task_complete) => {
