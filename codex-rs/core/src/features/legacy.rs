@@ -34,10 +34,6 @@ const ALIASES: &[Alias] = &[
         feature: Feature::ApplyPatchFreeform,
     },
     Alias {
-        legacy_key: "include_view_image_tool",
-        feature: Feature::ViewImageTool,
-    },
-    Alias {
         legacy_key: "web_search",
         feature: Feature::WebSearchRequest,
     },
@@ -56,7 +52,6 @@ pub(crate) fn feature_for_key(key: &str) -> Option<Feature> {
 #[derive(Debug, Default)]
 pub struct LegacyFeatureToggles {
     pub include_apply_patch_tool: Option<bool>,
-    pub include_view_image_tool: Option<bool>,
     pub experimental_sandbox_command_assessment: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
     pub experimental_use_exec_command_tool: Option<bool>,
@@ -109,12 +104,6 @@ impl LegacyFeatureToggles {
             Feature::WebSearchRequest,
             self.tools_web_search,
             "tools.web_search",
-        );
-        set_if_some(
-            features,
-            Feature::ViewImageTool,
-            self.include_view_image_tool,
-            "include_view_image_tool",
         );
         set_if_some(
             features,

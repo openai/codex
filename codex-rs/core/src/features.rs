@@ -82,7 +82,6 @@ pub struct Features {
 #[derive(Debug, Clone, Default)]
 pub struct FeatureOverrides {
     pub include_apply_patch_tool: Option<bool>,
-    pub include_view_image_tool: Option<bool>,
     pub web_search_request: Option<bool>,
     pub experimental_sandbox_command_assessment: Option<bool>,
 }
@@ -91,7 +90,6 @@ impl FeatureOverrides {
     fn apply(self, features: &mut Features) {
         LegacyFeatureToggles {
             include_apply_patch_tool: self.include_apply_patch_tool,
-            include_view_image_tool: self.include_view_image_tool,
             tools_web_search: self.web_search_request,
             ..Default::default()
         }
@@ -193,7 +191,6 @@ impl Features {
 
         let profile_legacy = LegacyFeatureToggles {
             include_apply_patch_tool: config_profile.include_apply_patch_tool,
-            include_view_image_tool: config_profile.include_view_image_tool,
             experimental_sandbox_command_assessment: config_profile
                 .experimental_sandbox_command_assessment,
             experimental_use_freeform_apply_patch: config_profile
