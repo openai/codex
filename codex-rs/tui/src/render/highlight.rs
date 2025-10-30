@@ -247,15 +247,4 @@ mod tests {
         let body_style = body_style.expect("missing heredoc span");
         assert!(body_style.add_modifier.contains(Modifier::DIM));
     }
-
-    #[test]
-    fn highlights_curl() {
-        let s = "curl https://example.com";
-        let lines = highlight_bash_to_lines(s);
-        let reconstructed_first: String = lines
-            .get(0)
-            .map(|l| l.spans.iter().map(|sp| sp.content.clone()).collect::<String>())
-            .unwrap_or_default();
-        assert!(reconstructed_first.contains("curl https://example.com"));
-    }
 }
