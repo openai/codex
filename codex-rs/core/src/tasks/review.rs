@@ -4,6 +4,8 @@ use async_trait::async_trait;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AgentMessageContentDeltaEvent;
+use codex_protocol::protocol::AgentMessageDeltaEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExitedReviewModeEvent;
@@ -114,10 +116,9 @@ async fn process_review_events(
             // Suppress ItemCompleted for assistant messages: forwarding it would
             // trigger legacy AgentMessage via as_legacy_events(), which this
             // review flow intentionally hides in favor of structured output.
-            EventMsg::ItemCompleted(ItemCompletedEvent {
-                item: TurnItem::AgentMessage(_),
-                ..
-            }) => {}
+            EventMsg::ItemCompleted(ItemCompletedEvent { .. })
+            | EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { .. })
+            | EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent { .. }) => {}
             EventMsg::TaskComplete(task_complete) => {
                 // Parse review output from the last agent message (if present).
                 let out = task_complete
