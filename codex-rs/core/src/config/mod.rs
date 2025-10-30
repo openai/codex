@@ -250,9 +250,6 @@ pub struct Config {
     /// https://github.com/modelcontextprotocol/rust-sdk
     pub use_experimental_use_rmcp_client: bool,
 
-    /// Include the `view_image` tool that lets the agent attach a local image path to context.
-    pub include_view_image_tool: bool,
-
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
 
@@ -841,7 +838,6 @@ pub struct ConfigOverrides {
     pub developer_instructions: Option<String>,
     pub compact_prompt: Option<String>,
     pub include_apply_patch_tool: Option<bool>,
-    pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub experimental_sandbox_command_assessment: Option<bool>,
@@ -873,7 +869,6 @@ impl Config {
             developer_instructions,
             compact_prompt,
             include_apply_patch_tool: include_apply_patch_tool_override,
-            include_view_image_tool: include_view_image_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             experimental_sandbox_command_assessment: sandbox_command_assessment_override,
@@ -900,7 +895,6 @@ impl Config {
 
         let feature_overrides = FeatureOverrides {
             include_apply_patch_tool: include_apply_patch_tool_override,
-            include_view_image_tool: include_view_image_tool_override,
             web_search_request: override_tools_web_search_request,
             experimental_sandbox_command_assessment: sandbox_command_assessment_override,
         };
@@ -998,7 +992,6 @@ impl Config {
         let history = cfg.history.unwrap_or_default();
 
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
-        let include_view_image_tool_flag = features.enabled(Feature::ViewImageTool);
         let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
         let use_experimental_streamable_shell_tool = features.enabled(Feature::StreamableShell);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
@@ -1160,7 +1153,6 @@ impl Config {
             use_experimental_streamable_shell_tool,
             use_experimental_unified_exec_tool,
             use_experimental_use_rmcp_client,
-            include_view_image_tool: include_view_image_tool_flag,
             features,
             active_profile: active_profile_name,
             active_project,
@@ -1595,7 +1587,7 @@ trust_level = "trusted"
         profiles.insert(
             "work".to_string(),
             ConfigProfile {
-                include_view_image_tool: Some(false),
+                tools_view_image: Some(false),
                 ..Default::default()
             },
         );
@@ -1612,7 +1604,6 @@ trust_level = "trusted"
         )?;
 
         assert!(!config.features.enabled(Feature::ViewImageTool));
-        assert!(!config.include_view_image_tool);
 
         Ok(())
     }
@@ -2908,7 +2899,6 @@ model_verbosity = "high"
                 use_experimental_streamable_shell_tool: false,
                 use_experimental_unified_exec_tool: false,
                 use_experimental_use_rmcp_client: false,
-                include_view_image_tool: true,
                 features: Features::with_defaults(),
                 active_profile: Some("o3".to_string()),
                 active_project: ProjectConfig { trust_level: None },
@@ -2981,7 +2971,6 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
-            include_view_image_tool: true,
             features: Features::with_defaults(),
             active_profile: Some("gpt3".to_string()),
             active_project: ProjectConfig { trust_level: None },
@@ -3069,7 +3058,6 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
-            include_view_image_tool: true,
             features: Features::with_defaults(),
             active_profile: Some("zdr".to_string()),
             active_project: ProjectConfig { trust_level: None },
@@ -3143,7 +3131,6 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
-            include_view_image_tool: true,
             features: Features::with_defaults(),
             active_profile: Some("gpt5".to_string()),
             active_project: ProjectConfig { trust_level: None },
