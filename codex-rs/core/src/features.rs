@@ -296,7 +296,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,
-        key: "experimental_enable_windows_sandbox",
+        key: "enable_experimental_windows_sandbox",
         stage: Stage::Experimental,
         default_enabled: false,
     },
