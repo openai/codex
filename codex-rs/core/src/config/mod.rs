@@ -128,6 +128,9 @@ pub struct Config {
     /// Base instructions override.
     pub base_instructions: Option<String>,
 
+    /// Compact prompt override.
+    pub compact_prompt: Option<String>,
+
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
     /// processing a user submission). The value must be the full command
@@ -540,6 +543,8 @@ pub struct ConfigToml {
 
     /// System instructions.
     pub instructions: Option<String>,
+    /// Compact prompt used for history compaction.
+    pub compact_prompt: Option<String>,
 
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     #[serde(default)]
@@ -644,6 +649,7 @@ pub struct ConfigToml {
 
     /// Legacy, now use features
     pub experimental_instructions_file: Option<PathBuf>,
+    pub experimental_compact_prompt_file: Option<PathBuf>,
     pub experimental_use_exec_command_tool: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
@@ -824,6 +830,7 @@ pub struct ConfigOverrides {
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
+    pub compact_prompt: Option<String>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
@@ -854,6 +861,7 @@ impl Config {
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
             base_instructions,
+            compact_prompt,
             include_apply_patch_tool: include_apply_patch_tool_override,
             include_view_image_tool: include_view_image_tool_override,
             show_raw_agent_reasoning,
@@ -1030,6 +1038,15 @@ impl Config {
                 .and_then(|info| info.auto_compact_token_limit)
         });
 
+        let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
         // behaviour matches other path-like config values.
@@ -1037,9 +1054,23 @@ impl Config {
             .experimental_instructions_file
             .as_ref()
             .or(cfg.experimental_instructions_file.as_ref());
-        let file_base_instructions =
-            Self::get_base_instructions(experimental_instructions_path, &resolved_cwd)?;
+        let file_base_instructions = Self::load_override_from_file(
+            experimental_instructions_path,
+            &resolved_cwd,
+            "experimental instructions file",
+        )?;
         let base_instructions = base_instructions.or(file_base_instructions);
+
+        let experimental_compact_prompt_path = config_profile
+            .experimental_compact_prompt_file
+            .as_ref()
+            .or(cfg.experimental_compact_prompt_file.as_ref());
+        let file_compact_prompt = Self::load_override_from_file(
+            experimental_compact_prompt_path,
+            &resolved_cwd,
+            "experimental compact prompt file",
+        )?;
+        let compact_prompt = compact_prompt.or(file_compact_prompt);
 
         // Default review model when not set in config; allow CLI override to take precedence.
         let review_model = override_review_model
@@ -1064,6 +1095,7 @@ impl Config {
             notify: cfg.notify,
             user_instructions,
             base_instructions,
+            compact_prompt,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
@@ -1160,18 +1192,15 @@ impl Config {
         None
     }
 
-    fn get_base_instructions(
+    fn load_override_from_file(
         path: Option<&PathBuf>,
         cwd: &Path,
+        description: &str,
     ) -> std::io::Result<Option<String>> {
-        let p = match path.as_ref() {
-            None => return Ok(None),
-            Some(p) => p,
+        let Some(p) = path else {
+            return Ok(None);
         };
 
-        // Resolve relative paths against the provided cwd to make CLI
-        // overrides consistent regardless of where the process was launched
-        // from.
         let full_path = if p.is_relative() {
             cwd.join(p)
         } else {
@@ -1181,10 +1210,7 @@ impl Config {
         let contents = std::fs::read_to_string(&full_path).map_err(|e| {
             std::io::Error::new(
                 e.kind(),
-                format!(
-                    "failed to read experimental instructions file {}: {e}",
-                    full_path.display()
-                ),
+                format!("failed to read {description} {}: {e}", full_path.display()),
             )
         })?;
 
@@ -1192,10 +1218,7 @@ impl Config {
         if s.is_empty() {
             Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!(
-                    "experimental instructions file is empty: {}",
-                    full_path.display()
-                ),
+                format!("{description} is empty: {}", full_path.display()),
             ))
         } else {
             Ok(Some(s))
@@ -2653,6 +2676,61 @@ model = "gpt-5-codex"
         }
     }
 
+    #[test]
+    fn cli_override_sets_compact_prompt() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let overrides = ConfigOverrides {
+            compact_prompt: Some("Use the compact override".to_string()),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            overrides,
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.compact_prompt.as_deref(),
+            Some("Use the compact override")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn loads_compact_prompt_from_file() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let workspace = codex_home.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+
+        let prompt_path = workspace.join("compact_prompt.txt");
+        std::fs::write(&prompt_path, "  summarize differently  ")?;
+
+        let cfg = ConfigToml {
+            experimental_compact_prompt_file: Some(PathBuf::from("compact_prompt.txt")),
+            ..Default::default()
+        };
+
+        let overrides = ConfigOverrides {
+            cwd: Some(workspace),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            overrides,
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.compact_prompt.as_deref(),
+            Some("summarize differently")
+        );
+
+        Ok(())
+    }
+
     fn create_test_fixture() -> std::io::Result<PrecedenceTestFixture> {
         let toml = r#"
 model = "o3"
@@ -2808,6 +2886,7 @@ model_verbosity = "high"
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
+                compact_prompt: None,
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
@@ -2879,6 +2958,7 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            compact_prompt: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -2965,6 +3045,7 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            compact_prompt: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -3037,6 +3118,7 @@ model_verbosity = "high"
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            compact_prompt: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
