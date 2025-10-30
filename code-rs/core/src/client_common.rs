@@ -582,7 +582,10 @@ mod tests {
 
         let v = serde_json::to_value(&req).expect("json");
         let text = v.get("text").expect("text field");
-        assert!(text.get("verbosity").is_none());
+        assert_eq!(
+            text.get("verbosity").and_then(|v| v.as_str()),
+            Some("medium")
+        );
         let format = text.get("format").expect("format field");
 
         assert_eq!(
