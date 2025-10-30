@@ -841,7 +841,6 @@ dependencies = [
  "eventsource-stream",
  "futures",
  "maplit",
- "once_cell",
  "regex-lite",
  "reqwest",
  "serde",
@@ -1233,7 +1232,6 @@ name = "codex-git"
 version = "0.0.0"
 dependencies = [
  "assert_matches",
- "once_cell",
  "pretty_assertions",
  "regex",
  "schemars 0.8.22",

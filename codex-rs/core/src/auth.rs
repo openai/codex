@@ -22,7 +22,6 @@ use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
 use crate::config::Config;
 use crate::default_client::CodexHttpClient;
-use crate::token_data::PlanType;
 use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;
 use crate::util::try_parse_error_message;
@@ -151,11 +150,6 @@ impl CodexAuth {
 
     pub fn get_account_email(&self) -> Option<String> {
         self.get_current_token_data().and_then(|t| t.id_token.email)
-    }
-
-    pub(crate) fn get_plan_type(&self) -> Option<PlanType> {
-        self.get_current_token_data()
-            .and_then(|t| t.id_token.chatgpt_plan_type)
     }
 
     fn get_current_auth_json(&self) -> Option<AuthDotJson> {

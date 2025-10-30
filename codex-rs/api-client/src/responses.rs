@@ -1,6 +1,6 @@
 use std::io::BufRead;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -18,7 +18,6 @@ use eventsource_stream::Eventsource;
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
-use once_cell::sync::OnceCell;
 use regex_lite::Regex;
 use reqwest::StatusCode;
 use reqwest::header::HeaderMap;
@@ -674,7 +673,7 @@ fn backoff(attempt: u64) -> Duration {
 }
 
 fn rate_limit_regex() -> &'static Regex {
-    static RE: OnceCell<Regex> = OnceCell::new();
+    static RE: OnceLock<Regex> = OnceLock::new();
 
     RE.get_or_init(|| Regex::new(r"Please try again in (\d+(?:\.\d+)?)(s|ms)").unwrap())
 }
