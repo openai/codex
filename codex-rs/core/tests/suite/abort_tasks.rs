@@ -13,6 +13,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_with_timeout;
+use regex_lite::Regex;
 use serde_json::json;
 
 /// Integration test: spawn a long‑running shell tool via a mocked Responses SSE
@@ -30,13 +31,19 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
         "timeout_ms": 60_000
     })
     .to_string();
-    let body = sse(vec![
-        ev_function_call("call_sleep", "shell", &args),
-        ev_completed("done"),
+    let call_id = "call-sleep-abort";
+    let first_body = sse(vec![
+        ev_response_created("resp-abort-check"),
+        ev_function_call(call_id, "shell", &args),
+        ev_completed("resp-abort-check"),
+    ]);
+    let follow_up_body = sse(vec![
+        ev_response_created("resp-followup-abort"),
+        ev_completed("resp-followup-abort"),
     ]);
 
     let server = start_mock_server().await;
-    mount_sse_once(&server, body).await;
+    let response_mock = mount_sse_sequence(&server, vec![first_body, follow_up_body]).await;
 
     let codex = test_codex().build(&server).await.unwrap().codex;
 
@@ -69,6 +76,45 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
         wait_timeout,
     )
     .await;
+
+    // Follow-up to flush the synthesized aborted output to the responses API.
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "follow up".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event_with_timeout(
+        &codex,
+        |ev| matches!(ev, EventMsg::TaskComplete(_)),
+        wait_timeout,
+    )
+    .await;
+
+    let output = response_mock
+        .function_call_output_text(call_id)
+        .expect("missing function_call_output text");
+    if output.starts_with("aborted by user after ") {
+        let re =
+            Regex::new(r"^aborted by user after ([0-9]+(?:\.[0-9])?)s$").expect("compile regex");
+        let caps = re.captures(&output).unwrap_or_else(|| {
+            panic!(
+                "aborted message with elapsed seconds, got output: {}",
+                output
+            )
+        });
+        let secs: f32 = caps.get(1).unwrap().as_str().parse().unwrap();
+        assert!(secs > 0.0, "expected non-zero elapsed seconds: {}", secs);
+    } else {
+        assert!(
+            output.starts_with("execution error:"),
+            "unexpected output after interrupt: {}",
+            output
+        );
+    }
 }
 
 /// After an interrupt we expect the next request to the model to include both
@@ -159,9 +205,13 @@ async fn interrupt_tool_records_history_entries() {
         response_mock.saw_function_call(call_id),
         "function call not recorded in responses payload"
     );
-    assert_eq!(
-        response_mock.function_call_output_text(call_id).as_deref(),
-        Some("aborted"),
-        "aborted function call output not recorded in responses payload"
-    );
+    let output = response_mock
+        .function_call_output_text(call_id)
+        .expect("missing function_call_output text");
+    let re = Regex::new(r"^aborted by user after ([0-9]+(?:\.[0-9])?)s$").expect("compile regex");
+    let caps = re
+        .captures(&output)
+        .expect("aborted message with elapsed seconds");
+    let secs: f32 = caps.get(1).unwrap().as_str().parse().unwrap();
+    assert!(secs > 0.0, "expected non-zero elapsed seconds: {}", secs);
 }

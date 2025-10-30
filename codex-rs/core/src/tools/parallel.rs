@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::sync::RwLock;
 use tokio_util::either::Either;
@@ -53,13 +54,36 @@ impl ToolCallRuntime {
         let turn = Arc::clone(&self.turn_context);
         let tracker = Arc::clone(&self.tracker);
         let lock = Arc::clone(&self.parallel_execution);
+        let started = Instant::now();
         let aborted_response = Self::aborted_response(&call);
         let readiness = self.turn_context.tool_call_gate.clone();
 
         let handle: AbortOnDropHandle<Result<ResponseInputItem, FunctionCallError>> =
             AbortOnDropHandle::new(tokio::spawn(async move {
                 tokio::select! {
-                    _ = cancellation_token.cancelled() => Ok(aborted_response),
+                    _ = cancellation_token.cancelled() => {
+                        // Include wall clock wait time so the model knows how long the user waited.
+                        let mut secs = ((started.elapsed().as_secs_f32()) * 10.0).round() / 10.0;
+                        if secs == 0.0 {
+                            secs = 0.1;
+                        }
+                        let msg = format!("aborted by user after {secs}s");
+
+                        let timed = match aborted_response {
+                            ResponseInputItem::FunctionCallOutput { call_id, mut output } => {
+                                output.content = msg;
+                                ResponseInputItem::FunctionCallOutput { call_id, output }
+                            }
+                            ResponseInputItem::CustomToolCallOutput { call_id, .. } => {
+                                ResponseInputItem::CustomToolCallOutput { call_id, output: msg }
+                            }
+                            ResponseInputItem::McpToolCallOutput { call_id, .. } => {
+                                ResponseInputItem::McpToolCallOutput { call_id, result: Err(msg) }
+                            }
+                            ResponseInputItem::Message { .. } => aborted_response,
+                        };
+                        Ok(timed)
+                    },
                     res = async {
                         tracing::info!("waiting for tool gate");
                         readiness.wait_ready().await;
