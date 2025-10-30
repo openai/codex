@@ -36,6 +36,8 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
+const COMPACT_PROMPT_MARKER: &str =
+    "You are performing a CONTEXT CHECKPOINT COMPACTION for a tool.";
 
 fn network_disabled() -> bool {
     std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
@@ -299,7 +301,29 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "include": [
         "reasoning.encrypted_content"
       ],
-      "prompt_cache_key": prompt_cache_key
+      "prompt_cache_key": prompt_cache_key,
+      "text": {
+        "format": {
+          "type": "json_schema",
+          "strict": true,
+          "name": "codex_output_schema",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "intent_user_message": {
+                "type": "string",
+                "description": "One consolidated user message capturing the user's current goal or request."
+              },
+              "summary": {
+                "type": "string",
+                "description": "A concise status summary describing progress and next steps."
+              }
+            },
+            "required": ["intent_user_message", "summary"],
+            "additionalProperties": false
+          }
+        }
+      }
     });
     let user_turn_2_after_compact = json!(
     {
@@ -619,6 +643,34 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         .unwrap_or_default()
         .to_string();
 
+    // Build expected final request input: initial context + forked user message +
+    // compacted call/output + post-compact user message + resumed user message.
+    let extract_compactor_items = |request: &Value| -> (Value, Value) {
+        let mut call = None;
+        let mut output = None;
+        if let Some(input) = request.get("input").and_then(|v| v.as_array()) {
+            for item in input {
+                match item.get("type").and_then(|v| v.as_str()) {
+                    Some("custom_tool_call")
+                        if item.get("name").and_then(|v| v.as_str()) == Some("compactor") =>
+                    {
+                        call = Some(item.clone());
+                    }
+                    Some("custom_tool_call_output") => {
+                        output = Some(item.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        (
+            call.expect("compactor call"),
+            output.expect("compactor output"),
+        )
+    };
+    let (call_after_second_compact, output_after_second_compact) =
+        extract_compactor_items(&requests[requests.len() - 3]);
+
     let mut expected = json!([
       {
         "instructions": prompt,
@@ -649,10 +701,12 @@ async fn compact_resume_after_second_compaction_preserves_history() {
             "content": [
               {
                 "type": "input_text",
-                "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:\n\nAFTER_FORK\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\nSUMMARY_ONLY_CONTEXT"
+                "text": "AFTER_FORK"
               }
             ]
           },
+          call_after_second_compact,
+          output_after_second_compact,
           {
             "type": "message",
             "role": "user",
@@ -738,7 +792,7 @@ async fn mount_initial_flow(server: &MockServer) {
     let match_first = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"hello world\"")
-            && !body.contains("You have exceeded the maximum number of tokens")
+            && !body.contains(COMPACT_PROMPT_MARKER)
             && !body.contains(&format!("\"text\":\"{SUMMARY_TEXT}\""))
             && !body.contains("\"text\":\"AFTER_COMPACT\"")
             && !body.contains("\"text\":\"AFTER_RESUME\"")
@@ -748,7 +802,7 @@ async fn mount_initial_flow(server: &MockServer) {
 
     let match_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("You have exceeded the maximum number of tokens")
+        body.contains(COMPACT_PROMPT_MARKER)
     };
     mount_sse_once_match(server, match_compact, sse2).await;
 
@@ -782,8 +836,7 @@ async fn mount_second_compact_flow(server: &MockServer) {
 
     let match_second_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("You have exceeded the maximum number of tokens")
-            && body.contains("AFTER_FORK")
+        body.contains(COMPACT_PROMPT_MARKER) && body.contains("AFTER_FORK")
     };
     mount_sse_once_match(server, match_second_compact, sse6).await;
 

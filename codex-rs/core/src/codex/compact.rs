@@ -250,11 +250,13 @@ fn build_compacted_history_with_limit(
         selected_messages.reverse();
     }
 
-    for message in selected_messages {
+    for message in &selected_messages {
         history.push(ResponseItem::Message {
             id: None,
             role: "user".to_string(),
-            content: vec![ContentItem::InputText { text: message }],
+            content: vec![ContentItem::InputText {
+                text: message.clone(),
+            }],
         });
     }
 
@@ -264,7 +266,7 @@ fn build_compacted_history_with_limit(
         summary_text.to_string()
     };
 
-    let call_id = Uuid::new_v4().to_string();
+    let call_id = deterministic_compact_call_id(&selected_messages, &summary_text);
     history.push(ResponseItem::CustomToolCall {
         id: None,
         status: Some("completed".to_string()),
@@ -278,6 +280,19 @@ fn build_compacted_history_with_limit(
     });
 
     history
+}
+
+fn deterministic_compact_call_id(user_messages: &[String], summary_text: &str) -> String {
+    // Required for testing purpose.
+    let payload = serde_json::json!({
+        "summary": summary_text,
+        "messages": user_messages,
+    });
+    if let Ok(bytes) = serde_json::to_vec(&payload) {
+        Uuid::new_v5(&Uuid::NAMESPACE_OID, &bytes).to_string()
+    } else {
+        Uuid::new_v4().to_string()
+    }
 }
 
 async fn drain_to_completed(
@@ -535,5 +550,44 @@ mod tests {
             }
             other => panic!("expected CustomToolCallOutput, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn build_compacted_history_produces_stable_call_id() {
+        let initial_context: Vec<ResponseItem> = Vec::new();
+        let user_messages = vec!["first user message".to_string()];
+        let summary_text = "summary text";
+
+        let history1 =
+            build_compacted_history(initial_context.clone(), &user_messages, summary_text);
+        let history2 = build_compacted_history(initial_context, &user_messages, summary_text);
+
+        let call_id1 = extract_compactor_call_id(&history1);
+        let call_id2 = extract_compactor_call_id(&history2);
+
+        assert_eq!(call_id1, call_id2);
+    }
+
+    fn extract_compactor_call_id(history: &[ResponseItem]) -> String {
+        let call_id = history
+            .iter()
+            .find_map(|item| match item {
+                ResponseItem::CustomToolCall { name, call_id, .. } if name == "compactor" => {
+                    Some(call_id.clone())
+                }
+                _ => None,
+            })
+            .expect("compactor call id missing");
+
+        let output_call_id = history
+            .iter()
+            .find_map(|item| match item {
+                ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id.clone()),
+                _ => None,
+            })
+            .expect("compactor call output missing");
+
+        assert_eq!(call_id, output_call_id);
+        call_id
     }
 }

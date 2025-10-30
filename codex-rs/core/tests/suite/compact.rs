@@ -53,6 +53,8 @@ const DUMMY_FUNCTION_NAME: &str = "unsupported_tool";
 const DUMMY_CALL_ID: &str = "call-multi-auto";
 const FUNCTION_CALL_LIMIT_MSG: &str = "function call limit push";
 const POST_AUTO_USER_MSG: &str = "post auto follow-up";
+const COMPACT_PROMPT_MARKER: &str =
+    "You are performing a CONTEXT CHECKPOINT COMPACTION for a tool.";
 
 fn structured_auto_summary(intent: &str, summary: &str) -> String {
     json!({
@@ -104,14 +106,13 @@ async fn summarize_context_three_requests_and_instructions() {
     // Mount three expectations, one per request, matched by body content.
     let first_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("\"text\":\"hello world\"")
-            && !body.contains("You have exceeded the maximum number of tokens")
+        body.contains("\"text\":\"hello world\"") && !body.contains(COMPACT_PROMPT_MARKER)
     };
     mount_sse_once_match(&server, first_matcher, sse1).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("You have exceeded the maximum number of tokens")
+        body.contains(COMPACT_PROMPT_MARKER)
     };
     mount_sse_once_match(&server, second_matcher, sse2).await;
 
@@ -414,6 +415,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         ev_assistant_message("m3", &auto_summary_payload),
         ev_completed_with_tokens("r3", 200),
     ]);
+    let sse_resume = sse(vec![ev_completed("r3-resume")]);
     let sse4 = sse(vec![
         ev_assistant_message("m4", FINAL_REPLY),
         ev_completed_with_tokens("r4", 120),
@@ -423,7 +425,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(FIRST_AUTO_MSG)
             && !body.contains(SECOND_AUTO_MSG)
-            && !body.contains("You have exceeded the maximum number of tokens")
+            && !body.contains(COMPACT_PROMPT_MARKER)
     };
     mount_sse_once_match(&server, first_matcher, sse1).await;
 
@@ -431,20 +433,27 @@ async fn auto_compact_runs_after_token_limit_hit() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(SECOND_AUTO_MSG)
             && body.contains(FIRST_AUTO_MSG)
-            && !body.contains("You have exceeded the maximum number of tokens")
+            && !body.contains(COMPACT_PROMPT_MARKER)
     };
     mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("You have exceeded the maximum number of tokens")
+        body.contains(COMPACT_PROMPT_MARKER)
     };
     mount_sse_once_match(&server, third_matcher, sse3).await;
 
+    let resume_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(AUTO_INTENT_TEXT)
+            && !body.contains(COMPACT_PROMPT_MARKER)
+            && !body.contains(POST_AUTO_USER_MSG)
+    };
+    mount_sse_once_match(&server, resume_matcher, sse_resume).await;
+
     let fourth_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(POST_AUTO_USER_MSG)
-            && !body.contains("You have exceeded the maximum number of tokens")
+        body.contains(POST_AUTO_USER_MSG) && !body.contains(COMPACT_PROMPT_MARKER)
     };
     mount_sse_once_match(&server, fourth_matcher, sse4).await;
 
@@ -500,14 +509,14 @@ async fn auto_compact_runs_after_token_limit_hit() {
     let requests = server.received_requests().await.unwrap();
     assert_eq!(
         requests.len(),
-        4,
-        "expected user turns, one auto compact request, and the follow-up turn; got {}",
+        5,
+        "expected user turns, a compaction request, a resumed turn, and the follow-up turn; got {}",
         requests.len()
     );
     let is_auto_compact = |req: &wiremock::Request| {
         std::str::from_utf8(&req.body)
             .unwrap_or("")
-            .contains("You have exceeded the maximum number of tokens")
+            .contains(COMPACT_PROMPT_MARKER)
     };
     let auto_compact_count = requests.iter().filter(|req| is_auto_compact(req)).count();
     assert_eq!(
@@ -524,12 +533,41 @@ async fn auto_compact_runs_after_token_limit_hit() {
         "auto compact should add a third request"
     );
 
+    let resume_index = requests
+        .iter()
+        .enumerate()
+        .find_map(|(idx, req)| {
+            let body = std::str::from_utf8(&req.body).unwrap_or("");
+            (body.contains(AUTO_INTENT_TEXT)
+                && !body.contains(COMPACT_PROMPT_MARKER)
+                && !body.contains(POST_AUTO_USER_MSG))
+            .then_some(idx)
+        })
+        .expect("resume request missing after compaction");
+
+    let follow_up_index = requests
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(idx, req)| {
+            let body = std::str::from_utf8(&req.body).unwrap_or("");
+            (body.contains(POST_AUTO_USER_MSG) && !body.contains(COMPACT_PROMPT_MARKER))
+                .then_some(idx)
+        })
+        .expect("follow-up request missing");
+    assert_eq!(follow_up_index, 4, "follow-up request should be last");
+
     let body_first = requests[0].body_json::<serde_json::Value>().unwrap();
-    let body3 = requests[auto_compact_index]
+    let body_auto = requests[auto_compact_index]
         .body_json::<serde_json::Value>()
         .unwrap();
-    let body4 = requests[3].body_json::<serde_json::Value>().unwrap();
-    let instructions = body3
+    let body_resume = requests[resume_index]
+        .body_json::<serde_json::Value>()
+        .unwrap();
+    let body_follow_up = requests[follow_up_index]
+        .body_json::<serde_json::Value>()
+        .unwrap();
+    let instructions = body_auto
         .get("instructions")
         .and_then(|v| v.as_str())
         .unwrap_or_default();
@@ -543,13 +581,16 @@ async fn auto_compact_runs_after_token_limit_hit() {
         "auto compact should keep the standard developer instructions",
     );
 
-    let input3 = body3.get("input").and_then(|v| v.as_array()).unwrap();
-    let last3 = input3
+    let input_auto = body_auto.get("input").and_then(|v| v.as_array()).unwrap();
+    let last_auto = input_auto
         .last()
         .expect("auto compact request should append a user message");
-    assert_eq!(last3.get("type").and_then(|v| v.as_str()), Some("message"));
-    assert_eq!(last3.get("role").and_then(|v| v.as_str()), Some("user"));
-    let last_text = last3
+    assert_eq!(
+        last_auto.get("type").and_then(|v| v.as_str()),
+        Some("message")
+    );
+    assert_eq!(last_auto.get("role").and_then(|v| v.as_str()), Some("user"));
+    let last_text = last_auto
         .get("content")
         .and_then(|v| v.as_array())
         .and_then(|items| items.first())
@@ -561,8 +602,19 @@ async fn auto_compact_runs_after_token_limit_hit() {
         "auto compact should send the summarization prompt as a user message",
     );
 
-    let input4 = body4.get("input").and_then(|v| v.as_array()).unwrap();
-    let user_texts: Vec<String> = input4
+    let input_resume = body_resume.get("input").and_then(|v| v.as_array()).unwrap();
+    assert!(
+        input_resume.iter().any(
+            |item| item.get("type").and_then(|v| v.as_str()) == Some("custom_tool_call_output")
+        ),
+        "resume request should include compacted history"
+    );
+
+    let input_follow_up = body_follow_up
+        .get("input")
+        .and_then(|v| v.as_array())
+        .unwrap();
+    let user_texts: Vec<String> = input_follow_up
         .iter()
         .filter(|item| item.get("type").and_then(|v| v.as_str()) == Some("message"))
         .filter(|item| item.get("role").and_then(|v| v.as_str()) == Some("user"))
@@ -589,7 +641,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
             .any(|text| text == FIRST_AUTO_MSG || text == SECOND_AUTO_MSG),
         "original user messages should be replaced by the intent message after compaction"
     );
-    let compactor_output = input4
+    let compactor_output = input_follow_up
         .iter()
         .find(|item| item.get("type").and_then(|v| v.as_str()) == Some("custom_tool_call_output"))
         .and_then(|item| item.get("output"))
@@ -628,7 +680,7 @@ async fn auto_compact_persists_rollout_entries() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(FIRST_AUTO_MSG)
             && !body.contains(SECOND_AUTO_MSG)
-            && !body.contains("You have exceeded the maximum number of tokens")
+            && !body.contains(COMPACT_PROMPT_MARKER)
     };
     mount_sse_once_match(&server, first_matcher, sse1).await;
 
@@ -636,13 +688,13 @@ async fn auto_compact_persists_rollout_entries() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(SECOND_AUTO_MSG)
             && body.contains(FIRST_AUTO_MSG)
-            && !body.contains("You have exceeded the maximum number of tokens")
+            && !body.contains(COMPACT_PROMPT_MARKER)
     };
     mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("You have exceeded the maximum number of tokens")
+        body.contains(COMPACT_PROMPT_MARKER)
     };
     mount_sse_once_match(&server, third_matcher, sse3).await;
 
@@ -740,21 +792,19 @@ async fn auto_compact_stops_after_failed_attempt() {
 
     let first_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(FIRST_AUTO_MSG)
-            && !body.contains("You have exceeded the maximum number of tokens")
+        body.contains(FIRST_AUTO_MSG) && !body.contains(COMPACT_PROMPT_MARKER)
     };
     mount_sse_once_match(&server, first_matcher, sse1.clone()).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("You have exceeded the maximum number of tokens")
+        body.contains(COMPACT_PROMPT_MARKER)
     };
     mount_sse_once_match(&server, second_matcher, sse2.clone()).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        !body.contains("You have exceeded the maximum number of tokens")
-            && body.contains(SUMMARY_TEXT)
+        !body.contains(COMPACT_PROMPT_MARKER) && body.contains(SUMMARY_TEXT)
     };
     mount_sse_once_match(&server, third_matcher, sse3.clone()).await;
 
@@ -1262,7 +1312,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         "first request should contain the user input"
     );
     assert!(
-        request_bodies[1].contains("You have exceeded the maximum number of tokens"),
+        request_bodies[1].contains(COMPACT_PROMPT_MARKER),
         "first auto compact request should include the summarization prompt"
     );
     assert!(
@@ -1270,7 +1320,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         "function call output should be sent before the second auto compact"
     );
     assert!(
-        request_bodies[4].contains("You have exceeded the maximum number of tokens"),
+        request_bodies[4].contains(COMPACT_PROMPT_MARKER),
         "second auto compact request should include the summarization prompt"
     );
 }
@@ -1365,7 +1415,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
 
     let auto_compact_body = auto_compact_mock.single_request().body_json().to_string();
     assert!(
-        auto_compact_body.contains("You have exceeded the maximum number of tokens"),
+        auto_compact_body.contains(COMPACT_PROMPT_MARKER),
         "auto compact request should include the summarization prompt after exceeding 95% (limit {limit})"
     );
 }
