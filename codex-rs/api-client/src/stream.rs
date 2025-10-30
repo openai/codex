@@ -1,9 +1,20 @@
+use std::pin::Pin;
+use std::task::Context;
+use std::task::Poll;
+
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::TokenUsage;
+use futures::Stream;
 use serde::Serialize;
 use serde_json::Value;
+use tokio::sync::mpsc;
 
-#[derive(Debug, Serialize)]
+use crate::error::Result;
+
+#[derive(Debug, Serialize, Clone)]
 pub struct Reasoning {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffortConfig>,
@@ -32,4 +43,32 @@ pub struct TextControls {
     pub verbosity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<TextFormat>,
+}
+
+#[derive(Debug)]
+pub enum ResponseEvent {
+    Created,
+    OutputItemDone(ResponseItem),
+    OutputItemAdded(ResponseItem),
+    Completed {
+        response_id: String,
+        token_usage: Option<TokenUsage>,
+    },
+    OutputTextDelta(String),
+    ReasoningSummaryDelta(String),
+    ReasoningContentDelta(String),
+    ReasoningSummaryPartAdded,
+    RateLimits(RateLimitSnapshot),
+}
+
+pub struct ResponseStream {
+    pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
+}
+
+impl Stream for ResponseStream {
+    type Item = Result<ResponseEvent>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.rx_event.poll_recv(cx)
+    }
 }

@@ -88,19 +88,21 @@ async fn run_compact_task_inner(
         let mut turn_input = history.get_history_for_prompt();
         let turn_input_len = turn_input.len();
         crate::conversation_history::format_prompt_items(&mut turn_input, false);
-        let prompt = Prompt::new(turn_input, Vec::new(), false, None);
+        let mut prompt = Prompt::default();
+        prompt.input = turn_input;
+        prompt.tools = Vec::new();
+        prompt.parallel_tool_calls = false;
+        prompt.output_schema = None;
+        prompt.store_response = false;
         let instructions = crate::client_common::compute_full_instructions(
             turn_context.base_instructions.as_deref(),
             &turn_context.client.get_model_family(),
             false,
         )
         .into_owned();
-        let payload = StreamPayload {
-            prompt,
-            instructions,
-            store_response: false,
-            previous_response_id: None,
-        };
+        prompt.instructions = instructions.clone();
+        prompt.previous_response_id = None;
+        let payload = StreamPayload { prompt };
         let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), payload).await;
 
         match attempt_result {

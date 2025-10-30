@@ -17,9 +17,6 @@ use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::TokenUsage;
 use serde_json::Value;
 
 use crate::model_family::ModelFamily;
@@ -85,21 +82,7 @@ pub fn create_text_param_for_request(
     })
 }
 
-#[derive(Debug)]
-pub enum ResponseEvent {
-    Created,
-    OutputItemDone(ResponseItem),
-    OutputItemAdded(ResponseItem),
-    Completed {
-        response_id: String,
-        token_usage: Option<TokenUsage>,
-    },
-    OutputTextDelta(String),
-    ReasoningSummaryDelta(String),
-    ReasoningContentDelta(String),
-    ReasoningSummaryPartAdded,
-    RateLimits(RateLimitSnapshot),
-}
+pub use codex_api_client::ResponseEvent;
 
 pub struct ResponseStream {
     pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,

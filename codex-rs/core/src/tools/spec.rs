@@ -710,9 +710,6 @@ pub(crate) struct ApplyPatchToolArgs {
     pub(crate) input: String,
 }
 
-/// Returns JSON values that are compatible with Function Calling in the
-/// Responses API:
-/// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
 pub fn create_tools_json_for_responses_api(
     tools: &[ToolSpec],
 ) -> crate::error::Result<Vec<serde_json::Value>> {
@@ -735,31 +732,6 @@ pub fn tools_metadata_for_prompt(
         _ => false,
     });
     Ok((tools_json, has_freeform_apply_patch))
-}
-/// Returns JSON values that are compatible with Function Calling in the
-/// Chat Completions API:
-/// https://platform.openai.com/docs/guides/function-calling?api-mode=chat
-pub(crate) fn create_tools_json_for_chat_completions_api(
-    tools: &[serde_json::Value],
-) -> crate::error::Result<Vec<serde_json::Value>> {
-    let tools_json = tools
-        .iter()
-        .filter_map(|tool| {
-            if tool.get("type") != Some(&serde_json::Value::String("function".to_string())) {
-                return None;
-            }
-
-            tool.as_object().map(|map| {
-                let mut function = map.clone();
-                function.remove("type");
-                json!({
-                    "type": "function",
-                    "function": function,
-                })
-            })
-        })
-        .collect::<Vec<serde_json::Value>>();
-    Ok(tools_json)
 }
 
 pub(crate) fn mcp_tool_to_openai_tool(

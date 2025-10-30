@@ -1949,19 +1949,16 @@ async fn run_turn(
         .get_model_family()
         .supports_parallel_tool_calls;
     let parallel_tool_calls = model_supports_parallel;
-    let prompt = Prompt::new(
-        request_items,
-        tools_json,
-        parallel_tool_calls,
-        turn_context.final_output_json_schema.clone(),
-    );
+    let mut prompt = Prompt::default();
+    prompt.instructions = instructions.clone();
+    prompt.input = request_items;
+    prompt.tools = tools_json;
+    prompt.parallel_tool_calls = parallel_tool_calls;
+    prompt.output_schema = turn_context.final_output_json_schema.clone();
+    prompt.store_response = store_response;
+    prompt.previous_response_id = previous_response_id.clone();
 
-    let payload = StreamPayload {
-        prompt,
-        instructions,
-        store_response,
-        previous_response_id,
-    };
+    let payload = StreamPayload { prompt };
 
     let mut retries = 0;
     loop {
@@ -2058,7 +2055,7 @@ async fn try_run_turn(
     full_prompt_items: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
-    let chaining_intent = payload.store_response;
+    let chaining_intent = payload.prompt.store_response;
 
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),

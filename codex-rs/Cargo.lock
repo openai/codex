@@ -833,11 +833,24 @@ dependencies = [
 name = "codex-api-client"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
+ "bytes",
+ "codex-app-server-protocol",
+ "codex-otel",
  "codex-protocol",
+ "eventsource-stream",
  "futures",
+ "maplit",
+ "once_cell",
+ "regex-lite",
+ "reqwest",
  "serde",
  "serde_json",
+ "thiserror 2.0.16",
  "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
 ]
 
 [[package]]

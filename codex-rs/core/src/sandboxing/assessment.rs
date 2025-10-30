@@ -128,12 +128,12 @@ pub(crate) async fn assess_command(
     }];
     crate::conversation_history::format_prompt_items(&mut prompt_items, false);
 
-    let prompt = Prompt::new(
-        prompt_items,
-        Vec::new(),
-        false,
-        Some(sandbox_assessment_schema()),
-    );
+    let mut prompt = Prompt::default();
+    prompt.input = prompt_items;
+    prompt.tools = Vec::new();
+    prompt.parallel_tool_calls = false;
+    prompt.output_schema = Some(sandbox_assessment_schema());
+    prompt.store_response = false;
     let instructions = crate::client_common::compute_full_instructions(
         Some(system_prompt.as_str()),
         &config.model_family,
@@ -141,12 +141,8 @@ pub(crate) async fn assess_command(
     )
     .into_owned();
 
-    let payload = StreamPayload {
-        prompt,
-        instructions,
-        store_response: false,
-        previous_response_id: None,
-    };
+    prompt.instructions = instructions.clone();
+    let payload = StreamPayload { prompt };
 
     let child_otel =
         parent_otel.with_model(config.model.as_str(), config.model_family.slug.as_str());
