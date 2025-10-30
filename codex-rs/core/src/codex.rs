@@ -158,6 +158,7 @@ impl Codex {
         auth_manager: Arc<AuthManager>,
         conversation_history: InitialHistory,
         session_source: SessionSource,
+        prompt_cache_key: Option<String>,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -190,6 +191,7 @@ impl Codex {
             tx_event.clone(),
             conversation_history,
             session_source_clone,
+            prompt_cache_key,
         )
         .await
         .map_err(|e| {
@@ -253,6 +255,7 @@ pub(crate) struct Session {
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
+    prompt_cache_key: String,
 }
 
 /// The context needed for a single turn of the conversation.
@@ -368,6 +371,7 @@ impl Session {
         session_configuration: &SessionConfiguration,
         conversation_id: ConversationId,
         sub_id: String,
+        prompt_cache_key: String,
     ) -> TurnContext {
         let config = session_configuration.original_config_do_not_use.clone();
         let model_family = find_family_for_model(&session_configuration.model)
@@ -395,6 +399,7 @@ impl Session {
             session_configuration.model_reasoning_summary,
             conversation_id,
             session_configuration.session_source.clone(),
+            prompt_cache_key,
         );
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -425,6 +430,7 @@ impl Session {
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
         session_source: SessionSource,
+        prompt_cache_key: Option<String>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -589,6 +595,7 @@ impl Session {
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
+            prompt_cache_key: prompt_cache_key.unwrap_or_else(|| conversation_id.to_string()),
         });
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
@@ -616,6 +623,10 @@ impl Session {
         sess.record_initial_history(initial_history).await;
 
         Ok(sess)
+    }
+
+    pub(crate) fn get_conversation_id(&self) -> ConversationId {
+        self.conversation_id
     }
 
     pub(crate) fn get_tx_event(&self) -> Sender<Event> {
@@ -703,6 +714,7 @@ impl Session {
             &session_configuration,
             self.conversation_id,
             sub_id,
+            self.prompt_cache_key.clone(),
         );
         if let Some(final_schema) = updates.final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
@@ -788,16 +800,11 @@ impl Session {
         failure_message: Option<&str>,
     ) -> Option<SandboxCommandAssessment> {
         let config = turn_context.client.config();
-        let provider = turn_context.client.provider().clone();
-        let auth_manager = Arc::clone(&self.services.auth_manager);
         let otel = self.services.otel_event_manager.clone();
         crate::sandboxing::assessment::assess_command(
             config,
-            provider,
-            auth_manager,
             &otel,
-            self.conversation_id,
-            turn_context.client.get_session_source(),
+            turn_context.client.clone(),
             call_id,
             command,
             &turn_context.sandbox_policy,
@@ -1656,6 +1663,7 @@ async fn spawn_review_thread(
         per_turn_config.model_reasoning_summary,
         sess.conversation_id,
         parent_turn_context.client.get_session_source(),
+        sess.prompt_cache_key.clone(),
     );
 
     let review_turn_context = TurnContext {
@@ -2529,6 +2537,7 @@ mod tests {
             &session_configuration,
             conversation_id,
             "turn_id".to_string(),
+            conversation_id.to_string(),
         );
 
         let session = Session {
@@ -2538,6 +2547,7 @@ mod tests {
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
+            prompt_cache_key: conversation_id.to_string(),
         };
 
         (session, turn_context)
@@ -2603,6 +2613,7 @@ mod tests {
             &session_configuration,
             conversation_id,
             "turn_id".to_string(),
+            conversation_id.to_string(),
         ));
 
         let session = Arc::new(Session {
@@ -2612,6 +2623,7 @@ mod tests {
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
+            prompt_cache_key: conversation_id.to_string(),
         });
 
         (session, turn_context, rx_event)

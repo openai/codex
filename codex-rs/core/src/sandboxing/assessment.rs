@@ -4,8 +4,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::AuthManager;
-use crate::ModelProviderInfo;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
@@ -13,11 +11,9 @@ use crate::config::Config;
 use crate::protocol::SandboxPolicy;
 use askama::Template;
 use codex_otel::otel_event_manager::OtelEventManager;
-use codex_protocol::ConversationId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SandboxCommandAssessment;
-use codex_protocol::protocol::SessionSource;
 use futures::StreamExt;
 use serde_json::json;
 use tokio::time::timeout;
@@ -50,11 +46,8 @@ struct SandboxAssessmentPromptTemplate<'a> {
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn assess_command(
     config: Arc<Config>,
-    provider: ModelProviderInfo,
-    auth_manager: Arc<AuthManager>,
     parent_otel: &OtelEventManager,
-    conversation_id: ConversationId,
-    session_source: SessionSource,
+    client: ModelClient,
     call_id: &str,
     command: &[String],
     sandbox_policy: &SandboxPolicy,
@@ -131,20 +124,6 @@ pub(crate) async fn assess_command(
         base_instructions_override: Some(system_prompt),
         output_schema: Some(sandbox_assessment_schema()),
     };
-
-    let child_otel =
-        parent_otel.with_model(config.model.as_str(), config.model_family.slug.as_str());
-
-    let client = ModelClient::new(
-        Arc::clone(&config),
-        Some(auth_manager),
-        child_otel,
-        provider,
-        config.model_reasoning_effort,
-        config.model_reasoning_summary,
-        conversation_id,
-        session_source,
-    );
 
     let start = Instant::now();
     let assessment_result = timeout(SANDBOX_ASSESSMENT_TIMEOUT, async move {

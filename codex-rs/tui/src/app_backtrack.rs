@@ -305,7 +305,12 @@ impl App {
         let cfg = self.chat_widget.config_ref().clone();
         // Perform the fork via a thin wrapper for clarity/testability.
         let result = self
-            .perform_fork(ev.path.clone(), nth_user_message, cfg.clone())
+            .perform_fork(
+                ev.path.clone(),
+                nth_user_message,
+                cfg.clone(),
+                ev.conversation_id,
+            )
             .await;
         match result {
             Ok(new_conv) => {
@@ -321,9 +326,10 @@ impl App {
         path: PathBuf,
         nth_user_message: usize,
         cfg: codex_core::config::Config,
+        conversation_id: ConversationId,
     ) -> codex_core::error::Result<codex_core::NewConversation> {
         self.server
-            .fork_conversation(nth_user_message, cfg, path)
+            .fork_conversation(nth_user_message, cfg, path, conversation_id)
             .await
     }
 

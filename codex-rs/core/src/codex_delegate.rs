@@ -45,6 +45,7 @@ pub(crate) async fn run_codex_conversation_interactive(
         auth_manager,
         InitialHistory::New,
         SessionSource::SubAgent(SubAgentSource::Review),
+        Some(parent_session.get_conversation_id().to_string()),
     )
     .await?;
     let codex = Arc::new(codex);

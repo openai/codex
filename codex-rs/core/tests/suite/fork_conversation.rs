@@ -58,6 +58,7 @@ async fn fork_conversation_twice_drops_to_first_message() {
     let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
     let NewConversation {
         conversation: codex,
+        conversation_id,
         ..
     } = conversation_manager
         .new_conversation(config)
@@ -129,7 +130,12 @@ async fn fork_conversation_twice_drops_to_first_message() {
         conversation: codex_fork1,
         ..
     } = conversation_manager
-        .fork_conversation(1, config_for_fork.clone(), base_path.clone())
+        .fork_conversation(
+            1,
+            config_for_fork.clone(),
+            base_path.clone(),
+            conversation_id,
+        )
         .await
         .expect("fork 1");
 
@@ -147,7 +153,12 @@ async fn fork_conversation_twice_drops_to_first_message() {
         conversation: codex_fork2,
         ..
     } = conversation_manager
-        .fork_conversation(0, config_for_fork.clone(), fork1_path.clone())
+        .fork_conversation(
+            0,
+            config_for_fork.clone(),
+            fork1_path.clone(),
+            conversation_id,
+        )
         .await
         .expect("fork 2");
 

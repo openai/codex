@@ -74,6 +74,7 @@ impl ConversationManager {
             auth_manager,
             InitialHistory::New,
             self.session_source.clone(),
+            None,
         )
         .await?;
         self.finalize_spawn(codex, conversation_id).await
@@ -150,6 +151,7 @@ impl ConversationManager {
             auth_manager,
             initial_history,
             self.session_source.clone(),
+            None,
         )
         .await?;
         self.finalize_spawn(codex, conversation_id).await
@@ -175,6 +177,7 @@ impl ConversationManager {
         nth_user_message: usize,
         config: Config,
         path: PathBuf,
+        conversation_id: ConversationId,
     ) -> CodexResult<NewConversation> {
         // Compute the prefix up to the cut point.
         let history = RolloutRecorder::get_rollout_history(&path).await?;
@@ -185,7 +188,14 @@ impl ConversationManager {
         let CodexSpawnOk {
             codex,
             conversation_id,
-        } = Codex::spawn(config, auth_manager, history, self.session_source.clone()).await?;
+        } = Codex::spawn(
+            config,
+            auth_manager,
+            history,
+            self.session_source.clone(),
+            Some(conversation_id.to_string()),
+        )
+        .await?;
 
         self.finalize_spawn(codex, conversation_id).await
     }

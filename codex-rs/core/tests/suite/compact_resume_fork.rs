@@ -21,6 +21,7 @@ use codex_core::config::OPENAI_DEFAULT_MODEL;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_protocol::ConversationId;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
@@ -78,7 +79,8 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     mount_initial_flow(&server).await;
 
     // 2. Start a new conversation and drive it through the compact/resume/fork steps.
-    let (_home, config, manager, base) = start_test_conversation(&server).await;
+    let (_home, config, manager, base, base_conversation_id) =
+        start_test_conversation(&server).await;
 
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
@@ -97,7 +99,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         "compact+resume test expects resumed path {resumed_path:?} to exist",
     );
 
-    let forked = fork_conversation(&manager, &config, resumed_path, 2).await;
+    let forked = fork_conversation(&manager, &config, resumed_path, 2, base_conversation_id).await;
     user_turn(&forked, "AFTER_FORK").await;
 
     // 3. Capture the requests to the model and validate the history slices.
@@ -535,7 +537,8 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     mount_second_compact_flow(&server).await;
 
     // 2. Drive the conversation through compact -> resume -> fork -> compact -> resume.
-    let (_home, config, manager, base) = start_test_conversation(&server).await;
+    let (_home, config, manager, base, base_conversation_id) =
+        start_test_conversation(&server).await;
 
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
@@ -554,7 +557,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         "second compact test expects resumed path {resumed_path:?} to exist",
     );
 
-    let forked = fork_conversation(&manager, &config, resumed_path, 3).await;
+    let forked = fork_conversation(&manager, &config, resumed_path, 3, base_conversation_id).await;
     user_turn(&forked, "AFTER_FORK").await;
 
     compact_conversation(&forked).await;
@@ -780,7 +783,13 @@ async fn mount_second_compact_flow(server: &MockServer) {
 
 async fn start_test_conversation(
     server: &MockServer,
-) -> (TempDir, Config, ConversationManager, Arc<CodexConversation>) {
+) -> (
+    TempDir,
+    Config,
+    ConversationManager,
+    Arc<CodexConversation>,
+    ConversationId,
+) {
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
@@ -790,12 +799,16 @@ async fn start_test_conversation(
     config.model_provider = model_provider;
 
     let manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
-    let NewConversation { conversation, .. } = manager
+    let NewConversation {
+        conversation,
+        conversation_id,
+        ..
+    } = manager
         .new_conversation(config.clone())
         .await
         .expect("create conversation");
 
-    (home, config, manager, conversation)
+    (home, config, manager, conversation, conversation_id)
 }
 
 async fn user_turn(conversation: &Arc<CodexConversation>, text: &str) {
@@ -840,9 +853,10 @@ async fn fork_conversation(
     config: &Config,
     path: std::path::PathBuf,
     nth_user_message: usize,
+    conversation_id: ConversationId,
 ) -> Arc<CodexConversation> {
     let NewConversation { conversation, .. } = manager
-        .fork_conversation(nth_user_message, config.clone(), path)
+        .fork_conversation(nth_user_message, config.clone(), path, conversation_id)
         .await
         .expect("fork conversation");
     conversation

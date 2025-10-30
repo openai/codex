@@ -88,6 +88,7 @@ pub struct ModelClient {
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
+    prompt_cache_key: String,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -101,6 +102,7 @@ impl ModelClient {
         summary: ReasoningSummaryConfig,
         conversation_id: ConversationId,
         session_source: SessionSource,
+        prompt_cache_key: String,
     ) -> Self {
         let client = create_client();
 
@@ -114,6 +116,7 @@ impl ModelClient {
             effort,
             summary,
             session_source,
+            prompt_cache_key,
         }
     }
 
@@ -246,7 +249,7 @@ impl ModelClient {
             store: azure_workaround,
             stream: true,
             include,
-            prompt_cache_key: Some(self.conversation_id.to_string()),
+            prompt_cache_key: Some(self.prompt_cache_key.clone()),
             text,
         };
 

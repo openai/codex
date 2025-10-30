@@ -77,6 +77,7 @@ async fn responses_stream_includes_task_type_header() {
         summary,
         conversation_id,
         SessionSource::Exec,
+        conversation_id.to_string(),
     );
 
     let mut prompt = Prompt::default();
