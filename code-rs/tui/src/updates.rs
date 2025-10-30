@@ -109,6 +109,8 @@ struct VersionInfo {
     latest_version: String,
     // ISO-8601 timestamp (RFC3339)
     last_checked_at: DateTime<Utc>,
+    #[serde(default)]
+    release_repo: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -118,6 +120,8 @@ struct ReleaseInfo {
 
 const VERSION_FILENAME: &str = "version.json";
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/just-every/code/releases/latest";
+const CURRENT_RELEASE_REPO: &str = "just-every/code";
+const LEGACY_RELEASE_REPO: &str = "openai/codex";
 pub const CODE_RELEASE_URL: &str = "https://github.com/just-every/code/releases/latest";
 
 const AUTO_UPGRADE_LOCK_FILE: &str = "auto-upgrade.lock";
@@ -460,7 +464,17 @@ fn truncate_for_log(text: &str) -> String {
 
 fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
     let contents = std::fs::read_to_string(version_file)?;
-    Ok(serde_json::from_str(&contents)?)
+    let info: VersionInfo = serde_json::from_str(&contents)?;
+    let repo = info
+        .release_repo
+        .as_deref()
+        .unwrap_or(LEGACY_RELEASE_REPO);
+    if repo != CURRENT_RELEASE_REPO {
+        anyhow::bail!(
+            "stale version info from {repo}; discarding cached update metadata"
+        );
+    }
+    Ok(info)
 }
 
 async fn check_for_update(version_file: &Path, originator: &str) -> anyhow::Result<VersionInfo> {
@@ -496,6 +510,7 @@ async fn check_for_update(version_file: &Path, originator: &str) -> anyhow::Resu
     let info = VersionInfo {
         latest_version,
         last_checked_at: Utc::now(),
+        release_repo: Some(CURRENT_RELEASE_REPO.to_string()),
     };
 
     let json_line = format!("{}\n", serde_json::to_string(&info)?);
@@ -519,4 +534,43 @@ fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
     let min = iter.next()?.parse::<u64>().ok()?;
     let pat = iter.next()?.parse::<u64>().ok()?;
     Some((maj, min, pat))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+    use tempfile::tempdir;
+
+    #[test]
+    fn read_version_info_rejects_legacy_repo_cache() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("version.json");
+        let legacy = serde_json::json!({
+            "latest_version": "0.50.0",
+            "last_checked_at": Utc.timestamp_opt(1_696_000_000, 0).unwrap().to_rfc3339(),
+        });
+        std::fs::write(&path, format!("{}\n", legacy)).unwrap();
+
+        let err = read_version_info(&path).expect_err("legacy cache should be rejected");
+        assert!(err
+            .to_string()
+            .contains("stale version info"));
+    }
+
+    #[test]
+    fn read_version_info_accepts_current_repo_cache() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("version.json");
+        let info = serde_json::json!({
+            "latest_version": "0.4.7",
+            "last_checked_at": Utc::now().to_rfc3339(),
+            "release_repo": CURRENT_RELEASE_REPO,
+        });
+        std::fs::write(&path, format!("{}\n", info)).unwrap();
+
+        let parsed = read_version_info(&path).expect("current repo cache should load");
+        assert_eq!(parsed.latest_version, "0.4.7");
+        assert_eq!(parsed.release_repo.as_deref(), Some(CURRENT_RELEASE_REPO));
+    }
 }
