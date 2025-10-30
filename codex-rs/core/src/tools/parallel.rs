@@ -55,7 +55,6 @@ impl ToolCallRuntime {
         let tracker = Arc::clone(&self.tracker);
         let lock = Arc::clone(&self.parallel_execution);
         let started = Instant::now();
-        let aborted_response = Self::aborted_response(&call);
         let readiness = self.turn_context.tool_call_gate.clone();
 
         let handle: AbortOnDropHandle<Result<ResponseInputItem, FunctionCallError>> =
@@ -63,26 +62,8 @@ impl ToolCallRuntime {
                 tokio::select! {
                     _ = cancellation_token.cancelled() => {
                         // Include wall clock wait time so the model knows how long the user waited.
-                        let mut secs = ((started.elapsed().as_secs_f32()) * 10.0).round() / 10.0;
-                        if secs == 0.0 {
-                            secs = 0.1;
-                        }
-                        let msg = format!("aborted by user after {secs}s");
-
-                        let timed = match aborted_response {
-                            ResponseInputItem::FunctionCallOutput { call_id, mut output } => {
-                                output.content = msg;
-                                ResponseInputItem::FunctionCallOutput { call_id, output }
-                            }
-                            ResponseInputItem::CustomToolCallOutput { call_id, .. } => {
-                                ResponseInputItem::CustomToolCallOutput { call_id, output: msg }
-                            }
-                            ResponseInputItem::McpToolCallOutput { call_id, .. } => {
-                                ResponseInputItem::McpToolCallOutput { call_id, result: Err(msg) }
-                            }
-                            ResponseInputItem::Message { .. } => aborted_response,
-                        };
-                        Ok(timed)
+                        let secs = started.elapsed().as_secs_f32().round();
+                        Ok(Self::aborted_response(&call, secs))
                     },
                     res = async {
                         tracing::info!("waiting for tool gate");
@@ -95,7 +76,7 @@ impl ToolCallRuntime {
                         };
 
                         router
-                            .dispatch_tool_call(session, turn, tracker, call)
+                            .dispatch_tool_call(session, turn, tracker, call.clone())
                             .await
                     } => res,
                 }
@@ -115,20 +96,20 @@ impl ToolCallRuntime {
 }
 
 impl ToolCallRuntime {
-    fn aborted_response(call: &ToolCall) -> ResponseInputItem {
+    fn aborted_response(call: &ToolCall, secs: f32) -> ResponseInputItem {
         match &call.payload {
             ToolPayload::Custom { .. } => ResponseInputItem::CustomToolCallOutput {
                 call_id: call.call_id.clone(),
-                output: "aborted".to_string(),
+                output: format!("aborted by user after {secs}s"),
             },
             ToolPayload::Mcp { .. } => ResponseInputItem::McpToolCallOutput {
                 call_id: call.call_id.clone(),
-                result: Err("aborted".to_string()),
+                result: Err(format!("aborted by user after {secs}s")),
             },
             _ => ResponseInputItem::FunctionCallOutput {
                 call_id: call.call_id.clone(),
                 output: FunctionCallOutputPayload {
-                    content: "aborted".to_string(),
+                    content: format!("aborted by user after {secs}s"),
                     ..Default::default()
                 },
             },

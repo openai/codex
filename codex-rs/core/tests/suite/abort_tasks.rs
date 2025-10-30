@@ -7,7 +7,6 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -101,18 +100,14 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
         let re =
             Regex::new(r"^aborted by user after ([0-9]+(?:\.[0-9])?)s$").expect("compile regex");
         let caps = re.captures(&output).unwrap_or_else(|| {
-            panic!(
-                "aborted message with elapsed seconds, got output: {}",
-                output
-            )
+            panic!("aborted message with elapsed seconds, got output: {output}")
         });
         let secs: f32 = caps.get(1).unwrap().as_str().parse().unwrap();
-        assert!(secs > 0.0, "expected non-zero elapsed seconds: {}", secs);
+        assert!(secs > 0.0, "expected non-zero elapsed seconds: {secs}");
     } else {
         assert!(
             output.starts_with("execution error:"),
-            "unexpected output after interrupt: {}",
-            output
+            "unexpected output after interrupt: {output}"
         );
     }
 }
@@ -213,5 +208,5 @@ async fn interrupt_tool_records_history_entries() {
         .captures(&output)
         .expect("aborted message with elapsed seconds");
     let secs: f32 = caps.get(1).unwrap().as_str().parse().unwrap();
-    assert!(secs > 0.0, "expected non-zero elapsed seconds: {}", secs);
+    assert!(secs > 0.0, "expected non-zero elapsed seconds: {secs}");
 }
