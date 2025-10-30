@@ -50,9 +50,9 @@ pub struct CodexToolCallParam {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_instructions: Option<String>,
 
-    /// Whether to include the plan tool in the conversation.
+    /// Prompt used when compacting the conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include_plan_tool: Option<bool>,
+    pub compact_prompt: Option<String>,
 }
 
 /// Custom enum mirroring [`AskForApproval`], but has an extra dependency on
@@ -145,7 +145,7 @@ impl CodexToolCallParam {
             sandbox,
             config: cli_overrides,
             base_instructions,
-            include_plan_tool,
+            compact_prompt,
         } = self;
 
         // Build the `ConfigOverrides` recognized by codex-core.
@@ -159,11 +159,12 @@ impl CodexToolCallParam {
             model_provider: None,
             codex_linux_sandbox_exe,
             base_instructions,
-            include_plan_tool,
+            compact_prompt,
             include_apply_patch_tool: None,
             include_view_image_tool: None,
             show_raw_agent_reasoning: None,
             tools_web_search_request: None,
+            experimental_sandbox_command_assessment: None,
             additional_writable_roots: Vec::new(),
         };
 
@@ -277,10 +278,6 @@ mod tests {
                 "description": "Working directory for the session. If relative, it is resolved against the server process's current working directory.",
                 "type": "string"
               },
-              "include-plan-tool": {
-                "description": "Whether to include the plan tool in the conversation.",
-                "type": "boolean"
-              },
               "model": {
                 "description": "Optional override for the model name (e.g. \"o3\", \"o4-mini\").",
                 "type": "string"
@@ -295,6 +292,10 @@ mod tests {
               },
               "base-instructions": {
                 "description": "The set of instructions to use instead of the default ones.",
+                "type": "string"
+              },
+              "compact-prompt": {
+                "description": "Prompt used when compacting the conversation.",
                 "type": "string"
               },
             },

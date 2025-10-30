@@ -9,10 +9,10 @@ use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::Prompt;
-use codex_core::ReasoningItemContent;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
+use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::error::CodexErr;
 use codex_core::model_family::find_family_for_model;
@@ -21,6 +21,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
+use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::user_input::UserInput;
@@ -154,7 +155,8 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
                 "instructions": "be nice",
                 "cwd": ".",
                 "originator": "test_originator",
-                "cli_version": "test_version"
+                "cli_version": "test_version",
+                "model_provider": "test-provider"
             }
         })
     )
@@ -524,11 +526,12 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
 
-    let auth_manager = match CodexAuth::from_codex_home(codex_home.path()) {
-        Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
-        Ok(None) => panic!("No CodexAuth found in codex_home"),
-        Err(e) => panic!("Failed to load CodexAuth: {e}"),
-    };
+    let auth_manager =
+        match CodexAuth::from_auth_storage(codex_home.path(), AuthCredentialsStoreMode::File) {
+            Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
+            Ok(None) => panic!("No CodexAuth found in codex_home"),
+            Err(e) => panic!("Failed to load CodexAuth: {e}"),
+        };
     let conversation_manager = ConversationManager::new(auth_manager, SessionSource::Exec);
     let NewConversation {
         conversation: codex,
@@ -632,6 +635,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         base_url: Some(format!("{}/openai", server.uri())),
         env_key: None,
         env_key_instructions: None,
+        experimental_bearer_token: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -671,6 +675,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         effort,
         summary,
         conversation_id,
+        codex_protocol::protocol::SessionSource::Exec,
     );
 
     let mut prompt = Prompt::default();
@@ -1115,6 +1120,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         base_url: Some(format!("{}/openai", server.uri())),
         // Reuse the existing environment variable to avoid using unsafe code
         env_key: Some(existing_env_var_with_random_value.to_string()),
+        experimental_bearer_token: None,
         query_params: Some(std::collections::HashMap::from([(
             "api-version".to_string(),
             "2025-04-01-preview".to_string(),
@@ -1197,6 +1203,7 @@ async fn env_var_overrides_loaded_auth() {
             "2025-04-01-preview".to_string(),
         )])),
         env_key_instructions: None,
+        experimental_bearer_token: None,
         wire_api: WireApi::Responses,
         http_headers: Some(std::collections::HashMap::from([(
             "Custom-Header".to_string(),
@@ -1255,6 +1262,10 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Build a small SSE stream with deltas and a final assistant message.
     // We emit the same body for all 3 turns; ids vary but are unused by assertions.
     let sse_raw = r##"[
+        {"type":"response.output_item.added", "item":{
+            "type":"message", "role":"assistant",
+            "content":[{"type":"output_text","text":""}]
+        }},
         {"type":"response.output_text.delta", "delta":"Hey "},
         {"type":"response.output_text.delta", "delta":"there"},
         {"type":"response.output_text.delta", "delta":"!\n"},

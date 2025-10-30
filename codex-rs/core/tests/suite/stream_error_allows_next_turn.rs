@@ -66,6 +66,7 @@ async fn continue_after_stream_error() {
         base_url: Some(format!("{}/v1", server.uri())),
         env_key: Some("PATH".into()),
         env_key_instructions: None,
+        experimental_bearer_token: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,

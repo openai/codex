@@ -22,8 +22,13 @@
 //! - `session_manager.rs`: orchestration (approvals, sandboxing, reuse) and request handling.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
+use std::time::Duration;
 
+use rand::Rng;
+use rand::rng;
 use tokio::sync::Mutex;
 
 use crate::codex::Session;
@@ -36,46 +41,132 @@ mod session_manager;
 pub(crate) use errors::UnifiedExecError;
 pub(crate) use session::UnifiedExecSession;
 
-const DEFAULT_TIMEOUT_MS: u64 = 1_000;
-const MAX_TIMEOUT_MS: u64 = 60_000;
-const UNIFIED_EXEC_OUTPUT_MAX_BYTES: usize = 128 * 1024; // 128 KiB
+pub(crate) const DEFAULT_YIELD_TIME_MS: u64 = 10_000;
+pub(crate) const MIN_YIELD_TIME_MS: u64 = 250;
+pub(crate) const MAX_YIELD_TIME_MS: u64 = 30_000;
+pub(crate) const DEFAULT_MAX_OUTPUT_TOKENS: usize = 10_000;
+pub(crate) const UNIFIED_EXEC_OUTPUT_MAX_BYTES: usize = 1024 * 1024; // 1 MiB
 
-pub(crate) struct UnifiedExecContext<'a> {
-    pub session: &'a Session,
-    pub turn: &'a TurnContext,
-    pub sub_id: &'a str,
-    pub call_id: &'a str,
-    pub session_id: Option<i32>,
+pub(crate) struct UnifiedExecContext {
+    pub session: Arc<Session>,
+    pub turn: Arc<TurnContext>,
+    pub call_id: String,
+}
+
+impl UnifiedExecContext {
+    pub fn new(session: Arc<Session>, turn: Arc<TurnContext>, call_id: String) -> Self {
+        Self {
+            session,
+            turn,
+            call_id,
+        }
+    }
 }
 
 #[derive(Debug)]
-pub(crate) struct UnifiedExecRequest<'a> {
-    pub input_chunks: &'a [String],
-    pub timeout_ms: Option<u64>,
+pub(crate) struct ExecCommandRequest<'a> {
+    pub command: &'a str,
+    pub shell: &'a str,
+    pub login: bool,
+    pub yield_time_ms: Option<u64>,
+    pub max_output_tokens: Option<usize>,
+}
+
+#[derive(Debug)]
+pub(crate) struct WriteStdinRequest<'a> {
+    pub session_id: i32,
+    pub input: &'a str,
+    pub yield_time_ms: Option<u64>,
+    pub max_output_tokens: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct UnifiedExecResult {
-    pub session_id: Option<i32>,
+pub(crate) struct UnifiedExecResponse {
+    pub event_call_id: String,
+    pub chunk_id: String,
+    pub wall_time: Duration,
     pub output: String,
+    pub session_id: Option<i32>,
+    pub exit_code: Option<i32>,
+    pub original_token_count: Option<usize>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct UnifiedExecSessionManager {
     next_session_id: AtomicI32,
-    sessions: Mutex<HashMap<i32, session::UnifiedExecSession>>,
+    sessions: Mutex<HashMap<i32, SessionEntry>>,
+}
+
+struct SessionEntry {
+    session: session::UnifiedExecSession,
+    session_ref: Arc<Session>,
+    turn_ref: Arc<TurnContext>,
+    call_id: String,
+    command: String,
+    cwd: PathBuf,
+    started_at: tokio::time::Instant,
+}
+
+pub(crate) fn clamp_yield_time(yield_time_ms: Option<u64>) -> u64 {
+    match yield_time_ms {
+        Some(value) => value.clamp(MIN_YIELD_TIME_MS, MAX_YIELD_TIME_MS),
+        None => DEFAULT_YIELD_TIME_MS,
+    }
+}
+
+pub(crate) fn resolve_max_tokens(max_tokens: Option<usize>) -> usize {
+    max_tokens.unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
+}
+
+pub(crate) fn generate_chunk_id() -> String {
+    let mut rng = rng();
+    (0..6)
+        .map(|_| format!("{:x}", rng.random_range(0..16)))
+        .collect()
+}
+
+pub(crate) fn truncate_output_to_tokens(
+    output: &str,
+    max_tokens: usize,
+) -> (String, Option<usize>) {
+    if max_tokens == 0 {
+        let total_tokens = output.chars().count();
+        let message = format!("…{total_tokens} tokens truncated…");
+        return (message, Some(total_tokens));
+    }
+
+    let tokens: Vec<char> = output.chars().collect();
+    let total_tokens = tokens.len();
+    if total_tokens <= max_tokens {
+        return (output.to_string(), None);
+    }
+
+    let half = max_tokens / 2;
+    if half == 0 {
+        let truncated = total_tokens.saturating_sub(max_tokens);
+        let message = format!("…{truncated} tokens truncated…");
+        return (message, Some(total_tokens));
+    }
+
+    let truncated = total_tokens.saturating_sub(half * 2);
+    let mut truncated_output = String::new();
+    truncated_output.extend(&tokens[..half]);
+    truncated_output.push_str(&format!("…{truncated} tokens truncated…"));
+    truncated_output.extend(&tokens[total_tokens - half..]);
+    (truncated_output, Some(total_tokens))
 }
 
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
     use super::*;
-
     use crate::codex::Session;
     use crate::codex::TurnContext;
     use crate::codex::make_session_and_context;
     use crate::protocol::AskForApproval;
     use crate::protocol::SandboxPolicy;
+    use crate::unified_exec::ExecCommandRequest;
+    use crate::unified_exec::WriteStdinRequest;
     use core_test_support::skip_if_sandbox;
     use std::sync::Arc;
     use tokio::time::Duration;
@@ -89,32 +180,46 @@ mod tests {
         (Arc::new(session), Arc::new(turn))
     }
 
-    async fn run_unified_exec_request(
+    async fn exec_command(
         session: &Arc<Session>,
         turn: &Arc<TurnContext>,
-        session_id: Option<i32>,
-        input: Vec<String>,
-        timeout_ms: Option<u64>,
-    ) -> Result<UnifiedExecResult, UnifiedExecError> {
-        let request_input = input;
-        let request = UnifiedExecRequest {
-            input_chunks: &request_input,
-            timeout_ms,
-        };
+        cmd: &str,
+        yield_time_ms: Option<u64>,
+    ) -> Result<UnifiedExecResponse, UnifiedExecError> {
+        let context =
+            UnifiedExecContext::new(Arc::clone(session), Arc::clone(turn), "call".to_string());
 
         session
             .services
             .unified_exec_manager
-            .handle_request(
-                request,
-                UnifiedExecContext {
-                    session,
-                    turn: turn.as_ref(),
-                    sub_id: "sub",
-                    call_id: "call",
-                    session_id,
+            .exec_command(
+                ExecCommandRequest {
+                    command: cmd,
+                    shell: "/bin/bash",
+                    login: true,
+                    yield_time_ms,
+                    max_output_tokens: None,
                 },
+                &context,
             )
+            .await
+    }
+
+    async fn write_stdin(
+        session: &Arc<Session>,
+        session_id: i32,
+        input: &str,
+        yield_time_ms: Option<u64>,
+    ) -> Result<UnifiedExecResponse, UnifiedExecError> {
+        session
+            .services
+            .unified_exec_manager
+            .write_stdin(WriteStdinRequest {
+                session_id,
+                input,
+                yield_time_ms,
+                max_output_tokens: None,
+            })
             .await
     }
 
@@ -142,37 +247,28 @@ mod tests {
 
         let (session, turn) = test_session_and_turn();
 
-        let open_shell = run_unified_exec_request(
-            &session,
-            &turn,
-            None,
-            vec!["bash".to_string(), "-i".to_string()],
-            Some(2_500),
-        )
-        .await?;
+        let open_shell = exec_command(&session, &turn, "bash -i", Some(2_500)).await?;
         let session_id = open_shell.session_id.expect("expected session_id");
 
-        run_unified_exec_request(
+        write_stdin(
             &session,
-            &turn,
-            Some(session_id),
-            vec![
-                "export".to_string(),
-                "CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string(),
-            ],
+            session_id,
+            "export CODEX_INTERACTIVE_SHELL_VAR=codex\n",
             Some(2_500),
         )
         .await?;
 
-        let out_2 = run_unified_exec_request(
+        let out_2 = write_stdin(
             &session,
-            &turn,
-            Some(session_id),
-            vec!["echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
+            session_id,
+            "echo $CODEX_INTERACTIVE_SHELL_VAR\n",
             Some(2_500),
         )
         .await?;
-        assert!(out_2.output.contains("codex"));
+        assert!(
+            out_2.output.contains("codex"),
+            "expected environment variable output"
+        );
 
         Ok(())
     }
@@ -183,47 +279,44 @@ mod tests {
 
         let (session, turn) = test_session_and_turn();
 
-        let shell_a = run_unified_exec_request(
-            &session,
-            &turn,
-            None,
-            vec!["/bin/bash".to_string(), "-i".to_string()],
-            Some(2_500),
-        )
-        .await?;
+        let shell_a = exec_command(&session, &turn, "bash -i", Some(2_500)).await?;
         let session_a = shell_a.session_id.expect("expected session id");
 
-        run_unified_exec_request(
+        write_stdin(
             &session,
-            &turn,
-            Some(session_a),
-            vec!["export CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string()],
+            session_a,
+            "export CODEX_INTERACTIVE_SHELL_VAR=codex\n",
             Some(2_500),
         )
         .await?;
 
-        let out_2 = run_unified_exec_request(
+        let out_2 = exec_command(
             &session,
             &turn,
-            None,
-            vec![
-                "echo".to_string(),
-                "$CODEX_INTERACTIVE_SHELL_VAR\n".to_string(),
-            ],
+            "echo $CODEX_INTERACTIVE_SHELL_VAR",
             Some(2_500),
         )
         .await?;
-        assert!(!out_2.output.contains("codex"));
+        assert!(
+            out_2.session_id.is_none(),
+            "short command should not retain a session"
+        );
+        assert!(
+            !out_2.output.contains("codex"),
+            "short command should run in a fresh shell"
+        );
 
-        let out_3 = run_unified_exec_request(
+        let out_3 = write_stdin(
             &session,
-            &turn,
-            Some(session_a),
-            vec!["echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
+            session_a,
+            "echo $CODEX_INTERACTIVE_SHELL_VAR\n",
             Some(2_500),
         )
         .await?;
-        assert!(out_3.output.contains("codex"));
+        assert!(
+            out_3.output.contains("codex"),
+            "session should preserve state"
+        );
 
         Ok(())
     }
@@ -234,45 +327,37 @@ mod tests {
 
         let (session, turn) = test_session_and_turn();
 
-        let open_shell = run_unified_exec_request(
-            &session,
-            &turn,
-            None,
-            vec!["bash".to_string(), "-i".to_string()],
-            Some(2_500),
-        )
-        .await?;
+        let open_shell = exec_command(&session, &turn, "bash -i", Some(2_500)).await?;
         let session_id = open_shell.session_id.expect("expected session id");
 
-        run_unified_exec_request(
+        write_stdin(
             &session,
-            &turn,
-            Some(session_id),
-            vec![
-                "export".to_string(),
-                "CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string(),
-            ],
+            session_id,
+            "export CODEX_INTERACTIVE_SHELL_VAR=codex\n",
             Some(2_500),
         )
         .await?;
 
-        let out_2 = run_unified_exec_request(
+        let out_2 = write_stdin(
             &session,
-            &turn,
-            Some(session_id),
-            vec!["sleep 5 && echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
+            session_id,
+            "sleep 5 && echo $CODEX_INTERACTIVE_SHELL_VAR\n",
             Some(10),
         )
         .await?;
-        assert!(!out_2.output.contains("codex"));
+        assert!(
+            !out_2.output.contains("codex"),
+            "timeout too short should yield incomplete output"
+        );
 
         tokio::time::sleep(Duration::from_secs(7)).await;
 
-        let out_3 =
-            run_unified_exec_request(&session, &turn, Some(session_id), Vec::new(), Some(100))
-                .await?;
+        let out_3 = write_stdin(&session, session_id, "", Some(100)).await?;
 
-        assert!(out_3.output.contains("codex"));
+        assert!(
+            out_3.output.contains("codex"),
+            "subsequent poll should retrieve output"
+        );
 
         Ok(())
     }
@@ -282,18 +367,9 @@ mod tests {
     async fn requests_with_large_timeout_are_capped() -> anyhow::Result<()> {
         let (session, turn) = test_session_and_turn();
 
-        let result = run_unified_exec_request(
-            &session,
-            &turn,
-            None,
-            vec!["echo".to_string(), "codex".to_string()],
-            Some(120_000),
-        )
-        .await?;
+        let result = exec_command(&session, &turn, "echo codex", Some(120_000)).await?;
 
-        assert!(result.output.starts_with(
-            "Warning: requested timeout 120000ms exceeds maximum of 60000ms; clamping to 60000ms.\n"
-        ));
+        assert!(result.session_id.is_none());
         assert!(result.output.contains("codex"));
 
         Ok(())
@@ -303,16 +379,12 @@ mod tests {
     #[ignore] // Ignored while we have a better way to test this.
     async fn completed_commands_do_not_persist_sessions() -> anyhow::Result<()> {
         let (session, turn) = test_session_and_turn();
-        let result = run_unified_exec_request(
-            &session,
-            &turn,
-            None,
-            vec!["/bin/echo".to_string(), "codex".to_string()],
-            Some(2_500),
-        )
-        .await?;
+        let result = exec_command(&session, &turn, "echo codex", Some(2_500)).await?;
 
-        assert!(result.session_id.is_none());
+        assert!(
+            result.session_id.is_none(),
+            "completed command should not retain session"
+        );
         assert!(result.output.contains("codex"));
 
         assert!(
@@ -334,31 +406,16 @@ mod tests {
 
         let (session, turn) = test_session_and_turn();
 
-        let open_shell = run_unified_exec_request(
-            &session,
-            &turn,
-            None,
-            vec!["/bin/bash".to_string(), "-i".to_string()],
-            Some(2_500),
-        )
-        .await?;
+        let open_shell = exec_command(&session, &turn, "bash -i", Some(2_500)).await?;
         let session_id = open_shell.session_id.expect("expected session id");
 
-        run_unified_exec_request(
-            &session,
-            &turn,
-            Some(session_id),
-            vec!["exit\n".to_string()],
-            Some(2_500),
-        )
-        .await?;
+        write_stdin(&session, session_id, "exit\n", Some(2_500)).await?;
 
         tokio::time::sleep(Duration::from_millis(200)).await;
 
-        let err =
-            run_unified_exec_request(&session, &turn, Some(session_id), Vec::new(), Some(100))
-                .await
-                .expect_err("expected unknown session error");
+        let err = write_stdin(&session, session_id, "", Some(100))
+            .await
+            .expect_err("expected unknown session error");
 
         match err {
             UnifiedExecError::UnknownSessionId { session_id: err_id } => {

@@ -10,6 +10,10 @@ struct Alias {
 
 const ALIASES: &[Alias] = &[
     Alias {
+        legacy_key: "experimental_sandbox_command_assessment",
+        feature: Feature::SandboxCommandAssessment,
+    },
+    Alias {
         legacy_key: "experimental_use_unified_exec_tool",
         feature: Feature::UnifiedExec,
     },
@@ -28,10 +32,6 @@ const ALIASES: &[Alias] = &[
     Alias {
         legacy_key: "include_apply_patch_tool",
         feature: Feature::ApplyPatchFreeform,
-    },
-    Alias {
-        legacy_key: "include_plan_tool",
-        feature: Feature::PlanTool,
     },
     Alias {
         legacy_key: "include_view_image_tool",
@@ -55,9 +55,9 @@ pub(crate) fn feature_for_key(key: &str) -> Option<Feature> {
 
 #[derive(Debug, Default)]
 pub struct LegacyFeatureToggles {
-    pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
+    pub experimental_sandbox_command_assessment: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
     pub experimental_use_exec_command_tool: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
@@ -70,15 +70,15 @@ impl LegacyFeatureToggles {
     pub fn apply(self, features: &mut Features) {
         set_if_some(
             features,
-            Feature::PlanTool,
-            self.include_plan_tool,
-            "include_plan_tool",
-        );
-        set_if_some(
-            features,
             Feature::ApplyPatchFreeform,
             self.include_apply_patch_tool,
             "include_apply_patch_tool",
+        );
+        set_if_some(
+            features,
+            Feature::SandboxCommandAssessment,
+            self.experimental_sandbox_command_assessment,
+            "experimental_sandbox_command_assessment",
         );
         set_if_some(
             features,
@@ -134,6 +134,7 @@ fn set_if_some(
     if let Some(enabled) = maybe_value {
         set_feature(features, feature, enabled);
         log_alias(alias_key, feature);
+        features.record_legacy_usage_force(alias_key, feature);
     }
 }
 
