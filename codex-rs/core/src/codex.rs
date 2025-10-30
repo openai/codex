@@ -173,6 +173,7 @@ impl Codex {
             model_reasoning_summary: config.model_reasoning_summary,
             user_instructions,
             base_instructions: config.base_instructions.clone(),
+            compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
@@ -265,6 +266,7 @@ pub(crate) struct TurnContext {
     /// instead of `std::env::current_dir()`.
     pub(crate) cwd: PathBuf,
     pub(crate) base_instructions: Option<String>,
+    pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) sandbox_policy: SandboxPolicy,
@@ -280,6 +282,12 @@ impl TurnContext {
         path.as_ref()
             .map(PathBuf::from)
             .map_or_else(|| self.cwd.clone(), |p| self.cwd.join(p))
+    }
+
+    pub(crate) fn compact_prompt(&self) -> &str {
+        self.compact_prompt
+            .as_deref()
+            .unwrap_or(compact::SUMMARIZATION_PROMPT)
     }
 }
 
@@ -300,6 +308,9 @@ pub(crate) struct SessionConfiguration {
 
     /// Base instructions override.
     base_instructions: Option<String>,
+
+    /// Compact prompt override.
+    compact_prompt: Option<String>,
 
     /// When to escalate for approval for execution
     approval_policy: AskForApproval,
@@ -407,6 +418,7 @@ impl Session {
             client,
             cwd: session_configuration.cwd.clone(),
             base_instructions: session_configuration.base_instructions.clone(),
+            compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             approval_policy: session_configuration.approval_policy,
             sandbox_policy: session_configuration.sandbox_policy.clone(),
@@ -1313,7 +1325,7 @@ mod handlers {
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::TurnContext;
-    use crate::codex::compact;
+
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
     use crate::mcp::auth::compute_auth_statuses;
@@ -1540,7 +1552,7 @@ mod handlers {
         // Attempt to inject input into current task
         if let Err(items) = sess
             .inject_input(vec![UserInput::Text {
-                text: compact::SUMMARIZATION_PROMPT.to_string(),
+                text: turn_context.compact_prompt().to_string(),
             }])
             .await
         {
@@ -1664,6 +1676,7 @@ async fn spawn_review_thread(
         tools_config,
         user_instructions: None,
         base_instructions: Some(base_instructions.clone()),
+        compact_prompt: parent_turn_context.compact_prompt.clone(),
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
@@ -2500,6 +2513,7 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             user_instructions: config.user_instructions.clone(),
             base_instructions: config.base_instructions.clone(),
+            compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
@@ -2574,6 +2588,7 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             user_instructions: config.user_instructions.clone(),
             base_instructions: config.base_instructions.clone(),
+            compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
