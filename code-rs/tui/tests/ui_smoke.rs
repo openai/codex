@@ -187,6 +187,32 @@ fn composer_input_clear() {
 }
 
 #[test]
+fn composer_input_normalizes_windows_newlines_on_paste() {
+    let mut composer = ComposerInput::new();
+    let windows_text = "line1\r\nline2\r\nline3";
+
+    composer.handle_paste(windows_text.to_string());
+
+    assert_eq!(composer.text(), "line1\nline2\nline3");
+}
+
+#[test]
+fn composer_input_multiline_paste_submits_all_content() {
+    let mut composer = ComposerInput::new();
+    let multiline = "alpha\nbeta\ngamma";
+
+    composer.handle_paste(multiline.to_string());
+
+    let enter_key = make_key(KeyCode::Enter, KeyModifiers::NONE);
+    match composer.input(enter_key) {
+        ComposerAction::Submitted(text) => assert_eq!(text, multiline),
+        ComposerAction::None => panic!("Enter key should submit multiline paste"),
+    }
+
+    assert!(composer.is_empty(), "composer should clear after submission");
+}
+
+#[test]
 fn composer_input_shift_enter_no_submit() {
     // Verify that Shift+Enter does NOT submit (it should add a newline instead)
     let mut composer = ComposerInput::new();

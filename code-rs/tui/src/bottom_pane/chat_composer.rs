@@ -620,6 +620,10 @@ impl ChatComposer {
 
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         self.post_paste_space_guard = None;
+        let mut pasted = pasted;
+        if pasted.contains('\r') {
+            pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
+        }
         let char_count = pasted.chars().count();
         // If the pasted text looks like a base64/data-URI image, decode it and insert as a path.
         if let Ok((path, info)) = try_decode_base64_image_to_temp_png(&pasted) {
