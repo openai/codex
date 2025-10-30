@@ -347,13 +347,15 @@ pub(crate) async fn stream_chat_completions(
 
         let mut req_builder = provider.create_request_builder(client, &None).await?;
 
-        // Include session source for backend telemetry and routing.
-        let task_type = match serde_json::to_value(session_source) {
-            Ok(serde_json::Value::String(s)) => s,
-            Ok(other) => other.to_string(),
-            Err(_) => "unknown".to_string(),
-        };
-        req_builder = req_builder.header("Codex-Task-Type", task_type);
+        // Include subagent header only for subagent sessions.
+        if let codex_protocol::protocol::SessionSource::SubAgent(sub) = session_source.clone() {
+            let subagent = match sub {
+                codex_protocol::protocol::SubAgentSource::Review => "review".to_string(),
+                codex_protocol::protocol::SubAgentSource::Compact => "compact".to_string(),
+                codex_protocol::protocol::SubAgentSource::Other(label) => label,
+            };
+            req_builder = req_builder.header("x-openai-subagent", subagent);
+        }
 
         let res = otel_event_manager
             .log_request(attempt, || {
