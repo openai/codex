@@ -49,7 +49,6 @@ pub enum ContentItem {
 pub enum ResponseItem {
     Message {
         #[serde(skip_serializing)]
-        #[ts(optional = nullable)]
         id: Option<String>,
         role: String,
         content: Vec<ContentItem>,
@@ -59,25 +58,21 @@ pub enum ResponseItem {
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
         #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
-        #[ts(optional = nullable)]
+        #[ts(optional)]
         content: Option<Vec<ReasoningItemContent>>,
-        #[ts(optional = nullable)]
         encrypted_content: Option<String>,
     },
     LocalShellCall {
         /// Set when using the chat completions API.
         #[serde(skip_serializing)]
-        #[ts(optional = nullable)]
         id: Option<String>,
         /// Set when using the Responses API.
-        #[ts(optional = nullable)]
         call_id: Option<String>,
         status: LocalShellStatus,
         action: LocalShellAction,
     },
     FunctionCall {
         #[serde(skip_serializing)]
-        #[ts(optional = nullable)]
         id: Option<String>,
         name: String,
         // The Responses API returns the function call arguments as a *string* that contains
@@ -98,10 +93,8 @@ pub enum ResponseItem {
     },
     CustomToolCall {
         #[serde(skip_serializing)]
-        #[ts(optional = nullable)]
         id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional = nullable)]
         status: Option<String>,
 
         call_id: String,
@@ -122,10 +115,8 @@ pub enum ResponseItem {
     // }
     WebSearchCall {
         #[serde(skip_serializing)]
-        #[ts(optional = nullable)]
         id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional = nullable)]
         status: Option<String>,
         action: WebSearchAction,
     },
@@ -203,7 +194,6 @@ pub enum LocalShellAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct LocalShellExecAction {
     pub command: Vec<String>,
     pub timeout_ms: Option<u64>,
@@ -296,7 +286,6 @@ impl From<Vec<UserInput>> for ResponseInputItem {
 /// If the `name` of a `ResponseItem::FunctionCall` is either `container.exec`
 /// or shell`, the `arguments` field should deserialize to this struct.
 #[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct ShellToolCallParams {
     pub command: Vec<String>,
     pub workdir: Option<String>,
@@ -329,7 +318,6 @@ pub enum FunctionCallOutputContentItem {
 /// `content_items` with the structured form that the Responses/Chat
 /// Completions APIs understand.
 #[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct FunctionCallOutputPayload {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -166,6 +166,7 @@ mod tests {
                 "params": {
                     "loginId": Uuid::nil(),
                     "success": true,
+                    "error": null,
                 },
             }),
             serde_json::to_value(jsonrpc_notification)
