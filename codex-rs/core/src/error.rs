@@ -253,7 +253,7 @@ impl std::fmt::Display for UsageLimitReachedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let message = match self.plan_type.as_ref() {
             Some(PlanType::Known(KnownPlan::Plus)) => format!(
-                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing){}",
+                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), visit chatgpt.com/codex/settings/usage to purchase more credits{}",
                 retry_suffix_after_or(self.resets_at.as_ref())
             ),
             Some(PlanType::Known(KnownPlan::Team)) | Some(PlanType::Known(KnownPlan::Business)) => {
@@ -266,8 +266,11 @@ impl std::fmt::Display for UsageLimitReachedError {
                 "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://openai.com/chatgpt/pricing)."
                     .to_string()
             }
-            Some(PlanType::Known(KnownPlan::Pro))
-            | Some(PlanType::Known(KnownPlan::Enterprise))
+            Some(PlanType::Known(KnownPlan::Pro)) => format!(
+                "You've hit your usage limit. Visit chatgpt.com/codex/settings/usage to purchase more credits{}",
+                retry_suffix_after_or(self.resets_at.as_ref())
+            ),
+            Some(PlanType::Known(KnownPlan::Enterprise))
             | Some(PlanType::Known(KnownPlan::Edu)) => format!(
                 "You've hit your usage limit.{}",
                 retry_suffix(self.resets_at.as_ref())
@@ -467,7 +470,7 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing) or try again later."
+            "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), visit chatgpt.com/codex/settings/usage to purchase more credits or try again later."
         );
     }
 
@@ -597,7 +600,7 @@ mod tests {
     #[test]
     fn usage_limit_reached_error_formats_default_for_other_plans() {
         let err = UsageLimitReachedError {
-            plan_type: Some(PlanType::Known(KnownPlan::Pro)),
+            plan_type: Some(PlanType::Known(KnownPlan::Enterprise)),
             resets_at: None,
             rate_limits: Some(rate_limit_snapshot()),
         };
@@ -605,6 +608,23 @@ mod tests {
             err.to_string(),
             "You've hit your usage limit. Try again later."
         );
+    }
+
+    #[test]
+    fn usage_limit_reached_error_formats_pro_plan_with_reset() {
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let resets_at = base + ChronoDuration::hours(1);
+        with_now_override(base, move || {
+            let err = UsageLimitReachedError {
+                plan_type: Some(PlanType::Known(KnownPlan::Pro)),
+                resets_at: Some(resets_at),
+                rate_limits: Some(rate_limit_snapshot()),
+            };
+            assert_eq!(
+                err.to_string(),
+                "You've hit your usage limit. Visit chatgpt.com/codex/settings/usage to purchase more credits or try again in 1 hour."
+            );
+        });
     }
 
     #[test]
@@ -636,7 +656,7 @@ mod tests {
             };
             assert_eq!(
                 err.to_string(),
-                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing) or try again in 3 hours 32 minutes."
+                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), visit chatgpt.com/codex/settings/usage to purchase more credits or try again in 3 hours 32 minutes."
             );
         });
     }
