@@ -104,11 +104,10 @@ pub(crate) async fn run_codex_conversation_one_shot(
     // requiring the caller to cancel the parent token.
     let child_cancel = params.cancel_token.child_token();
     params.cancel_token = child_cancel.clone();
-    let io_input = input.clone();
     let io = run_codex_conversation_interactive(params).await?;
 
     // Send the initial input to kick off the one-shot turn.
-    io.submit(Op::UserInput { items: io_input }).await?;
+    io.submit(Op::UserInput { items: input }).await?;
 
     // Bridge events so we can observe completion and shut down automatically.
     let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
