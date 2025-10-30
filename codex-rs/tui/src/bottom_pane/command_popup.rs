@@ -34,7 +34,12 @@ impl CommandPopup {
     pub(crate) fn new(mut prompts: Vec<CustomPrompt>) -> Self {
         let builtins = built_in_slash_commands();
         // Exclude prompts that collide with builtin command names and sort by name.
-        let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
+        let mut exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
+        for (_, cmd) in &builtins {
+            for alias in cmd.aliases() {
+                exclude.insert((*alias).to_string());
+            }
+        }
         prompts.retain(|p| !exclude.contains(&p.name));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
         Self {
@@ -46,11 +51,16 @@ impl CommandPopup {
     }
 
     pub(crate) fn set_prompts(&mut self, mut prompts: Vec<CustomPrompt>) {
-        let exclude: HashSet<String> = self
+        let mut exclude: HashSet<String> = self
             .builtins
             .iter()
             .map(|(n, _)| (*n).to_string())
             .collect();
+        for (_, cmd) in &self.builtins {
+            for alias in cmd.aliases() {
+                exclude.insert((*alias).to_string());
+            }
+        }
         prompts.retain(|p| !exclude.contains(&p.name));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
         self.prompts = prompts;
@@ -121,6 +131,18 @@ impl CommandPopup {
         for (_, cmd) in self.builtins.iter() {
             if let Some((indices, score)) = fuzzy_match(cmd.command(), filter) {
                 out.push((CommandItem::Builtin(*cmd), Some(indices), score));
+                continue;
+            }
+            let mut best_alias_score: Option<i32> = None;
+            for alias in cmd.aliases() {
+                if let Some((_indices, score)) = fuzzy_match(alias, filter)
+                    && best_alias_score.is_none_or(|best| score < best)
+                {
+                    best_alias_score = Some(score);
+                }
+            }
+            if let Some(score) = best_alias_score {
+                out.push((CommandItem::Builtin(*cmd), None, score));
             }
         }
         // Support both search styles:
