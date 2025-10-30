@@ -114,6 +114,7 @@ use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::ToolsConfigParams;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecSessionManager;
+use crate::user_instructions::DeveloperInstructions;
 use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
@@ -173,8 +174,10 @@ impl Codex {
             model: config.model.clone(),
             model_reasoning_effort: config.model_reasoning_effort,
             model_reasoning_summary: config.model_reasoning_summary,
+            developer_instructions: config.developer_instructions.clone(),
             user_instructions,
             base_instructions: config.base_instructions.clone(),
+            compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
@@ -266,7 +269,9 @@ pub(crate) struct TurnContext {
     /// the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
     pub(crate) cwd: PathBuf,
+    pub(crate) developer_instructions: Option<String>,
     pub(crate) base_instructions: Option<String>,
+    pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) sandbox_policy: SandboxPolicy,
@@ -283,6 +288,12 @@ impl TurnContext {
             .map(PathBuf::from)
             .map_or_else(|| self.cwd.clone(), |p| self.cwd.join(p))
     }
+
+    pub(crate) fn compact_prompt(&self) -> &str {
+        self.compact_prompt
+            .as_deref()
+            .unwrap_or(compact::SUMMARIZATION_PROMPT)
+    }
 }
 
 #[allow(dead_code)]
@@ -297,11 +308,17 @@ pub(crate) struct SessionConfiguration {
     model_reasoning_effort: Option<ReasoningEffortConfig>,
     model_reasoning_summary: ReasoningSummaryConfig,
 
+    /// Developer instructions that supplement the base instructions.
+    developer_instructions: Option<String>,
+
     /// Model instructions that are appended to the base instructions.
     user_instructions: Option<String>,
 
     /// Base instructions override.
     base_instructions: Option<String>,
+
+    /// Compact prompt override.
+    compact_prompt: Option<String>,
 
     /// When to escalate for approval for execution
     approval_policy: AskForApproval,
@@ -414,7 +431,9 @@ impl Session {
             sub_id,
             client,
             cwd: session_configuration.cwd.clone(),
+            developer_instructions: session_configuration.developer_instructions.clone(),
             base_instructions: session_configuration.base_instructions.clone(),
+            compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             approval_policy: session_configuration.approval_policy,
             sandbox_policy: session_configuration.sandbox_policy.clone(),
@@ -1057,7 +1076,10 @@ impl Session {
     }
 
     pub(crate) fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
-        let mut items = Vec::<ResponseItem>::with_capacity(2);
+        let mut items = Vec::<ResponseItem>::with_capacity(3);
+        if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
+            items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
+        }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(UserInstructions::new(user_instructions.to_string()).into());
         }
@@ -1391,7 +1413,7 @@ mod handlers {
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::TurnContext;
-    use crate::codex::compact;
+
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
     use crate::mcp::auth::compute_auth_statuses;
@@ -1618,7 +1640,7 @@ mod handlers {
         // Attempt to inject input into current task
         if let Err(items) = sess
             .inject_input(vec![UserInput::Text {
-                text: compact::SUMMARIZATION_PROMPT.to_string(),
+                text: turn_context.compact_prompt().to_string(),
             }])
             .await
         {
@@ -1740,8 +1762,10 @@ async fn spawn_review_thread(
         sub_id: sub_id.to_string(),
         client,
         tools_config,
+        developer_instructions: None,
         user_instructions: None,
         base_instructions: Some(base_instructions.clone()),
+        compact_prompt: parent_turn_context.compact_prompt.clone(),
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
@@ -2623,8 +2647,10 @@ mod tests {
             model: config.model.clone(),
             model_reasoning_effort: config.model_reasoning_effort,
             model_reasoning_summary: config.model_reasoning_summary,
+            developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             base_instructions: config.base_instructions.clone(),
+            compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
@@ -2697,8 +2723,10 @@ mod tests {
             model: config.model.clone(),
             model_reasoning_effort: config.model_reasoning_effort,
             model_reasoning_summary: config.model_reasoning_summary,
+            developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             base_instructions: config.base_instructions.clone(),
+            compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),

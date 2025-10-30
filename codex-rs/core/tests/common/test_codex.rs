@@ -240,6 +240,30 @@ impl TestCodexHarness {
             .expect("output string")
             .to_string()
     }
+
+    pub async fn custom_tool_call_output(&self, call_id: &str) -> String {
+        let bodies = self.request_bodies().await;
+        custom_tool_call_output(&bodies, call_id)
+            .get("output")
+            .and_then(Value::as_str)
+            .expect("output string")
+            .to_string()
+    }
+}
+
+fn custom_tool_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
+    for body in bodies {
+        if let Some(items) = body.get("input").and_then(Value::as_array) {
+            for item in items {
+                if item.get("type").and_then(Value::as_str) == Some("custom_tool_call_output")
+                    && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+                {
+                    return item;
+                }
+            }
+        }
+    }
+    panic!("custom_tool_call_output {call_id} not found");
 }
 
 fn function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {

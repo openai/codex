@@ -545,7 +545,7 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
-    fn generated_ts_omits_undefined_unions_for_optionals() -> Result<()> {
+    fn generated_ts_has_no_optional_nullable_fields() -> Result<()> {
         let output_dir = std::env::temp_dir().join(format!("codex_ts_types_{}", Uuid::now_v7()));
         fs::create_dir(&output_dir)?;
 
@@ -562,7 +562,7 @@ mod tests {
         generate_ts(&output_dir, None)?;
 
         let mut undefined_offenders = Vec::new();
-        let mut missing_optional_marker = BTreeSet::new();
+        let mut optional_nullable_offenders = BTreeSet::new();
         let mut stack = vec![output_dir];
         while let Some(dir) = stack.pop() {
             for entry in fs::read_dir(&dir)? {
@@ -591,26 +591,79 @@ mod tests {
                     let mut search_start = 0;
                     while let Some(idx) = contents[search_start..].find("| null") {
                         let abs_idx = search_start + idx;
-                        let Some(colon_idx) = contents[..abs_idx].rfind(':') else {
+                        // Find the property-colon for this field by scanning forward
+                        // from the start of the segment and ignoring nested braces,
+                        // brackets, and parens. This avoids colons inside nested
+                        // type literals like `{ [k in string]?: string }`.
+
+                        let line_start_idx =
+                            contents[..abs_idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
+
+                        let mut segment_start_idx = line_start_idx;
+                        if let Some(rel_idx) = contents[line_start_idx..abs_idx].rfind(',') {
+                            segment_start_idx = segment_start_idx.max(line_start_idx + rel_idx + 1);
+                        }
+                        if let Some(rel_idx) = contents[line_start_idx..abs_idx].rfind('{') {
+                            segment_start_idx = segment_start_idx.max(line_start_idx + rel_idx + 1);
+                        }
+                        if let Some(rel_idx) = contents[line_start_idx..abs_idx].rfind('}') {
+                            segment_start_idx = segment_start_idx.max(line_start_idx + rel_idx + 1);
+                        }
+
+                        // Scan forward for the colon that separates the field name from its type.
+                        let mut level_brace = 0_i32;
+                        let mut level_brack = 0_i32;
+                        let mut level_paren = 0_i32;
+                        let mut in_single = false;
+                        let mut in_double = false;
+                        let mut escape = false;
+                        let mut prop_colon_idx = None;
+                        for (i, ch) in contents[segment_start_idx..abs_idx].char_indices() {
+                            let idx_abs = segment_start_idx + i;
+                            if escape {
+                                escape = false;
+                                continue;
+                            }
+                            match ch {
+                                '\\' => {
+                                    // Only treat as escape when inside a string.
+                                    if in_single || in_double {
+                                        escape = true;
+                                    }
+                                }
+                                '\'' => {
+                                    if !in_double {
+                                        in_single = !in_single;
+                                    }
+                                }
+                                '"' => {
+                                    if !in_single {
+                                        in_double = !in_double;
+                                    }
+                                }
+                                '{' if !in_single && !in_double => level_brace += 1,
+                                '}' if !in_single && !in_double => level_brace -= 1,
+                                '[' if !in_single && !in_double => level_brack += 1,
+                                ']' if !in_single && !in_double => level_brack -= 1,
+                                '(' if !in_single && !in_double => level_paren += 1,
+                                ')' if !in_single && !in_double => level_paren -= 1,
+                                ':' if !in_single
+                                    && !in_double
+                                    && level_brace == 0
+                                    && level_brack == 0
+                                    && level_paren == 0 =>
+                                {
+                                    prop_colon_idx = Some(idx_abs);
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        let Some(colon_idx) = prop_colon_idx else {
                             search_start = abs_idx + 5;
                             continue;
                         };
-
-                        let line_start_idx = contents[..colon_idx]
-                            .rfind('\n')
-                            .map(|i| i + 1)
-                            .unwrap_or(0);
-
-                        let mut segment_start_idx = line_start_idx;
-                        if let Some(rel_idx) = contents[line_start_idx..colon_idx].rfind(',') {
-                            segment_start_idx = segment_start_idx.max(line_start_idx + rel_idx + 1);
-                        }
-                        if let Some(rel_idx) = contents[line_start_idx..colon_idx].rfind('{') {
-                            segment_start_idx = segment_start_idx.max(line_start_idx + rel_idx + 1);
-                        }
-                        if let Some(rel_idx) = contents[line_start_idx..colon_idx].rfind('}') {
-                            segment_start_idx = segment_start_idx.max(line_start_idx + rel_idx + 1);
-                        }
 
                         let mut field_prefix = contents[segment_start_idx..colon_idx].trim();
                         if field_prefix.is_empty() {
@@ -640,24 +693,25 @@ mod tests {
                             continue;
                         }
 
+                        // If the last non-whitespace before ':' is '?', then this is an
+                        // optional field with a nullable type (i.e., "?: T | null"),
+                        // which we explicitly disallow.
                         if field_prefix.chars().rev().find(|c| !c.is_whitespace()) == Some('?') {
-                            search_start = abs_idx + 5;
-                            continue;
+                            let line_number =
+                                contents[..abs_idx].chars().filter(|c| *c == '\n').count() + 1;
+                            let offending_line_end = contents[line_start_idx..]
+                                .find('\n')
+                                .map(|i| line_start_idx + i)
+                                .unwrap_or(contents.len());
+                            let offending_snippet =
+                                contents[line_start_idx..offending_line_end].trim();
+
+                            optional_nullable_offenders.insert(format!(
+                                "{}:{}: {offending_snippet}",
+                                path.display(),
+                                line_number
+                            ));
                         }
-
-                        let line_number =
-                            contents[..abs_idx].chars().filter(|c| *c == '\n').count() + 1;
-                        let offending_line_end = contents[line_start_idx..]
-                            .find('\n')
-                            .map(|i| line_start_idx + i)
-                            .unwrap_or(contents.len());
-                        let offending_snippet = contents[line_start_idx..offending_line_end].trim();
-
-                        missing_optional_marker.insert(format!(
-                            "{}:{}: {offending_snippet}",
-                            path.display(),
-                            line_number
-                        ));
 
                         search_start = abs_idx + 5;
                     }
@@ -670,12 +724,12 @@ mod tests {
             "Generated TypeScript still includes unions with `undefined` in {undefined_offenders:?}"
         );
 
-        // If this test fails, it means that a struct field that is `Option<T>` in Rust
-        // is being generated as `T | null` in TypeScript, without the optional marker
-        // (`?`). To fix this, add #[ts(optional_fields = nullable)] to the struct definition.
+        // If this assertion fails, it means a field was generated as
+        // "?: T | null" — i.e., both optional (undefined) and nullable (null).
+        // We only want either "?: T" or ": T | null".
         assert!(
-            missing_optional_marker.is_empty(),
-            "Generated TypeScript has nullable fields without an optional marker: {missing_optional_marker:?}"
+            optional_nullable_offenders.is_empty(),
+            "Generated TypeScript has optional fields with nullable types (disallowed '?: T | null'), add #[ts(optional)] to fix:\n{optional_nullable_offenders:?}"
         );
 
         Ok(())
