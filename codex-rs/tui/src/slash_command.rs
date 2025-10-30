@@ -26,9 +26,7 @@ pub enum SlashCommand {
     Logout,
     Quit,
     Feedback,
-    #[cfg(debug_assertions)]
     Rollout,
-    #[cfg(debug_assertions)]
     TestApproval,
 }
 
@@ -50,9 +48,7 @@ impl SlashCommand {
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
-            #[cfg(debug_assertions)]
             SlashCommand::Rollout => "print the rollout file path",
-            #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "test approval request",
         }
     }
@@ -80,16 +76,23 @@ impl SlashCommand {
             | SlashCommand::Mcp
             | SlashCommand::Feedback
             | SlashCommand::Quit => true,
-
-            #[cfg(debug_assertions)]
             SlashCommand::Rollout => true,
-            #[cfg(debug_assertions)]
             SlashCommand::TestApproval => true,
+        }
+    }
+
+    fn is_visible(self) -> bool {
+        match self {
+            SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
+            _ => true,
         }
     }
 }
 
 /// Return all built-in commands in a Vec paired with their command string.
 pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
-    SlashCommand::iter().map(|c| (c.command(), c)).collect()
+    SlashCommand::iter()
+        .filter(|command| command.is_visible())
+        .map(|c| (c.command(), c))
+        .collect()
 }
