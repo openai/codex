@@ -61,14 +61,23 @@ pub enum ResponseEvent {
     RateLimits(RateLimitSnapshot),
 }
 
-pub struct ResponseStream {
-    pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
+#[derive(Debug)]
+pub struct EventStream<T> {
+    pub(crate) rx_event: mpsc::Receiver<T>,
 }
 
-impl Stream for ResponseStream {
-    type Item = Result<ResponseEvent>;
+impl<T> EventStream<T> {
+    pub fn from_receiver(rx_event: mpsc::Receiver<T>) -> Self {
+        Self { rx_event }
+    }
+}
+
+impl<T> Stream for EventStream<T> {
+    type Item = T;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.rx_event.poll_recv(cx)
     }
 }
+
+pub type ResponseStream = EventStream<Result<ResponseEvent>>;

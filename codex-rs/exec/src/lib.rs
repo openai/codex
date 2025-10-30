@@ -11,8 +11,8 @@ pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
 
 pub use cli::Cli;
+use codex_api_client::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::AuthManager;
-use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::auth::enforce_login_restrictions;

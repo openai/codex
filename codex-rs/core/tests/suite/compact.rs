@@ -1,8 +1,8 @@
+use codex_api_client::ModelProviderInfo;
+use codex_api_client::built_in_model_providers;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
-use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
-use codex_core::built_in_model_providers;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;

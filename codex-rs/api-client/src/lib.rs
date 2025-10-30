@@ -26,6 +26,7 @@ pub use crate::prompt::Prompt;
 pub use crate::responses::ResponsesApiClient;
 pub use crate::responses::ResponsesApiClientConfig;
 pub use crate::responses::stream_from_fixture;
+pub use crate::stream::EventStream;
 pub use crate::stream::Reasoning;
 pub use crate::stream::ResponseEvent;
 pub use crate::stream::ResponseStream;

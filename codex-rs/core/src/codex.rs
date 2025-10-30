@@ -51,7 +51,6 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::ModelProviderInfo;
 use crate::client::ModelClient;
 use crate::client::StreamPayload;
 use crate::client_common::Prompt;
@@ -65,6 +64,7 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
+use codex_api_client::ModelProviderInfo;
 // Removed: legacy executor wiring replaced by ToolOrchestrator flows.
 // legacy normalize_exec_result no longer used after orchestrator migration
 use crate::conversation_history::ResponsesApiChainState;
@@ -360,6 +360,12 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) reasoning_effort: Option<Option<ReasoningEffortConfig>>,
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
+}
+
+#[derive(Clone)]
+struct PreparedPrompt {
+    prompt: Prompt,
+    full_prompt_items: Vec<ResponseItem>,
 }
 
 impl Session {
@@ -923,37 +929,51 @@ impl Session {
         self.send_raw_response_items(turn_context, items).await;
     }
 
-    async fn prepare_prompt_items(
-        &self,
-        turn_context: &TurnContext,
-    ) -> (Vec<ResponseItem>, Vec<ResponseItem>, Option<String>, bool) {
+    async fn prepare_prompt(&self, turn_context: &TurnContext) -> PreparedPrompt {
         let use_chain = turn_context.client.supports_responses_api_chaining();
         let mut history = self.clone_history().await;
         let full_prompt_items = history.get_history_for_prompt();
 
+        let mut prompt = Prompt::default();
+        prompt.store_response = use_chain;
+
         if !use_chain {
-            let mut state = self.state.lock().await;
-            state.reset_responses_api_chain();
-            return (full_prompt_items.clone(), full_prompt_items, None, false);
+            {
+                let mut state = self.state.lock().await;
+                state.reset_responses_api_chain();
+            }
+            prompt.input = full_prompt_items.clone();
+            return PreparedPrompt {
+                prompt,
+                full_prompt_items,
+            };
         }
 
-        let mut state = self.state.lock().await;
         let mut previous_response_id = None;
         let mut request_items = full_prompt_items.clone();
 
-        if let Some(chain) = state.responses_api_chain()
-            && let Some(prev_id) = chain.last_response_id
         {
-            let prefix = common_prefix_len(&chain.last_prompt_items, &full_prompt_items);
-            if prefix == 0 && !chain.last_prompt_items.is_empty() {
-                state.reset_responses_api_chain();
-            } else {
-                previous_response_id = Some(prev_id);
-                request_items = full_prompt_items[prefix..].to_vec();
+            let mut state = self.state.lock().await;
+            if let Some(chain) = state.responses_api_chain()
+                && let Some(prev_id) = chain.last_response_id
+            {
+                let prefix = common_prefix_len(&chain.last_prompt_items, &full_prompt_items);
+                if prefix == 0 && !chain.last_prompt_items.is_empty() {
+                    state.reset_responses_api_chain();
+                } else {
+                    previous_response_id = Some(prev_id);
+                    request_items = full_prompt_items[prefix..].to_vec();
+                }
             }
         }
 
-        (request_items, full_prompt_items, previous_response_id, true)
+        prompt.previous_response_id = previous_response_id;
+        prompt.input = request_items;
+
+        PreparedPrompt {
+            prompt,
+            full_prompt_items,
+        }
     }
 
     fn reconstruct_history_from_rollout(
@@ -1797,11 +1817,11 @@ pub(crate) async fn run_task(
         // Construct the input that we will send to the model.
         sess.record_conversation_items(&turn_context, &pending_input)
             .await;
-        let (request_items, full_prompt_items, previous_response_id, store_response) =
-            sess.prepare_prompt_items(&turn_context).await;
+        let prepared_prompt = sess.prepare_prompt(&turn_context).await;
 
         let turn_input_messages: Vec<String> = {
-            full_prompt_items
+            prepared_prompt
+                .full_prompt_items
                 .iter()
                 .filter_map(|item| match item {
                     ResponseItem::Message { content, .. } => Some(content),
@@ -1819,10 +1839,7 @@ pub(crate) async fn run_task(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
-            request_items,
-            full_prompt_items,
-            previous_response_id,
-            store_response,
+            prepared_prompt,
             cancellation_token.child_token(),
         )
         .await
@@ -1914,10 +1931,7 @@ async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
-    mut request_items: Vec<ResponseItem>,
-    mut full_prompt_items: Vec<ResponseItem>,
-    previous_response_id: Option<String>,
-    store_response: bool,
+    mut prepared_prompt: PreparedPrompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
     let mcp_tools = sess.services.mcp_connection_manager.list_all_tools();
@@ -1929,11 +1943,17 @@ async fn run_turn(
     let tool_specs = router.specs();
     let (tools_json, has_freeform_apply_patch) =
         crate::tools::spec::tools_metadata_for_prompt(&tool_specs)?;
-    crate::conversation_history::format_prompt_items(&mut request_items, has_freeform_apply_patch);
     crate::conversation_history::format_prompt_items(
-        &mut full_prompt_items,
+        &mut prepared_prompt.prompt.input,
         has_freeform_apply_patch,
     );
+    crate::conversation_history::format_prompt_items(
+        &mut prepared_prompt.full_prompt_items,
+        has_freeform_apply_patch,
+    );
+
+    let mut prompt = prepared_prompt.prompt;
+    let full_prompt_items = prepared_prompt.full_prompt_items;
 
     let apply_patch_present = tool_specs.iter().any(|spec| spec.name() == "apply_patch");
 
@@ -1949,16 +1969,10 @@ async fn run_turn(
         .get_model_family()
         .supports_parallel_tool_calls;
     let parallel_tool_calls = model_supports_parallel;
-    let prompt = Prompt {
-        instructions: instructions.clone(),
-        input: request_items,
-        tools: tools_json,
-        parallel_tool_calls,
-        output_schema: turn_context.final_output_json_schema.clone(),
-        store_response,
-        previous_response_id: previous_response_id.clone(),
-        ..Default::default()
-    };
+    prompt.instructions = instructions.clone();
+    prompt.tools = tools_json;
+    prompt.parallel_tool_calls = parallel_tool_calls;
+    prompt.output_schema = turn_context.final_output_json_schema.clone();
 
     let payload = StreamPayload { prompt };
 

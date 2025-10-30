@@ -10,9 +10,9 @@ use crate::pull::PullEvent;
 use crate::pull::PullProgressReporter;
 use crate::url::base_url_to_host_root;
 use crate::url::is_openai_compatible_base_url;
-use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
-use codex_core::ModelProviderInfo;
-use codex_core::WireApi;
+use codex_api_client::BUILT_IN_OSS_MODEL_PROVIDER_ID;
+use codex_api_client::ModelProviderInfo;
+use codex_api_client::WireApi;
 use codex_core::config::Config;
 
 const OLLAMA_CONNECTION_ERROR: &str = "No running Ollama server detected. Start it with: `ollama serve` (after installing). Install instructions: https://github.com/ollama/ollama?tab=readme-ov-file#ollama";
@@ -47,7 +47,7 @@ impl OllamaClient {
 
     #[cfg(test)]
     async fn try_from_provider_with_base_url(base_url: &str) -> io::Result<Self> {
-        let provider = codex_core::create_oss_provider_with_base_url(base_url);
+        let provider = codex_api_client::create_oss_provider_with_base_url(base_url);
         Self::try_from_provider(&provider).await
     }
 

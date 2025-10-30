@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 async-stream = { workspace = true }
 bytes = { workspace = true }
+codex-api-client = { workspace = true }
 codex-core = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }

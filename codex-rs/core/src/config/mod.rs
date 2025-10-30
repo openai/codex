@@ -1,6 +1,4 @@
-use crate::ModelProviderInfo;
 use crate::auth::AuthCredentialsStoreMode;
-use crate::built_in_model_providers;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
@@ -32,6 +30,8 @@ use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use codex_api_client::ModelProviderInfo;
+use codex_api_client::built_in_model_providers;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -2712,7 +2712,7 @@ model_verbosity = "high"
             name: "OpenAI using Chat Completions".to_string(),
             base_url: Some("https://api.openai.com/v1".to_string()),
             env_key: Some("OPENAI_API_KEY".to_string()),
-            wire_api: crate::WireApi::Chat,
+            wire_api: codex_api_client::WireApi::Chat,
             env_key_instructions: None,
             experimental_bearer_token: None,
             query_params: None,

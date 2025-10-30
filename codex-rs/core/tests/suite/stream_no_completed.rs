@@ -3,8 +3,8 @@
 
 use std::time::Duration;
 
-use codex_core::ModelProviderInfo;
-use codex_core::WireApi;
+use codex_api_client::ModelProviderInfo;
+use codex_api_client::WireApi;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_protocol::user_input::UserInput;

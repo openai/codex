@@ -4,11 +4,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
+use codex_api_client::ModelProviderInfo;
+use codex_api_client::built_in_model_providers;
 use codex_core::CodexAuth;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
-use codex_core::ModelProviderInfo;
-use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;

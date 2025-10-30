@@ -6,9 +6,9 @@
 use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
+use codex_api_client::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_app_server_protocol::AuthMode;
 use codex_core::AuthManager;
-use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;

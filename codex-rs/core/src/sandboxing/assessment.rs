@@ -5,7 +5,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::AuthManager;
-use crate::ModelProviderInfo;
 use crate::client::ModelClient;
 use crate::client::StreamPayload;
 use crate::client_common::Prompt;
@@ -13,6 +12,7 @@ use crate::client_common::ResponseEvent;
 use crate::config::Config;
 use crate::protocol::SandboxPolicy;
 use askama::Template;
+use codex_api_client::ModelProviderInfo;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ContentItem;

@@ -1,3 +1,4 @@
+use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -17,20 +18,19 @@ use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::protocol::SessionSource;
-use futures::Stream;
+use futures::StreamExt;
+use futures::stream::BoxStream;
+use tokio::sync::OnceCell;
 use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::AuthManager;
-use crate::ModelProviderInfo;
-use crate::WireApi;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::client_common::create_reasoning_param_for_request;
 use crate::client_common::create_text_param_for_request;
 use crate::config::Config;
-use crate::default_client::CodexHttpClient;
 use crate::default_client::create_client;
 use crate::error::CodexErr;
 use crate::error::ConnectionFailedError;
@@ -43,23 +43,83 @@ use crate::features::Feature;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_family::ModelFamily;
 use crate::openai_model_info::get_model_info;
+use codex_api_client::ModelProviderInfo;
+use codex_api_client::WireApi;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ModelClient {
     config: Arc<Config>,
     auth_manager: Option<Arc<AuthManager>>,
     otel_event_manager: OtelEventManager,
-    client: CodexHttpClient,
+    http_client: reqwest::Client,
     provider: ModelProviderInfo,
+    backend: Arc<OnceCell<ModelBackend>>,
     conversation_id: ConversationId,
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
 }
 
+impl fmt::Debug for ModelClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ModelClient")
+            .field("provider", &self.provider.name)
+            .field("model", &self.config.model)
+            .field("conversation_id", &self.conversation_id)
+            .field("backend_initialized", &self.backend.get().is_some())
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StreamPayload {
     pub prompt: Prompt,
+}
+
+type ApiClientStream = BoxStream<'static, ApiClientResult<ResponseEvent>>;
+
+enum ModelBackend {
+    Responses(ResponsesBackend),
+    Chat(ChatBackend),
+}
+
+impl ModelBackend {
+    async fn stream(&self, prompt: Prompt) -> ApiClientResult<ApiClientStream> {
+        match self {
+            ModelBackend::Responses(backend) => backend.stream(prompt).await,
+            ModelBackend::Chat(backend) => backend.stream(prompt).await,
+        }
+    }
+}
+
+struct ResponsesBackend {
+    client: ResponsesApiClient,
+}
+
+impl ResponsesBackend {
+    async fn stream(&self, prompt: Prompt) -> ApiClientResult<ApiClientStream> {
+        self.client
+            .stream(prompt)
+            .await
+            .map(|stream| stream.boxed())
+    }
+}
+
+struct ChatBackend {
+    client: ChatCompletionsApiClient,
+    show_reasoning: bool,
+}
+
+impl ChatBackend {
+    async fn stream(&self, prompt: Prompt) -> ApiClientResult<ApiClientStream> {
+        let stream = self.client.stream(prompt).await?;
+        let stream = if self.show_reasoning {
+            stream.streaming_mode().boxed()
+        } else {
+            stream.aggregate().boxed()
+        };
+        Ok(stream)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -74,14 +134,16 @@ impl ModelClient {
         conversation_id: ConversationId,
         session_source: SessionSource,
     ) -> Self {
-        let client = create_client();
+        let http_client = create_client().clone_inner();
+        let backend = Arc::new(OnceCell::new());
 
         Self {
             config,
             auth_manager,
             otel_event_manager,
-            client,
+            http_client,
             provider,
+            backend,
             conversation_id,
             effort,
             summary,
@@ -119,11 +181,30 @@ impl ModelClient {
     pub async fn stream(&self, payload: &StreamPayload) -> Result<ResponseStream> {
         let mut prompt = payload.prompt.clone();
         self.populate_prompt(&mut prompt);
-
-        match self.provider.wire_api {
-            WireApi::Responses => self.stream_via_responses(prompt).await,
-            WireApi::Chat => self.stream_via_chat(prompt).await,
+        if self.provider.wire_api == WireApi::Responses {
+            if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
+                warn!(path, "Streaming from fixture");
+                let stream = stream_from_fixture(
+                    path,
+                    self.provider.clone(),
+                    self.otel_event_manager.clone(),
+                )
+                .await
+                .map_err(map_api_error)?
+                .boxed();
+                return Ok(wrap_stream(stream));
+            }
         }
+
+        let backend = self
+            .backend
+            .get_or_try_init(|| async { self.build_backend().await })
+            .await
+            .map_err(map_api_error)?;
+
+        let api_stream = backend.stream(prompt).await.map_err(map_api_error)?;
+
+        Ok(wrap_stream(api_stream))
     }
 
     fn populate_prompt(&self, prompt: &mut Prompt) {
@@ -154,22 +235,20 @@ impl ModelClient {
         prompt.text_controls = create_text_param_for_request(verbosity, &prompt.output_schema);
     }
 
-    async fn stream_via_responses(&self, prompt: Prompt) -> Result<ResponseStream> {
-        if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
-            warn!(path, "Streaming from fixture");
-            let stream =
-                stream_from_fixture(path, self.provider.clone(), self.otel_event_manager.clone())
-                    .await
-                    .map_err(map_api_error)?;
-            return Ok(wrap_stream(stream));
+    async fn build_backend(&self) -> ApiClientResult<ModelBackend> {
+        match self.provider.wire_api {
+            WireApi::Responses => self.build_responses_backend().await,
+            WireApi::Chat => self.build_chat_backend().await,
         }
+    }
 
+    async fn build_responses_backend(&self) -> ApiClientResult<ModelBackend> {
         let auth_provider = self.auth_manager.as_ref().map(|manager| {
             Arc::new(AuthManagerProvider::new(Arc::clone(manager))) as Arc<dyn AuthProvider>
         });
 
         let config = ResponsesApiClientConfig {
-            http_client: self.client.clone_inner(),
+            http_client: self.http_client.clone(),
             provider: self.provider.clone(),
             model: self.config.model.clone(),
             conversation_id: self.conversation_id,
@@ -177,42 +256,30 @@ impl ModelClient {
             otel_event_manager: self.otel_event_manager.clone(),
         };
 
-        let client = ResponsesApiClient::new(config)
-            .await
-            .map_err(map_api_error)?;
-
-        let stream = client.stream(prompt).await.map_err(map_api_error)?;
-
-        Ok(wrap_stream(stream))
+        let client = ResponsesApiClient::new(config).await?;
+        Ok(ModelBackend::Responses(ResponsesBackend { client }))
     }
 
-    async fn stream_via_chat(&self, prompt: Prompt) -> Result<ResponseStream> {
+    async fn build_chat_backend(&self) -> ApiClientResult<ModelBackend> {
+        let show_reasoning = self.config.show_raw_agent_reasoning;
         let config = ChatCompletionsApiClientConfig {
-            http_client: self.client.clone_inner(),
+            http_client: self.http_client.clone(),
             provider: self.provider.clone(),
             model: self.config.model.clone(),
             otel_event_manager: self.otel_event_manager.clone(),
             session_source: self.session_source.clone(),
-            aggregation_mode: if self.config.show_raw_agent_reasoning {
+            aggregation_mode: if show_reasoning {
                 ChatAggregationMode::Streaming
             } else {
                 ChatAggregationMode::AggregatedOnly
             },
         };
 
-        let client = ChatCompletionsApiClient::new(config)
-            .await
-            .map_err(map_api_error)?;
-
-        let stream = client.stream(prompt).await.map_err(map_api_error)?;
-
-        let stream = if self.config.show_raw_agent_reasoning {
-            stream.streaming_mode()
-        } else {
-            stream.aggregate()
-        };
-
-        Ok(wrap_stream(stream))
+        let client = ChatCompletionsApiClient::new(config).await?;
+        Ok(ModelBackend::Chat(ChatBackend {
+            client,
+            show_reasoning,
+        }))
     }
 
     pub async fn stream_for_test(&self, mut prompt: Prompt) -> Result<ResponseStream> {
@@ -304,15 +371,10 @@ impl AuthProvider for AuthManagerProvider {
     }
 }
 
-fn wrap_stream<S>(stream: S) -> ResponseStream
-where
-    S: Stream<Item = ApiClientResult<ResponseEvent>> + Send + Unpin + 'static,
-{
+fn wrap_stream(stream: ApiClientStream) -> ResponseStream {
     let (tx, rx) = mpsc::channel::<Result<ResponseEvent>>(1600);
 
     tokio::spawn(async move {
-        use futures::StreamExt;
-
         let mut stream = stream;
         while let Some(item) = stream.next().await {
             let mapped = match item {
@@ -326,7 +388,7 @@ where
         }
     });
 
-    ResponseStream { rx_event: rx }
+    codex_api_client::EventStream::from_receiver(rx)
 }
 
 fn map_api_error(err: codex_api_client::Error) -> CodexErr {

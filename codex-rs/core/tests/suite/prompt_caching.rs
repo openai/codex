@@ -1,9 +1,9 @@
 #![allow(clippy::unwrap_used)]
 
+use codex_api_client::ModelProviderInfo;
+use codex_api_client::built_in_model_providers;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
-use codex_core::ModelProviderInfo;
-use codex_core::built_in_model_providers;
 use codex_core::config::OPENAI_DEFAULT_MODEL;
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;

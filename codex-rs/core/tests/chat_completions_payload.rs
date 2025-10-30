@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
+use codex_api_client::ModelProviderInfo;
+use codex_api_client::WireApi;
 use codex_app_server_protocol::AuthMode;
 use codex_core::ContentItem;
 use codex_core::LocalShellAction;
 use codex_core::LocalShellExecAction;
 use codex_core::LocalShellStatus;
 use codex_core::ModelClient;
-use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseItem;
-use codex_core::WireApi;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;

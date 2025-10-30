@@ -1063,6 +1063,7 @@ name = "codex-common"
 version = "0.0.0"
 dependencies = [
  "clap",
+ "codex-api-client",
  "codex-app-server-protocol",
  "codex-core",
  "codex-protocol",
@@ -1156,6 +1157,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
+ "codex-api-client",
  "codex-arg0",
  "codex-common",
  "codex-core",
@@ -1321,6 +1323,7 @@ dependencies = [
  "assert_matches",
  "async-stream",
  "bytes",
+ "codex-api-client",
  "codex-core",
  "futures",
  "reqwest",
@@ -1462,6 +1465,7 @@ dependencies = [
  "chrono",
  "clap",
  "codex-ansi-escape",
+ "codex-api-client",
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-common",
@@ -1695,6 +1699,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "codex-api-client",
  "codex-core",
  "codex-protocol",
  "notify",

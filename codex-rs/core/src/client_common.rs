@@ -1,13 +1,8 @@
 use std::borrow::Cow;
 use std::ops::Deref;
 
-use futures::Stream;
-use std::pin::Pin;
-use std::task::Context;
-use std::task::Poll;
-use tokio::sync::mpsc;
-
 use crate::error::Result;
+use codex_api_client::EventStream;
 pub use codex_api_client::Prompt;
 pub use codex_api_client::Reasoning;
 pub use codex_api_client::TextControls;
@@ -84,17 +79,7 @@ pub fn create_text_param_for_request(
 
 pub use codex_api_client::ResponseEvent;
 
-pub struct ResponseStream {
-    pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
-}
-
-impl Stream for ResponseStream {
-    type Item = Result<ResponseEvent>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.rx_event.poll_recv(cx)
-    }
-}
+pub type ResponseStream = EventStream<Result<ResponseEvent>>;
 
 #[cfg(test)]
 mod tests {
