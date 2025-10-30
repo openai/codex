@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
@@ -152,6 +153,24 @@ impl ToolRouter {
             tool_name,
             payload,
         };
+
+        if !invocation
+            .turn
+            .tools_config
+            .is_tool_allowed(invocation.tool_name.as_str())
+        {
+            let message = format!("tool {} is disabled for this session", invocation.tool_name);
+            let otel = invocation.turn.client.get_otel_event_manager();
+            otel.tool_result(
+                invocation.tool_name.as_str(),
+                &invocation.call_id,
+                invocation.payload.log_payload().as_ref(),
+                Duration::ZERO,
+                false,
+                &message,
+            );
+            return Err(FunctionCallError::RespondToModel(message));
+        }
 
         match self.registry.dispatch(invocation).await {
             Ok(response) => Ok(response),

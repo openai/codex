@@ -348,6 +348,17 @@ impl SessionConfiguration {
         if let Some(cwd) = updates.cwd.clone() {
             next_configuration.cwd = cwd;
         }
+        if let Some(web_search_request) = updates.web_search_request {
+            if web_search_request {
+                next_configuration
+                    .features
+                    .enable(crate::features::Feature::WebSearchRequest);
+            } else {
+                next_configuration
+                    .features
+                    .disable(crate::features::Feature::WebSearchRequest);
+            }
+        }
         next_configuration
     }
 }
@@ -361,6 +372,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) reasoning_effort: Option<Option<ReasoningEffortConfig>>,
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
+    pub(crate) web_search_request: Option<bool>,
 }
 
 impl Session {
@@ -376,6 +388,7 @@ impl Session {
         let model_family = find_family_for_model(&session_configuration.model)
             .unwrap_or_else(|| config.model_family.clone());
         let mut per_turn_config = (*config).clone();
+        let features = session_configuration.features.clone();
         per_turn_config.model = session_configuration.model.clone();
         per_turn_config.model_family = model_family.clone();
         per_turn_config.model_reasoning_effort = session_configuration.model_reasoning_effort;
@@ -383,6 +396,16 @@ impl Session {
         if let Some(model_info) = get_model_info(&model_family) {
             per_turn_config.model_context_window = Some(model_info.context_window);
         }
+
+        per_turn_config.features = features.clone();
+        per_turn_config.include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
+        per_turn_config.include_view_image_tool = features.enabled(Feature::ViewImageTool);
+        per_turn_config.tools_web_search_request = features.enabled(Feature::WebSearchRequest);
+        per_turn_config.experimental_sandbox_command_assessment =
+            features.enabled(Feature::SandboxCommandAssessment);
+        per_turn_config.use_experimental_streamable_shell_tool =
+            features.enabled(Feature::StreamableShell);
+        per_turn_config.use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
 
         let otel_event_manager = otel_event_manager.clone().with_model(
             session_configuration.model.as_str(),
@@ -401,7 +424,7 @@ impl Session {
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: &config.features,
+            features: &features,
         });
 
         TurnContext {
@@ -1254,6 +1277,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 model,
                 effort,
                 summary,
+                include_web_search_request,
             } => {
                 let updates = SessionSettingsUpdate {
                     cwd,
@@ -1262,6 +1286,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     model,
                     reasoning_effort: effort,
                     reasoning_summary: summary,
+                    web_search_request: include_web_search_request,
                     ..Default::default()
                 };
                 sess.update_settings(updates).await;
@@ -1288,6 +1313,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                             reasoning_effort: Some(effort),
                             reasoning_summary: Some(summary),
                             final_output_json_schema: Some(final_output_json_schema),
+                            web_search_request: None,
                         },
                     ),
                     Op::UserInput { items } => (items, SessionSettingsUpdate::default()),
@@ -1848,12 +1874,17 @@ async fn run_turn(
         .get_model_family()
         .supports_parallel_tool_calls;
     let parallel_tool_calls = model_supports_parallel;
+    let tool_specs = router.specs();
+    let allowed_tools = turn_context
+        .tools_config
+        .allowed_tool_names(tool_specs.as_slice());
     let prompt = Prompt {
         input: filter_model_visible_history(input),
-        tools: router.specs(),
+        tools: tool_specs,
         parallel_tool_calls,
         base_instructions_override: turn_context.base_instructions.clone(),
         output_schema: turn_context.final_output_json_schema.clone(),
+        allowed_tools,
     };
 
     let mut retries = 0;

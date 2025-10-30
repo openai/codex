@@ -19,6 +19,8 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::persist_model_selection;
 use codex_core::config::set_hide_full_access_warning;
+use codex_core::config_edit::persist_overrides;
+use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
@@ -413,6 +415,32 @@ impl App {
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
                 self.chat_widget.set_sandbox_policy(policy);
+            }
+            AppEvent::UpdateWebSearch(enabled) => {
+                if enabled {
+                    self.config.features.enable(Feature::WebSearchRequest);
+                } else {
+                    self.config.features.disable(Feature::WebSearchRequest);
+                }
+                self.config.tools_web_search_request = enabled;
+                self.chat_widget.set_web_search_enabled(enabled);
+            }
+            AppEvent::PersistWebSearch { enabled } => {
+                let value = if enabled { "true" } else { "false" };
+                if let Err(err) = persist_overrides(
+                    &self.config.codex_home,
+                    self.active_profile.as_deref(),
+                    &[(&["features", "web_search_request"], value)],
+                )
+                .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist web search toggle"
+                    );
+                    self.chat_widget
+                        .add_error_message(format!("Failed to save web search preference: {err}"));
+                }
             }
             AppEvent::UpdateFullAccessWarningAcknowledged(ack) => {
                 self.chat_widget.set_full_access_warning_acknowledged(ack);

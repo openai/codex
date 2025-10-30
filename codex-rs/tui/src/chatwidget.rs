@@ -1213,6 +1213,9 @@ impl ChatWidget {
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
             }
+            SlashCommand::Search => {
+                self.open_search_popup();
+            }
             SlashCommand::Quit => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
@@ -1741,6 +1744,7 @@ impl ChatWidget {
                     model: Some(model_for_action.clone()),
                     effort: Some(effort_for_action),
                     summary: None,
+                    include_web_search_request: None,
                 }));
                 tx.send(AppEvent::UpdateModel(model_for_action.clone()));
                 tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
@@ -1826,6 +1830,72 @@ impl ChatWidget {
         });
     }
 
+    pub(crate) fn open_search_popup(&mut self) {
+        let current_enabled = self.config.tools_web_search_request;
+
+        let make_item = |label: &str,
+                         enabled: bool,
+                         description: &str,
+                         info_message: &str,
+                         hint: Option<&str>,
+                         search_value: &str| {
+            let message_owned = info_message.to_string();
+            let hint_owned = hint.map(std::string::ToString::to_string);
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    include_web_search_request: Some(enabled),
+                }));
+                tx.send(AppEvent::UpdateWebSearch(enabled));
+                tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_info_event(message_owned.clone(), hint_owned.clone()),
+                )));
+                tx.send(AppEvent::PersistWebSearch { enabled });
+            })];
+
+            SelectionItem {
+                name: label.to_string(),
+                description: Some(description.to_string()),
+                is_current: current_enabled == enabled,
+                actions,
+                dismiss_on_select: true,
+                search_value: Some(search_value.to_string()),
+                ..Default::default()
+            }
+        };
+
+        let mut items: Vec<SelectionItem> = Vec::with_capacity(2);
+        items.push(make_item(
+            "Enable Web Search",
+            true,
+            "Allow Codex to make web searches when it needs external information",
+            "Web search enabled",
+            Some("Disable later if you prefer offline-only behavior."),
+            "enable web search",
+        ));
+        items.push(make_item(
+            "Disable Web Search",
+            false,
+            "Do not allow codex to perform web searches",
+            "Web search disabled",
+            Some("Enable when you want Codex to pull fresh information."),
+            "disable web search",
+        ));
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Toggle Web Search".to_string()),
+            subtitle: Some("Control whether Codex can access external search.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
     fn approval_preset_actions(
         approval: AskForApproval,
         sandbox: SandboxPolicy,
@@ -1839,6 +1909,7 @@ impl ChatWidget {
                 model: None,
                 effort: None,
                 summary: None,
+                include_web_search_request: None,
             }));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
@@ -1932,6 +2003,10 @@ impl ChatWidget {
     pub(crate) fn set_model(&mut self, model: &str) {
         self.session_header.set_model(model);
         self.config.model = model.to_string();
+    }
+
+    pub(crate) fn set_web_search_enabled(&mut self, enabled: bool) {
+        self.config.tools_web_search_request = enabled;
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {

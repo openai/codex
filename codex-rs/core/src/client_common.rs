@@ -11,6 +11,7 @@ use codex_protocol::models::ResponseItem;
 use futures::Stream;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::ser::Serializer;
 use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -41,6 +42,9 @@ pub struct Prompt {
 
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
+
+    /// Optional list of tool identifiers that should remain enabled for this turn.
+    pub allowed_tools: Option<Vec<String>>,
 }
 
 impl Prompt {
@@ -268,7 +272,8 @@ pub(crate) struct ResponsesApiRequest<'a> {
     // separate enum for serialization.
     pub(crate) input: &'a Vec<ResponseItem>,
     pub(crate) tools: &'a [serde_json::Value],
-    pub(crate) tool_choice: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tool_choice: Option<ToolChoicePayload>,
     pub(crate) parallel_tool_calls: bool,
     pub(crate) reasoning: Option<Reasoning>,
     pub(crate) store: bool,
@@ -280,10 +285,54 @@ pub(crate) struct ResponsesApiRequest<'a> {
     pub(crate) text: Option<TextControls>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolChoiceMode {
+    Auto,
+}
+
+#[derive(Debug, Clone)]
+pub enum ToolChoicePayload {
+    Auto,
+    AllowedTools {
+        mode: ToolChoiceMode,
+        tools: Vec<serde_json::Value>,
+    },
+}
+
+impl Serialize for ToolChoicePayload {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            ToolChoicePayload::Auto => serializer.serialize_str("auto"),
+            ToolChoicePayload::AllowedTools { mode, tools } => {
+                #[derive(Serialize)]
+                struct AllowedToolsPayload<'a> {
+                    #[serde(rename = "type")]
+                    r#type: &'static str,
+                    mode: ToolChoiceMode,
+                    tools: &'a [serde_json::Value],
+                }
+
+                let payload = AllowedToolsPayload {
+                    r#type: "allowed_tools",
+                    mode: *mode,
+                    tools: tools.as_slice(),
+                };
+                payload.serialize(serializer)
+            }
+        }
+    }
+}
+
 pub(crate) mod tools {
     use crate::tools::spec::JsonSchema;
     use serde::Deserialize;
     use serde::Serialize;
+    use serde_json::Value;
+    use serde_json::json;
 
     /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
     /// Responses API.
@@ -309,6 +358,21 @@ pub(crate) mod tools {
                 ToolSpec::LocalShell {} => "local_shell",
                 ToolSpec::WebSearch {} => "web_search",
                 ToolSpec::Freeform(tool) => tool.name.as_str(),
+            }
+        }
+
+        pub(crate) fn to_allowed_tool_entry(&self) -> Value {
+            match self {
+                ToolSpec::Function(tool) => json!({
+                    "type": "function",
+                    "name": tool.name,
+                }),
+                ToolSpec::LocalShell {} => json!({ "type": "local_shell" }),
+                ToolSpec::WebSearch {} => json!({ "type": "web_search" }),
+                ToolSpec::Freeform(tool) => json!({
+                    "type": "custom",
+                    "name": tool.name,
+                }),
             }
         }
     }
@@ -457,7 +521,7 @@ mod tests {
             instructions: "i",
             input: &input,
             tools: &tools,
-            tool_choice: "auto",
+            tool_choice: Some(ToolChoicePayload::Auto),
             parallel_tool_calls: true,
             reasoning: None,
             store: false,
@@ -498,7 +562,7 @@ mod tests {
             instructions: "i",
             input: &input,
             tools: &tools,
-            tool_choice: "auto",
+            tool_choice: Some(ToolChoicePayload::Auto),
             parallel_tool_calls: true,
             reasoning: None,
             store: false,
@@ -534,7 +598,7 @@ mod tests {
             instructions: "i",
             input: &input,
             tools: &tools,
-            tool_choice: "auto",
+            tool_choice: Some(ToolChoicePayload::Auto),
             parallel_tool_calls: true,
             reasoning: None,
             store: false,
@@ -546,5 +610,66 @@ mod tests {
 
         let v = serde_json::to_value(&req).expect("json");
         assert!(v.get("text").is_none());
+    }
+
+    #[test]
+    fn serializes_auto_tool_choice_as_string() {
+        let input: Vec<ResponseItem> = vec![];
+        let tools: Vec<serde_json::Value> = vec![];
+        let req = ResponsesApiRequest {
+            model: "gpt-5",
+            instructions: "i",
+            input: &input,
+            tools: &tools,
+            tool_choice: Some(ToolChoicePayload::Auto),
+            parallel_tool_calls: true,
+            reasoning: None,
+            store: false,
+            stream: true,
+            include: vec![],
+            prompt_cache_key: None,
+            text: None,
+        };
+
+        let v = serde_json::to_value(&req).expect("json");
+        assert_eq!(
+            v.get("tool_choice"),
+            Some(&serde_json::Value::String("auto".to_string()))
+        );
+    }
+
+    #[test]
+    fn serializes_allowed_tools_choice() {
+        let input: Vec<ResponseItem> = vec![];
+        let tools: Vec<serde_json::Value> = vec![];
+        let allowed_tools = vec![
+            serde_json::json!({"type": "function", "name": "shell"}),
+            serde_json::json!({"type": "local_shell"}),
+        ];
+        let req = ResponsesApiRequest {
+            model: "gpt-5",
+            instructions: "i",
+            input: &input,
+            tools: &tools,
+            tool_choice: Some(ToolChoicePayload::AllowedTools {
+                mode: ToolChoiceMode::Auto,
+                tools: allowed_tools.clone(),
+            }),
+            parallel_tool_calls: true,
+            reasoning: None,
+            store: false,
+            stream: true,
+            include: vec![],
+            prompt_cache_key: None,
+            text: None,
+        };
+
+        let v = serde_json::to_value(&req).expect("json");
+        let expected = serde_json::json!({
+            "type": "allowed_tools",
+            "mode": "auto",
+            "tools": allowed_tools,
+        });
+        assert_eq!(v.get("tool_choice"), Some(&expected));
     }
 }

@@ -36,6 +36,8 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::client_common::ResponsesApiRequest;
+use crate::client_common::ToolChoiceMode;
+use crate::client_common::ToolChoicePayload;
 use crate::client_common::create_reasoning_param_for_request;
 use crate::client_common::create_text_param_for_request;
 use crate::config::Config;
@@ -245,12 +247,33 @@ impl ModelClient {
         // For Azure, we send `store: true` and preserve reasoning item IDs.
         let azure_workaround = self.provider.is_azure_responses_endpoint();
 
+        let allowed_tool_values = prompt.allowed_tools.as_ref().map(|allowed_names| {
+            use std::collections::HashSet;
+            let allowed: HashSet<&str> = allowed_names.iter().map(String::as_str).collect();
+            prompt
+                .tools
+                .iter()
+                .filter(|spec| allowed.contains(spec.name()))
+                .map(|spec| spec.to_allowed_tool_entry())
+                .collect::<Vec<serde_json::Value>>()
+        });
+
+        let tool_choice = match allowed_tool_values {
+            Some(tools) if !tools.is_empty() => Some(ToolChoicePayload::AllowedTools {
+                mode: ToolChoiceMode::Auto,
+                tools,
+            }),
+            _ => Some(ToolChoicePayload::Auto),
+        };
+
+        trace!(tool_choice = ?tool_choice, "resolved tool choice for request");
+
         let payload = ResponsesApiRequest {
             model: &self.config.model,
             instructions: &full_instructions,
             input: &input_with_instructions,
             tools: &tools_json,
-            tool_choice: "auto",
+            tool_choice,
             parallel_tool_calls: prompt.parallel_tool_calls,
             reasoning,
             store: azure_workaround,

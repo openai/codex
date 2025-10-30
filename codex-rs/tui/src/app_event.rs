@@ -78,6 +78,14 @@ pub(crate) enum AppEvent {
     /// Update the current sandbox policy in the running app and widget.
     UpdateSandboxPolicy(SandboxPolicy),
 
+    /// Update whether the web_search tool is available.
+    UpdateWebSearch(bool),
+
+    /// Persist the web_search availability toggle to config.
+    PersistWebSearch {
+        enabled: bool,
+    },
+
     /// Update whether the full access warning prompt has been acknowledged.
     UpdateFullAccessWarningAcknowledged(bool),
 

@@ -136,6 +136,10 @@ pub enum Op {
         /// Updated reasoning summary preference (honored only for reasoning-capable models).
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummaryConfig>,
+
+        /// Toggle the availability of the Responses `web_search` tool for subsequent turns.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        include_web_search_request: Option<bool>,
     },
 
     /// Approve a command execution

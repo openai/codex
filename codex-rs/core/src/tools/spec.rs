@@ -78,6 +78,37 @@ impl ToolsConfig {
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }
+
+    pub fn allowed_tool_names(&self, tool_specs: &[ToolSpec]) -> Option<Vec<String>> {
+        if tool_specs.is_empty() {
+            return None;
+        }
+
+        let mut removed_web_search = false;
+        let mut allowed: Vec<String> = Vec::with_capacity(tool_specs.len());
+
+        for spec in tool_specs {
+            let name = spec.name();
+            if name == "web_search" && !self.web_search_request {
+                removed_web_search = true;
+                continue;
+            }
+            allowed.push(name.to_string());
+        }
+
+        if removed_web_search {
+            Some(allowed)
+        } else {
+            None
+        }
+    }
+
+    pub fn is_tool_allowed(&self, name: &str) -> bool {
+        if name == "web_search" {
+            return self.web_search_request;
+        }
+        true
+    }
 }
 
 /// Generic JSON‑Schema subset needed for our tool definitions
@@ -971,9 +1002,7 @@ pub(crate) fn build_specs(
         builder.register_handler("test_sync_tool", test_sync_handler);
     }
 
-    if config.web_search_request {
-        builder.push_spec(ToolSpec::WebSearch {});
-    }
+    builder.push_spec(ToolSpec::WebSearch {});
 
     if config.include_view_image_tool {
         builder.push_spec_with_parallel_support(create_view_image_tool(), true);
@@ -1203,6 +1232,64 @@ mod tests {
             subset.push(shell_tool);
         }
         assert_contains_tool_names(&tools, &subset);
+    }
+
+    #[test]
+    fn test_web_search_spec_present_even_when_disabled() {
+        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let mut features = Features::with_defaults();
+        features.disable(Feature::WebSearchRequest);
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            features: &features,
+        });
+        let (tools, _) = build_specs(&config, None).build();
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == "web_search"),
+            "web_search spec should be present even when feature disabled"
+        );
+    }
+
+    #[test]
+    fn test_allowed_tool_names_filters_disabled_web_search() {
+        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let mut features = Features::with_defaults();
+        features.disable(Feature::WebSearchRequest);
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            features: &features,
+        });
+        let (tools, _) = build_specs(&config, None).build();
+        let specs: Vec<ToolSpec> = tools.iter().map(|t| t.spec.clone()).collect();
+        let allowed = config
+            .allowed_tool_names(specs.as_slice())
+            .expect("expected allow list when web_search disabled");
+        assert!(
+            !allowed.iter().any(|name| name == "web_search"),
+            "allowed tool list should exclude web_search"
+        );
+        assert!(
+            !allowed.is_empty(),
+            "allowed tool list should retain other tool names"
+        );
+    }
+
+    #[test]
+    fn test_allowed_tool_names_none_when_enabled() {
+        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let features = Features::with_defaults();
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            features: &features,
+        });
+        let (tools, _) = build_specs(&config, None).build();
+        let specs: Vec<ToolSpec> = tools.iter().map(|t| t.spec.clone()).collect();
+        assert!(
+            config.allowed_tool_names(specs.as_slice()).is_none(),
+            "allowed tool list should be None when web_search enabled"
+        );
     }
 
     #[test]

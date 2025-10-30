@@ -11,6 +11,14 @@ pub fn create_config_summary_entries(config: &Config) -> Vec<(&'static str, Stri
         ("provider", config.model_provider_id.clone()),
         ("approval", config.approval_policy.to_string()),
         ("sandbox", summarize_sandbox_policy(&config.sandbox_policy)),
+        (
+            "web search",
+            if config.tools_web_search_request {
+                "enabled".to_string()
+            } else {
+                "disabled".to_string()
+            },
+        ),
     ];
     if config.model_provider.wire_api == WireApi::Responses
         && config.model_family.supports_reasoning_summaries

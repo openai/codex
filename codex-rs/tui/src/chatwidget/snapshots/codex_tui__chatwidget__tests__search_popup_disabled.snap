@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Toggle Web Search
+  Control whether Codex can access external search.
+
+  1. Enable Web Search             Allow Codex to make web searches when it
+                                  needs external information
+› 2. Disable Web Search (current)  Do not allow codex to perform web searches
+
+  Press enter to confirm or esc to go back

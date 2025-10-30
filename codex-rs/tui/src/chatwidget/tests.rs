@@ -1,6 +1,7 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::slash_command::SlashCommand;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
@@ -50,6 +51,7 @@ use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
+use std::str::FromStr;
 use tempfile::NamedTempFile;
 use tempfile::tempdir;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -1255,6 +1257,117 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     }
 
     lines.join("\n")
+}
+
+#[test]
+fn slash_command_search_parses() {
+    assert_eq!(
+        SlashCommand::from_str("search").unwrap(),
+        SlashCommand::Search
+    );
+}
+
+#[test]
+fn search_popup_snapshot_disabled() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.tools_web_search_request = false;
+    chat.open_search_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("search_popup_disabled", popup);
+}
+
+#[test]
+fn search_popup_snapshot_enabled() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.tools_web_search_request = true;
+    chat.open_search_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("search_popup_enabled", popup);
+}
+
+#[test]
+fn search_popup_highlight_non_current_shows_action_description() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.tools_web_search_request = true;
+    chat.open_search_popup();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Do not allow codex to perform web searches"),
+        "expected non-current item to show its action description"
+    );
+    assert!(
+        !popup.contains("Currently enabled"),
+        "expected current-state tooltip to disappear when another option is highlighted"
+    );
+}
+
+#[test]
+fn search_popup_highlight_from_disabled_shows_enable_description() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.tools_web_search_request = false;
+    chat.open_search_popup();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Allow Codex to make web searches"),
+        "expected enable option to show its action description when selected"
+    );
+    assert!(
+        !popup.contains("Currently disabled"),
+        "expected current-state tooltip to disappear when another option is highlighted"
+    );
+}
+
+#[test]
+fn search_popup_selection_persists_toggle() {
+    let (mut chat, _tx, mut app_rx, _op_rx) = make_chatwidget_manual_with_sender();
+
+    chat.config.tools_web_search_request = false;
+    chat.open_search_popup();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut saw_override = false;
+    let mut saw_update = false;
+    let mut saw_persist = false;
+
+    while let Ok(event) = app_rx.try_recv() {
+        match event {
+            AppEvent::CodexOp(Op::OverrideTurnContext {
+                include_web_search_request,
+                ..
+            }) => {
+                assert_eq!(
+                    include_web_search_request,
+                    Some(true),
+                    "expected override to enable web search"
+                );
+                saw_override = true;
+            }
+            AppEvent::UpdateWebSearch(enabled) => {
+                assert!(enabled, "expected UpdateWebSearch to enable the toggle");
+                saw_update = true;
+            }
+            AppEvent::PersistWebSearch { enabled } => {
+                assert!(enabled, "expected persistence to record enabled state");
+                saw_persist = true;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(saw_override, "expected to send override op");
+    assert!(saw_update, "expected to send UpdateWebSearch");
+    assert!(saw_persist, "expected to persist web search toggle");
 }
 
 #[test]

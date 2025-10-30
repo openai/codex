@@ -93,6 +93,14 @@ fn apply_toml_edit_override_segments(
     current[last] = value;
 }
 
+fn scalar_from_str(value: &str) -> toml_edit::Item {
+    match value {
+        "true" => toml_edit::value(true),
+        "false" => toml_edit::value(false),
+        _ => toml_edit::value(value),
+    }
+}
+
 async fn persist_overrides_with_behavior(
     codex_home: &Path,
     profile: Option<&str>,
@@ -161,7 +169,7 @@ async fn persist_overrides_with_behavior(
 
         match value {
             Some(v) => {
-                let item_value = toml_edit::value(v);
+                let item_value = scalar_from_str(v);
                 apply_toml_edit_override_segments(&mut doc, segments_to_apply, item_value);
                 mutated = true;
             }

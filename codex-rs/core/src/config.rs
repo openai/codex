@@ -1781,6 +1781,48 @@ trust_level = "trusted"
     }
 
     #[test]
+    fn web_search_override_keeps_config_and_features_in_sync() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml::default();
+
+        let enabled = Config::load_from_base_config_with_overrides(
+            cfg.clone(),
+            ConfigOverrides {
+                tools_web_search_request: Some(true),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+        assert!(
+            enabled.features.enabled(Feature::WebSearchRequest),
+            "feature flag should be enabled when override is true"
+        );
+        assert!(
+            enabled.tools_web_search_request,
+            "config mirror flag should reflect enabled state"
+        );
+
+        let disabled = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides {
+                tools_web_search_request: Some(false),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+        assert!(
+            !disabled.features.enabled(Feature::WebSearchRequest),
+            "feature flag should be disabled when override is false"
+        );
+        assert!(
+            !disabled.tools_web_search_request,
+            "config mirror flag should reflect disabled state"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn profile_sandbox_mode_overrides_base() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let mut profiles = HashMap::new();

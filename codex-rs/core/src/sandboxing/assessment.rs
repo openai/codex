@@ -128,6 +128,7 @@ pub(crate) async fn assess_command(
         parallel_tool_calls: false,
         base_instructions_override: Some(system_prompt),
         output_schema: Some(sandbox_assessment_schema()),
+        allowed_tools: None,
     };
 
     let child_otel =

@@ -356,6 +356,7 @@ impl ConversationHistory {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
                         content: truncated,
+                        content_items: output.content_items.clone(),
                         success: output.success,
                     },
                 }
@@ -653,6 +654,7 @@ mod tests {
             call_id: "call-100".to_string(),
             output: FunctionCallOutputPayload {
                 content: long_output.clone(),
+                content_items: None,
                 success: Some(true),
             },
         };
