@@ -21,6 +21,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use eventsource_stream::Eventsource;
 use futures::Stream;
 use futures::StreamExt;
@@ -348,11 +349,11 @@ pub(crate) async fn stream_chat_completions(
         let mut req_builder = provider.create_request_builder(client, &None).await?;
 
         // Include subagent header only for subagent sessions.
-        if let codex_protocol::protocol::SessionSource::SubAgent(sub) = session_source.clone() {
+        if let SessionSource::SubAgent(sub) = session_source.clone() {
             let subagent = match sub {
-                codex_protocol::protocol::SubAgentSource::Review => "review".to_string(),
-                codex_protocol::protocol::SubAgentSource::Compact => "compact".to_string(),
-                codex_protocol::protocol::SubAgentSource::Other(label) => label,
+                SubAgentSource::Review => "review".to_string(),
+                SubAgentSource::Compact => "compact".to_string(),
+                SubAgentSource::Other(label) => label,
             };
             req_builder = req_builder.header("x-openai-subagent", subagent);
         }
