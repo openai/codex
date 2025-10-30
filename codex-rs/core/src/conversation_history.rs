@@ -80,6 +80,10 @@ impl ConversationHistory {
     // Returns the history prepared for sending to the model.
     // With extra response items filtered out and GhostCommits removed.
     pub(crate) fn get_history_for_prompt(&mut self) -> Vec<ResponseItem> {
+        self.build_prompt_history()
+    }
+
+    fn build_prompt_history(&mut self) -> Vec<ResponseItem> {
         let mut history = self.get_history();
         Self::remove_ghost_snapshots(&mut history);
         Self::remove_reasoning_before_last_turn(&mut history);

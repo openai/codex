@@ -2,6 +2,7 @@
 
 use codex_protocol::models::ResponseItem;
 
+use crate::client_common::Prompt;
 use crate::codex::SessionConfiguration;
 use crate::conversation_history::ConversationHistory;
 use crate::conversation_history::ResponsesApiChainState;
@@ -51,10 +52,6 @@ impl SessionState {
         self.history.set_responses_api_chain(chain);
     }
 
-    pub(crate) fn responses_api_chain(&self) -> Option<ResponsesApiChainState> {
-        self.history.responses_api_chain()
-    }
-
     // Token/rate limit helpers
     pub(crate) fn update_token_info_from_usage(
         &mut self,
@@ -81,4 +78,44 @@ impl SessionState {
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
         self.history.set_token_usage_full(context_window);
     }
+
+    pub(crate) fn prompt_for_turn(&mut self, supports_responses_api_chaining: bool) -> Prompt {
+        let mut prompt = Prompt::default();
+        prompt.store_response = supports_responses_api_chaining;
+
+        let mut prompt_items = self.history.get_history_for_prompt();
+        if !supports_responses_api_chaining {
+            self.reset_responses_api_chain();
+            prompt.input = prompt_items;
+            return prompt;
+        }
+
+        let mut previous_response_id = None;
+        if let Some(chain_state) = self.history.responses_api_chain() {
+            if let Some(prev_id) = chain_state.last_response_id {
+                let prefix = common_prefix_len(&chain_state.last_prompt_items, &prompt_items);
+                let matches_previous_prompt = prefix == chain_state.last_prompt_items.len();
+                if matches_previous_prompt {
+                    previous_response_id = Some(prev_id);
+                    if prefix > 0 {
+                        prompt_items.drain(..prefix);
+                    }
+                } else if !chain_state.last_prompt_items.is_empty() {
+                    self.reset_responses_api_chain();
+                }
+            }
+        }
+
+        prompt.previous_response_id = previous_response_id;
+        prompt.input = prompt_items;
+
+        prompt
+    }
+}
+
+fn common_prefix_len(lhs: &[ResponseItem], rhs: &[ResponseItem]) -> usize {
+    lhs.iter()
+        .zip(rhs.iter())
+        .take_while(|(left, right)| left == right)
+        .count()
 }
