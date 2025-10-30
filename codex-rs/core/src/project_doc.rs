@@ -15,6 +15,7 @@
 
 use crate::config::Config;
 use dunce::canonicalize as normalize_path;
+use std::path::Path;
 use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
 use tracing::error;
@@ -27,6 +28,20 @@ pub const LOCAL_PROJECT_DOC_FILENAME: &str = "AGENTS.override.md";
 /// When both `Config::instructions` and the project doc are present, they will
 /// be concatenated with the following separator.
 const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
+
+fn format_inline_project_doc(dirname: &str, contents: &str) -> String {
+    format!("# AGENTS.md instructions for {dirname}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
+}
+
+fn directory_display_name(path: &Path) -> String {
+    path.parent()
+        .map(|dir| {
+            dir.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| dir.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| ".".to_string())
+}
 
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
@@ -93,7 +108,9 @@ pub async fn read_project_docs(config: &Config) -> std::io::Result<Option<String
 
         let text = String::from_utf8_lossy(&data).to_string();
         if !text.trim().is_empty() {
-            parts.push(text);
+            let dirname = directory_display_name(&p);
+            let normalized_contents = text.trim_end_matches(['\n', '\r']);
+            parts.push(format_inline_project_doc(&dirname, normalized_contents));
             remaining = remaining.saturating_sub(data.len() as u64);
         }
     }
@@ -255,14 +272,17 @@ mod tests {
     #[tokio::test]
     async fn doc_smaller_than_limit_is_returned() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        fs::write(tmp.path().join("AGENTS.md"), "hello world").unwrap();
+        let doc_path = tmp.path().join("AGENTS.md");
+        fs::write(&doc_path, "hello world").unwrap();
 
         let res = get_user_instructions(&make_config(&tmp, 4096, None))
             .await
             .expect("doc expected");
 
+        let expected = format_inline_project_doc(&directory_display_name(&doc_path), "hello world");
+
         assert_eq!(
-            res, "hello world",
+            res, expected,
             "The document should be returned verbatim when it is smaller than the limit and there are no existing instructions"
         );
     }
@@ -274,14 +294,17 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
 
         let huge = "A".repeat(LIMIT * 2); // 2 KiB
-        fs::write(tmp.path().join("AGENTS.md"), &huge).unwrap();
+        let doc_path = tmp.path().join("AGENTS.md");
+        fs::write(&doc_path, &huge).unwrap();
 
         let res = get_user_instructions(&make_config(&tmp, LIMIT, None))
             .await
             .expect("doc expected");
 
-        assert_eq!(res.len(), LIMIT, "doc should be truncated to LIMIT bytes");
-        assert_eq!(res, huge[..LIMIT]);
+        let truncated = huge[..LIMIT].trim_end_matches(['\n', '\r']);
+        let expected = format_inline_project_doc(&directory_display_name(&doc_path), truncated);
+
+        assert_eq!(res, expected);
     }
 
     /// When `cwd` is nested inside a repo, the search should locate AGENTS.md
@@ -298,7 +321,8 @@ mod tests {
         .unwrap();
 
         // Put the doc at the repo root.
-        fs::write(repo.path().join("AGENTS.md"), "root level doc").unwrap();
+        let doc_path = repo.path().join("AGENTS.md");
+        fs::write(&doc_path, "root level doc").unwrap();
 
         // Now create a nested working directory: repo/workspace/crate_a
         let nested = repo.path().join("workspace/crate_a");
@@ -309,7 +333,9 @@ mod tests {
         cfg.cwd = nested;
 
         let res = get_user_instructions(&cfg).await.expect("doc expected");
-        assert_eq!(res, "root level doc");
+        let expected =
+            format_inline_project_doc(&directory_display_name(&doc_path), "root level doc");
+        assert_eq!(res, expected);
     }
 
     /// Explicitly setting the byte-limit to zero disables project docs.
@@ -330,7 +356,8 @@ mod tests {
     #[tokio::test]
     async fn merges_existing_instructions_with_project_doc() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        fs::write(tmp.path().join("AGENTS.md"), "proj doc").unwrap();
+        let doc_path = tmp.path().join("AGENTS.md");
+        fs::write(&doc_path, "proj doc").unwrap();
 
         const INSTRUCTIONS: &str = "base instructions";
 
@@ -338,7 +365,9 @@ mod tests {
             .await
             .expect("should produce a combined instruction string");
 
-        let expected = format!("{INSTRUCTIONS}{PROJECT_DOC_SEPARATOR}{}", "proj doc");
+        let formatted_doc =
+            format_inline_project_doc(&directory_display_name(&doc_path), "proj doc");
+        let expected = format!("{INSTRUCTIONS}{PROJECT_DOC_SEPARATOR}{formatted_doc}");
 
         assert_eq!(res, expected);
     }
@@ -370,18 +399,25 @@ mod tests {
         .unwrap();
 
         // Repo root doc.
-        fs::write(repo.path().join("AGENTS.md"), "root doc").unwrap();
+        let root_doc_path = repo.path().join("AGENTS.md");
+        fs::write(&root_doc_path, "root doc").unwrap();
 
         // Nested working directory with its own doc.
         let nested = repo.path().join("workspace/crate_a");
         std::fs::create_dir_all(&nested).unwrap();
-        fs::write(nested.join("AGENTS.md"), "crate doc").unwrap();
+        let nested_doc_path = nested.join("AGENTS.md");
+        fs::write(&nested_doc_path, "crate doc").unwrap();
 
         let mut cfg = make_config(&repo, 4096, None);
         cfg.cwd = nested;
 
         let res = get_user_instructions(&cfg).await.expect("doc expected");
-        assert_eq!(res, "root doc\n\ncrate doc");
+        let expected_root =
+            format_inline_project_doc(&directory_display_name(&root_doc_path), "root doc");
+        let expected_nested =
+            format_inline_project_doc(&directory_display_name(&nested_doc_path), "crate doc");
+        let expected = format!("{expected_root}\n\n{expected_nested}");
+        assert_eq!(res, expected);
     }
 
     /// AGENTS.override.md is preferred over AGENTS.md when both are present.
@@ -389,7 +425,8 @@ mod tests {
     async fn agents_local_md_preferred() {
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join(DEFAULT_PROJECT_DOC_FILENAME), "versioned").unwrap();
-        fs::write(tmp.path().join(LOCAL_PROJECT_DOC_FILENAME), "local").unwrap();
+        let local_path = tmp.path().join(LOCAL_PROJECT_DOC_FILENAME);
+        fs::write(&local_path, "local").unwrap();
 
         let cfg = make_config(&tmp, 4096, None);
 
@@ -397,7 +434,9 @@ mod tests {
             .await
             .expect("local doc expected");
 
-        assert_eq!(res, "local");
+        let expected = format_inline_project_doc(&directory_display_name(&local_path), "local");
+
+        assert_eq!(res, expected);
 
         let discovery = discover_project_doc_paths(&cfg).expect("discover paths");
         assert_eq!(discovery.len(), 1);
@@ -411,7 +450,8 @@ mod tests {
     #[tokio::test]
     async fn uses_configured_fallback_when_agents_missing() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        fs::write(tmp.path().join("EXAMPLE.md"), "example instructions").unwrap();
+        let fallback_path = tmp.path().join("EXAMPLE.md");
+        fs::write(&fallback_path, "example instructions").unwrap();
 
         let cfg = make_config_with_fallback(&tmp, 4096, None, &["EXAMPLE.md"]);
 
@@ -419,14 +459,20 @@ mod tests {
             .await
             .expect("fallback doc expected");
 
-        assert_eq!(res, "example instructions");
+        let expected = format_inline_project_doc(
+            &directory_display_name(&fallback_path),
+            "example instructions",
+        );
+
+        assert_eq!(res, expected);
     }
 
     /// AGENTS.md remains preferred when both AGENTS.md and fallbacks are present.
     #[tokio::test]
     async fn agents_md_preferred_over_fallbacks() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        fs::write(tmp.path().join("AGENTS.md"), "primary").unwrap();
+        let agents_path = tmp.path().join("AGENTS.md");
+        fs::write(&agents_path, "primary").unwrap();
         fs::write(tmp.path().join("EXAMPLE.md"), "secondary").unwrap();
 
         let cfg = make_config_with_fallback(&tmp, 4096, None, &["EXAMPLE.md", ".example.md"]);
@@ -435,7 +481,9 @@ mod tests {
             .await
             .expect("AGENTS.md should win");
 
-        assert_eq!(res, "primary");
+        let expected = format_inline_project_doc(&directory_display_name(&agents_path), "primary");
+
+        assert_eq!(res, expected);
 
         let discovery = discover_project_doc_paths(&cfg).expect("discover paths");
         assert_eq!(discovery.len(), 1);
