@@ -16,6 +16,7 @@ pub enum SlashCommand {
     Approvals,
     Review,
     New,
+    Resume,
     Init,
     Compact,
     Undo,
@@ -43,6 +44,7 @@ impl SlashCommand {
             SlashCommand::Quit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
+            SlashCommand::Resume => "resume a previous Codex session",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what Codex can do without approval",
@@ -64,6 +66,7 @@ impl SlashCommand {
         match self {
             SlashCommand::New
             | SlashCommand::Init
+            | SlashCommand::Resume
             | SlashCommand::Compact
             | SlashCommand::Undo
             | SlashCommand::Model

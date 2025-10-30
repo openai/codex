@@ -418,6 +418,7 @@ async fn run_ratatui_app(
             &mut tui,
             &config.codex_home,
             &config.model_provider_id,
+            Some(config.cwd.as_path()),
         )
         .await?
         {

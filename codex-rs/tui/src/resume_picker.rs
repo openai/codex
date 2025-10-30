@@ -4,6 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::DateTime;
+use chrono::Duration;
+use chrono::Local;
+use chrono::TimeZone;
 use chrono::Utc;
 use codex_core::ConversationItem;
 use codex_core::ConversationsPage;
@@ -15,6 +18,7 @@ use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use dunce::simplified;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
@@ -24,17 +28,88 @@ use ratatui::text::Span;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::key_hint;
-use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::SessionMetaLine;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
+const UPDATED_COL_MAX_WIDTH: usize = 16;
+const CONVERSATION_COL_MAX_WIDTH: usize = 60;
+const MIN_UPDATED_WIDTH: usize = 7;
+const MIN_CONVERSATION_WIDTH: usize = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimeFilter {
+    Today,
+    Recent,
+    Last30Days,
+    All,
+}
+
+impl TimeFilter {
+    const ORDERED: [TimeFilter; 4] = [
+        TimeFilter::Today,
+        TimeFilter::Recent,
+        TimeFilter::Last30Days,
+        TimeFilter::All,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            TimeFilter::Today => "Today",
+            TimeFilter::Recent => "Recent",
+            TimeFilter::Last30Days => "Last 30 days",
+            TimeFilter::All => "All",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            TimeFilter::Today => TimeFilter::Recent,
+            TimeFilter::Recent => TimeFilter::Last30Days,
+            TimeFilter::Last30Days => TimeFilter::All,
+            TimeFilter::All => TimeFilter::Today,
+        }
+    }
+
+    fn previous(self) -> Self {
+        match self {
+            TimeFilter::Today => TimeFilter::All,
+            TimeFilter::Recent => TimeFilter::Today,
+            TimeFilter::Last30Days => TimeFilter::Recent,
+            TimeFilter::All => TimeFilter::Last30Days,
+        }
+    }
+
+    fn matches(self, timestamp: Option<DateTime<Utc>>) -> bool {
+        if matches!(self, TimeFilter::All) {
+            return true;
+        }
+        let Some(ts) = timestamp else {
+            return false;
+        };
+        let now = Utc::now();
+        match self {
+            TimeFilter::Today => ts >= start_of_today_utc(),
+            TimeFilter::Recent => ts >= now - Duration::days(7),
+            TimeFilter::Last30Days => ts >= now - Duration::days(30),
+            TimeFilter::All => true,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FilterDirection {
+    Next,
+    Prev,
+}
 
 #[derive(Debug, Clone)]
 pub enum ResumeSelection {
@@ -69,6 +144,7 @@ pub async fn run_resume_picker(
     tui: &mut Tui,
     codex_home: &Path,
     default_provider: &str,
+    target_cwd: Option<&Path>,
 ) -> Result<ResumeSelection> {
     let alt = AltScreenGuard::enter(tui);
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
@@ -102,12 +178,12 @@ pub async fn run_resume_picker(
         alt.tui.frame_requester(),
         page_loader,
         default_provider.clone(),
+        target_cwd.map(Path::to_path_buf),
     );
     state.load_initial_page().await?;
-    state.request_frame();
-
     let mut tui_events = alt.tui.event_stream().fuse();
     let mut background_events = UnboundedReceiverStream::new(bg_rx).fuse();
+    state.request_frame();
 
     loop {
         tokio::select! {
@@ -177,6 +253,8 @@ struct PickerState {
     page_loader: PageLoader,
     view_rows: Option<usize>,
     default_provider: String,
+    target_cwd: Option<PathBuf>,
+    time_filter: TimeFilter,
 }
 
 struct PaginationState {
@@ -232,6 +310,7 @@ impl SearchState {
 struct Row {
     path: PathBuf,
     preview: String,
+    cwd: Option<PathBuf>,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
 }
@@ -242,6 +321,7 @@ impl PickerState {
         requester: FrameRequester,
         page_loader: PageLoader,
         default_provider: String,
+        target_cwd: Option<PathBuf>,
     ) -> Self {
         Self {
             codex_home,
@@ -264,6 +344,8 @@ impl PickerState {
             page_loader,
             view_rows: None,
             default_provider,
+            target_cwd,
+            time_filter: TimeFilter::Today,
         }
     }
 
@@ -300,6 +382,12 @@ impl PickerState {
                 }
                 self.maybe_load_more_for_scroll();
                 self.request_frame();
+            }
+            KeyCode::Left => {
+                self.cycle_time_filter(FilterDirection::Prev);
+            }
+            KeyCode::Right => {
+                self.cycle_time_filter(FilterDirection::Next);
             }
             KeyCode::PageUp => {
                 let step = self.view_rows.unwrap_or(10).max(1);
@@ -409,6 +497,9 @@ impl PickerState {
 
         let rows = rows_from_items(page.items);
         for row in rows {
+            if !self.matches_target_cwd(&row) {
+                continue;
+            }
             if self.seen_paths.insert(row.path.clone()) {
                 self.all_rows.push(row);
             }
@@ -418,17 +509,32 @@ impl PickerState {
     }
 
     fn apply_filter(&mut self) {
-        if self.query.is_empty() {
-            self.filtered_rows = self.all_rows.clone();
+        let query = if self.query.is_empty() {
+            None
         } else {
-            let q = self.query.to_lowercase();
-            self.filtered_rows = self
-                .all_rows
+            Some(self.query.to_lowercase())
+        };
+
+        let mut filtered = self.filter_rows_with(self.time_filter, query.as_deref());
+
+        if filtered.is_empty()
+            && query.is_none()
+            && !self.all_rows.is_empty()
+            && let Some(start_idx) = TimeFilter::ORDERED
                 .iter()
-                .filter(|r| r.preview.to_lowercase().contains(&q))
-                .cloned()
-                .collect();
+                .position(|f| *f == self.time_filter)
+        {
+            for &candidate in &TimeFilter::ORDERED[start_idx + 1..] {
+                let candidate_rows = self.filter_rows_with(candidate, None);
+                if !candidate_rows.is_empty() {
+                    self.time_filter = candidate;
+                    filtered = candidate_rows;
+                    break;
+                }
+            }
         }
+
+        self.filtered_rows = filtered;
         if self.selected >= self.filtered_rows.len() {
             self.selected = self.filtered_rows.len().saturating_sub(1);
         }
@@ -529,6 +635,46 @@ impl PickerState {
         }
     }
 
+    fn matches_target_cwd(&self, row: &Row) -> bool {
+        match &self.target_cwd {
+            Some(target) => row
+                .cwd
+                .as_ref()
+                .map(|cwd| simplified(cwd.as_path()) == simplified(target.as_path()))
+                .unwrap_or(false),
+            None => true,
+        }
+    }
+
+    fn matches_time_filter(&self, filter: TimeFilter, row: &Row) -> bool {
+        let timestamp = row.updated_at.or(row.created_at);
+        filter.matches(timestamp)
+    }
+
+    fn filter_rows_with(&self, filter: TimeFilter, query: Option<&str>) -> Vec<Row> {
+        self.all_rows
+            .iter()
+            .filter(|row| {
+                self.matches_target_cwd(row)
+                    && self.matches_time_filter(filter, row)
+                    && query.map(|q| row_matches_query(row, q)).unwrap_or(true)
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn cycle_time_filter(&mut self, direction: FilterDirection) {
+        let next = match direction {
+            FilterDirection::Next => self.time_filter.next(),
+            FilterDirection::Prev => self.time_filter.previous(),
+        };
+        if next == self.time_filter {
+            return;
+        }
+        self.time_filter = next;
+        self.apply_filter();
+    }
+
     fn update_view_rows(&mut self, rows: usize) {
         self.view_rows = if rows == 0 { None } else { Some(rows) };
         self.ensure_selected_visible();
@@ -606,17 +752,156 @@ fn head_to_row(item: &ConversationItem) -> Row {
         .and_then(parse_timestamp_str)
         .or(created_at);
 
-    let preview = preview_from_head(&item.head)
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| String::from("(no message yet)"));
+    let meta = find_session_meta(&item.head);
+    let cwd = meta
+        .as_ref()
+        .map(|meta_line| meta_line.meta.cwd.clone())
+        .or_else(|| extract_cwd_from_tail(&item.tail));
+
+    let preview = conversation_preview(item);
 
     Row {
         path: item.path.clone(),
         preview,
+        cwd,
         created_at,
         updated_at,
     }
+}
+
+fn conversation_preview(item: &ConversationItem) -> String {
+    if let Some(text) = first_user_message(&item.head) {
+        return text;
+    }
+    if let Some(text) = first_user_message(&item.tail) {
+        return text;
+    }
+    "(no user messages yet)".to_string()
+}
+
+fn pad_or_truncate(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+
+    const ELLIPSIS: &str = "...";
+    const ELLIPSIS_WIDTH: usize = 3;
+
+    let graphemes: Vec<&str> = UnicodeSegmentation::graphemes(text, true).collect();
+    let mut visible: Vec<&str> = Vec::new();
+    let mut current_width = 0;
+    for grapheme in &graphemes {
+        let grapheme_width = UnicodeWidthStr::width(*grapheme);
+        if current_width + grapheme_width > width {
+            break;
+        }
+        visible.push(grapheme);
+        current_width += grapheme_width;
+    }
+
+    let mut result = visible.concat();
+    let was_truncated = visible.len() < graphemes.len();
+
+    if was_truncated && width >= ELLIPSIS_WIDTH {
+        while current_width + ELLIPSIS_WIDTH > width && !visible.is_empty() {
+            if let Some(removed) = visible.pop() {
+                current_width -= UnicodeWidthStr::width(removed);
+            }
+        }
+        result = visible.concat();
+        if current_width + ELLIPSIS_WIDTH <= width {
+            result.push_str(ELLIPSIS);
+        }
+    }
+
+    let display_width = UnicodeWidthStr::width(result.as_str());
+    if display_width < width {
+        result.extend(std::iter::repeat_n(' ', width - display_width));
+    }
+
+    result
+}
+
+fn start_of_today_utc() -> DateTime<Utc> {
+    let local_now = Local::now();
+    let date = local_now.date_naive();
+    let naive = date
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight should be representable");
+    let start_local = Local
+        .from_local_datetime(&naive)
+        .single()
+        .unwrap_or_else(|| {
+            Local
+                .from_local_datetime(&naive)
+                .earliest()
+                .expect("midnight should map to a local datetime")
+        });
+    start_local.with_timezone(&Utc)
+}
+
+fn find_session_meta(values: &[serde_json::Value]) -> Option<SessionMetaLine> {
+    values
+        .iter()
+        .filter_map(|value| serde_json::from_value::<SessionMetaLine>(value.clone()).ok())
+        .next()
+}
+
+fn extract_cwd_from_tail(values: &[serde_json::Value]) -> Option<PathBuf> {
+    values
+        .iter()
+        .filter_map(|value| serde_json::from_value::<SessionMetaLine>(value.clone()).ok())
+        .map(|meta| meta.meta.cwd)
+        .next()
+}
+
+fn first_user_message(values: &[serde_json::Value]) -> Option<String> {
+    values
+        .iter()
+        .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
+        .find_map(|item| match codex_core::parse_turn_item(&item) {
+            Some(TurnItem::UserMessage(user)) => {
+                let message = clean_preview_text(user.message());
+                if message.is_empty() {
+                    None
+                } else {
+                    Some(message)
+                }
+            }
+            _ => None,
+        })
+}
+
+fn clean_preview_text(text: String) -> String {
+    let mut prev_was_space = false;
+    let mut cleaned = String::new();
+    for ch in text.trim().chars() {
+        if ch.is_whitespace() {
+            if !prev_was_space {
+                cleaned.push(' ');
+                prev_was_space = true;
+            }
+        } else {
+            cleaned.push(ch);
+            prev_was_space = false;
+        }
+    }
+    cleaned.trim().to_string()
+}
+
+fn row_matches_query(row: &Row, query: &str) -> bool {
+    if row.preview.to_lowercase().contains(query) {
+        return true;
+    }
+    if row.path.to_string_lossy().to_lowercase().contains(query) {
+        return true;
+    }
+    if let Some(cwd) = &row.cwd
+        && cwd.to_string_lossy().to_lowercase().contains(query)
+    {
+        return true;
+    }
+    false
 }
 
 fn parse_timestamp_str(ts: &str) -> Option<DateTime<Utc>> {
@@ -631,15 +916,6 @@ fn extract_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
         .and_then(|v| v.as_str())
         .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
         .map(|dt| dt.with_timezone(&Utc))
-}
-
-fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
-    head.iter()
-        .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
-        .find_map(|item| match codex_core::parse_turn_item(&item) {
-            Some(TurnItem::UserMessage(user)) => Some(user.message()),
-            _ => None,
-        })
 }
 
 fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
@@ -662,19 +938,24 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             header,
         );
 
-        // Search line
-        let q = if state.query.is_empty() {
-            "Type to search".dim().to_string()
+        // Search + filter line
+        let mut search_spans: Vec<Span> = Vec::new();
+        search_spans.push("Filter: ".dim());
+        search_spans.push(state.time_filter.label().bold());
+        search_spans.push("    ".into());
+        if state.query.is_empty() {
+            search_spans.push("Type to search".dim());
         } else {
-            format!("Search: {}", state.query)
-        };
-        frame.render_widget_ref(Line::from(q), search);
+            search_spans.push(format!("Search: {}", state.query).into());
+        }
+        frame.render_widget_ref(Line::from(search_spans), search);
 
         let metrics = calculate_column_metrics(&state.filtered_rows);
+        let widths = compute_column_widths(list.width as usize, &metrics);
 
         // Column headers and list
-        render_column_headers(frame, columns, &metrics);
-        render_list(frame, list, state, &metrics);
+        render_column_headers(frame, columns, &metrics, &widths);
+        render_list(frame, list, state, &metrics, &widths);
 
         // Hint line
         let hint_line: Line = vec![
@@ -686,6 +967,11 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             "    ".dim(),
             key_hint::ctrl(KeyCode::Char('c')).into(),
             " to quit ".dim(),
+            "    ".dim(),
+            key_hint::plain(KeyCode::Left).into(),
+            "/".dim(),
+            key_hint::plain(KeyCode::Right).into(),
+            " change time range ".dim(),
             "    ".dim(),
             key_hint::plain(KeyCode::Up).into(),
             "/".dim(),
@@ -702,6 +988,7 @@ fn render_list(
     area: Rect,
     state: &PickerState,
     metrics: &ColumnMetrics,
+    widths: &ColumnWidths,
 ) {
     if area.height == 0 {
         return;
@@ -720,53 +1007,24 @@ fn render_list(
     let labels = &metrics.labels;
     let mut y = area.y;
 
-    let max_created_width = metrics.max_created_width;
-    let max_updated_width = metrics.max_updated_width;
-
-    for (idx, (row, (created_label, updated_label))) in rows[start..end]
+    for (idx, (row, updated_label)) in rows[start..end]
         .iter()
         .zip(labels[start..end].iter())
         .enumerate()
     {
         let is_sel = start + idx == state.selected;
         let marker = if is_sel { "> ".bold() } else { "  ".into() };
-        let marker_width = 2usize;
-        let created_span = if max_created_width == 0 {
-            None
-        } else {
-            Some(Span::from(format!("{created_label:<max_created_width$}")).dim())
-        };
-        let updated_span = if max_updated_width == 0 {
-            None
-        } else {
-            Some(Span::from(format!("{updated_label:<max_updated_width$}")).dim())
-        };
-        let mut preview_width = area.width as usize;
-        preview_width = preview_width.saturating_sub(marker_width);
-        if max_created_width > 0 {
-            preview_width = preview_width.saturating_sub(max_created_width + 2);
-        }
-        if max_updated_width > 0 {
-            preview_width = preview_width.saturating_sub(max_updated_width + 2);
-        }
-        let add_leading_gap = max_created_width == 0 && max_updated_width == 0;
-        if add_leading_gap {
-            preview_width = preview_width.saturating_sub(2);
-        }
-        let preview = truncate_text(&row.preview, preview_width);
         let mut spans: Vec<Span> = vec![marker];
-        if let Some(created) = created_span {
-            spans.push(created);
-            spans.push("  ".into());
+        if widths.conversation > 0 {
+            spans.push(Span::from(pad_or_truncate(
+                &row.preview,
+                widths.conversation,
+            )));
         }
-        if let Some(updated) = updated_span {
-            spans.push(updated);
+        if widths.updated > 0 {
             spans.push("  ".into());
+            spans.push(Span::from(pad_or_truncate(updated_label, widths.updated)).dim());
         }
-        if add_leading_gap {
-            spans.push("  ".into());
-        }
-        spans.push(preview.into());
 
         let line: Line = spans.into();
         let rect = Rect::new(area.x, y, area.width, 1);
@@ -804,6 +1062,11 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
 
     if state.pagination.loading.is_pending() {
         return vec!["Loading older sessions…".italic().dim()].into();
+    }
+
+    if state.filtered_rows.is_empty() && state.query.is_empty() && !state.all_rows.is_empty() {
+        let msg = format!("No sessions in {} range", state.time_filter.label());
+        return vec![Span::from(msg).italic().dim()].into();
     }
 
     vec!["No sessions yet".italic().dim()].into()
@@ -844,12 +1107,6 @@ fn human_time_ago(ts: DateTime<Utc>) -> String {
     }
 }
 
-fn format_created_label(row: &Row) -> String {
-    row.created_at
-        .map(human_time_ago)
-        .unwrap_or_else(|| "-".to_string())
-}
-
 fn format_updated_label(row: &Row) -> String {
     match (row.updated_at, row.created_at) {
         (Some(updated), _) => human_time_ago(updated),
@@ -861,71 +1118,175 @@ fn format_updated_label(row: &Row) -> String {
 fn render_column_headers(
     frame: &mut crate::custom_terminal::Frame,
     area: Rect,
-    metrics: &ColumnMetrics,
+    _metrics: &ColumnMetrics,
+    widths: &ColumnWidths,
 ) {
     if area.height == 0 {
         return;
     }
 
     let mut spans: Vec<Span> = vec!["  ".into()];
-    if metrics.max_created_width > 0 {
-        let label = format!(
-            "{text:<width$}",
-            text = "Created",
-            width = metrics.max_created_width
-        );
-        spans.push(Span::from(label).bold());
-        spans.push("  ".into());
+    if widths.conversation > 0 {
+        spans.push(Span::from(pad_or_truncate("Conversation", widths.conversation)).bold());
     }
-    if metrics.max_updated_width > 0 {
-        let label = format!(
-            "{text:<width$}",
-            text = "Updated",
-            width = metrics.max_updated_width
-        );
-        spans.push(Span::from(label).bold());
+    if widths.updated > 0 {
         spans.push("  ".into());
+        spans.push(Span::from(pad_or_truncate("Updated", widths.updated)).bold());
     }
-    spans.push("Conversation".bold());
     frame.render_widget_ref(Line::from(spans), area);
 }
 
 struct ColumnMetrics {
-    max_created_width: usize,
     max_updated_width: usize,
-    labels: Vec<(String, String)>,
+    labels: Vec<String>,
+}
+
+struct ColumnWidths {
+    conversation: usize,
+    updated: usize,
 }
 
 fn calculate_column_metrics(rows: &[Row]) -> ColumnMetrics {
-    let mut labels: Vec<(String, String)> = Vec::with_capacity(rows.len());
-    let mut max_created_width = UnicodeWidthStr::width("Created");
+    let mut labels: Vec<String> = Vec::with_capacity(rows.len());
     let mut max_updated_width = UnicodeWidthStr::width("Updated");
 
     for row in rows {
-        let created = format_created_label(row);
         let updated = format_updated_label(row);
-        max_created_width = max_created_width.max(UnicodeWidthStr::width(created.as_str()));
         max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
-        labels.push((created, updated));
+        labels.push(updated);
     }
 
     ColumnMetrics {
-        max_created_width,
         max_updated_width,
         labels,
     }
+}
+
+fn compute_column_widths(area_width: usize, metrics: &ColumnMetrics) -> ColumnWidths {
+    const MARKER_WIDTH: usize = 2;
+    const GAP_WIDTH: usize = 2;
+
+    if area_width <= MARKER_WIDTH {
+        return ColumnWidths {
+            conversation: 0,
+            updated: 0,
+        };
+    }
+
+    let mut updated = if metrics.max_updated_width == 0 {
+        0
+    } else {
+        metrics
+            .max_updated_width
+            .clamp(MIN_UPDATED_WIDTH, UPDATED_COL_MAX_WIDTH)
+    };
+
+    let mut conversation = area_width.saturating_sub(MARKER_WIDTH);
+    if updated > 0 {
+        conversation = conversation.saturating_sub(GAP_WIDTH + updated);
+    }
+    conversation = conversation.min(CONVERSATION_COL_MAX_WIDTH);
+
+    let mut total = total_width(MARKER_WIDTH, GAP_WIDTH, conversation, updated);
+
+    while total > area_width {
+        let overflow = total - area_width;
+
+        if conversation > MIN_CONVERSATION_WIDTH {
+            let reducible = conversation.saturating_sub(MIN_CONVERSATION_WIDTH);
+            if reducible > 0 {
+                let reduce = reducible.min(overflow);
+                conversation -= reduce;
+                total -= reduce;
+                continue;
+            }
+        }
+
+        if updated > MIN_UPDATED_WIDTH {
+            let reducible = updated.saturating_sub(MIN_UPDATED_WIDTH);
+            if reducible > 0 {
+                let reduce = reducible.min(overflow);
+                updated -= reduce;
+                total -= reduce;
+                continue;
+            }
+        }
+
+        if conversation > 0 {
+            let reduce = conversation.min(overflow);
+            conversation -= reduce;
+            total -= reduce;
+            continue;
+        }
+
+        if updated > 0 {
+            let reducible = updated.saturating_sub(1);
+            if reducible > 0 {
+                let reduce = reducible.min(overflow);
+                updated -= reduce;
+                total -= reduce;
+                continue;
+            }
+        }
+
+        if updated > 0 {
+            total -= updated + GAP_WIDTH;
+            updated = 0;
+            continue;
+        }
+
+        break;
+    }
+
+    let mut max_conversation = area_width.saturating_sub(MARKER_WIDTH);
+    if updated > 0 {
+        max_conversation = max_conversation.saturating_sub(GAP_WIDTH + updated);
+    }
+    conversation = max_conversation
+        .min(CONVERSATION_COL_MAX_WIDTH)
+        .min(conversation);
+
+    if conversation == 0 {
+        if updated > 0 {
+            updated = 0;
+        }
+        conversation = area_width.saturating_sub(MARKER_WIDTH);
+    }
+
+    if conversation == 0 && area_width > MARKER_WIDTH {
+        conversation = area_width - MARKER_WIDTH;
+    }
+
+    ColumnWidths {
+        conversation,
+        updated,
+    }
+}
+
+fn total_width(marker: usize, gap: usize, conversation: usize, updated: usize) -> usize {
+    let mut total = marker + conversation;
+    if updated > 0 {
+        total += gap + updated;
+    }
+    total
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Duration;
+    use codex_protocol::ConversationId;
+    use codex_protocol::protocol::SessionMeta;
+    use codex_protocol::protocol::SessionMetaLine;
+    use codex_protocol::protocol::SessionSource;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use serde_json::json;
+    use serde_json::to_value;
     use std::future::Future;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Mutex;
@@ -948,6 +1309,49 @@ mod tests {
         ConversationItem {
             path: PathBuf::from(path),
             head: head_with_ts_and_user_text(ts, &[preview]),
+            tail: Vec::new(),
+            created_at: Some(ts.to_string()),
+            updated_at: Some(ts.to_string()),
+        }
+    }
+
+    fn set_time_filter(state: &mut PickerState, filter: TimeFilter) {
+        state.time_filter = filter;
+        state.apply_filter();
+    }
+
+    fn row_with_timestamp(path: &str, preview: &str, timestamp: DateTime<Utc>) -> Row {
+        Row {
+            path: PathBuf::from(path),
+            preview: preview.to_string(),
+            cwd: None,
+            created_at: Some(timestamp),
+            updated_at: Some(timestamp),
+        }
+    }
+
+    fn make_item_with_meta(path: &str, ts: &str, preview: &str, cwd: &str) -> ConversationItem {
+        let meta = SessionMetaLine {
+            meta: SessionMeta {
+                id: ConversationId::from_string("00000000-0000-4000-8000-000000000001")
+                    .expect("valid conversation id"),
+                timestamp: ts.to_string(),
+                cwd: PathBuf::from(cwd),
+                originator: "codex".to_string(),
+                cli_version: "0.0.0".to_string(),
+                instructions: None,
+                source: SessionSource::Cli,
+                model_provider: Some("openai".to_string()),
+            },
+            git: None,
+        };
+
+        let mut head = vec![to_value(meta).expect("meta to value")];
+        head.extend(head_with_ts_and_user_text(ts, &[preview]));
+
+        ConversationItem {
+            path: PathBuf::from(path),
+            head,
             tail: Vec::new(),
             created_at: Some(ts.to_string()),
             updated_at: Some(ts.to_string()),
@@ -982,7 +1386,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_uses_first_message_input_text() {
+    fn preview_uses_first_real_user_message() {
         let head = vec![
             json!({ "timestamp": "2025-01-01T00:00:00Z" }),
             json!({
@@ -1003,7 +1407,7 @@ mod tests {
                 "type": "message",
                 "role": "user",
                 "content": [
-                    { "type": "input_text", "text": "real question" },
+                    { "type": "input_text", "text": " real   question \nwith spaces" },
                     { "type": "input_image", "image_url": "ignored" }
                 ]
             }),
@@ -1013,8 +1417,38 @@ mod tests {
                 "content": [ { "type": "input_text", "text": "later text" } ]
             }),
         ];
-        let preview = preview_from_head(&head);
-        assert_eq!(preview.as_deref(), Some("real question"));
+        let item = ConversationItem {
+            path: PathBuf::from("/tmp/test.jsonl"),
+            head,
+            tail: Vec::new(),
+            created_at: None,
+            updated_at: None,
+        };
+        assert_eq!(conversation_preview(&item), "real question with spaces");
+    }
+
+    #[test]
+    fn preview_falls_back_to_tail_user_message() {
+        let tail = vec![
+            json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [ { "type": "output_text", "text": "assistant" } ],
+            }),
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [ { "type": "input_text", "text": "tail question" } ],
+            }),
+        ];
+        let item = ConversationItem {
+            path: PathBuf::from("/tmp/test.jsonl"),
+            head: Vec::new(),
+            tail,
+            created_at: None,
+            updated_at: None,
+        };
+        assert_eq!(conversation_preview(&item), "tail question");
     }
 
     #[test]
@@ -1039,6 +1473,227 @@ mod tests {
         // Preserve the given order even if timestamps differ; backend already provides newest-first.
         assert!(rows[0].preview.contains('A'));
         assert!(rows[1].preview.contains('B'));
+    }
+
+    #[test]
+    fn head_to_row_extracts_cwd_from_meta() {
+        let item = make_item_with_meta(
+            "/tmp/a.jsonl",
+            "2025-01-01T00:00:00Z",
+            "Initial message",
+            "/workspace/project-alpha",
+        );
+        let row = head_to_row(&item);
+        assert_eq!(
+            row.cwd.as_deref(),
+            Some(Path::new("/workspace/project-alpha"))
+        );
+    }
+
+    #[test]
+    fn query_matches_directory_path() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            None,
+        );
+        state.reset_pagination();
+        state.ingest_page(page(
+            vec![
+                make_item_with_meta(
+                    "/tmp/a.jsonl",
+                    "2025-01-01T00:00:00Z",
+                    "first",
+                    "/workspace/project-alpha",
+                ),
+                make_item_with_meta(
+                    "/tmp/b.jsonl",
+                    "2025-01-01T00:00:00Z",
+                    "second",
+                    "/workspace/project-beta",
+                ),
+            ],
+            None,
+            2,
+            false,
+        ));
+
+        set_time_filter(&mut state, TimeFilter::All);
+
+        state.set_query("beta".to_string());
+        assert_eq!(state.filtered_rows.len(), 1);
+        let row = &state.filtered_rows[0];
+        assert_eq!(
+            row.cwd.as_deref(),
+            Some(Path::new("/workspace/project-beta"))
+        );
+    }
+
+    #[test]
+    fn filters_out_sessions_not_matching_target_directory() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            Some(PathBuf::from("/workspace/project-alpha")),
+        );
+        state.reset_pagination();
+        state.ingest_page(page(
+            vec![
+                make_item_with_meta(
+                    "/tmp/a.jsonl",
+                    "2025-01-01T00:00:00Z",
+                    "first",
+                    "/workspace/project-alpha",
+                ),
+                make_item_with_meta(
+                    "/tmp/b.jsonl",
+                    "2025-01-01T00:00:00Z",
+                    "second",
+                    "/workspace/project-beta",
+                ),
+            ],
+            None,
+            2,
+            false,
+        ));
+
+        set_time_filter(&mut state, TimeFilter::All);
+
+        assert_eq!(state.all_rows.len(), 1);
+        let row = &state.all_rows[0];
+        assert_eq!(
+            row.cwd.as_deref(),
+            Some(Path::new("/workspace/project-alpha"))
+        );
+        assert_eq!(state.filtered_rows.len(), 1);
+    }
+
+    #[test]
+    fn narrow_width_preserves_updated_column() {
+        let metrics = ColumnMetrics {
+            max_updated_width: 12,
+            labels: Vec::new(),
+        };
+        for width in [20usize, 18usize] {
+            let widths = compute_column_widths(width, &metrics);
+            assert!(
+                widths.updated > 0,
+                "expected updated column for width {width}"
+            );
+            let total = total_width(2, 2, widths.conversation, widths.updated);
+            assert!(total <= width, "layout exceeded width {width}");
+        }
+    }
+
+    #[test]
+    fn time_filter_today_limits_results() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            None,
+        );
+
+        let now = Utc::now();
+        state.all_rows = vec![
+            row_with_timestamp("/tmp/today.jsonl", "today", now),
+            row_with_timestamp("/tmp/old.jsonl", "old", now - Duration::days(2)),
+        ];
+        state.apply_filter();
+
+        assert_eq!(state.filtered_rows.len(), 1);
+        assert_eq!(
+            state.filtered_rows[0].path,
+            PathBuf::from("/tmp/today.jsonl")
+        );
+    }
+
+    #[test]
+    fn time_filter_recent_and_last30_days_include_expected_sessions() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            None,
+        );
+
+        let now = Utc::now();
+        let recent = now - Duration::days(5);
+        let last_month = now - Duration::days(20);
+        let old = now - Duration::days(60);
+
+        state.all_rows = vec![
+            row_with_timestamp("/tmp/now.jsonl", "now", now),
+            row_with_timestamp("/tmp/recent.jsonl", "recent", recent),
+            row_with_timestamp("/tmp/month.jsonl", "month", last_month),
+            row_with_timestamp("/tmp/old.jsonl", "old", old),
+        ];
+
+        set_time_filter(&mut state, TimeFilter::Recent);
+        let recent_paths: Vec<_> = state
+            .filtered_rows
+            .iter()
+            .map(|row| row.path.as_path())
+            .collect();
+        assert_eq!(
+            recent_paths,
+            vec![Path::new("/tmp/now.jsonl"), Path::new("/tmp/recent.jsonl")]
+        );
+
+        set_time_filter(&mut state, TimeFilter::Last30Days);
+        let month_paths: Vec<_> = state
+            .filtered_rows
+            .iter()
+            .map(|row| row.path.as_path())
+            .collect();
+        assert_eq!(
+            month_paths,
+            vec![
+                Path::new("/tmp/now.jsonl"),
+                Path::new("/tmp/recent.jsonl"),
+                Path::new("/tmp/month.jsonl"),
+            ]
+        );
+
+        set_time_filter(&mut state, TimeFilter::All);
+        assert_eq!(state.filtered_rows.len(), 4);
+    }
+
+    #[test]
+    fn auto_expands_time_filter_when_today_empty() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            None,
+        );
+
+        let now = Utc::now();
+        state.all_rows = vec![
+            row_with_timestamp("/tmp/recent.jsonl", "recent", now - Duration::days(5)),
+            row_with_timestamp("/tmp/month.jsonl", "month", now - Duration::days(20)),
+        ];
+
+        state.apply_filter();
+
+        assert_eq!(state.time_filter, TimeFilter::Recent);
+        assert_eq!(state.filtered_rows.len(), 1);
+        assert_eq!(
+            state.filtered_rows[0].path,
+            PathBuf::from("/tmp/recent.jsonl")
+        );
     }
 
     #[test]
@@ -1088,6 +1743,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            None,
         );
 
         let now = Utc::now();
@@ -1095,18 +1751,21 @@ mod tests {
             Row {
                 path: PathBuf::from("/tmp/a.jsonl"),
                 preview: String::from("Fix resume picker timestamps"),
+                cwd: None,
                 created_at: Some(now - Duration::minutes(16)),
                 updated_at: Some(now - Duration::seconds(42)),
             },
             Row {
                 path: PathBuf::from("/tmp/b.jsonl"),
                 preview: String::from("Investigate lazy pagination cap"),
+                cwd: None,
                 created_at: Some(now - Duration::hours(1)),
                 updated_at: Some(now - Duration::minutes(35)),
             },
             Row {
                 path: PathBuf::from("/tmp/c.jsonl"),
                 preview: String::from("Explain the codebase"),
+                cwd: None,
                 created_at: Some(now - Duration::hours(2)),
                 updated_at: Some(now - Duration::hours(2)),
             },
@@ -1118,10 +1777,10 @@ mod tests {
         state.scroll_top = 0;
         state.update_view_rows(3);
 
-        let metrics = calculate_column_metrics(&state.filtered_rows);
-
         let width: u16 = 80;
         let height: u16 = 6;
+        let metrics = calculate_column_metrics(&state.filtered_rows);
+        let widths = compute_column_widths(width as usize, &metrics);
         let backend = VT100Backend::new(width, height);
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, width, height));
@@ -1131,8 +1790,8 @@ mod tests {
             let area = frame.area();
             let segments =
                 Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
-            render_column_headers(&mut frame, segments[0], &metrics);
-            render_list(&mut frame, segments[1], &state, &metrics);
+            render_column_headers(&mut frame, segments[0], &metrics, &widths);
+            render_list(&mut frame, segments[1], &state, &metrics, &widths);
         }
         terminal.flush().expect("flush");
 
@@ -1148,6 +1807,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            None,
         );
 
         state.reset_pagination();
@@ -1186,6 +1846,8 @@ mod tests {
             false,
         ));
 
+        set_time_filter(&mut state, TimeFilter::All);
+
         let previews: Vec<_> = state
             .filtered_rows
             .iter()
@@ -1214,6 +1876,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            None,
         );
         state.reset_pagination();
         state.ingest_page(page(
@@ -1227,6 +1890,8 @@ mod tests {
             2,
             false,
         ));
+
+        set_time_filter(&mut state, TimeFilter::All);
 
         assert!(recorded_requests.lock().unwrap().is_empty());
         state.ensure_minimum_rows_for_view(10);
@@ -1243,6 +1908,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            None,
         );
 
         let mut items = Vec::new();
@@ -1255,6 +1921,7 @@ mod tests {
 
         state.reset_pagination();
         state.ingest_page(page(items, None, 20, false));
+        set_time_filter(&mut state, TimeFilter::All);
         state.update_view_rows(5);
 
         assert_eq!(state.selected, 0);
@@ -1291,6 +1958,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            None,
         );
 
         let mut items = Vec::new();
@@ -1303,6 +1971,7 @@ mod tests {
 
         state.reset_pagination();
         state.ingest_page(page(items, None, 10, false));
+        set_time_filter(&mut state, TimeFilter::All);
         state.update_view_rows(5);
 
         state.selected = state.filtered_rows.len().saturating_sub(1);
@@ -1335,6 +2004,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            None,
         );
         state.reset_pagination();
         state.ingest_page(page(
