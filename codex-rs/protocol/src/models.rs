@@ -95,6 +95,7 @@ pub enum ResponseItem {
         #[serde(skip_serializing)]
         id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         status: Option<String>,
 
         call_id: String,
@@ -117,6 +118,7 @@ pub enum ResponseItem {
         #[serde(skip_serializing)]
         id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         status: Option<String>,
         action: WebSearchAction,
     },
