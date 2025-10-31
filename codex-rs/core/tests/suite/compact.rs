@@ -627,6 +627,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
                 .map(std::string::ToString::to_string)
         })
         .collect();
+    dbg!(&user_texts);
     assert!(
         user_texts.iter().any(|text| text == AUTO_INTENT_TEXT),
         "auto compact follow-up request should include the intent user message"

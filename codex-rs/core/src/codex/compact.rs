@@ -22,11 +22,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
-use serde::Deserialize;
-use serde_json::Value as JsonValue;
-use serde_json::json;
 use tracing::error;
-use tracing::warn;
 use uuid::Uuid;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
