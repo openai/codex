@@ -551,6 +551,39 @@ async fn undo_handles_ignored_directory_contents() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn undo_overwrites_manual_edits_after_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = undo_harness().await?;
+    init_git_repo(harness.cwd())?;
+
+    let tracked = harness.path("tracked.txt");
+    fs::write(&tracked, "baseline\n")?;
+    git(harness.cwd(), &["add", "tracked.txt"])?;
+    git(harness.cwd(), &["commit", "-m", "baseline tracked"])?;
+
+    run_apply_patch_turn(
+        &harness,
+        "modify tracked",
+        "undo-manual-overwrite",
+        "*** Begin Patch\n*** Update File: tracked.txt\n@@\n-baseline\n+turn change\n*** End Patch",
+        "ok",
+    )
+    .await?;
+    assert_eq!(fs::read_to_string(&tracked)?, "turn change\n");
+
+    fs::write(&tracked, "manual edit\n")?;
+    assert_eq!(fs::read_to_string(&tracked)?, "manual edit\n");
+
+    let codex = Arc::clone(&harness.test().codex);
+    expect_successful_undo(&codex).await?;
+
+    assert_eq!(fs::read_to_string(&tracked)?, "baseline\n");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn undo_preserves_manual_tracked_changes_across_turns() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
