@@ -7,6 +7,8 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Span;
 
+use crate::accessibility::animations_enabled;
+
 static PROCESS_START: OnceLock<Instant> = OnceLock::new();
 
 fn elapsed_since_start() -> Duration {
@@ -15,6 +17,11 @@ fn elapsed_since_start() -> Duration {
 }
 
 pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
+    // If animations are disabled, return plain text
+    if !animations_enabled() {
+        return vec![Span::raw(text.to_string())];
+    }
+
     let chars: Vec<char> = text.chars().collect();
     if chars.is_empty() {
         return Vec::new();
@@ -60,17 +67,6 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
         spans.push(Span::styled(ch.to_string(), style));
     }
     spans
-}
-
-pub(crate) fn shimmer_spans_with_animation_control(
-    text: &str,
-    animations_enabled: bool,
-) -> Vec<Span<'static>> {
-    if animations_enabled {
-        shimmer_spans(text)
-    } else {
-        vec![Span::raw(text.to_string())]
-    }
 }
 
 fn color_for_level(level: u8) -> Style {

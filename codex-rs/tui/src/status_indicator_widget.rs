@@ -16,7 +16,7 @@ use crate::accessibility::animations_enabled;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
-use crate::shimmer::shimmer_spans_with_animation_control;
+use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 
@@ -170,10 +170,7 @@ impl WidgetRef for StatusIndicatorWidget {
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
         let mut spans = vec![" ".repeat(LIVE_PREFIX_COLS as usize).into()];
-        spans.extend(shimmer_spans_with_animation_control(
-            &self.header,
-            self.animations_enabled,
-        ));
+        spans.extend(shimmer_spans(&self.header));
         spans.extend(vec![
             " ".into(),
             format!("({pretty_elapsed} • ").dim(),
