@@ -8,8 +8,8 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use codex_core::config_types::McpServerConfig;
-use codex_core::config_types::McpServerTransportConfig;
+use codex_core::config::types::McpServerConfig;
+use codex_core::config::types::McpServerTransportConfig;
 use codex_core::features::Feature;
 
 use codex_core::protocol::AskForApproval;

@@ -361,7 +361,7 @@ pub struct Notice {
 }
 
 impl Notice {
-    /// used by set_hide_full_access_warning until we refactor config updates
+    /// referenced by config_edit helpers when writing notice flags
     pub(crate) const TABLE_KEY: &'static str = "notice";
 }
 

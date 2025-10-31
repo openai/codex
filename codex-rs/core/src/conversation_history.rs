@@ -1,12 +1,13 @@
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+
+use crate::util::error_or_panic;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_utils_string::take_bytes_at_char_boundary;
 use codex_utils_string::take_last_bytes_at_char_boundary;
 use std::ops::Deref;
-use tracing::error;
 
 // Model-formatting limits: clients get full streams; only content sent to the model is truncated.
 pub(crate) const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
@@ -72,7 +73,6 @@ impl ConversationHistory {
     pub(crate) fn get_history_for_prompt(&mut self) -> Vec<ResponseItem> {
         let mut history = self.get_history();
         Self::remove_ghost_snapshots(&mut history);
-        Self::remove_reasoning_before_last_turn(&mut history);
         history
     }
 
@@ -122,25 +122,6 @@ impl ConversationHistory {
 
     fn remove_ghost_snapshots(items: &mut Vec<ResponseItem>) {
         items.retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
-    }
-
-    fn remove_reasoning_before_last_turn(items: &mut Vec<ResponseItem>) {
-        // Responses API drops reasoning items before the last user message.
-        // Sending them is harmless but can lead to validation errors when switching between API organizations.
-        // https://cookbook.openai.com/examples/responses_api/reasoning_items#caching
-        let Some(last_user_index) = items
-            .iter()
-            // Use last user message as the turn boundary.
-            .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
-        else {
-            return;
-        };
-        let mut index = 0usize;
-        items.retain(|item| {
-            let keep = index >= last_user_index || !matches!(item, ResponseItem::Reasoning { .. });
-            index += 1;
-            keep
-        });
     }
 
     fn ensure_call_outputs_present(&mut self) {
@@ -501,15 +482,6 @@ fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
     result
 }
 
-#[inline]
-fn error_or_panic(message: String) {
-    if cfg!(debug_assertions) || env!("CARGO_PKG_VERSION").contains("alpha") {
-        panic!("{message}");
-    } else {
-        error!("{message}");
-    }
-}
-
 /// Anything that is not a system message or "reasoning" message is considered
 /// an API message.
 fn is_api_message(message: &ResponseItem) -> bool {
@@ -545,15 +517,6 @@ mod tests {
             content: vec![ContentItem::OutputText {
                 text: text.to_string(),
             }],
-        }
-    }
-
-    fn reasoning(id: &str) -> ResponseItem {
-        ResponseItem::Reasoning {
-            id: id.to_string(),
-            summary: Vec::new(),
-            content: None,
-            encrypted_content: None,
         }
     }
 
@@ -611,40 +574,6 @@ mod tests {
                 }
             ]
         );
-    }
-
-    #[test]
-    fn get_history_drops_reasoning_before_last_user_message() {
-        let mut history = ConversationHistory::new();
-        let items = vec![
-            user_msg("initial"),
-            reasoning("first"),
-            assistant_msg("ack"),
-            user_msg("latest"),
-            reasoning("second"),
-            assistant_msg("ack"),
-            reasoning("third"),
-        ];
-        history.record_items(items.iter());
-
-        let filtered = history.get_history_for_prompt();
-        assert_eq!(
-            filtered,
-            vec![
-                user_msg("initial"),
-                assistant_msg("ack"),
-                user_msg("latest"),
-                reasoning("second"),
-                assistant_msg("ack"),
-                reasoning("third"),
-            ]
-        );
-        let reasoning_count = history
-            .contents()
-            .iter()
-            .filter(|item| matches!(item, ResponseItem::Reasoning { .. }))
-            .count();
-        assert_eq!(reasoning_count, 3);
     }
 
     #[test]

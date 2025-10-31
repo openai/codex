@@ -9,11 +9,11 @@ use codex_common::CliConfigOverrides;
 use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
-use codex_core::config::write_global_mcp_servers;
-use codex_core::config_types::McpServerConfig;
-use codex_core::config_types::McpServerTransportConfig;
+use codex_core::config::types::McpServerConfig;
+use codex_core::config::types::McpServerTransportConfig;
 use codex_core::features::Feature;
 use codex_core::mcp::auth::compute_auth_statuses;
 use codex_core::protocol::McpAuthStatus;
@@ -196,7 +196,9 @@ impl McpCli {
 
 async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<()> {
     // Validate any provided overrides even though they are not currently applied.
-    let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+    let overrides = config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
     let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
         .await
         .context("failed to load configuration")?;
@@ -263,7 +265,10 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 
     servers.insert(name.clone(), new_entry);
 
-    write_global_mcp_servers(&codex_home, &servers)
+    ConfigEditsBuilder::new(&codex_home)
+        .replace_mcp_servers(&servers)
+        .apply()
+        .await
         .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
 
     println!("Added global MCP server '{name}'.");
@@ -307,7 +312,9 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 }
 
 async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveArgs) -> Result<()> {
-    config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+    config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
 
     let RemoveArgs { name } = remove_args;
 
@@ -321,7 +328,10 @@ async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveAr
     let removed = servers.remove(&name).is_some();
 
     if removed {
-        write_global_mcp_servers(&codex_home, &servers)
+        ConfigEditsBuilder::new(&codex_home)
+            .replace_mcp_servers(&servers)
+            .apply()
+            .await
             .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
     }
 
@@ -335,15 +345,15 @@ async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveAr
 }
 
 async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs) -> Result<()> {
-    let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+    let overrides = config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
     let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
         .await
         .context("failed to load configuration")?;
 
     if !config.features.enabled(Feature::RmcpClient) {
-        bail!(
-            "OAuth login is only supported when experimental_use_rmcp_client is true in config.toml."
-        );
+        bail!("OAuth login is only supported when [feature].rmcp_client is true in config.toml.");
     }
 
     let LoginArgs { name, scopes } = login_args;
@@ -376,7 +386,9 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
 }
 
 async fn run_logout(config_overrides: &CliConfigOverrides, logout_args: LogoutArgs) -> Result<()> {
-    let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+    let overrides = config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
     let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
         .await
         .context("failed to load configuration")?;
@@ -403,7 +415,9 @@ async fn run_logout(config_overrides: &CliConfigOverrides, logout_args: LogoutAr
 }
 
 async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Result<()> {
-    let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+    let overrides = config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
     let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
         .await
         .context("failed to load configuration")?;
@@ -658,7 +672,9 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
 }
 
 async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<()> {
-    let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+    let overrides = config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
     let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
         .await
         .context("failed to load configuration")?;
