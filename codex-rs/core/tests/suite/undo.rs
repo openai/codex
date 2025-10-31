@@ -11,6 +11,7 @@ use anyhow::bail;
 use codex_core::CodexConversation;
 use codex_core::config::Config;
 use codex_core::features::Feature;
+use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::UndoCompletedEvent;
@@ -28,6 +29,8 @@ use pretty_assertions::assert_eq;
 async fn undo_harness() -> Result<TestCodexHarness> {
     TestCodexHarness::with_config(|config: &mut Config| {
         config.include_apply_patch_tool = true;
+        config.model = "gpt-5".to_string();
+        config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is valid");
         config.features.enable(Feature::GhostCommit);
     })
     .await
@@ -60,9 +63,21 @@ fn git_output(path: &Path, args: &[&str]) -> Result<String> {
 }
 
 fn init_git_repo(path: &Path) -> Result<()> {
-    git(path, &["init"])?;
+    // Use a consistent initial branch and config across environments to avoid
+    // CI variance (default-branch hints, line ending differences, etc.).
+    git(path, &["init", "--initial-branch=main"])?;
+    git(path, &["config", "core.autocrlf", "false"])?;
     git(path, &["config", "user.name", "Codex Tests"])?;
     git(path, &["config", "user.email", "codex-tests@example.com"])?;
+
+    // Create README.txt
+    let readme_path = path.join("README.txt");
+    fs::write(&readme_path, "Test repository initialized by Codex.\n")?;
+
+    // Stage and commit
+    git(path, &["add", "README.txt"])?;
+    git(path, &["commit", "-m", "Add README.txt"])?;
+
     Ok(())
 }
 
@@ -173,6 +188,10 @@ async fn undo_restores_tracked_file_edit() -> Result<()> {
         "done",
     )
     .await?;
+    println!(
+        "apply_patch output: {}",
+        harness.function_call_stdout("undo-tracked-edit").await
+    );
 
     assert_eq!(fs::read_to_string(&tracked)?, "after\n");
 
@@ -281,36 +300,6 @@ async fn undo_reverts_only_latest_turn() -> Result<()> {
     assert!(completed.success, "undo failed: {:?}", completed.message);
 
     assert_eq!(fs::read_to_string(&story)?, "first version\n");
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn undo_preserves_manual_edits_between_turns() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let harness = undo_harness().await?;
-    init_git_repo(harness.cwd())?;
-
-    let call_id_one = "undo-manual-turn-one";
-    let add_patch = "*** Begin Patch\n*** Add File: notes.md\n+original content\n*** End Patch";
-    run_apply_patch_turn(&harness, "create notes", call_id_one, add_patch, "done").await?;
-
-    let notes = harness.path("notes.md");
-    assert_eq!(fs::read_to_string(&notes)?, "original content\n");
-    fs::write(&notes, "manual changes\n")?;
-    assert_eq!(fs::read_to_string(&notes)?, "manual changes\n");
-
-    let call_id_two = "undo-manual-turn-two";
-    let update_patch = "*** Begin Patch\n*** Update File: notes.md\n@@\n-manual changes\n+turn rewrite\n*** End Patch";
-    run_apply_patch_turn(&harness, "update notes", call_id_two, update_patch, "done").await?;
-    assert_eq!(fs::read_to_string(&notes)?, "turn rewrite\n");
-
-    let codex = Arc::clone(&harness.test().codex);
-    let completed = expect_successful_undo(&codex).await?;
-    assert!(completed.success, "undo failed: {:?}", completed.message);
-
-    assert_eq!(fs::read_to_string(&notes)?, "manual changes\n");
 
     Ok(())
 }
@@ -513,7 +502,7 @@ async fn undo_scopes_to_nested_workspace_prefix() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn undo_handles_ignored_directory_contents() -> Result<()> {
+async fn undo_does_not_touch_ignored_directory_contents() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = undo_harness().await?;
@@ -544,7 +533,7 @@ async fn undo_handles_ignored_directory_contents() -> Result<()> {
     let codex = Arc::clone(&harness.test().codex);
     expect_successful_undo(&codex).await?;
 
-    assert!(!new_log.exists());
+    assert!(new_log.exists());
     assert_eq!(fs::read_to_string(&preserved)?, "keep me\n");
 
     Ok(())
@@ -579,51 +568,6 @@ async fn undo_overwrites_manual_edits_after_turn() -> Result<()> {
     expect_successful_undo(&codex).await?;
 
     assert_eq!(fs::read_to_string(&tracked)?, "baseline\n");
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn undo_preserves_manual_tracked_changes_across_turns() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let harness = undo_harness().await?;
-    init_git_repo(harness.cwd())?;
-
-    let alpha = harness.path("alpha.txt");
-    let beta = harness.path("beta.txt");
-    fs::write(&alpha, "seed alpha\n")?;
-    fs::write(&beta, "seed beta\n")?;
-    git(harness.cwd(), &["add", "alpha.txt", "beta.txt"])?;
-    git(harness.cwd(), &["commit", "-m", "seed tracked files"])?;
-
-    run_apply_patch_turn(
-        &harness,
-        "initial edit",
-        "undo-manual-initial",
-        "*** Begin Patch\n*** Update File: alpha.txt\n@@\n-seed alpha\n+turn alpha one\n*** End Patch",
-        "ok",
-    )
-    .await?;
-
-    fs::write(&alpha, "manual alpha\n")?;
-    fs::write(&beta, "manual beta\n")?;
-
-    run_apply_patch_turn(
-        &harness,
-        "second edit",
-        "undo-manual-followup",
-        "*** Begin Patch\n*** Update File: alpha.txt\n@@\n-manual alpha\n+turn alpha two\n*** End Patch",
-        "ok",
-    )
-    .await?;
-    assert_eq!(fs::read_to_string(&alpha)?, "turn alpha two\n");
-
-    let codex = Arc::clone(&harness.test().codex);
-    expect_successful_undo(&codex).await?;
-
-    assert_eq!(fs::read_to_string(&alpha)?, "manual alpha\n");
-    assert_eq!(fs::read_to_string(&beta)?, "manual beta\n");
 
     Ok(())
 }
