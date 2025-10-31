@@ -11,6 +11,7 @@ export type CodexExecArgs = {
   baseUrl?: string;
   apiKey?: string;
   threadId?: string | null;
+  images?: string[];
   // --model
   model?: string;
   // --sandbox
@@ -53,6 +54,12 @@ export class CodexExec {
 
     if (args.outputSchemaFile) {
       commandArgs.push("--output-schema", args.outputSchemaFile);
+    }
+
+    if (args.images?.length) {
+      for (const image of args.images) {
+        commandArgs.push("--image", image);
+      }
     }
 
     if (args.threadId) {
