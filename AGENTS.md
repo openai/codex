@@ -100,3 +100,56 @@ If you don’t have the tool:
   let request = mock.single_request();
   // assert using request.function_call_output(call_id) or request.json_body() or other helpers.
   ```
+
+## Rust Documentation Responsibilities
+
+Codex must ensure Rust documentation accuracy and quality increases over time.
+
+### Goals
+
+- Code should explain intent, constraints, and behavior clearly.
+- Future contributors must not need Slack or PR context to understand decisions.
+- Docs and code evolve together; neither should drift.
+- Improvements happen **incrementally** (ratchet model).
+
+#### When to document or update docs
+
+Cdex must update or add documentation when changes involve:
+
+- Public APIs (modules, structs, enums, functions, traits)
+- Behavior, invariants, or side effects
+- Error handling or retry/backoff logic
+- Configuration, env vars, serialization, or persistence
+- Concurrency, async behavior, or `unsafe` code
+- Meaningful design/architecture changes
+
+> If modifying how something works, update how it is explained.
+
+### Minimum behavior
+
+When generating or modifying Rust code:
+
+- Add a brief summary for new public items
+- Adjust docs in the file if behavior or roles change
+- Maintain or improve intra-doc links (use backticks, e.g., [`Foo`])
+- Provide context for `unsafe` and concurrency constraints
+- Ensure examples compile when provided (unless intentionally disabled)
+- Apply the ratcheting rule: improve only the files touched
+
+### Instruction
+
+When work requires writing or modifying docs, **stop and read**:
+
+👉 [`rust-docs.md`](./docs/rust-docs.md) — _follow the full documentation standards and examples there._
+
+This file guides _when_ and _why_ to document.  
+`rust-docs.md` guides **how** to document.
+
+### Review mode
+
+When Codex is reviewing Rust changes:
+
+- Confirm every new or modified public item has docs that meet [`rust-docs.md`](./docs/rust-docs.md) guidance.
+- Flag behavior changes that weren’t reflected in module/struct/function docs.
+- Call out missing updates to cross-links, examples, or safety notes described in the doc standard.
+- Remind authors to avoid PII or OpenAI confidential info in documentation (see the confidentiality callout in `rust-docs.md`).
