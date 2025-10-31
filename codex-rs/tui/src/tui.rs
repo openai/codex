@@ -277,7 +277,6 @@ impl Tui {
         let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
-        let _ = crate::terminal_palette::terminal_palette();
         let _ = crate::terminal_palette::default_colors();
 
         Self {
@@ -549,7 +548,7 @@ impl Tui {
                 crate::insert_history::insert_history_lines(
                     terminal,
                     self.pending_history_lines.clone(),
-                );
+                )?;
                 self.pending_history_lines.clear();
             }
             // Update the y position for suspending so Ctrl-Z can place the cursor correctly.

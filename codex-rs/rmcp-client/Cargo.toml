@@ -12,6 +12,10 @@ axum = { workspace = true, default-features = false, features = [
     "http1",
     "tokio",
 ] }
+codex-keyring-store = { workspace = true }
+codex-protocol = { workspace = true }
+dirs = { workspace = true }
+futures = { workspace = true, default-features = false, features = ["std"] }
 keyring = { workspace = true, features = [
     "apple-native",
     "crypto-rust",
@@ -19,6 +23,12 @@ keyring = { workspace = true, features = [
     "windows-native",
 ] }
 mcp-types = { path = "../mcp-types" }
+oauth2 = "5"
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "stream",
+    "rustls-tls",
+] }
 rmcp = { workspace = true, default-features = false, features = [
     "auth",
     "base64",
@@ -30,17 +40,9 @@ rmcp = { workspace = true, default-features = false, features = [
     "transport-streamable-http-client-reqwest",
     "transport-streamable-http-server",
 ] }
-futures = { workspace = true, default-features = false, features = ["std"] }
-reqwest = { version = "0.12", default-features = false, features = [
-    "json",
-    "stream",
-    "rustls-tls",
-] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-dirs = { workspace = true }
-oauth2 = "5"
 tiny_http = { workspace = true }
 tokio = { workspace = true, features = [
     "io-util",
@@ -56,5 +58,7 @@ urlencoding = { workspace = true }
 webbrowser = { workspace = true }
 
 [dev-dependencies]
+escargot = { workspace = true }
 pretty_assertions = { workspace = true }
+serial_test = { workspace = true }
 tempfile = { workspace = true }

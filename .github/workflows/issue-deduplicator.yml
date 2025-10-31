@@ -16,7 +16,7 @@ jobs:
     outputs:
       codex_output: ${{ steps.codex.outputs.final-message }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Prepare Codex inputs
         env:
@@ -87,7 +87,7 @@ jobs:
       issues: write
     steps:
       - name: Comment on issue
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           CODEX_OUTPUT: ${{ needs.gather-duplicates.outputs.codex_output }}
         with:
@@ -105,6 +105,10 @@ jobs:
 
             const issues = Array.isArray(parsed?.issues) ? parsed.issues : [];
             const currentIssueNumber = String(context.payload.issue.number);
+
+            console.log(`Current issue number: ${currentIssueNumber}`);
+            console.log(issues);
+
             const filteredIssues = issues.filter((value) => String(value) !== currentIssueNumber);
 
             if (filteredIssues.length === 0) {
@@ -113,7 +117,8 @@ jobs:
             }
 
             const lines = [
-              'Potential duplicates detected:',
+              'Potential duplicates detected. Please review them and close your issue if it is a duplicate.',
+              '',
               ...filteredIssues.map((value) => `- #${String(value)}`),
               '',
               '*Powered by [Codex Action](https://github.com/openai/codex-action)*'];

@@ -1,6 +1,5 @@
 use crate::history_cell::HistoryCell;
 use crate::history_cell::{self};
-use codex_core::config::Config;
 use ratatui::text::Line;
 
 use super::StreamState;
@@ -8,16 +7,14 @@ use super::StreamState;
 /// Controller that manages newline-gated streaming, header emission, and
 /// commit animation across streams.
 pub(crate) struct StreamController {
-    config: Config,
     state: StreamState,
     finishing_after_drain: bool,
     header_emitted: bool,
 }
 
 impl StreamController {
-    pub(crate) fn new(config: Config, width: Option<usize>) -> Self {
+    pub(crate) fn new(width: Option<usize>) -> Self {
         Self {
-            config,
             state: StreamState::new(width),
             finishing_after_drain: false,
             header_emitted: false,
@@ -26,14 +23,13 @@ impl StreamController {
 
     /// Push a delta; if it contains a newline, commit completed lines and start animation.
     pub(crate) fn push(&mut self, delta: &str) -> bool {
-        let cfg = self.config.clone();
         let state = &mut self.state;
         if !delta.is_empty() {
             state.has_seen_delta = true;
         }
         state.collector.push_delta(delta);
         if delta.contains('\n') {
-            let newly_completed = state.collector.commit_complete_lines(&cfg);
+            let newly_completed = state.collector.commit_complete_lines();
             if !newly_completed.is_empty() {
                 state.enqueue(newly_completed);
                 return true;
@@ -44,11 +40,10 @@ impl StreamController {
 
     /// Finalize the active stream. Drain and emit now.
     pub(crate) fn finalize(&mut self) -> Option<Box<dyn HistoryCell>> {
-        let cfg = self.config.clone();
         // Finalize collector first.
         let remaining = {
             let state = &mut self.state;
-            state.collector.finalize_and_drain(&cfg)
+            state.collector.finalize_and_drain()
         };
         // Collect all output first to avoid emitting headers when there is no content.
         let mut out_lines = Vec::new();
@@ -88,18 +83,6 @@ impl StreamController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_core::config::Config;
-    use codex_core::config::ConfigOverrides;
-
-    async fn test_config() -> Config {
-        let overrides = ConfigOverrides {
-            cwd: std::env::current_dir().ok(),
-            ..Default::default()
-        };
-        Config::load_with_cli_overrides(vec![], overrides)
-            .await
-            .expect("load test config")
-    }
 
     fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
         lines
@@ -116,8 +99,7 @@ mod tests {
 
     #[tokio::test]
     async fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
-        let cfg = test_config().await;
-        let mut ctrl = StreamController::new(cfg.clone(), None);
+        let mut ctrl = StreamController::new(None);
         let mut lines = Vec::new();
 
         // Exact deltas from the session log (section: Loose vs. tight list items)
@@ -195,7 +177,7 @@ mod tests {
         for d in deltas.iter() {
             ctrl.push(d);
             while let (Some(cell), idle) = ctrl.on_commit_tick() {
-                lines.extend(cell.transcript_lines());
+                lines.extend(cell.transcript_lines(u16::MAX));
                 if idle {
                     break;
                 }
@@ -203,26 +185,19 @@ mod tests {
         }
         // Finalize and flush remaining lines now.
         if let Some(cell) = ctrl.finalize() {
-            lines.extend(cell.transcript_lines());
+            lines.extend(cell.transcript_lines(u16::MAX));
         }
 
-        let mut flat = lines;
-        // Drop leading blank and header line if present.
-        if !flat.is_empty() && lines_to_plain_strings(&[flat[0].clone()])[0].is_empty() {
-            flat.remove(0);
-        }
-        if !flat.is_empty() {
-            let s0 = lines_to_plain_strings(&[flat[0].clone()])[0].clone();
-            if s0 == "codex" {
-                flat.remove(0);
-            }
-        }
-        let streamed = lines_to_plain_strings(&flat);
+        let streamed: Vec<_> = lines_to_plain_strings(&lines)
+            .into_iter()
+            // skip • and 2-space indentation
+            .map(|s| s.chars().skip(2).collect::<String>())
+            .collect();
 
         // Full render of the same source
         let source: String = deltas.iter().copied().collect();
         let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
-        crate::markdown::append_markdown(&source, None, &mut rendered, &cfg);
+        crate::markdown::append_markdown(&source, None, &mut rendered);
         let rendered_strs = lines_to_plain_strings(&rendered);
 
         assert_eq!(streamed, rendered_strs);

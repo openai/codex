@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,11 +13,19 @@ use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::InitializeRequestParams;
 use mcp_types::InitializeResult;
+use mcp_types::ListResourceTemplatesRequestParams;
+use mcp_types::ListResourceTemplatesResult;
+use mcp_types::ListResourcesRequestParams;
+use mcp_types::ListResourcesResult;
 use mcp_types::ListToolsRequestParams;
 use mcp_types::ListToolsResult;
+use mcp_types::ReadResourceRequestParams;
+use mcp_types::ReadResourceResult;
+use reqwest::header::HeaderMap;
 use rmcp::model::CallToolRequestParam;
 use rmcp::model::InitializeRequestParam;
 use rmcp::model::PaginatedRequestParam;
+use rmcp::model::ReadResourceRequestParam;
 use rmcp::service::RoleClient;
 use rmcp::service::RunningService;
 use rmcp::service::{self};
@@ -35,8 +44,11 @@ use tracing::warn;
 
 use crate::load_oauth_tokens;
 use crate::logging_client_handler::LoggingClientHandler;
+use crate::oauth::OAuthCredentialsStoreMode;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
+use crate::utils::apply_default_headers;
+use crate::utils::build_default_headers;
 use crate::utils::convert_call_tool_result;
 use crate::utils::convert_to_mcp;
 use crate::utils::convert_to_rmcp;
@@ -75,6 +87,8 @@ impl RmcpClient {
         program: OsString,
         args: Vec<OsString>,
         env: Option<HashMap<String, String>>,
+        env_vars: &[String],
+        cwd: Option<PathBuf>,
     ) -> io::Result<Self> {
         let program_name = program.to_string_lossy().into_owned();
         let mut command = Command::new(&program);
@@ -83,8 +97,11 @@ impl RmcpClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .env_clear()
-            .envs(create_env_for_mcp_server(env))
+            .envs(create_env_for_mcp_server(env, env_vars))
             .args(&args);
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
 
         let (transport, stderr) = TokioChildProcess::builder(command)
             .stderr(Stdio::piped())
@@ -115,32 +132,51 @@ impl RmcpClient {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn new_streamable_http_client(
         server_name: &str,
         url: &str,
         bearer_token: Option<String>,
+        http_headers: Option<HashMap<String, String>>,
+        env_http_headers: Option<HashMap<String, String>>,
+        store_mode: OAuthCredentialsStoreMode,
     ) -> Result<Self> {
-        let initial_tokens = match load_oauth_tokens(server_name, url) {
-            Ok(tokens) => tokens,
-            Err(err) => {
-                warn!("failed to read tokens for server `{server_name}`: {err}");
-                None
-            }
+        let default_headers = build_default_headers(http_headers, env_http_headers)?;
+
+        let initial_oauth_tokens = match bearer_token {
+            Some(_) => None,
+            None => match load_oauth_tokens(server_name, url, store_mode) {
+                Ok(tokens) => tokens,
+                Err(err) => {
+                    warn!("failed to read tokens for server `{server_name}`: {err}");
+                    None
+                }
+            },
         };
-        let transport = if let Some(initial_tokens) = initial_tokens.clone() {
-            let (transport, oauth_persistor) =
-                create_oauth_transport_and_runtime(server_name, url, initial_tokens).await?;
+
+        let transport = if let Some(initial_tokens) = initial_oauth_tokens.clone() {
+            let (transport, oauth_persistor) = create_oauth_transport_and_runtime(
+                server_name,
+                url,
+                initial_tokens,
+                store_mode,
+                default_headers.clone(),
+            )
+            .await?;
             PendingTransport::StreamableHttpWithOAuth {
                 transport,
                 oauth_persistor,
             }
         } else {
             let mut http_config = StreamableHttpClientTransportConfig::with_uri(url.to_string());
-            if let Some(bearer_token) = bearer_token {
-                http_config = http_config.auth_header(format!("Bearer {bearer_token}"));
+            if let Some(bearer_token) = bearer_token.clone() {
+                http_config = http_config.auth_header(bearer_token);
             }
 
-            let transport = StreamableHttpClientTransport::from_config(http_config);
+            let http_client =
+                apply_default_headers(reqwest::Client::builder(), &default_headers).build()?;
+
+            let transport = StreamableHttpClientTransport::with_client(http_client, http_config);
             PendingTransport::StreamableHttp { transport }
         };
         Ok(Self {
@@ -235,6 +271,54 @@ impl RmcpClient {
         Ok(converted)
     }
 
+    pub async fn list_resources(
+        &self,
+        params: Option<ListResourcesRequestParams>,
+        timeout: Option<Duration>,
+    ) -> Result<ListResourcesResult> {
+        let service = self.service().await?;
+        let rmcp_params = params
+            .map(convert_to_rmcp::<_, PaginatedRequestParam>)
+            .transpose()?;
+
+        let fut = service.list_resources(rmcp_params);
+        let result = run_with_timeout(fut, timeout, "resources/list").await?;
+        let converted = convert_to_mcp(result)?;
+        self.persist_oauth_tokens().await;
+        Ok(converted)
+    }
+
+    pub async fn list_resource_templates(
+        &self,
+        params: Option<ListResourceTemplatesRequestParams>,
+        timeout: Option<Duration>,
+    ) -> Result<ListResourceTemplatesResult> {
+        let service = self.service().await?;
+        let rmcp_params = params
+            .map(convert_to_rmcp::<_, PaginatedRequestParam>)
+            .transpose()?;
+
+        let fut = service.list_resource_templates(rmcp_params);
+        let result = run_with_timeout(fut, timeout, "resources/templates/list").await?;
+        let converted = convert_to_mcp(result)?;
+        self.persist_oauth_tokens().await;
+        Ok(converted)
+    }
+
+    pub async fn read_resource(
+        &self,
+        params: ReadResourceRequestParams,
+        timeout: Option<Duration>,
+    ) -> Result<ReadResourceResult> {
+        let service = self.service().await?;
+        let rmcp_params: ReadResourceRequestParam = convert_to_rmcp(params)?;
+        let fut = service.read_resource(rmcp_params);
+        let result = run_with_timeout(fut, timeout, "resources/read").await?;
+        let converted = convert_to_mcp(result)?;
+        self.persist_oauth_tokens().await;
+        Ok(converted)
+    }
+
     pub async fn call_tool(
         &self,
         name: String,
@@ -270,6 +354,8 @@ impl RmcpClient {
         }
     }
 
+    /// This should be called after every tool call so that if a given tool call triggered
+    /// a refresh of the OAuth tokens, they are persisted.
     async fn persist_oauth_tokens(&self) {
         if let Some(runtime) = self.oauth_persistor().await
             && let Err(error) = runtime.persist_if_needed().await
@@ -283,11 +369,14 @@ async fn create_oauth_transport_and_runtime(
     server_name: &str,
     url: &str,
     initial_tokens: StoredOAuthTokens,
+    credentials_store: OAuthCredentialsStoreMode,
+    default_headers: HeaderMap,
 ) -> Result<(
     StreamableHttpClientTransport<AuthClient<reqwest::Client>>,
     OAuthPersistor,
 )> {
-    let http_client = reqwest::Client::builder().build()?;
+    let http_client =
+        apply_default_headers(reqwest::Client::builder(), &default_headers).build()?;
     let mut oauth_state = OAuthState::new(url.to_string(), Some(http_client.clone())).await?;
 
     oauth_state
@@ -317,6 +406,7 @@ async fn create_oauth_transport_and_runtime(
         server_name.to_string(),
         url.to_string(),
         auth_manager,
+        credentials_store,
         Some(initial_tokens),
     );
 

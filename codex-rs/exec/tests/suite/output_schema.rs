@@ -28,7 +28,7 @@ async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
         responses::ev_assistant_message("m1", "fixture hello"),
         responses::ev_completed("resp1"),
     ]);
-    responses::mount_sse_once_match(&server, any(), body).await;
+    let response_mock = responses::mount_sse_once_match(&server, any(), body).await;
 
     test.cmd_with_server(&server)
         .arg("--skip-git-repo-check")
@@ -43,12 +43,8 @@ async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
         .assert()
         .success();
 
-    let requests = server
-        .received_requests()
-        .await
-        .expect("failed to capture requests");
-    assert_eq!(requests.len(), 1, "expected exactly one request");
-    let payload: Value = serde_json::from_slice(&requests[0].body)?;
+    let request = response_mock.single_request();
+    let payload: Value = request.body_json();
     let text = payload.get("text").expect("request missing text field");
     let format = text
         .get("format")

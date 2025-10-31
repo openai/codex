@@ -5,10 +5,10 @@ use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
+use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
@@ -19,9 +19,11 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_failed;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
 // --- Test helpers -----------------------------------------------------------
@@ -38,8 +40,11 @@ const SECOND_LARGE_REPLY: &str = "SECOND_LARGE_REPLY";
 const FIRST_AUTO_SUMMARY: &str = "FIRST_AUTO_SUMMARY";
 const SECOND_AUTO_SUMMARY: &str = "SECOND_AUTO_SUMMARY";
 const FINAL_REPLY: &str = "FINAL_REPLY";
+const CONTEXT_LIMIT_MESSAGE: &str =
+    "Your input exceeds the context window of this model. Please adjust your input and try again.";
 const DUMMY_FUNCTION_NAME: &str = "unsupported_tool";
 const DUMMY_CALL_ID: &str = "call-multi-auto";
+const FUNCTION_CALL_LIMIT_MSG: &str = "function call limit push";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn summarize_context_three_requests_and_instructions() {
@@ -103,7 +108,7 @@ async fn summarize_context_three_requests_and_instructions() {
     // 1) Normal user input – should hit server once.
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello world".into(),
             }],
         })
@@ -118,7 +123,7 @@ async fn summarize_context_three_requests_and_instructions() {
     // 3) Next user input – third hit; history should include only the summary.
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: THIRD_USER_MSG.into(),
             }],
         })
@@ -256,6 +261,65 @@ async fn summarize_context_three_requests_and_instructions() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_compact_uses_custom_prompt() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let sse_stream = sse(vec![ev_completed("r1")]);
+    mount_sse_once(&server, sse_stream).await;
+
+    let custom_prompt = "Use this compact prompt instead";
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    config.compact_prompt = Some(custom_prompt.to_string());
+
+    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create conversation")
+        .conversation;
+
+    codex.submit(Op::Compact).await.expect("trigger compact");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.expect("collect requests");
+    let body = requests
+        .iter()
+        .find_map(|req| req.body_json::<serde_json::Value>().ok())
+        .expect("summary request body");
+
+    let input = body
+        .get("input")
+        .and_then(|v| v.as_array())
+        .expect("input array");
+    let mut found_custom_prompt = false;
+    let mut found_default_prompt = false;
+
+    for item in input {
+        if item["type"].as_str() != Some("message") {
+            continue;
+        }
+        let text = item["content"][0]["text"].as_str().unwrap_or_default();
+        if text == custom_prompt {
+            found_custom_prompt = true;
+        }
+        if text == SUMMARIZATION_PROMPT {
+            found_default_prompt = true;
+        }
+    }
+
+    assert!(found_custom_prompt, "custom prompt should be injected");
+    assert!(!found_default_prompt, "default prompt should be replaced");
+}
+
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
@@ -319,7 +383,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
             }],
         })
@@ -330,7 +394,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
             }],
         })
@@ -463,7 +527,7 @@ async fn auto_compact_persists_rollout_entries() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
             }],
         })
@@ -473,7 +537,7 @@ async fn auto_compact_persists_rollout_entries() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
             }],
         })
@@ -575,7 +639,7 @@ async fn auto_compact_stops_after_failed_attempt() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
             }],
         })
@@ -620,6 +684,130 @@ async fn auto_compact_stops_after_failed_attempt() {
         !contains_prompt,
         "third request should be the follow-up turn, not another summarization",
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_compact_retries_after_context_window_error() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let user_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed("r1"),
+    ]);
+    let compact_failed = sse_failed(
+        "resp-fail",
+        "context_length_exceeded",
+        CONTEXT_LIMIT_MESSAGE,
+    );
+    let compact_succeeds = sse(vec![
+        ev_assistant_message("m2", SUMMARY_TEXT),
+        ev_completed("r2"),
+    ]);
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            user_turn.clone(),
+            compact_failed.clone(),
+            compact_succeeds.clone(),
+        ],
+    )
+    .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    config.model_auto_compact_token_limit = Some(200_000);
+    let codex = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"))
+        .new_conversation(config)
+        .await
+        .unwrap()
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "first turn".into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex.submit(Op::Compact).await.unwrap();
+
+    let EventMsg::BackgroundEvent(event) =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::BackgroundEvent(_))).await
+    else {
+        panic!("expected background event after compact retry");
+    };
+    assert!(
+        event.message.contains("Trimmed 1 older conversation item"),
+        "background event should mention trimmed item count: {}",
+        event.message
+    );
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected user turn and two compact attempts"
+    );
+
+    let compact_attempt = requests[1].body_json();
+    let retry_attempt = requests[2].body_json();
+
+    let compact_input = compact_attempt["input"]
+        .as_array()
+        .unwrap_or_else(|| panic!("compact attempt missing input array: {compact_attempt}"));
+    let retry_input = retry_attempt["input"]
+        .as_array()
+        .unwrap_or_else(|| panic!("retry attempt missing input array: {retry_attempt}"));
+    assert_eq!(
+        compact_input
+            .last()
+            .and_then(|item| item.get("content"))
+            .and_then(|v| v.as_array())
+            .and_then(|items| items.first())
+            .and_then(|entry| entry.get("text"))
+            .and_then(|text| text.as_str()),
+        Some(SUMMARIZATION_PROMPT),
+        "compact attempt should include summarization prompt"
+    );
+    assert_eq!(
+        retry_input
+            .last()
+            .and_then(|item| item.get("content"))
+            .and_then(|v| v.as_array())
+            .and_then(|items| items.first())
+            .and_then(|entry| entry.get("text"))
+            .and_then(|text| text.as_str()),
+        Some(SUMMARIZATION_PROMPT),
+        "retry attempt should include summarization prompt"
+    );
+    assert_eq!(
+        retry_input.len(),
+        compact_input.len().saturating_sub(1),
+        "retry should drop exactly one history item (before {} vs after {})",
+        compact_input.len(),
+        retry_input.len()
+    );
+    if let (Some(first_before), Some(first_after)) = (compact_input.first(), retry_input.first()) {
+        assert_ne!(
+            first_before, first_after,
+            "retry should drop the oldest conversation item"
+        );
+    } else {
+        panic!("expected non-empty compact inputs");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -673,7 +861,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: MULTI_AUTO_MSG.into(),
             }],
         })
@@ -731,5 +919,99 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     assert!(
         request_bodies[4].contains("You have exceeded the maximum number of tokens"),
         "second auto compact request should include the summarization prompt"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let context_window = 100;
+    let limit = context_window * 90 / 100;
+    let over_limit_tokens = context_window * 95 / 100 + 1;
+
+    let first_turn = sse(vec![
+        ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
+        ev_completed_with_tokens("r1", 50),
+    ]);
+    let function_call_follow_up = sse(vec![
+        ev_assistant_message("m2", FINAL_REPLY),
+        ev_completed_with_tokens("r2", over_limit_tokens),
+    ]);
+    let auto_compact_turn = sse(vec![
+        ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r3", 10),
+    ]);
+    let post_auto_compact_turn = sse(vec![ev_completed_with_tokens("r4", 10)]);
+
+    // Mount responses in order and keep mocks only for the ones we assert on.
+    let first_turn_mock = mount_sse_once(&server, first_turn).await;
+    let follow_up_mock = mount_sse_once(&server, function_call_follow_up).await;
+    let auto_compact_mock = mount_sse_once(&server, auto_compact_turn).await;
+    // We don't assert on the post-compact request, so no need to keep its mock.
+    mount_sse_once(&server, post_auto_compact_turn).await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    config.model_context_window = Some(context_window);
+    config.model_auto_compact_token_limit = Some(limit);
+
+    let codex = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"))
+        .new_conversation(config)
+        .await
+        .unwrap()
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: FUNCTION_CALL_LIMIT_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |msg| matches!(msg, EventMsg::TaskComplete(_))).await;
+
+    // Assert first request captured expected user message that triggers function call.
+    let first_request = first_turn_mock.single_request().input();
+    assert!(
+        first_request.iter().any(|item| {
+            item.get("type").and_then(|value| value.as_str()) == Some("message")
+                && item
+                    .get("content")
+                    .and_then(|content| content.as_array())
+                    .and_then(|entries| entries.first())
+                    .and_then(|entry| entry.get("text"))
+                    .and_then(|value| value.as_str())
+                    == Some(FUNCTION_CALL_LIMIT_MSG)
+        }),
+        "first request should include the user message that triggers the function call"
+    );
+
+    let function_call_output = follow_up_mock
+        .single_request()
+        .function_call_output(DUMMY_CALL_ID);
+    let output_text = function_call_output
+        .get("output")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    assert!(
+        output_text.contains(DUMMY_FUNCTION_NAME),
+        "function call output should be sent before auto compact"
+    );
+
+    let auto_compact_body = auto_compact_mock.single_request().body_json().to_string();
+    assert!(
+        auto_compact_body.contains("You have exceeded the maximum number of tokens"),
+        "auto compact request should include the summarization prompt after exceeding 95% (limit {limit})"
     );
 }

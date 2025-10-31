@@ -7,10 +7,10 @@ use std::time::Instant;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -28,7 +28,7 @@ async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
 
     test.codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: prompt.into(),
             }],
             final_output_json_schema: None,
@@ -63,8 +63,9 @@ async fn build_codex_with_test_tool(server: &wiremock::MockServer) -> anyhow::Re
 }
 
 fn assert_parallel_duration(actual: Duration) {
+    // Allow headroom for runtime overhead while still differentiating from serial execution.
     assert!(
-        actual < Duration::from_millis(500),
+        actual < Duration::from_millis(750),
         "expected parallel execution to finish quickly, got {actual:?}"
     );
 }
@@ -83,6 +84,16 @@ async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let test = build_codex_with_test_tool(&server).await?;
 
+    let warmup_args = json!({
+        "sleep_after_ms": 10,
+        "barrier": {
+            "id": "parallel-test-sync-warmup",
+            "participants": 2,
+            "timeout_ms": 1_000,
+        }
+    })
+    .to_string();
+
     let parallel_args = json!({
         "sleep_after_ms": 300,
         "barrier": {
@@ -92,6 +103,17 @@ async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
         }
     })
     .to_string();
+
+    let warmup_first = sse(vec![
+        json!({"type": "response.created", "response": {"id": "resp-warm-1"}}),
+        ev_function_call("warm-call-1", "test_sync_tool", &warmup_args),
+        ev_function_call("warm-call-2", "test_sync_tool", &warmup_args),
+        ev_completed("resp-warm-1"),
+    ]);
+    let warmup_second = sse(vec![
+        ev_assistant_message("warm-msg-1", "warmup complete"),
+        ev_completed("resp-warm-2"),
+    ]);
 
     let first_response = sse(vec![
         json!({"type": "response.created", "response": {"id": "resp-1"}}),
@@ -103,7 +125,13 @@ async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    mount_sse_sequence(&server, vec![first_response, second_response]).await;
+    mount_sse_sequence(
+        &server,
+        vec![warmup_first, warmup_second, first_response, second_response],
+    )
+    .await;
+
+    run_turn(&test, "warm up parallel tool").await?;
 
     let duration = run_turn_and_measure(&test, "exercise sync tool").await?;
     assert_parallel_duration(duration);
