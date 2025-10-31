@@ -754,11 +754,6 @@ async fn manual_compact_retries_after_context_window_error() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     codex.submit(Op::Compact).await.unwrap();
-    let warning_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
-    let EventMsg::Warning(WarningEvent { message }) = warning_event else {
-        panic!("expected warning event after compact retry");
-    };
-    assert_eq!(message, COMPACT_WARNING_MESSAGE);
     let EventMsg::BackgroundEvent(event) =
         wait_for_event(&codex, |ev| matches!(ev, EventMsg::BackgroundEvent(_))).await
     else {
@@ -769,6 +764,11 @@ async fn manual_compact_retries_after_context_window_error() {
         "background event should mention trimmed item count: {}",
         event.message
     );
+    let warning_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    let EventMsg::Warning(WarningEvent { message }) = warning_event else {
+        panic!("expected warning event after compact retry");
+    };
+    assert_eq!(message, COMPACT_WARNING_MESSAGE);
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     let requests = request_log.requests();
