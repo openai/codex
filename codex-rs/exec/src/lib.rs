@@ -68,6 +68,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         output_schema: output_schema_path,
+        system_prompt,
         config_overrides,
     } = cli;
 
@@ -114,6 +115,18 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let output_schema = load_output_schema(output_schema_path);
+
+    let base_instructions_override = match system_prompt {
+        Some(prompt) => {
+            let trimmed = prompt.trim();
+            if trimmed.is_empty() {
+                eprintln!("System prompt must not be empty after trimming whitespace.");
+                std::process::exit(1);
+            }
+            Some(trimmed.to_string())
+        }
+        None => None,
+    };
 
     let (stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -173,7 +186,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
         model_provider,
         codex_linux_sandbox_exe,
-        base_instructions: None,
+        base_instructions: base_instructions_override,
         developer_instructions: None,
         compact_prompt: None,
         include_apply_patch_tool: None,

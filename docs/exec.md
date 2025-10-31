@@ -83,6 +83,18 @@ codex exec "Extract details of the project" --output-schema ~/schema.json
 
 Combine `--output-schema` with `-o` to only print the final JSON output. You can also pass a file path to `-o` to save the JSON output to a file.
 
+### Custom system instructions
+
+By default, Codex uses the built-in system prompt for `codex exec`. To replace it, pass inline instructions with `--system-prompt`.
+
+```shell
+codex exec \
+  --system-prompt "You are a release automation assistant. Focus on changelog generation." \
+  "Draft the release notes"
+```
+
+The instructions are trimmed before use; Codex exits with an error if the value is empty after trimming.
+
 ### Git repository requirement
 
 Codex requires a Git repository to avoid destructive changes. To disable this check, use `codex exec --skip-git-repo-check`.

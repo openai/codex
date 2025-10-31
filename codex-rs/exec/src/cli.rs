@@ -56,6 +56,10 @@ pub struct Cli {
     #[arg(long = "output-schema", value_name = "FILE")]
     pub output_schema: Option<PathBuf>,
 
+    /// Inline system instructions for the agent.
+    #[arg(long = "system-prompt", value_name = "INSTRUCTIONS")]
+    pub system_prompt: Option<String>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 

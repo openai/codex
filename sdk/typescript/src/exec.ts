@@ -22,6 +22,8 @@ export type CodexExecArgs = {
   skipGitRepoCheck?: boolean;
   // --output-schema
   outputSchemaFile?: string;
+  // --system-prompt
+  systemPrompt?: string;
 };
 
 const INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
@@ -54,6 +56,10 @@ export class CodexExec {
 
     if (args.outputSchemaFile) {
       commandArgs.push("--output-schema", args.outputSchemaFile);
+    }
+
+    if (args.systemPrompt) {
+      commandArgs.push("--system-prompt", args.systemPrompt);
     }
 
     if (args.images?.length) {
