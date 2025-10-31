@@ -165,7 +165,41 @@ pub enum ApplyPatchToolType {
 pub(crate) fn create_apply_patch_freeform_tool() -> ToolSpec {
     ToolSpec::Freeform(FreeformTool {
         name: "apply_patch".to_string(),
-        description: "Use the `apply_patch` tool to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.".to_string(),
+        description: r#"Send a patch to filesystem.apply_patch to apply it to the current working directory.
+This is a FREEFORM tool, so do not wrap the patch in JSON. The patch should be a string following the grammar:
+
+```lark
+start: begin_patch hunk+ end_patch
+begin_patch: "*** Begin Patch" LF
+end_patch: "*** End Patch" LF?
+
+hunk: add_hunk | delete_hunk | update_hunk
+add_hunk: "*** Add File: " filename LF add_line+
+delete_hunk: "*** Delete File: " filename LF
+update_hunk: "*** Update File: " filename LF change_move? change?
+
+filename: /(.+)/  # Should be an absolute path
+add_line: "+" /(.*)/ LF -> line
+
+change_move: "*** Move to: " filename LF
+change: (change_context | change_line)+ eof_line?
+change_context: ("@@" | "@@ " /(.*)/) LF
+change_line: ("+" | "-" | " ") /(.*)/ LF
+eof_line: "*** End of File" LF
+```
+
+Example patch:
+
+*** Begin Patch
+*** Update File: /path/existing_file.txt
+@@ def f():
+     # Existing line
+-    return 1
++    return 2
+*** Add File: /path/new_file.txt
++This is a new file.
+*** Delete File: /path/old_file.txt
+*** End Patch"#.to_string(),
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
             syntax: "lark".to_string(),
