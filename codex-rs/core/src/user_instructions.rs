@@ -32,7 +32,7 @@ impl From<UserInstructions> for ResponseItem {
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
                 text: format!(
-                    "{USER_INSTRUCTIONS_PREFIX} {directory}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>",
+                    "{USER_INSTRUCTIONS_PREFIX}{directory}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>",
                     directory = ui.directory,
                     contents = ui.text
                 ),
