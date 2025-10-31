@@ -89,7 +89,10 @@ impl SessionTask for UserShellCommandTask {
         let tool_call = ToolCall {
             tool_name: USER_SHELL_TOOL_NAME.to_string(),
             call_id: Uuid::new_v4().to_string(),
-            payload: ToolPayload::LocalShell { params },
+            payload: ToolPayload::LocalShell {
+                params,
+                is_user_shell_command: true,
+            },
         };
 
         let router = Arc::new(ToolRouter::from_config(&turn_context.tools_config, None));
