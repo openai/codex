@@ -26,8 +26,10 @@ use textwrap::WordSplitter;
 use unicode_width::UnicodeWidthStr;
 
 pub(crate) const TOOL_CALL_MAX_LINES: usize = 5;
+const USER_SHELL_TOOL_CALL_MAX_LINES: usize = 50;
 
 pub(crate) struct OutputLinesParams {
+    pub(crate) line_limit: usize,
     pub(crate) only_err: bool,
     pub(crate) include_angle_pipe: bool,
     pub(crate) include_prefix: bool,
@@ -37,45 +39,59 @@ pub(crate) fn new_active_exec_command(
     call_id: String,
     command: Vec<String>,
     parsed: Vec<ParsedCommand>,
+    is_user_shell_command: bool,
 ) -> ExecCell {
     ExecCell::new(ExecCall {
         call_id,
         command,
         parsed,
         output: None,
+        is_user_shell_command,
         start_time: Some(Instant::now()),
         duration: None,
     })
 }
 
+#[derive(Clone)]
+pub(crate) struct OutputLines {
+    pub(crate) lines: Vec<Line<'static>>,
+    pub(crate) omitted: Option<usize>,
+}
+
 pub(crate) fn output_lines(
     output: Option<&CommandOutput>,
     params: OutputLinesParams,
-) -> Vec<Line<'static>> {
+) -> OutputLines {
     let OutputLinesParams {
+        line_limit,
         only_err,
         include_angle_pipe,
         include_prefix,
     } = params;
     let CommandOutput {
-        exit_code,
-        stdout,
-        stderr,
-        ..
+        aggregated_output, ..
     } = match output {
-        Some(output) if only_err && output.exit_code == 0 => return vec![],
+        Some(output) if only_err && output.exit_code == 0 => {
+            return OutputLines {
+                lines: Vec::new(),
+                omitted: None,
+            };
+        }
         Some(output) => output,
-        None => return vec![],
+        None => {
+            return OutputLines {
+                lines: Vec::new(),
+                omitted: None,
+            };
+        }
     };
 
-    let src = if *exit_code == 0 { stdout } else { stderr };
+    let src = aggregated_output;
     let lines: Vec<&str> = src.lines().collect();
     let total = lines.len();
-    let limit = TOOL_CALL_MAX_LINES;
+    let mut out: Vec<Line<'static>> = Vec::new();
 
-    let mut out = Vec::new();
-
-    let head_end = total.min(limit);
+    let head_end = total.min(line_limit);
     for (i, raw) in lines[..head_end].iter().enumerate() {
         let mut line = ansi_escape_line(raw);
         let prefix = if !include_prefix {
@@ -92,14 +108,19 @@ pub(crate) fn output_lines(
         out.push(line);
     }
 
-    let show_ellipsis = total > 2 * limit;
+    let show_ellipsis = total > 2 * line_limit;
+    let omitted = if show_ellipsis {
+        Some(total - 2 * line_limit)
+    } else {
+        None
+    };
     if show_ellipsis {
-        let omitted = total - 2 * limit;
+        let omitted = total - 2 * line_limit;
         out.push(format!("… +{omitted} lines").into());
     }
 
     let tail_start = if show_ellipsis {
-        total - limit
+        total - line_limit
     } else {
         head_end
     };
@@ -114,7 +135,10 @@ pub(crate) fn output_lines(
         out.push(line);
     }
 
-    out
+    OutputLines {
+        lines: out,
+        omitted,
+    }
 }
 
 pub(crate) fn spinner(start_time: Option<Instant>) -> Span<'static> {
@@ -371,24 +395,38 @@ impl ExecCell {
         }
 
         if let Some(output) = call.output.as_ref() {
-            let raw_output_lines = output_lines(
+            let line_limit = if call.is_user_shell_command {
+                USER_SHELL_TOOL_CALL_MAX_LINES
+            } else {
+                TOOL_CALL_MAX_LINES
+            };
+            let raw_output = output_lines(
                 Some(output),
                 OutputLinesParams {
+                    line_limit,
                     only_err: false,
                     include_angle_pipe: false,
                     include_prefix: false,
                 },
             );
+            let display_limit = if call.is_user_shell_command {
+                USER_SHELL_TOOL_CALL_MAX_LINES
+            } else {
+                layout.output_max_lines
+            };
 
-            if raw_output_lines.is_empty() {
+            if raw_output.lines.is_empty() {
                 lines.extend(prefix_lines(
                     vec![Line::from("(no output)".dim())],
                     Span::from(layout.output_block.initial_prefix).dim(),
                     Span::from(layout.output_block.subsequent_prefix),
                 ));
             } else {
-                let trimmed_output =
-                    Self::truncate_lines_middle(&raw_output_lines, layout.output_max_lines);
+                let trimmed_output = Self::truncate_lines_middle(
+                    &raw_output.lines,
+                    display_limit,
+                    raw_output.omitted,
+                );
 
                 let mut wrapped_output: Vec<Line<'static>> = Vec::new();
                 let output_wrap_width = layout.output_block.wrap_width(width);
@@ -427,7 +465,11 @@ impl ExecCell {
         out
     }
 
-    fn truncate_lines_middle(lines: &[Line<'static>], max: usize) -> Vec<Line<'static>> {
+    fn truncate_lines_middle(
+        lines: &[Line<'static>],
+        max: usize,
+        omitted_hint: Option<usize>,
+    ) -> Vec<Line<'static>> {
         if max == 0 {
             return Vec::new();
         }
@@ -435,7 +477,17 @@ impl ExecCell {
             return lines.to_vec();
         }
         if max == 1 {
-            return vec![Self::ellipsis_line(lines.len())];
+            // Carry forward any previously omitted count and add any
+            // additionally hidden content lines from this truncation.
+            let base = omitted_hint.unwrap_or(0);
+            // When an existing ellipsis is present, `lines` already includes
+            // that single representation line; exclude it from the count of
+            // additionally omitted content lines.
+            let extra = lines
+                .len()
+                .saturating_sub(usize::from(omitted_hint.is_some()));
+            let omitted = base + extra;
+            return vec![Self::ellipsis_line(omitted)];
         }
 
         let head = (max - 1) / 2;
@@ -446,8 +498,12 @@ impl ExecCell {
             out.extend(lines[..head].iter().cloned());
         }
 
-        let omitted = lines.len().saturating_sub(head + tail);
-        out.push(Self::ellipsis_line(omitted));
+        let base = omitted_hint.unwrap_or(0);
+        let additional = lines
+            .len()
+            .saturating_sub(head + tail)
+            .saturating_sub(usize::from(omitted_hint.is_some()));
+        out.push(Self::ellipsis_line(base + additional));
 
         if tail > 0 {
             out.extend(lines[lines.len() - tail..].iter().cloned());
