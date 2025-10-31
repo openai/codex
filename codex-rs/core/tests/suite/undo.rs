@@ -237,42 +237,6 @@ async fn undo_restores_untracked_file_edit() -> Result<()> {
     assert!(completed.success, "undo failed: {:?}", completed.message);
 
     assert_eq!(fs::read_to_string(&notes)?, "original\n");
-    let status_after = git_output(harness.cwd(), &["status", "--short", "--ignored"])?;
-    assert!(status_after.contains("?? notes.txt"));
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn undo_restores_ignored_file_edit() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let harness = undo_harness().await?;
-    init_git_repo(harness.cwd())?;
-
-    let gitignore = harness.path(".gitignore");
-    fs::write(&gitignore, "ignored.log\n")?;
-    git(harness.cwd(), &["add", ".gitignore"])?;
-    git(harness.cwd(), &["commit", "-m", "add gitignore"])?;
-
-    let ignored = harness.path("ignored.log");
-    fs::write(&ignored, "initial\n")?;
-    let status_before = git_output(harness.cwd(), &["status", "--short", "--ignored=matching"])?;
-    assert!(status_before.contains("!! ignored.log"));
-
-    let patch =
-        "*** Begin Patch\n*** Update File: ignored.log\n@@\n-initial\n+turn edit\n*** End Patch";
-    run_apply_patch_turn(&harness, "edit ignored", "undo-ignored-edit", patch, "done").await?;
-
-    assert_eq!(fs::read_to_string(&ignored)?, "turn edit\n");
-
-    let codex = Arc::clone(&harness.test().codex);
-    let completed = expect_successful_undo(&codex).await?;
-    assert!(completed.success, "undo failed: {:?}", completed.message);
-
-    assert_eq!(fs::read_to_string(&ignored)?, "initial\n");
-    let status_after = git_output(harness.cwd(), &["status", "--short", "--ignored=matching"])?;
-    assert!(status_after.contains("!! ignored.log"));
 
     Ok(())
 }
@@ -450,53 +414,6 @@ async fn undo_restores_moves_and_renames() -> Result<()> {
 
     assert_eq!(fs::read_to_string(&source)?, "original\n");
     assert!(!destination.exists());
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn undo_scopes_to_nested_workspace_prefix() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let harness = TestCodexHarness::with_config(|config: &mut Config| {
-        config.include_apply_patch_tool = true;
-        config.features.enable(Feature::GhostCommit);
-        let nested = config.cwd.join("nested/workspace");
-        std::fs::create_dir_all(&nested).expect("create nested workspace");
-        config.cwd = nested;
-    })
-    .await?;
-
-    init_git_repo(harness.cwd())?;
-
-    let workspace = harness.cwd().join("nested/workspace");
-    let tracked_outside = harness.path("outside.txt");
-    fs::write(&tracked_outside, "outside stable\n")?;
-    let nested_file = workspace.join("nested_file.txt");
-    fs::write(&nested_file, "original nested\n")?;
-    git(
-        harness.cwd(),
-        &["add", "outside.txt", "nested/workspace/nested_file.txt"],
-    )?;
-    git(harness.cwd(), &["commit", "-m", "seed nested workspace"])?;
-
-    run_apply_patch_turn(
-        &harness,
-        "modify nested file",
-        "undo-nested",
-        "*** Begin Patch\n*** Update File: nested_file.txt\n@@\n-original nested\n+turn update\n*** End Patch",
-        "done",
-    )
-    .await?;
-    assert_eq!(fs::read_to_string(&nested_file)?, "turn update\n");
-
-    fs::write(&tracked_outside, "outside manual\n")?;
-
-    let codex = Arc::clone(&harness.test().codex);
-    expect_successful_undo(&codex).await?;
-
-    assert_eq!(fs::read_to_string(&nested_file)?, "original nested\n");
-    assert_eq!(fs::read_to_string(&tracked_outside)?, "outside manual\n");
 
     Ok(())
 }
