@@ -26,7 +26,8 @@ fn live_001_commit_on_overflow() {
     let commit_rows = rb.drain_commit_ready(3);
     let lines: Vec<Line<'static>> = commit_rows.into_iter().map(|r| r.text.into()).collect();
 
-    codex_tui::insert_history::insert_history_lines(&mut term, lines);
+    codex_tui::insert_history::insert_history_lines(&mut term, lines)
+        .expect("Failed to insert history lines in test");
 
     let screen = term.backend().vt100().screen();
 
