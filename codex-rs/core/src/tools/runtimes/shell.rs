@@ -34,6 +34,7 @@ pub struct ShellRequest {
     pub env: std::collections::HashMap<String, String>,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
+    pub is_user_shell_command: bool,
 }
 
 impl ProvidesSandboxRetryData for ShellRequest {
@@ -121,6 +122,9 @@ impl Approvable<ShellRequest> for ShellRuntime {
         policy: AskForApproval,
         sandbox_policy: &SandboxPolicy,
     ) -> bool {
+        if req.is_user_shell_command {
+            return false;
+        }
         if is_known_safe_command(&req.command) {
             return false;
         }
