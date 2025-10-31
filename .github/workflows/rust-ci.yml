@@ -168,6 +168,22 @@ jobs:
           restore-keys: |
             cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
 
+      - name: Install LLVM (lld-link)
+        if: startsWith(matrix.runner, 'windows')
+        run: choco install -y llvm
+
+      - name: Force lld-link via .cargo/config.toml
+        if: startsWith(matrix.runner, 'windows')
+        shell: bash
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'EOF'
+          [target.x86_64-pc-windows-msvc]
+          linker = "lld-link.exe"
+          [target.aarch64-pc-windows-msvc]
+          linker = "lld-link.exe"
+          EOF
+
       # Install and restore sccache cache
       - name: Install sccache
         uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
