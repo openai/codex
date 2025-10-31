@@ -45,6 +45,22 @@ use tokio_stream::Stream;
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
 
+/// Enable the terminal capabilities the Codex TUI depends on.
+///
+/// - Enables bracketed paste so multi-line submissions reach [`ChatComposer`] as a single
+///   payload.
+/// - Switches to raw mode to expose low-level key events without line buffering.
+/// - Attempts to push Crossterm keyboard enhancement flags so modifier-aware keys are visible.
+///   [`ChatComposer`] listens for modifier-rich enter presses, so we best-effort enable the
+///   extension even when consoles may ignore it.
+/// - Enables focus reporting so
+///   [`ChatWidget::maybe_post_pending_notification`][ChatWidgetNotif] can gate alerts.
+///
+/// Ratatui leaves these switches to callers; centralizing them here guarantees the inline viewport
+/// starts from a consistent configuration.
+///
+/// [`ChatComposer`]: crate::bottom_pane::chat_composer::ChatComposer
+/// [ChatWidgetNotif]: crate::chatwidget::ChatWidget::maybe_post_pending_notification
 pub fn set_modes() -> Result<()> {
     execute!(stdout(), EnableBracketedPaste)?;
 
@@ -68,6 +84,9 @@ pub fn set_modes() -> Result<()> {
     Ok(())
 }
 
+/// Crossterm command that enables "alternate scroll" (SGR/DECSET 1007) so mouse wheels translate
+/// into arrow keys while the alt screen is active. See the xterm control sequence reference
+/// (<https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Mouse-Tracking>) for details.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EnableAlternateScroll;
 
@@ -89,6 +108,8 @@ impl Command for EnableAlternateScroll {
     }
 }
 
+/// Crossterm command that disables SGR/DECSET 1007 so scroll wheels go back to native terminal
+/// behavior; refer to the same xterm control sequence documentation for details.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DisableAlternateScroll;
 
@@ -111,7 +132,15 @@ impl Command for DisableAlternateScroll {
 }
 
 /// Restore the terminal to its original state.
-/// Inverse of `set_modes`.
+///
+/// Undo the side effects of [`set_modes`].
+///
+/// - Pops any keyboard enhancement flags that were pushed.
+/// - Disables bracketed paste and focus tracking.
+/// - Leaves raw mode and ensures the cursor is visible.
+///
+/// The disable calls are best-effort because some terminals refuse the matching sequences,
+/// especially after a suspend/resume cycle.
 pub fn restore() -> Result<()> {
     // Pop may fail on platforms that didn't support the push; ignore errors.
     let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
@@ -122,7 +151,18 @@ pub fn restore() -> Result<()> {
     Ok(())
 }
 
-/// Initialize the terminal (inline viewport; history stays in normal scrollback)
+/// Initialize the inline viewport while preserving scrollback.
+///
+/// - Rejects initialization if stdout is not a TTY.
+/// - Enables the raw-mode feature set via [`set_modes`].
+/// - Installs a panic hook that restores the terminal before unwinding.
+///
+/// Existing terminal contents are left untouched so scrollback stays intact, even on terminals that
+/// treat `Clear` as destructive.
+///
+/// Unlike [`ratatui::Terminal::new`], this uses our `CustomTerminal` wrapper so the interactive
+/// viewport stays inline and history remains accessible in the native scrollback buffer—the main
+/// architectural difference from Ratatui's default alt-screen workflow.
 pub fn init() -> Result<Terminal> {
     if !stdout().is_terminal() {
         return Err(std::io::Error::other("stdout is not a terminal"));
@@ -136,6 +176,11 @@ pub fn init() -> Result<Terminal> {
     Ok(tui)
 }
 
+/// Ensure panics drop the terminal back to cooked mode before surfacing.
+///
+/// Ratatui defers this to the consumer; we override the default panic hook so that even unexpected
+/// crashes clear raw mode and cursor hiding. The hook delegates to the previous handler after
+/// restoration so panic reporting (and test harness output) remains unchanged.
 fn set_panic_hook() {
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
@@ -146,25 +191,71 @@ fn set_panic_hook() {
 
 #[derive(Debug)]
 pub enum TuiEvent {
+    /// Raw `crossterm` key event, including modifier-rich variants unlocked by [`set_modes`].
     Key(KeyEvent),
+    /// Bracketed paste payload delivered as a single string.
     Paste(String),
+    /// Request to redraw the UI, typically due to focus changes, resizes, or coalesced frame
+    /// requests.
     Draw,
 }
 
+/// Drives the Codex UI on top of an inline [`CustomTerminal`].
+///
+/// Light fork of Ratatui's terminal that adapts to Codex requirements.
+///
+/// - Keeps transcript history in the native scrollback while reserving a configurable inline
+///   viewport for interactive UI using [`crate::insert_history::insert_history_lines`].
+/// - Owns the scheduler that coalesces draw requests to avoid redundant rendering work, exposing
+///   handles via [`FrameRequester`].
+/// - Manages alt-screen transitions so overlays can temporarily take over the full display through
+///   [`enter_alt_screen`] and [`leave_alt_screen`].
+/// - Caches capability probes such as keyboard enhancement support and default palette refreshes.
+///
+/// [`FrameRequester`]: crate::tui::FrameRequester
+/// [`enter_alt_screen`]: Tui::enter_alt_screen
+/// [`leave_alt_screen`]: Tui::leave_alt_screen
 pub struct Tui {
+    /// Channel used to schedule future frames; owned by the background coalescer task and cloned
+    /// into every [`FrameRequester`] handed to widgets.
     frame_schedule_tx: tokio::sync::mpsc::UnboundedSender<Instant>,
+
+    /// Broadcast channel that delivers draw notifications to the event stream so the UI loop can
+    /// wake without holding mutable access to the terminal.
     draw_tx: tokio::sync::broadcast::Sender<()>,
+
+    /// Inline terminal wrapper that keeps the active viewport and history buffers in sync with
+    /// Ratatui widgets.
     pub(crate) terminal: Terminal,
+
+    /// History lines waiting to be spliced above the viewport on the next draw; populated by
+    /// background tasks that stream transcript updates.
     pending_history_lines: Vec<Line<'static>>,
+
+    /// Saved viewport rectangle from inline mode so alt-screen overlays can be restored to the
+    /// exact scroll position users left.
     alt_saved_viewport: Option<ratatui::layout::Rect>,
+
+    /// Pending resume action recorded by the event loop when `Ctrl+Z` is processed; applied during
+    /// the next synchronized update to avoid cursor-query races.
     #[cfg(unix)]
-    resume_pending: Arc<AtomicU8>, // Stores a ResumeAction
+    resume_pending: Arc<AtomicU8>,
+
+    /// Cached cursor row where the inline viewport ends, ensuring the shell prompt lands beneath
+    /// the UI after a suspend.
     #[cfg(unix)]
-    suspend_cursor_y: Arc<AtomicU16>, // Bottom line of inline viewport
-    // True when overlay alt-screen UI is active
+    suspend_cursor_y: Arc<AtomicU16>,
+
+    /// Tracks whether an alt-screen overlay currently owns the terminal so mouse wheel handling and
+    /// viewport restoration behave correctly.
     alt_screen_active: Arc<AtomicBool>,
-    // True when terminal/tab is focused; updated internally from crossterm events
+
+    /// Reflects the window focus state based on Crossterm events; used to gate OSC 9 notifications
+    /// and palette refreshes.
     terminal_focused: Arc<AtomicBool>,
+
+    /// Whether the terminal acknowledged Crossterm's keyboard enhancement flags; controls key hint
+    /// rendering and modifier handling in the composer.
     enhanced_keys_supported: bool,
 }
 
@@ -172,17 +263,28 @@ pub struct Tui {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u8)]
 enum ResumeAction {
+    /// No post-resume work is required.
     None = 0,
+    /// Recenter the inline viewport around the cursor the shell left behind.
     RealignInline = 1,
+    /// Re-enter the alternate screen for overlays active when suspend happened.
     RestoreAlt = 2,
 }
 
 #[cfg(unix)]
 enum PreparedResumeAction {
+    /// Restore the alternate screen overlay and refresh its viewport.
     RestoreAltScreen,
+    /// Realign the inline viewport to the provided area.
     RealignViewport(ratatui::layout::Rect),
 }
 
+/// Swap the pending resume action out of the atomic flag.
+///
+/// The event loop records the desired action (realign inline viewport versus restore the alt
+/// screen) before invoking [`suspend`]. We clear the flag with relaxed ordering because only the
+/// main thread reads it during draw. The integer representation keeps the atomic size small when
+/// shared across threads.
 #[cfg(unix)]
 fn take_resume_action(pending: &AtomicU8) -> ResumeAction {
     match pending.swap(ResumeAction::None as u8, Ordering::Relaxed) {
@@ -192,14 +294,33 @@ fn take_resume_action(pending: &AtomicU8) -> ResumeAction {
     }
 }
 
+/// Handle that lets subsystems ask for a redraw without locking the terminal.
+///
+/// Requests are queued onto an unbounded channel and coalesced by the background task spawned in
+/// [`Tui::new`]. `schedule_frame_in` exists so call sites can defer work—for example to debounce
+/// status updates in [`BottomPane`].
+///
+/// [`BottomPane`]: crate::bottom_pane::BottomPane
 #[derive(Clone, Debug)]
 pub struct FrameRequester {
+    /// Handle to the shared frame scheduler; sending instants through this channel triggers draws
+    /// once the coalescer decides the deadline has arrived.
     frame_schedule_tx: tokio::sync::mpsc::UnboundedSender<Instant>,
 }
+
 impl FrameRequester {
+    /// Request an immediate redraw.
+    ///
+    /// The scheduler collapses concurrent requests into a single `Draw`, so callers can
+    /// fire-and-forget without coordinating.
     pub fn schedule_frame(&self) {
         let _ = self.frame_schedule_tx.send(Instant::now());
     }
+    /// Request a redraw no earlier than `dur` in the future.
+    ///
+    /// Callers use this to debounce follow-up frames (for example, to animate a spinner while
+    /// waiting on the network). The scheduler still collapses multiple pending deadlines to the
+    /// earliest instant.
     pub fn schedule_frame_in(&self, dur: Duration) {
         let _ = self.frame_schedule_tx.send(Instant::now() + dur);
     }
@@ -217,8 +338,11 @@ impl FrameRequester {
 }
 
 impl Tui {
-    /// Emit a desktop notification now if the terminal is unfocused.
-    /// Returns true if a notification was posted.
+    /// Emit an OSC 9 desktop notification if the terminal pane lacks focus.
+    ///
+    /// Returns `true` when a notification escape sequence was written. We only notify when the pane
+    /// is unfocused so OSC 9 terminals (iTerm2, Kitty, WezTerm) avoid redundant alerts. Terminals
+    /// that ignore OSC 9 fail silently.
     pub fn notify(&mut self, message: impl AsRef<str>) -> bool {
         if !self.terminal_focused.load(Ordering::Relaxed) {
             let _ = execute!(stdout(), PostNotification(message.as_ref().to_string()));
@@ -227,6 +351,15 @@ impl Tui {
             false
         }
     }
+
+    /// Construct the controller around an already-configured terminal backend.
+    ///
+    /// - Spawns the background task that coalesces frame requests into `Draw` events, avoiding
+    ///   flicker when history lines arrive in bursts.
+    /// - Primes capability checks that require talking to the terminal driver so they do not race
+    ///   the async event reader.
+    /// - Differs from Ratatui's `Terminal::new`, which performs these probes lazily and assumes
+    ///   exclusive control of the event loop.
     pub fn new(terminal: Terminal) -> Self {
         let (frame_schedule_tx, frame_schedule_rx) = tokio::sync::mpsc::unbounded_channel();
         let (draw_tx, _) = tokio::sync::broadcast::channel(1);
@@ -295,16 +428,35 @@ impl Tui {
         }
     }
 
+    /// Return a cloneable handle for requesting future draws.
+    ///
+    /// Widgets hold onto this so they can redraw from async callbacks without needing mutable
+    /// access to the `Tui`. The returned handle is cheap to clone because it only contains the
+    /// underlying channel sender.
     pub fn frame_requester(&self) -> FrameRequester {
         FrameRequester {
             frame_schedule_tx: self.frame_schedule_tx.clone(),
         }
     }
 
+    /// Returns whether the current terminal reported support for Crossterm's keyboard enhancement
+    /// flags.
+    ///
+    /// Consumers use this to decide whether to show modifier-specific key hints. We cache the probe
+    /// result because the underlying API talks to the terminal driver, and repeated checks would
+    /// contend with the event reader.
     pub fn enhanced_keys_supported(&self) -> bool {
         self.enhanced_keys_supported
     }
 
+    /// Build the async stream that drives the UI loop.
+    ///
+    /// - Merges raw `crossterm` events with draw notifications from the frame scheduler.
+    /// - Handles suspend/resume (`Ctrl+Z`) without exposing implementation details to callers.
+    /// - Translates focus events into redraws so palette refreshes take effect immediately.
+    /// - Surfaces bracketed paste as a first-class variant instead of leaving it to widgets.
+    /// - Disables the alternate scroll escape on exit from alt-screen mode so the shell prompt
+    ///   behaves normally.
     pub fn event_stream(&self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
         use tokio_stream::StreamExt;
         let mut crossterm_events = crossterm::event::EventStream::new();
@@ -337,9 +489,15 @@ impl Tui {
                                         // Disable alternate scroll when suspending from alt-screen
                                         let _ = execute!(stdout(), DisableAlternateScroll);
                                         let _ = execute!(stdout(), LeaveAlternateScreen);
-                                        resume_pending.store(ResumeAction::RestoreAlt as u8, Ordering::Relaxed);
+                                        resume_pending.store(
+                                            ResumeAction::RestoreAlt as u8,
+                                            Ordering::Relaxed,
+                                        );
                                     } else {
-                                        resume_pending.store(ResumeAction::RealignInline as u8, Ordering::Relaxed);
+                                        resume_pending.store(
+                                            ResumeAction::RealignInline as u8,
+                                            Ordering::Relaxed,
+                                        );
                                     }
                                     #[cfg(unix)]
                                     {
@@ -376,7 +534,7 @@ impl Tui {
                                 yield TuiEvent::Draw;
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                                // We dropped one or more draw notifications; coalesce to a single draw.
+                                // We dropped draw notifications; merge the backlog into one draw.
                                 yield TuiEvent::Draw;
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
@@ -389,6 +547,12 @@ impl Tui {
         };
         Box::pin(event_stream)
     }
+
+    /// Suspend the process after restoring terminal modes.
+    ///
+    /// Triggered internally when the user presses `Ctrl+Z`. The cursor is moved below the inline
+    /// viewport before the signal so the shell prompt appears beneath the UI once the process
+    /// stops. On resume [`Tui::draw`] applies any queued viewport adjustments.
     #[cfg(unix)]
     fn suspend() -> Result<()> {
         restore()?;
@@ -397,6 +561,12 @@ impl Tui {
         Ok(())
     }
 
+    /// Figure out what needs to happen after a suspend before we enter the synchronized update.
+    ///
+    /// We determine whether to realign the inline viewport or re-enter the alt-screen outside of
+    /// the synchronized update lock because querying the cursor while holding the lock can hang in
+    /// some terminals (WezTerm in particular). Errors from `get_cursor_position` are tolerated so
+    /// that resume never panics; we fall back to the last known coordinates instead.
     #[cfg(unix)]
     fn prepare_resume_action(
         &mut self,
@@ -424,6 +594,11 @@ impl Tui {
         }
     }
 
+    /// Apply the previously prepared post-resume action inside the synchronized update.
+    ///
+    /// Replaying the action here ensures the viewport changes happen atomically with the frame
+    /// render. When resuming an alt-screen overlay we re-enable the alternate scroll escape so
+    /// mouse wheels keep mapping to arrow keys.
     #[cfg(unix)]
     fn apply_prepared_resume_action(&mut self, prepared: PreparedResumeAction) -> Result<()> {
         match prepared {
@@ -448,8 +623,12 @@ impl Tui {
         Ok(())
     }
 
-    /// Enter alternate screen and expand the viewport to full terminal size, saving the current
-    /// inline viewport for restoration when leaving.
+    /// Enter the alternate screen, expanding the viewport to the full terminal.
+    ///
+    /// We snapshot the inline viewport bounds so that leaving the alt screen can restore the inline
+    /// history view exactly where it left off. Alternate scroll support is enabled here so mouse
+    /// wheels map to arrow presses while the overlay is active—a deliberate deviation from
+    /// Ratatui, where alt screen mode is the default rather than an opt-in overlay.
     pub fn enter_alt_screen(&mut self) -> Result<()> {
         let _ = execute!(self.terminal.backend_mut(), EnterAlternateScreen);
         // Enable "alternate scroll" so terminals may translate wheel to arrows
@@ -468,7 +647,11 @@ impl Tui {
         Ok(())
     }
 
-    /// Leave alternate screen and restore the previously saved inline viewport, if any.
+    /// Leave the alternate screen and restore the inline viewport, if present.
+    ///
+    /// Alternate scroll is disabled before dropping back to the inline viewport so that shells do
+    /// not inherit the mapping. If we resumed from a suspend while in the alt screen, the viewport
+    /// coordinates were already updated in [`prepare_resume_action`].
     pub fn leave_alt_screen(&mut self) -> Result<()> {
         // Disable alternate scroll when leaving alt-screen
         let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
@@ -480,11 +663,37 @@ impl Tui {
         Ok(())
     }
 
+    /// Queue history lines to be spliced above the inline viewport.
+    ///
+    /// The lines are copied into a pending buffer and applied immediately before the next draw (see
+    /// [`draw`]). This matches our approach of letting the terminal own the transcript so selection
+    /// and scrollback behave like a regular terminal log. Callers such as
+    /// [`App::handle_event`] use it whenever new transcript cells render.
+    ///
+    /// [`App::handle_event`]: crate::app::App::handle_event
     pub fn insert_history_lines(&mut self, lines: Vec<Line<'static>>) {
         self.pending_history_lines.extend(lines);
         self.frame_requester().schedule_frame();
     }
 
+    /// Render a frame inside the managed viewport.
+    ///
+    /// - `height` caps how tall the inline viewport may grow for this frame; the draw closure
+    ///   receives the same `Frame` type that Ratatui exposes.
+    /// - Gathers cursor-dependent state (notably viewport alignment) before the synchronized update
+    ///   lock so terminals such as WezTerm avoid cursor-query deadlocks.
+    /// - Applies suspend/resume bookkeeping so `Ctrl+Z` returns to the same viewport layout.
+    /// - Updates the viewport, splices pending history lines, refreshes the suspend cursor marker,
+    ///   and finally delegates to the caller's draw logic.
+    ///
+    /// Compared to Ratatui's stock `Terminal::draw`, the key differences are inline viewport
+    /// management and history injection; the rest of the rendering pipeline remains unchanged.
+    /// Primary callers include [`App::handle_tui_event`] for the main chat loop and overlay flows
+    /// such as [`run_update_prompt_if_needed`] and [`run_resume_picker`].
+    ///
+    /// [`App::handle_tui_event`]: crate::app::App::handle_tui_event
+    /// [`run_update_prompt_if_needed`]: crate::update_prompt::run_update_prompt_if_needed
+    /// [`run_resume_picker`]: crate::resume_picker::run_resume_picker
     pub fn draw(
         &mut self,
         height: u16,
@@ -572,8 +781,14 @@ impl Tui {
 }
 
 /// Command that emits an OSC 9 desktop notification with a message.
+///
+/// Only a subset of terminals (iTerm2, Kitty, WezTerm) honor OSC 9; others ignore the escape
+/// sequence, which is acceptable because [`Tui::notify`] treats write errors as non-fatal.
 #[derive(Debug, Clone)]
-pub struct PostNotification(pub String);
+pub struct PostNotification(
+    /// Message to surface via the OSC 9 escape sequence.
+    pub String,
+);
 
 impl Command for PostNotification {
     fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
