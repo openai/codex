@@ -13,13 +13,19 @@ use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::user_instructions::UserInstructions;
+
 fn is_session_prefix(text: &str) -> bool {
     let trimmed = text.trim_start();
     let lowered = trimmed.to_ascii_lowercase();
-    lowered.starts_with("<environment_context>") || lowered.starts_with("<user_instructions>")
+    lowered.starts_with("<environment_context>")
 }
 
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
+    if UserInstructions::is_user_instructions(message) {
+        return None;
+    }
+
     let mut content: Vec<UserInput> = Vec::new();
 
     for content_item in message.iter() {
@@ -164,6 +170,38 @@ mod tests {
                 assert_eq!(user.content, expected_content);
             }
             other => panic!("expected TurnItem::UserMessage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skips_user_instructions_and_env() {
+        let items = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<user_instructions>test_text</user_instructions>".to_string(),
+                }],
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<environment_context>test_text</environment_context>".to_string(),
+                }],
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>".to_string(),
+                }],
+            },
+        ];
+
+        for item in items {
+            let turn_item = parse_turn_item(&item);
+            assert!(turn_item.is_none(), "expected none, got {turn_item:?}");
         }
     }
 

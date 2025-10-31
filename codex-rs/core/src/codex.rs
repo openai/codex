@@ -1003,7 +1003,13 @@ impl Session {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-            items.push(UserInstructions::new(user_instructions.to_string()).into());
+            items.push(
+                UserInstructions {
+                    text: user_instructions.to_string(),
+                    directory: turn_context.cwd.to_string_lossy().into_owned(),
+                }
+                .into(),
+            );
         }
         items.push(ResponseItem::from(EnvironmentContext::new(
             Some(turn_context.cwd.clone()),
