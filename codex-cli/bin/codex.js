@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Unified entry point for the Codex CLI.
 
+import { spawn } from "node:child_process";
 import { existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -68,7 +69,6 @@ const binaryPath = path.join(archRoot, "codex", codexBinaryName);
 // executing. This allows us to forward those signals to the child process
 // and guarantees that when either the child terminates or the parent
 // receives a fatal signal, both processes exit in a predictable manner.
-const { spawn } = await import("child_process");
 
 function getUpdatedPath(newDirs) {
   const pathSep = process.platform === "win32" ? ";" : ":";
@@ -80,6 +80,32 @@ function getUpdatedPath(newDirs) {
   return updatedPath;
 }
 
+/**
+ * Use heuristics to detect the package manager that was used to install Codex
+ * in order to give the user a hint about how to update it.
+ */
+function detectPackageManager() {
+  const userAgent = process.env.npm_config_user_agent || "";
+  if (/\bbun\//.test(userAgent)) {
+    return "bun";
+  }
+
+  const execPath = process.env.npm_execpath || "";
+  if (execPath.includes("bun")) {
+    return "bun";
+  }
+
+  if (
+    process.env.BUN_INSTALL ||
+    process.env.BUN_INSTALL_GLOBAL_DIR ||
+    process.env.BUN_INSTALL_BIN_DIR
+  ) {
+    return "bun";
+  }
+
+  return userAgent ? "npm" : null;
+}
+
 const additionalDirs = [];
 const pathDir = path.join(archRoot, "path");
 if (existsSync(pathDir)) {
@@ -87,9 +113,16 @@ if (existsSync(pathDir)) {
 }
 const updatedPath = getUpdatedPath(additionalDirs);
 
+const env = { ...process.env, PATH: updatedPath };
+const packageManagerEnvVar =
+  detectPackageManager() === "bun"
+    ? "CODEX_MANAGED_BY_BUN"
+    : "CODEX_MANAGED_BY_NPM";
+env[packageManagerEnvVar] = "1";
+
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",
-  env: { ...process.env, PATH: updatedPath, CODEX_MANAGED_BY_NPM: "1" },
+  env,
 });
 
 child.on("error", (err) => {

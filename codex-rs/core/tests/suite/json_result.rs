@@ -2,10 +2,10 @@
 
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
@@ -67,14 +67,14 @@ async fn codex_returns_json_result(model: String) -> anyhow::Result<()> {
             && format.get("strict") == Some(&serde_json::Value::Bool(true))
             && format.get("schema") == Some(&expected_schema)
     };
-    responses::mount_sse_once(&server, match_json_text_param, sse1).await;
+    responses::mount_sse_once_match(&server, match_json_text_param, sse1).await;
 
     let TestCodex { codex, cwd, .. } = test_codex().build(&server).await?;
 
     // 1) Normal user input – should hit server once.
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello world".into(),
             }],
             final_output_json_schema: Some(serde_json::from_str(SCHEMA)?),

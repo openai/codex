@@ -63,14 +63,86 @@ pub async fn discover_prompts_in_excluding(
             Ok(s) => s,
             Err(_) => continue,
         };
+        let (description, argument_hint, body) = parse_frontmatter(&content);
         out.push(CustomPrompt {
             name,
             path,
-            content,
+            content: body,
+            description,
+            argument_hint,
         });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+/// Parse optional YAML-like frontmatter at the beginning of `content`.
+/// Supported keys:
+/// - `description`: short description shown in the slash popup
+/// - `argument-hint` or `argument_hint`: brief hint string shown after the description
+///   Returns (description, argument_hint, body_without_frontmatter).
+fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>, String) {
+    let mut segments = content.split_inclusive('\n');
+    let Some(first_segment) = segments.next() else {
+        return (None, None, String::new());
+    };
+    let first_line = first_segment.trim_end_matches(['\r', '\n']);
+    if first_line.trim() != "---" {
+        return (None, None, content.to_string());
+    }
+
+    let mut desc: Option<String> = None;
+    let mut hint: Option<String> = None;
+    let mut frontmatter_closed = false;
+    let mut consumed = first_segment.len();
+
+    for segment in segments {
+        let line = segment.trim_end_matches(['\r', '\n']);
+        let trimmed = line.trim();
+
+        if trimmed == "---" {
+            frontmatter_closed = true;
+            consumed += segment.len();
+            break;
+        }
+
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            consumed += segment.len();
+            continue;
+        }
+
+        if let Some((k, v)) = trimmed.split_once(':') {
+            let key = k.trim().to_ascii_lowercase();
+            let mut val = v.trim().to_string();
+            if val.len() >= 2 {
+                let bytes = val.as_bytes();
+                let first = bytes[0];
+                let last = bytes[bytes.len() - 1];
+                if (first == b'\"' && last == b'\"') || (first == b'\'' && last == b'\'') {
+                    val = val[1..val.len().saturating_sub(1)].to_string();
+                }
+            }
+            match key.as_str() {
+                "description" => desc = Some(val),
+                "argument-hint" | "argument_hint" => hint = Some(val),
+                _ => {}
+            }
+        }
+
+        consumed += segment.len();
+    }
+
+    if !frontmatter_closed {
+        // Unterminated frontmatter: treat input as-is.
+        return (None, None, content.to_string());
+    }
+
+    let body = if consumed >= content.len() {
+        String::new()
+    } else {
+        content[consumed..].to_string()
+    };
+    (desc, hint, body)
 }
 
 #[cfg(test)]
@@ -123,5 +195,32 @@ mod tests {
         let found = discover_prompts_in(dir).await;
         let names: Vec<String> = found.into_iter().map(|e| e.name).collect();
         assert_eq!(names, vec!["good"]);
+    }
+
+    #[tokio::test]
+    async fn parses_frontmatter_and_strips_from_body() {
+        let tmp = tempdir().expect("create TempDir");
+        let dir = tmp.path();
+        let file = dir.join("withmeta.md");
+        let text = "---\nname: ignored\ndescription: \"Quick review command\"\nargument-hint: \"[file] [priority]\"\n---\nActual body with $1 and $ARGUMENTS";
+        fs::write(&file, text).unwrap();
+
+        let found = discover_prompts_in(dir).await;
+        assert_eq!(found.len(), 1);
+        let p = &found[0];
+        assert_eq!(p.name, "withmeta");
+        assert_eq!(p.description.as_deref(), Some("Quick review command"));
+        assert_eq!(p.argument_hint.as_deref(), Some("[file] [priority]"));
+        // Body should not include the frontmatter delimiters.
+        assert_eq!(p.content, "Actual body with $1 and $ARGUMENTS");
+    }
+
+    #[test]
+    fn parse_frontmatter_preserves_body_newlines() {
+        let content = "---\r\ndescription: \"Line endings\"\r\nargument_hint: \"[arg]\"\r\n---\r\nFirst line\r\nSecond line\r\n";
+        let (desc, hint, body) = parse_frontmatter(content);
+        assert_eq!(desc.as_deref(), Some("Line endings"));
+        assert_eq!(hint.as_deref(), Some("[arg]"));
+        assert_eq!(body, "First line\r\nSecond line\r\n");
     }
 }

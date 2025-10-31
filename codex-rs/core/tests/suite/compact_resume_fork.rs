@@ -17,15 +17,15 @@ use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
 use codex_core::codex::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
-use codex_core::protocol::ConversationPathResponseEvent;
+use codex_core::config::OPENAI_DEFAULT_MODEL;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -39,6 +39,29 @@ const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
 
 fn network_disabled() -> bool {
     std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
+}
+
+fn filter_out_ghost_snapshot_entries(items: &[Value]) -> Vec<Value> {
+    items
+        .iter()
+        .filter(|item| !is_ghost_snapshot_message(item))
+        .cloned()
+        .collect()
+}
+
+fn is_ghost_snapshot_message(item: &Value) -> bool {
+    if item.get("type").and_then(Value::as_str) != Some("message") {
+        return false;
+    }
+    if item.get("role").and_then(Value::as_str) != Some("user") {
+        return false;
+    }
+    item.get("content")
+        .and_then(Value::as_array)
+        .and_then(|content| content.first())
+        .and_then(|entry| entry.get("text"))
+        .and_then(Value::as_str)
+        .is_some_and(|text| text.trim_start().starts_with("<ghost_snapshot>"))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -60,7 +83,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
     user_turn(&base, "AFTER_COMPACT").await;
-    let base_path = fetch_conversation_path(&base, "base conversation").await;
+    let base_path = fetch_conversation_path(&base).await;
     assert!(
         base_path.exists(),
         "compact+resume test expects base path {base_path:?} to exist",
@@ -68,7 +91,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
 
     let resumed = resume_conversation(&manager, &config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
-    let resumed_path = fetch_conversation_path(&resumed, "resumed conversation").await;
+    let resumed_path = fetch_conversation_path(&resumed).await;
     assert!(
         resumed_path.exists(),
         "compact+resume test expects resumed path {resumed_path:?} to exist",
@@ -131,9 +154,10 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .as_str()
         .unwrap_or_default()
         .to_string();
+    let expected_model = OPENAI_DEFAULT_MODEL;
     let user_turn_1 = json!(
     {
-      "model": "gpt-5-codex",
+      "model": expected_model,
       "instructions": prompt,
       "input": [
         {
@@ -182,7 +206,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     });
     let compact_1 = json!(
     {
-      "model": "gpt-5-codex",
+      "model": expected_model,
       "instructions": prompt,
       "input": [
         {
@@ -251,7 +275,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     });
     let user_turn_2_after_compact = json!(
     {
-      "model": "gpt-5-codex",
+      "model": expected_model,
       "instructions": prompt,
       "input": [
         {
@@ -316,7 +340,7 @@ SUMMARY_ONLY_CONTEXT"
     });
     let usert_turn_3_after_resume = json!(
     {
-      "model": "gpt-5-codex",
+      "model": expected_model,
       "instructions": prompt,
       "input": [
         {
@@ -401,7 +425,7 @@ SUMMARY_ONLY_CONTEXT"
     });
     let user_turn_3_after_fork = json!(
     {
-      "model": "gpt-5-codex",
+      "model": expected_model,
       "instructions": prompt,
       "input": [
         {
@@ -516,7 +540,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
     user_turn(&base, "AFTER_COMPACT").await;
-    let base_path = fetch_conversation_path(&base, "base conversation").await;
+    let base_path = fetch_conversation_path(&base).await;
     assert!(
         base_path.exists(),
         "second compact test expects base path {base_path:?} to exist",
@@ -524,7 +548,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
 
     let resumed = resume_conversation(&manager, &config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
-    let resumed_path = fetch_conversation_path(&resumed, "resumed conversation").await;
+    let resumed_path = fetch_conversation_path(&resumed).await;
     assert!(
         resumed_path.exists(),
         "second compact test expects resumed path {resumed_path:?} to exist",
@@ -535,7 +559,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
 
     compact_conversation(&forked).await;
     user_turn(&forked, "AFTER_COMPACT_2").await;
-    let forked_path = fetch_conversation_path(&forked, "forked conversation").await;
+    let forked_path = fetch_conversation_path(&forked).await;
     assert!(
         forked_path.exists(),
         "second compact test expects forked path {forked_path:?} to exist",
@@ -555,13 +579,15 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     let resume_input_array = input_after_resume
         .as_array()
         .expect("input after resume should be an array");
+    let compact_filtered = filter_out_ghost_snapshot_entries(compact_input_array);
+    let resume_filtered = filter_out_ghost_snapshot_entries(resume_input_array);
     assert!(
-        compact_input_array.len() <= resume_input_array.len(),
+        compact_filtered.len() <= resume_filtered.len(),
         "after-resume input should have at least as many items as after-compact"
     );
     assert_eq!(
-        compact_input_array.as_slice(),
-        &resume_input_array[..compact_input_array.len()]
+        compact_filtered.as_slice(),
+        &resume_filtered[..compact_filtered.len()]
     );
     // hard coded test
     let prompt = requests[0]["instructions"]
@@ -702,13 +728,13 @@ async fn mount_initial_flow(server: &MockServer) {
             && !body.contains("\"text\":\"AFTER_RESUME\"")
             && !body.contains("\"text\":\"AFTER_FORK\"")
     };
-    mount_sse_once(server, match_first, sse1).await;
+    mount_sse_once_match(server, match_first, sse1).await;
 
     let match_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("You have exceeded the maximum number of tokens")
     };
-    mount_sse_once(server, match_compact, sse2).await;
+    mount_sse_once_match(server, match_compact, sse2).await;
 
     let match_after_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
@@ -716,19 +742,19 @@ async fn mount_initial_flow(server: &MockServer) {
             && !body.contains("\"text\":\"AFTER_RESUME\"")
             && !body.contains("\"text\":\"AFTER_FORK\"")
     };
-    mount_sse_once(server, match_after_compact, sse3).await;
+    mount_sse_once_match(server, match_after_compact, sse3).await;
 
     let match_after_resume = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"AFTER_RESUME\"")
     };
-    mount_sse_once(server, match_after_resume, sse4).await;
+    mount_sse_once_match(server, match_after_resume, sse4).await;
 
     let match_after_fork = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"AFTER_FORK\"")
     };
-    mount_sse_once(server, match_after_fork, sse5).await;
+    mount_sse_once_match(server, match_after_fork, sse5).await;
 }
 
 async fn mount_second_compact_flow(server: &MockServer) {
@@ -743,13 +769,13 @@ async fn mount_second_compact_flow(server: &MockServer) {
         body.contains("You have exceeded the maximum number of tokens")
             && body.contains("AFTER_FORK")
     };
-    mount_sse_once(server, match_second_compact, sse6).await;
+    mount_sse_once_match(server, match_second_compact, sse6).await;
 
     let match_after_second_resume = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(&format!("\"text\":\"{AFTER_SECOND_RESUME}\""))
     };
-    mount_sse_once(server, match_after_second_resume, sse7).await;
+    mount_sse_once_match(server, match_after_second_resume, sse7).await;
 }
 
 async fn start_test_conversation(
@@ -775,7 +801,7 @@ async fn start_test_conversation(
 async fn user_turn(conversation: &Arc<CodexConversation>, text: &str) {
     conversation
         .submit(Op::UserInput {
-            items: vec![InputItem::Text { text: text.into() }],
+            items: vec![UserInput::Text { text: text.into() }],
         })
         .await
         .expect("submit user turn");
@@ -790,22 +816,8 @@ async fn compact_conversation(conversation: &Arc<CodexConversation>) {
     wait_for_event(conversation, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 }
 
-async fn fetch_conversation_path(
-    conversation: &Arc<CodexConversation>,
-    context: &str,
-) -> std::path::PathBuf {
-    conversation
-        .submit(Op::GetPath)
-        .await
-        .expect("request conversation path");
-    match wait_for_event(conversation, |ev| {
-        matches!(ev, EventMsg::ConversationPath(_))
-    })
-    .await
-    {
-        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path,
-        _ => panic!("expected ConversationPath event for {context}"),
-    }
+async fn fetch_conversation_path(conversation: &Arc<CodexConversation>) -> std::path::PathBuf {
+    conversation.rollout_path()
 }
 
 async fn resume_conversation(
