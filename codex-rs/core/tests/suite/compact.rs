@@ -1151,6 +1151,14 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         }),
         json!({
             "content": vec![json!({
+                "text": first_summary,
+                "type": "input_text",
+            })],
+            "role": "user",
+            "type": "message",
+        }),
+        json!({
+            "content": vec![json!({
                 "text": second_user_message,
                 "type": "input_text",
             })],
