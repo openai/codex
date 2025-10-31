@@ -13,6 +13,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_with_timeout;
+use regex::Regex;
 use serde_json::json;
 
 /// Integration test: spawn a long‑running shell tool via a mocked Responses SSE
@@ -22,7 +23,7 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
     let command = vec![
         "bash".to_string(),
         "-lc".to_string(),
-        "sleep 60".to_string(),
+        "sleep 1 && sleep 60".to_string(),
     ];
 
     let args = json!({
@@ -80,7 +81,7 @@ async fn interrupt_tool_records_history_entries() {
     let command = vec![
         "bash".to_string(),
         "-lc".to_string(),
-        "sleep 60".to_string(),
+        "sleep 1 && sleep 60".to_string(),
     ];
     let call_id = "call-history";
 
@@ -105,7 +106,7 @@ async fn interrupt_tool_records_history_entries() {
     let fixture = test_codex().build(&server).await.unwrap();
     let codex = Arc::clone(&fixture.codex);
 
-    let wait_timeout = Duration::from_millis(100);
+    let wait_timeout = Duration::from_secs(5);
 
     codex
         .submit(Op::UserInput {
