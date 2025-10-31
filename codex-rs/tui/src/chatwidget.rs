@@ -42,6 +42,7 @@ use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
+use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::ConversationId;
@@ -517,6 +518,11 @@ impl ChatWidget {
 
         // After an error ends the turn, try sending the next queued input.
         self.maybe_send_next_queued_input();
+    }
+
+    fn on_warning(&mut self, message: String) {
+        self.add_to_history(history_cell::new_warning_event(message));
+        self.request_redraw();
     }
 
     /// Handle a turn aborted due to user interrupt (Esc).
@@ -1477,6 +1483,7 @@ impl ChatWidget {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
+            EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {

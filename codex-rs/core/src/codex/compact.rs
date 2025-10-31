@@ -13,6 +13,7 @@ use crate::protocol::ErrorEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
+use crate::protocol::WarningEvent;
 use crate::truncate::truncate_middle;
 use crate::util::backoff;
 use askama::Template;
@@ -168,6 +169,11 @@ async fn run_compact_task_inner(
         message: "Compact task completed".to_string(),
     });
     sess.send_event(&turn_context, event).await;
+
+    let warning = EventMsg::Warning(WarningEvent {
+        message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start new a new conversation when possible to keep conversations small and targeted.".to_string(),
+    });
+    sess.send_event(&turn_context, warning).await;
 }
 
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {

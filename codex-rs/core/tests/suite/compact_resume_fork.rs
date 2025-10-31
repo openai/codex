@@ -7,6 +7,7 @@
 //! request payload that Codex would send to the model and assert that the
 //! model-visible history matches the expected sequence of messages.
 
+use super::compact::COMPACT_WARNING_MESSAGE;
 use super::compact::FIRST_REPLY;
 use super::compact::SUMMARY_TEXT;
 use codex_core::CodexAuth;
@@ -20,6 +21,7 @@ use codex_core::config::Config;
 use codex_core::config::OPENAI_DEFAULT_MODEL;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
+use codex_core::protocol::WarningEvent;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
@@ -813,6 +815,11 @@ async fn compact_conversation(conversation: &Arc<CodexConversation>) {
         .submit(Op::Compact)
         .await
         .expect("compact conversation");
+    let warning_event = wait_for_event(conversation, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    let EventMsg::Warning(WarningEvent { message }) = warning_event else {
+        panic!("expected warning event after compact");
+    };
+    assert_eq!(message, COMPACT_WARNING_MESSAGE);
     wait_for_event(conversation, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 }
 
