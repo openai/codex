@@ -21,7 +21,6 @@ pub struct PlanItemArg {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields = nullable)]
 pub struct UpdatePlanArgs {
     #[serde(default)]
     pub explanation: Option<String>,

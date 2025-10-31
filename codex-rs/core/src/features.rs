@@ -6,7 +6,7 @@
 //! container attached to `Config`.
 
 use crate::config::ConfigToml;
-use crate::config_profile::ConfigProfile;
+use crate::config::profile::ConfigProfile;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -43,6 +43,8 @@ pub enum Feature {
     SandboxCommandAssessment,
     /// Create a ghost commit at each turn.
     GhostCommit,
+    /// Enable Windows sandbox (restricted token) on Windows.
+    WindowsSandbox,
 }
 
 impl Feature {
@@ -82,7 +84,6 @@ pub struct Features {
 #[derive(Debug, Clone, Default)]
 pub struct FeatureOverrides {
     pub include_apply_patch_tool: Option<bool>,
-    pub include_view_image_tool: Option<bool>,
     pub web_search_request: Option<bool>,
     pub experimental_sandbox_command_assessment: Option<bool>,
 }
@@ -91,7 +92,6 @@ impl FeatureOverrides {
     fn apply(self, features: &mut Features) {
         LegacyFeatureToggles {
             include_apply_patch_tool: self.include_apply_patch_tool,
-            include_view_image_tool: self.include_view_image_tool,
             tools_web_search: self.web_search_request,
             ..Default::default()
         }
@@ -122,8 +122,9 @@ impl Features {
         self.enabled.insert(f);
     }
 
-    pub fn disable(&mut self, f: Feature) {
+    pub fn disable(&mut self, f: Feature) -> &mut Self {
         self.enabled.remove(&f);
+        self
     }
 
     pub fn record_legacy_usage_force(&mut self, alias: &str, feature: Feature) {
@@ -192,7 +193,6 @@ impl Features {
 
         let profile_legacy = LegacyFeatureToggles {
             include_apply_patch_tool: config_profile.include_apply_patch_tool,
-            include_view_image_tool: config_profile.include_view_image_tool,
             experimental_sandbox_command_assessment: config_profile
                 .experimental_sandbox_command_assessment,
             experimental_use_freeform_apply_patch: config_profile
@@ -291,6 +291,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GhostCommit,
         key: "ghost_commit",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::WindowsSandbox,
+        key: "enable_experimental_windows_sandbox",
         stage: Stage::Experimental,
         default_enabled: false,
     },

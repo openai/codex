@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_core::config::Config;
-use codex_core::config_types::Notifications;
+use codex_core::config::types::Notifications;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
@@ -42,6 +42,7 @@ use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
+use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::ConversationId;
@@ -519,6 +520,11 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
+    fn on_warning(&mut self, message: String) {
+        self.add_to_history(history_cell::new_warning_event(message));
+        self.request_redraw();
+    }
+
     /// Handle a turn aborted due to user interrupt (Esc).
     /// When there are queued user messages, restore them into the composer
     /// separated by newlines rather than auto‑submitting the next one.
@@ -657,7 +663,7 @@ impl ChatWidget {
     }
 
     fn on_shutdown_complete(&mut self) {
-        self.app_event_tx.send(AppEvent::ExitRequest);
+        self.request_exit();
     }
 
     fn on_turn_diff(&mut self, unified_diff: String) {
@@ -1229,8 +1235,8 @@ impl ChatWidget {
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
             }
-            SlashCommand::Quit => {
-                self.app_event_tx.send(AppEvent::ExitRequest);
+            SlashCommand::Quit | SlashCommand::Exit => {
+                self.request_exit();
             }
             SlashCommand::Logout => {
                 if let Err(e) = codex_core::auth::logout(
@@ -1239,7 +1245,7 @@ impl ChatWidget {
                 ) {
                     tracing::error!("failed to logout: {e}");
                 }
-                self.app_event_tx.send(AppEvent::ExitRequest);
+                self.request_exit();
             }
             SlashCommand::Undo => {
                 self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
@@ -1270,7 +1276,16 @@ impl ChatWidget {
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
-            #[cfg(debug_assertions)]
+            SlashCommand::Rollout => {
+                if let Some(path) = self.rollout_path() {
+                    self.add_info_message(
+                        format!("Current rollout path: {}", path.display()),
+                        None,
+                    );
+                } else {
+                    self.add_info_message("Rollout path is not available yet.".to_string(), None);
+                }
+            }
             SlashCommand::TestApproval => {
                 use codex_core::protocol::EventMsg;
                 use std::collections::HashMap;
@@ -1468,6 +1483,7 @@ impl ChatWidget {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
+            EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
@@ -1521,7 +1537,10 @@ impl ChatWidget {
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
-            | EventMsg::ItemCompleted(_) => {}
+            | EventMsg::ItemCompleted(_)
+            | EventMsg::AgentMessageContentDelta(_)
+            | EventMsg::ReasoningContentDelta(_)
+            | EventMsg::ReasoningRawContentDelta(_) => {}
         }
     }
 
@@ -1579,6 +1598,10 @@ impl ChatWidget {
         if !message.is_empty() {
             self.add_to_history(history_cell::new_user_prompt(message.to_string()));
         }
+    }
+
+    fn request_exit(&self) {
+        self.app_event_tx.send(AppEvent::ExitRequest);
     }
 
     fn request_redraw(&mut self) {
@@ -1850,7 +1873,10 @@ impl ChatWidget {
                 current_approval == preset.approval && current_sandbox == preset.sandbox;
             let name = preset.label.to_string();
             let description_text = preset.description;
-            let description = if cfg!(target_os = "windows") && preset.id == "auto" {
+            let description = if cfg!(target_os = "windows")
+                && preset.id == "auto"
+                && codex_core::get_platform_sandbox().is_none()
+            {
                 Some(format!(
                     "{description_text}\nRequires Windows Subsystem for Linux (WSL). Show installation instructions..."
                 ))
@@ -1870,7 +1896,10 @@ impl ChatWidget {
                         preset: preset_clone.clone(),
                     });
                 })]
-            } else if cfg!(target_os = "windows") && preset.id == "auto" {
+            } else if cfg!(target_os = "windows")
+                && preset.id == "auto"
+                && codex_core::get_platform_sandbox().is_none()
+            {
                 vec![Box::new(|tx| {
                     tx.send(AppEvent::ShowWindowsAutoModeInstructions);
                 })]

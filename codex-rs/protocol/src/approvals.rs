@@ -61,7 +61,6 @@ impl SandboxRiskCategory {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct ExecApprovalRequestEvent {
     /// Identifier for the associated exec call, if available.
     pub call_id: String,
@@ -79,7 +78,6 @@ pub struct ExecApprovalRequestEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct ApplyPatchApprovalRequestEvent {
     /// Responses API call id for the associated patch apply call, if available.
     pub call_id: String,

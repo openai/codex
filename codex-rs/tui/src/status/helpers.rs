@@ -89,7 +89,7 @@ pub(crate) fn compose_account_display(config: &Config) -> Option<StatusAccountDi
     if let Some(tokens) = auth.tokens.as_ref() {
         let info = &tokens.id_token;
         let email = info.email.clone();
-        let plan = info.get_chatgpt_plan_type().map(|plan| title_case(&plan));
+        let plan = info.get_chatgpt_plan_type().as_deref().map(title_case);
         return Some(StatusAccountDisplay::ChatGpt { email, plan });
     }
 
