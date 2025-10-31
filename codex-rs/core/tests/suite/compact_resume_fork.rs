@@ -301,29 +301,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "include": [
         "reasoning.encrypted_content"
       ],
-      "prompt_cache_key": prompt_cache_key,
-      "text": {
-        "format": {
-          "type": "json_schema",
-          "strict": true,
-          "name": "codex_output_schema",
-          "schema": {
-            "type": "object",
-            "properties": {
-              "intent_user_message": {
-                "type": "string",
-                "description": "One consolidated user message capturing the user's current goal or request."
-              },
-              "summary": {
-                "type": "string",
-                "description": "A concise status summary describing progress and next steps."
-              }
-            },
-            "required": ["intent_user_message", "summary"],
-            "additionalProperties": false
-          }
-        }
-      }
+      "prompt_cache_key": prompt_cache_key
     });
     let user_turn_2_after_compact = json!(
     {

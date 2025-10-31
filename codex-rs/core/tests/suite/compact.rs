@@ -35,7 +35,6 @@ pub(super) const FIRST_REPLY: &str = "FIRST_REPLY";
 pub(super) const SUMMARY_TEXT: &str = "SUMMARY_ONLY_CONTEXT";
 const THIRD_USER_MSG: &str = "next turn";
 const AUTO_SUMMARY_TEXT: &str = "AUTO_SUMMARY";
-const AUTO_INTENT_TEXT: &str = "AUTO_INTENT";
 const FIRST_AUTO_MSG: &str = "token limit start";
 const SECOND_AUTO_MSG: &str = "token limit push";
 const STILL_TOO_BIG_REPLY: &str = "STILL_TOO_BIG";
@@ -43,9 +42,6 @@ const MULTI_AUTO_MSG: &str = "multi auto";
 const SECOND_LARGE_REPLY: &str = "SECOND_LARGE_REPLY";
 const FIRST_AUTO_SUMMARY: &str = "FIRST_AUTO_SUMMARY";
 const SECOND_AUTO_SUMMARY: &str = "SECOND_AUTO_SUMMARY";
-const FIRST_AUTO_INTENT: &str = "FIRST_AUTO_INTENT";
-const SECOND_AUTO_INTENT: &str = "SECOND_AUTO_INTENT";
-const SUMMARY_INTENT: &str = "SUMMARY_INTENT";
 const FINAL_REPLY: &str = "FINAL_REPLY";
 const CONTEXT_LIMIT_MESSAGE: &str =
     "Your input exceeds the context window of this model. Please adjust your input and try again.";
@@ -56,12 +52,8 @@ const POST_AUTO_USER_MSG: &str = "post auto follow-up";
 const COMPACT_PROMPT_MARKER: &str =
     "You are performing a CONTEXT CHECKPOINT COMPACTION for a tool.";
 
-fn structured_auto_summary(intent: &str, summary: &str) -> String {
-    json!({
-        "intent_user_message": intent,
-        "summary": summary,
-    })
-    .to_string()
+fn auto_summary(summary: &str) -> String {
+    summary.to_string()
 }
 
 fn drop_call_id(value: &mut serde_json::Value) {
@@ -410,9 +402,8 @@ async fn auto_compact_runs_after_token_limit_hit() {
         ev_completed_with_tokens("r2", 330_000),
     ]);
 
-    let auto_summary_payload = structured_auto_summary(AUTO_INTENT_TEXT, AUTO_SUMMARY_TEXT);
     let sse3 = sse(vec![
-        ev_assistant_message("m3", &auto_summary_payload),
+        ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
         ev_completed_with_tokens("r3", 200),
     ]);
     let sse_resume = sse(vec![ev_completed("r3-resume")]);
@@ -445,7 +436,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     let resume_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(AUTO_INTENT_TEXT)
+        body.contains(AUTO_SUMMARY_TEXT)
             && !body.contains(COMPACT_PROMPT_MARKER)
             && !body.contains(POST_AUTO_USER_MSG)
     };
@@ -538,7 +529,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .enumerate()
         .find_map(|(idx, req)| {
             let body = std::str::from_utf8(&req.body).unwrap_or("");
-            (body.contains(AUTO_INTENT_TEXT)
+            (body.contains(AUTO_SUMMARY_TEXT)
                 && !body.contains(COMPACT_PROMPT_MARKER)
                 && !body.contains(POST_AUTO_USER_MSG))
             .then_some(idx)
@@ -627,20 +618,17 @@ async fn auto_compact_runs_after_token_limit_hit() {
                 .map(std::string::ToString::to_string)
         })
         .collect();
-    dbg!(&user_texts);
     assert!(
-        user_texts.iter().any(|text| text == AUTO_INTENT_TEXT),
-        "auto compact follow-up request should include the intent user message"
+        user_texts.iter().any(|text| text == FIRST_AUTO_MSG),
+        "auto compact follow-up request should include the first user message"
+    );
+    assert!(
+        user_texts.iter().any(|text| text == SECOND_AUTO_MSG),
+        "auto compact follow-up request should include the second user message"
     );
     assert!(
         user_texts.iter().any(|text| text == POST_AUTO_USER_MSG),
         "auto compact follow-up request should include the new user message"
-    );
-    assert!(
-        !user_texts
-            .iter()
-            .any(|text| text == FIRST_AUTO_MSG || text == SECOND_AUTO_MSG),
-        "original user messages should be replaced by the intent message after compaction"
     );
     let compactor_output = input_follow_up
         .iter()
@@ -651,7 +639,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .to_string();
     assert_eq!(
         compactor_output, AUTO_SUMMARY_TEXT,
-        "compactor tool output should contain the structured summary field"
+        "compactor tool output should contain the summary text"
     );
 }
 
@@ -671,7 +659,7 @@ async fn auto_compact_persists_rollout_entries() {
         ev_completed_with_tokens("r2", 330_000),
     ]);
 
-    let auto_summary_payload = structured_auto_summary(AUTO_INTENT_TEXT, AUTO_SUMMARY_TEXT);
+    let auto_summary_payload = auto_summary(AUTO_SUMMARY_TEXT);
     let sse3 = sse(vec![
         ev_assistant_message("m3", &auto_summary_payload),
         ev_completed_with_tokens("r3", 200),
@@ -780,7 +768,7 @@ async fn auto_compact_stops_after_failed_attempt() {
         ev_completed_with_tokens("r1", 500),
     ]);
 
-    let summary_payload = structured_auto_summary(SUMMARY_INTENT, SUMMARY_TEXT);
+    let summary_payload = auto_summary(SUMMARY_TEXT);
     let sse2 = sse(vec![
         ev_assistant_message("m2", &summary_payload),
         ev_completed_with_tokens("r2", 50),
@@ -999,14 +987,12 @@ async fn manual_compact_retries_after_context_window_error() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn manual_compact_twice_replaces_history_with_latest_intent() {
+async fn manual_compact_twice_preserves_latest_user_messages() {
     skip_if_no_network!();
 
     let first_user_message = "first manual turn";
     let second_user_message = "second manual turn";
     let final_user_message = "post compact follow-up";
-    let first_intent = "FIRST_MANUAL_INTENT";
-    let second_intent = "SECOND_MANUAL_INTENT";
     let first_summary = "FIRST_MANUAL_SUMMARY";
     let second_summary = "SECOND_MANUAL_SUMMARY";
 
@@ -1016,19 +1002,18 @@ async fn manual_compact_twice_replaces_history_with_latest_intent() {
         ev_assistant_message("m1", FIRST_REPLY),
         ev_completed("r1"),
     ]);
+    let first_compact_summary = auto_summary(first_summary);
     let first_compact = sse(vec![
-        ev_assistant_message("m2", &structured_auto_summary(first_intent, first_summary)),
+        ev_assistant_message("m2", &first_compact_summary),
         ev_completed("r2"),
     ]);
     let second_turn = sse(vec![
         ev_assistant_message("m3", SECOND_LARGE_REPLY),
         ev_completed("r3"),
     ]);
+    let second_compact_summary = auto_summary(second_summary);
     let second_compact = sse(vec![
-        ev_assistant_message(
-            "m4",
-            &structured_auto_summary(second_intent, second_summary),
-        ),
+        ev_assistant_message("m4", &second_compact_summary),
         ev_completed("r4"),
     ]);
     let final_turn = sse(vec![
@@ -1146,8 +1131,8 @@ async fn manual_compact_twice_replaces_history_with_latest_intent() {
         "second turn request missing second user message"
     );
     assert!(
-        contains_user_text(&second_turn_input, first_intent),
-        "second turn request should include the compacted intent"
+        contains_user_text(&second_turn_input, first_user_message),
+        "second turn request should include the compacted user history"
     );
 
     let second_compact_input = requests[3].input();
@@ -1179,12 +1164,18 @@ async fn manual_compact_twice_replaces_history_with_latest_intent() {
 
     let expected = vec![
         json!({
-            "content": vec![
-                json!({
-                    "text": "SECOND_MANUAL_INTENT",
-                    "type": "input_text",
-                }),
-            ],
+            "content": vec![json!({
+                "text": first_user_message,
+                "type": "input_text",
+            })],
+            "role": "user",
+            "type": "message",
+        }),
+        json!({
+            "content": vec![json!({
+                "text": second_user_message,
+                "type": "input_text",
+            })],
             "role": "user",
             "type": "message",
         }),
@@ -1195,16 +1186,14 @@ async fn manual_compact_twice_replaces_history_with_latest_intent() {
             "type": "custom_tool_call",
         }),
         json!({
-            "output": "SECOND_MANUAL_SUMMARY",
+            "output": second_summary,
             "type": "custom_tool_call_output",
         }),
         json!({
-            "content": vec![
-                json!({
-                    "text": "post compact follow-up",
-                    "type": "input_text",
-                }),
-            ],
+            "content": vec![json!({
+                "text": final_user_message,
+                "type": "input_text",
+            })],
             "role": "user",
             "type": "message",
         }),
@@ -1222,7 +1211,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         ev_assistant_message("m1", FIRST_REPLY),
         ev_completed_with_tokens("r1", 500),
     ]);
-    let first_summary_payload = structured_auto_summary(FIRST_AUTO_INTENT, FIRST_AUTO_SUMMARY);
+    let first_summary_payload = auto_summary(FIRST_AUTO_SUMMARY);
     let sse2 = sse(vec![
         ev_assistant_message("m2", &first_summary_payload),
         ev_completed_with_tokens("r2", 50),
@@ -1235,7 +1224,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         ev_assistant_message("m4", SECOND_LARGE_REPLY),
         ev_completed_with_tokens("r4", 450),
     ]);
-    let second_summary_payload = structured_auto_summary(SECOND_AUTO_INTENT, SECOND_AUTO_SUMMARY);
+    let second_summary_payload = auto_summary(SECOND_AUTO_SUMMARY);
     let sse5 = sse(vec![
         ev_assistant_message("m5", &second_summary_payload),
         ev_completed_with_tokens("r5", 60),
@@ -1344,7 +1333,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
         ev_assistant_message("m2", FINAL_REPLY),
         ev_completed_with_tokens("r2", over_limit_tokens),
     ]);
-    let auto_summary_payload = structured_auto_summary(AUTO_INTENT_TEXT, AUTO_SUMMARY_TEXT);
+    let auto_summary_payload = auto_summary(AUTO_SUMMARY_TEXT);
     let auto_compact_turn = sse(vec![
         ev_assistant_message("m3", &auto_summary_payload),
         ev_completed_with_tokens("r3", 10),
