@@ -74,13 +74,12 @@ impl ApiClient for ResponsesApiClient {
 
         let mut payload_json = self.build_payload(&prompt)?;
 
-        if self.config.provider.is_azure_responses_endpoint() {
-            if let Some(input_value) = payload_json.get_mut("input")
+        if self.config.provider.is_azure_responses_endpoint()
+            && let Some(input_value) = payload_json.get_mut("input")
                 && let Some(array) = input_value.as_array_mut()
             {
                 attach_item_ids_array(array, &prompt.input);
             }
-        }
 
         let max_attempts = self.config.provider.request_max_retries();
         for attempt in 0..=max_attempts {
@@ -218,7 +217,7 @@ impl ResponsesApiClient {
                 .headers()
                 .get("cf-ray")
                 .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
+                .map(std::string::ToString::to_string);
         }
 
         match res {
@@ -260,8 +259,8 @@ impl ResponsesApiClient {
                     .and_then(|s| s.parse::<u64>().ok());
                 let retry_after = retry_after_secs.map(|s| Duration::from_millis(s * 1_000));
 
-                if status == StatusCode::UNAUTHORIZED {
-                    if let Some(provider) = self.config.auth_provider.as_ref()
+                if status == StatusCode::UNAUTHORIZED
+                    && let Some(provider) = self.config.auth_provider.as_ref()
                         && let Some(ctx) = auth.as_ref()
                         && ctx.mode == AuthMode::ChatGPT
                     {
@@ -270,7 +269,6 @@ impl ResponsesApiClient {
                             .await
                             .map_err(|err| StreamAttemptError::Fatal(Error::Auth(err)))?;
                     }
-                }
 
                 if !(status == StatusCode::TOO_MANY_REQUESTS
                     || status == StatusCode::UNAUTHORIZED
@@ -718,13 +716,13 @@ pub async fn stream_from_fixture(
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
     let display_path = path.as_ref().display().to_string();
     let file = std::fs::File::open(path.as_ref())
-        .map_err(|e| Error::Other(format!("failed to open fixture {}: {}", display_path, e)))?;
+        .map_err(|e| Error::Other(format!("failed to open fixture {display_path}: {e}")))?;
     let lines = std::io::BufReader::new(file).lines();
 
     let mut content = String::new();
     for line in lines {
         let line = line
-            .map_err(|e| Error::Other(format!("failed to read fixture {}: {}", display_path, e)))?;
+            .map_err(|e| Error::Other(format!("failed to read fixture {display_path}: {e}")))?;
         content.push_str(&line);
         content.push_str("\n\n");
     }

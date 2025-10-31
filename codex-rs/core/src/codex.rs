@@ -303,7 +303,7 @@ pub(crate) struct SessionConfiguration {
     provider: ModelProviderInfo,
 
     /// If not specified, server will use its default model.
-    model: String,
+    pub(crate) model: String,
 
     model_reasoning_effort: Option<ReasoningEffortConfig>,
     model_reasoning_summary: ReasoningSummaryConfig,
@@ -315,7 +315,7 @@ pub(crate) struct SessionConfiguration {
     user_instructions: Option<String>,
 
     /// Base instructions override.
-    base_instructions: Option<String>,
+    pub(crate) base_instructions: Option<String>,
 
     /// Compact prompt override.
     compact_prompt: Option<String>,
@@ -335,7 +335,7 @@ pub(crate) struct SessionConfiguration {
     cwd: PathBuf,
 
     /// Set of feature flags for this session
-    features: Features,
+    pub(crate) features: Features,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -588,8 +588,9 @@ impl Session {
             config.active_profile.clone(),
         );
 
-        // Create the mutable state for the Session.
-        let state = SessionState::new(session_configuration.clone());
+        let model_family = find_family_for_model(&session_configuration.model)
+            .unwrap_or_else(|| config.model_family.clone());
+        let state = SessionState::new(session_configuration.clone(), model_family);
 
         let services = SessionServices {
             mcp_connection_manager,
@@ -696,7 +697,6 @@ impl Session {
 
     pub(crate) async fn update_settings(&self, updates: SessionSettingsUpdate) {
         let mut state = self.state.lock().await;
-
         state.session_configuration = state.session_configuration.apply(&updates);
     }
 
@@ -940,12 +940,6 @@ impl Session {
         self.record_into_history(items).await;
         self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;
-    }
-
-    async fn prompt_for_turn(&self, turn_context: &TurnContext) -> Prompt {
-        let supports_chain = turn_context.client.supports_responses_api_chaining();
-        let mut state = self.state.lock().await;
-        state.prompt_for_turn(supports_chain)
     }
 
     fn reconstruct_history_from_rollout(
@@ -1801,7 +1795,8 @@ pub(crate) async fn run_task(
         // Construct the input that we will send to the model.
         sess.record_conversation_items(&turn_context, &pending_input)
             .await;
-        let prompt = sess.prompt_for_turn(&turn_context).await;
+        let mut state = sess.state.lock().await;
+        let prompt = state.prompt_for_turn();
 
         let turn_input_messages: Vec<String> = {
             prompt
@@ -2594,7 +2589,9 @@ mod tests {
             session_source: SessionSource::Exec,
         };
 
-        let state = SessionState::new(session_configuration.clone());
+        let model_family = find_family_for_model(&session_configuration.model)
+            .unwrap_or_else(|| config.model_family.clone());
+        let state = SessionState::new(session_configuration.clone(), model_family);
 
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
@@ -2670,7 +2667,9 @@ mod tests {
             session_source: SessionSource::Exec,
         };
 
-        let state = SessionState::new(session_configuration.clone());
+        let model_family = find_family_for_model(&session_configuration.model)
+            .unwrap_or_else(|| config.model_family.clone());
+        let state = SessionState::new(session_configuration.clone(), model_family);
 
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),

@@ -3,27 +3,39 @@
 use codex_protocol::models::ResponseItem;
 
 use crate::client_common::Prompt;
+use crate::client_common::compute_full_instructions;
 use crate::codex::SessionConfiguration;
 use crate::conversation_history::ConversationHistory;
 use crate::conversation_history::ResponsesApiChainState;
+use crate::conversation_history::format_prompt_items;
+use crate::model_family::ModelFamily;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
+use crate::tools::spec::ToolsConfig;
+use crate::tools::spec::ToolsConfigParams;
+use crate::tools::spec::build_specs;
+use crate::tools::spec::tools_metadata_for_prompt;
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ConversationHistory,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
+    pub(crate) model_family: ModelFamily,
 }
 
 impl SessionState {
     /// Create a new session state mirroring previous `State::default()` semantics.
-    pub(crate) fn new(session_configuration: SessionConfiguration) -> Self {
+    pub(crate) fn new(
+        session_configuration: SessionConfiguration,
+        model_family: ModelFamily,
+    ) -> Self {
         Self {
             session_configuration,
             history: ConversationHistory::new(),
             latest_rate_limits: None,
+            model_family,
         }
     }
 
@@ -79,13 +91,36 @@ impl SessionState {
         self.history.set_token_usage_full(context_window);
     }
 
-    pub(crate) fn prompt_for_turn(&mut self, supports_responses_api_chaining: bool) -> Prompt {
+    pub(crate) fn prompt_for_turn(&mut self) -> Prompt {
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &self.model_family,
+            features: &self.session_configuration.features,
+        });
+        let (tool_specs, _registry) = build_specs(&tools_config, None).build();
+        let tool_specs = tool_specs.into_iter().map(|c| c.spec).collect::<Vec<_>>();
+
         let prompt_items = self.history.get_history_for_prompt();
         let chain_state = self.history.responses_api_chain();
-        let (prompt, reset_chain) = build_prompt_from_items(prompt_items, chain_state.as_ref());
+        let (mut prompt, reset_chain) = build_prompt_from_items(prompt_items, chain_state.as_ref());
         if reset_chain {
             self.reset_responses_api_chain();
         }
+
+        // Populate prompt fields that depend only on session state.
+        let (tools_json, has_freeform_apply_patch) =
+            tools_metadata_for_prompt(&tool_specs).expect("tool specs serialization");
+        format_prompt_items(&mut prompt.input, has_freeform_apply_patch);
+
+        let apply_patch_present = tool_specs.iter().any(|spec| spec.name() == "apply_patch");
+        let base_override = self.session_configuration.base_instructions.as_deref();
+        let instructions =
+            compute_full_instructions(base_override, &self.model_family, apply_patch_present)
+                .into_owned();
+
+        prompt.instructions = instructions;
+        prompt.tools = tools_json;
+        prompt.parallel_tool_calls = self.model_family.supports_parallel_tool_calls;
+
         prompt
     }
 }

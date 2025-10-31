@@ -140,7 +140,7 @@ impl ApiClient for ChatCompletionsApiClient {
                         .get(reqwest::header::RETRY_AFTER)
                         .and_then(|v| v.to_str().ok())
                         .and_then(|s| s.parse::<u64>().ok())
-                        .map(|s| Duration::from_secs(s));
+                        .map(Duration::from_secs);
                     tokio::time::sleep(retry_after.unwrap_or_else(|| backoff(attempt))).await;
                 }
                 Err(error) => {
@@ -624,7 +624,7 @@ async fn process_chat_sse<S>(
                 .and_then(|v| v.as_array())
             {
                 for call in tool_calls {
-                    if let Some(index) = call.get("index").and_then(|i| i.as_u64())
+                    if let Some(index) = call.get("index").and_then(serde_json::Value::as_u64)
                         && index == 0
                         && let Some(function) = call.get("function")
                     {
@@ -641,8 +641,7 @@ async fn process_chat_sse<S>(
 
                         if let Some(finish) = choice.get("finish_reason").and_then(|f| f.as_str())
                             && finish == "tool_calls"
-                        {
-                            if let Some(name) = function_call_state.name.take() {
+                            && let Some(name) = function_call_state.name.take() {
                                 let call_id =
                                     function_call_state.call_id.take().unwrap_or_default();
                                 let arguments = std::mem::take(&mut function_call_state.arguments);
@@ -655,7 +654,6 @@ async fn process_chat_sse<S>(
                                 let _ =
                                     tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                             }
-                        }
                     }
                 }
             }

@@ -101,7 +101,7 @@ impl ResponsesBackend {
         self.client
             .stream(prompt)
             .await
-            .map(|stream| stream.boxed())
+            .map(futures::StreamExt::boxed)
     }
 }
 
@@ -181,8 +181,8 @@ impl ModelClient {
     pub async fn stream(&self, payload: &StreamPayload) -> Result<ResponseStream> {
         let mut prompt = payload.prompt.clone();
         self.populate_prompt(&mut prompt);
-        if self.provider.wire_api == WireApi::Responses {
-            if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
+        if self.provider.wire_api == WireApi::Responses
+            && let Some(path) = &*CODEX_RS_SSE_FIXTURE {
                 warn!(path, "Streaming from fixture");
                 let stream = stream_from_fixture(
                     path,
@@ -194,7 +194,6 @@ impl ModelClient {
                 .boxed();
                 return Ok(wrap_stream(stream));
             }
-        }
 
         let backend = self
             .backend
