@@ -189,6 +189,10 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
     let mut definitions_root = Map::new();
     let mut definitions_v2 = Map::new();
 
+    // Collect the set of v2 type names so we can selectively rewrite $refs
+    // that point at these names (and only these names).
+    let v2_names: HashSet<String> = bundle_v2.keys().cloned().collect();
+
     const SPECIAL_DEFINITIONS: &[&str] = &[
         "ClientNotification",
         "ClientRequest",
@@ -201,17 +205,22 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
         "ServerRequest",
     ];
 
-    // Helper to process a bundle map into a definitions object, optionally rewriting refs to v2.
+    // Helper to process a bundle map into a definitions object, optionally rewriting
+    // refs to v2 but only for known v2 type names. When `drop_v2_defs` is true, any
+    // hoisted definitions whose name is a v2 type will be skipped to avoid
+    // duplicating them at the root while still preserving references by rewriting.
     fn append_bundle(
         src: BTreeMap<String, RootSchema>,
         out_defs: &mut Map<String, Value>,
-        rewrite_to_v2: bool,
+        v2_names: &HashSet<String>,
+        rewrite_v2_refs: bool,
+        drop_v2_defs: bool,
     ) -> Result<()> {
         for (name, schema) in src {
             let mut schema_value = serde_json::to_value(schema)?;
             annotate_schema(&mut schema_value, Some(name.as_str()));
-            if rewrite_to_v2 {
-                rewrite_json_refs_to_v2(&mut schema_value);
+            if rewrite_v2_refs {
+                rewrite_json_refs_to_v2_in_set(&mut schema_value, v2_names);
             }
 
             if let Value::Object(ref mut obj) = schema_value
@@ -221,10 +230,12 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
                 for (def_name, mut def_schema) in defs_obj {
                     if !SPECIAL_DEFINITIONS.contains(&def_name.as_str()) {
                         annotate_schema(&mut def_schema, Some(def_name.as_str()));
-                        if rewrite_to_v2 {
-                            rewrite_json_refs_to_v2(&mut def_schema);
+                        if rewrite_v2_refs {
+                            rewrite_json_refs_to_v2_in_set(&mut def_schema, v2_names);
                         }
-                        out_defs.insert(def_name, def_schema);
+                        if !(drop_v2_defs && v2_names.contains(&def_name)) {
+                            out_defs.insert(def_name, def_schema);
+                        }
                     }
                 }
             }
@@ -233,8 +244,20 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
         Ok(())
     }
 
-    append_bundle(bundle_root, &mut definitions_root, false)?;
-    append_bundle(bundle_v2, &mut definitions_v2, true)?;
+    append_bundle(
+        bundle_root,
+        &mut definitions_root,
+        &v2_names,
+        true, // rewrite v2 type refs inside root bundle
+        true, // and drop v2 definitions from root to avoid duplication
+    )?;
+    append_bundle(
+        bundle_v2,
+        &mut definitions_v2,
+        &v2_names,
+        true,  // rewrite v2 type refs inside v2 bundle as well (for intra-v2 refs)
+        false, // keep v2 definitions under definitions.v2
+    )?;
 
     let mut root = Map::new();
     root.insert(
@@ -380,39 +403,31 @@ fn annotate_schema(value: &mut Value, base: Option<&str>) {
 // Rewrite internal $ref targets of the form "#/definitions/<Name>" to
 // "#/definitions/v2/<Name>". Skip special top-level definitions which are
 // intentionally kept at the root.
-fn rewrite_json_refs_to_v2(value: &mut Value) {
+// NOTE: legacy helper removed in favor of the selective variant below.
+
+// Like `rewrite_json_refs_to_v2`, but only rewrites references whose target name
+// is present in `v2_names`. This avoids accidentally rewriting references to
+// root-only definitions such as RequestId.
+fn rewrite_json_refs_to_v2_in_set(value: &mut Value, v2_names: &HashSet<String>) {
     match value {
         Value::Object(obj) => {
             if let Some(Value::String(r)) = obj.get_mut("$ref") {
                 const PREFIX: &str = "#/definitions/";
-                // Skip if already namespaced
                 if r.starts_with("#/definitions/v2/") {
-                    // no-op
-                } else if let Some(rest) = r.strip_prefix(PREFIX) {
-                    // Only rewrite if not a special definition.
-                    const SPECIAL_DEFINITIONS: &[&str] = &[
-                        "ClientNotification",
-                        "ClientRequest",
-                        "EventMsg",
-                        "FileChange",
-                        "InputItem",
-                        "ParsedCommand",
-                        "SandboxPolicy",
-                        "ServerNotification",
-                        "ServerRequest",
-                    ];
-                    if !SPECIAL_DEFINITIONS.contains(&rest) {
-                        *r = format!("#/definitions/v2/{rest}");
-                    }
+                    // already namespaced
+                } else if let Some(rest) = r.strip_prefix(PREFIX)
+                    && v2_names.contains(rest)
+                {
+                    *r = format!("#/definitions/v2/{rest}");
                 }
             }
             for v in obj.values_mut() {
-                rewrite_json_refs_to_v2(v);
+                rewrite_json_refs_to_v2_in_set(v, v2_names);
             }
         }
         Value::Array(arr) => {
             for v in arr {
-                rewrite_json_refs_to_v2(v);
+                rewrite_json_refs_to_v2_in_set(v, v2_names);
             }
         }
         _ => {}
