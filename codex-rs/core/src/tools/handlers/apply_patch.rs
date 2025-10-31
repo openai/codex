@@ -165,7 +165,13 @@ pub enum ApplyPatchToolType {
 pub(crate) fn create_apply_patch_freeform_tool() -> ToolSpec {
     ToolSpec::Freeform(FreeformTool {
         name: "apply_patch".to_string(),
-        description: "Use the `apply_patch` tool to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.".to_string(),
+        description: "Send a patch to filesystem.apply_patch to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.
+The patch must start with `*** Begin Patch` and end with `*** End Patch`. The second line is the beginning of a hunk:
+- `*** Add File: PATH` creates a new file and is followed by lines that begin with `+`.
+- `*** Delete File: PATH` removes a file.
+- `*** Update File: PATH` edits a file. You may add `*** Move to: PATH` to rename it.
+    - Update lines should either start with @@ (start of range), ` ` (context line), `+` (add line), or `-` (delete line).
+A patch can contain multiple hunks. Paths should be absolute.".to_string(),
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
             syntax: "lark".to_string(),
