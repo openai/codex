@@ -852,6 +852,24 @@ fn slash_init_skips_when_project_doc_exists() {
 }
 
 #[test]
+fn slash_quit_requests_exit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.dispatch_command(SlashCommand::Quit);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ExitRequest));
+}
+
+#[test]
+fn slash_exit_requests_exit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.dispatch_command(SlashCommand::Exit);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ExitRequest));
+}
+
+#[test]
 fn slash_undo_sends_op() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
@@ -861,6 +879,42 @@ fn slash_undo_sends_op() {
         Ok(AppEvent::CodexOp(Op::Undo)) => {}
         other => panic!("expected AppEvent::CodexOp(Op::Undo), got {other:?}"),
     }
+}
+
+#[test]
+fn slash_rollout_displays_current_path() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let rollout_path = PathBuf::from("/tmp/codex-test-rollout.jsonl");
+    chat.current_rollout_path = Some(rollout_path.clone());
+
+    chat.dispatch_command(SlashCommand::Rollout);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected info message for rollout path");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains(&rollout_path.display().to_string()),
+        "expected rollout path to be shown: {rendered}"
+    );
+}
+
+#[test]
+fn slash_rollout_handles_missing_path() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.dispatch_command(SlashCommand::Rollout);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected info message explaining missing path"
+    );
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("not available"),
+        "expected missing rollout path message: {rendered}"
+    );
 }
 
 #[test]
@@ -1528,7 +1582,8 @@ async fn binary_size_transcript_snapshot() {
                             }
                             has_emitted_history = true;
                             transcript.push_str(&lines_to_single_string(&lines));
-                            crate::insert_history::insert_history_lines(&mut terminal, lines);
+                            crate::insert_history::insert_history_lines(&mut terminal, lines)
+                                .expect("Failed to insert history lines in test");
                         }
                     }
                 }
@@ -1549,7 +1604,8 @@ async fn binary_size_transcript_snapshot() {
                             }
                             has_emitted_history = true;
                             transcript.push_str(&lines_to_single_string(&lines));
-                            crate::insert_history::insert_history_lines(&mut terminal, lines);
+                            crate::insert_history::insert_history_lines(&mut terminal, lines)
+                                .expect("Failed to insert history lines in test");
                         }
                     }
                 }
@@ -2600,7 +2656,8 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     term.set_viewport_area(viewport);
 
     for lines in drain_insert_history(&mut rx) {
-        crate::insert_history::insert_history_lines(&mut term, lines);
+        crate::insert_history::insert_history_lines(&mut term, lines)
+            .expect("Failed to insert history lines in test");
     }
 
     term.draw(|f| {
@@ -2677,7 +2734,8 @@ printf 'fenced within fenced\n'
             while let Ok(app_ev) = rx.try_recv() {
                 if let AppEvent::InsertHistoryCell(cell) = app_ev {
                     let lines = cell.display_lines(width);
-                    crate::insert_history::insert_history_lines(&mut term, lines);
+                    crate::insert_history::insert_history_lines(&mut term, lines)
+                        .expect("Failed to insert history lines in test");
                     inserted_any = true;
                 }
             }
@@ -2695,7 +2753,8 @@ printf 'fenced within fenced\n'
         }),
     });
     for lines in drain_insert_history(&mut rx) {
-        crate::insert_history::insert_history_lines(&mut term, lines);
+        crate::insert_history::insert_history_lines(&mut term, lines)
+            .expect("Failed to insert history lines in test");
     }
 
     assert_snapshot!(term.backend().vt100().screen().contents());

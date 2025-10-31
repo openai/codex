@@ -217,6 +217,25 @@ pub fn ev_assistant_message(id: &str, text: &str) -> Value {
     })
 }
 
+pub fn ev_message_item_added(id: &str, text: &str) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.added",
+        "item": {
+            "type": "message",
+            "role": "assistant",
+            "id": id,
+            "content": [{"type": "output_text", "text": text}]
+        }
+    })
+}
+
+pub fn ev_output_text_delta(delta: &str) -> Value {
+    serde_json::json!({
+        "type": "response.output_text.delta",
+        "delta": delta,
+    })
+}
+
 pub fn ev_reasoning_item(id: &str, summary: &[&str], raw_content: &[&str]) -> Value {
     let summary_entries: Vec<Value> = summary
         .iter()
@@ -241,6 +260,36 @@ pub fn ev_reasoning_item(id: &str, summary: &[&str], raw_content: &[&str]) -> Va
     }
 
     event
+}
+
+pub fn ev_reasoning_item_added(id: &str, summary: &[&str]) -> Value {
+    let summary_entries: Vec<Value> = summary
+        .iter()
+        .map(|text| serde_json::json!({"type": "summary_text", "text": text}))
+        .collect();
+
+    serde_json::json!({
+        "type": "response.output_item.added",
+        "item": {
+            "type": "reasoning",
+            "id": id,
+            "summary": summary_entries,
+        }
+    })
+}
+
+pub fn ev_reasoning_summary_text_delta(delta: &str) -> Value {
+    serde_json::json!({
+        "type": "response.reasoning_summary_text.delta",
+        "delta": delta,
+    })
+}
+
+pub fn ev_reasoning_text_delta(delta: &str) -> Value {
+    serde_json::json!({
+        "type": "response.reasoning_text.delta",
+        "delta": delta,
+    })
 }
 
 pub fn ev_web_search_call_added(id: &str, status: &str, query: &str) -> Value {

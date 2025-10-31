@@ -74,25 +74,13 @@ impl SandboxManager {
         match pref {
             SandboxablePreference::Forbid => SandboxType::None,
             SandboxablePreference::Require => {
-                #[cfg(target_os = "macos")]
-                {
-                    return SandboxType::MacosSeatbelt;
-                }
-                #[cfg(target_os = "linux")]
-                {
-                    return SandboxType::LinuxSeccomp;
-                }
-                #[allow(unreachable_code)]
-                SandboxType::None
+                // Require a platform sandbox when available; on Windows this
+                // respects the enable_experimental_windows_sandbox feature.
+                crate::safety::get_platform_sandbox().unwrap_or(SandboxType::None)
             }
             SandboxablePreference::Auto => match policy {
                 SandboxPolicy::DangerFullAccess => SandboxType::None,
-                #[cfg(target_os = "macos")]
-                _ => SandboxType::MacosSeatbelt,
-                #[cfg(target_os = "linux")]
-                _ => SandboxType::LinuxSeccomp,
-                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-                _ => SandboxType::None,
+                _ => crate::safety::get_platform_sandbox().unwrap_or(SandboxType::None),
             },
         }
     }
@@ -143,6 +131,14 @@ impl SandboxManager {
                     Some("codex-linux-sandbox".to_string()),
                 )
             }
+            // On Windows, the restricted token sandbox executes in-process via the
+            // codex-windows-sandbox crate. We leave the command unchanged here and
+            // branch during execution based on the sandbox type.
+            #[cfg(target_os = "windows")]
+            SandboxType::WindowsRestrictedToken => (command, HashMap::new(), None),
+            // When building for non-Windows targets, this variant is never constructed.
+            #[cfg(not(target_os = "windows"))]
+            SandboxType::WindowsRestrictedToken => (command, HashMap::new(), None),
         };
 
         env.extend(sandbox_env);

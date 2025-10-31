@@ -274,31 +274,32 @@ impl ToolEmitter {
         ctx: ToolEventCtx<'_>,
         out: Result<ExecToolCallOutput, ToolError>,
     ) -> Result<String, FunctionCallError> {
-        let event;
-        let result = match out {
+        let (event, result) = match out {
             Ok(output) => {
                 let content = super::format_exec_output_for_model(&output);
                 let exit_code = output.exit_code;
-                event = ToolEventStage::Success(output);
-                if exit_code == 0 {
+                let event = ToolEventStage::Success(output);
+                let result = if exit_code == 0 {
                     Ok(content)
                 } else {
                     Err(FunctionCallError::RespondToModel(content))
-                }
+                };
+                (event, result)
             }
             Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output })))
             | Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
                 let response = super::format_exec_output_for_model(&output);
-                event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
-                Err(FunctionCallError::RespondToModel(response))
+                let event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
+                let result = Err(FunctionCallError::RespondToModel(response));
+                (event, result)
             }
             Err(ToolError::Codex(err)) => {
                 let message = format!("execution error: {err:?}");
-                let response = message.clone();
-                event = ToolEventStage::Failure(ToolEventFailure::Message(message));
-                Err(FunctionCallError::RespondToModel(response))
+                let event = ToolEventStage::Failure(ToolEventFailure::Message(message.clone()));
+                let result = Err(FunctionCallError::RespondToModel(message));
+                (event, result)
             }
-            Err(ToolError::Rejected(msg)) | Err(ToolError::SandboxDenied(msg)) => {
+            Err(ToolError::Rejected(msg)) => {
                 // Normalize common rejection messages for exec tools so tests and
                 // users see a clear, consistent phrase.
                 let normalized = if msg == "rejected by user" {
@@ -306,9 +307,9 @@ impl ToolEmitter {
                 } else {
                     msg
                 };
-                let response = &normalized;
-                event = ToolEventStage::Failure(ToolEventFailure::Message(normalized.clone()));
-                Err(FunctionCallError::RespondToModel(response.clone()))
+                let event = ToolEventStage::Failure(ToolEventFailure::Message(normalized.clone()));
+                let result = Err(FunctionCallError::RespondToModel(normalized));
+                (event, result)
             }
         };
         self.emit(ctx, event).await;

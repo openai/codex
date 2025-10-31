@@ -7,6 +7,7 @@ use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
+use codex_cli::WindowsCommand;
 use codex_cli::login::read_api_key_from_stdin;
 use codex_cli::login::run_login_status;
 use codex_cli::login::run_login_with_api_key;
@@ -151,6 +152,9 @@ enum SandboxCommand {
     /// Run a command under Landlock+seccomp (Linux only).
     #[clap(visible_alias = "landlock")]
     Linux(LandlockCommand),
+
+    /// Run a command under Windows restricted token (Windows only).
+    Windows(WindowsCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -472,6 +476,17 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 )
                 .await?;
             }
+            SandboxCommand::Windows(mut windows_cli) => {
+                prepend_config_flags(
+                    &mut windows_cli.config_overrides,
+                    root_config_overrides.clone(),
+                );
+                codex_cli::debug_sandbox::run_command_under_windows(
+                    windows_cli,
+                    codex_linux_sandbox_exe,
+                )
+                .await?;
+            }
         },
         Some(Subcommand::Apply(mut apply_cli)) => {
             prepend_config_flags(
@@ -497,7 +512,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 // Respect root-level `-c` overrides plus top-level flags like `--profile`.
                 let cli_kv_overrides = root_config_overrides
                     .parse_overrides()
-                    .map_err(|e| anyhow::anyhow!(e))?;
+                    .map_err(anyhow::Error::msg)?;
 
                 // Thread through relevant top-level flags (at minimum, `--profile`).
                 // Also honor `--search` since it maps to a feature toggle.

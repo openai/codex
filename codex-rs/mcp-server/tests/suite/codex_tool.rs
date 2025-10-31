@@ -341,6 +341,7 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
         .send_codex_tool_call(CodexToolCallParam {
             prompt: "How are you?".to_string(),
             base_instructions: Some("You are a helpful assistant.".to_string()),
+            developer_instructions: Some("Foreshadow upcoming tool calls.".to_string()),
             ..Default::default()
         })
         .await?;
@@ -367,9 +368,27 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
     );
 
     let requests = server.received_requests().await.unwrap();
-    let request = requests[0].body_json::<serde_json::Value>().unwrap();
+    let request = requests[0].body_json::<serde_json::Value>()?;
     let instructions = request["messages"][0]["content"].as_str().unwrap();
     assert!(instructions.starts_with("You are a helpful assistant."));
+
+    let developer_msg = request["messages"]
+        .as_array()
+        .and_then(|messages| {
+            messages
+                .iter()
+                .find(|msg| msg.get("role").and_then(|role| role.as_str()) == Some("developer"))
+        })
+        .unwrap();
+    let developer_content = developer_msg
+        .get("content")
+        .and_then(|value| value.as_str())
+        .unwrap();
+    assert!(
+        !developer_content.contains('<'),
+        "expected developer instructions without XML tags, got `{developer_content}`"
+    );
+    assert_eq!(developer_content, "Foreshadow upcoming tool calls.");
 
     Ok(())
 }

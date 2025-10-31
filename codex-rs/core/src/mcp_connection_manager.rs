@@ -37,8 +37,8 @@ use tokio::task::JoinSet;
 use tracing::info;
 use tracing::warn;
 
-use crate::config_types::McpServerConfig;
-use crate::config_types::McpServerTransportConfig;
+use crate::config::types::McpServerConfig;
+use crate::config::types::McpServerTransportConfig;
 
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.
