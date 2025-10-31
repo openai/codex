@@ -4,6 +4,7 @@ use codex_core::config::Config;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -159,6 +160,16 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::Error(ErrorEvent { message }) => {
                 let prefix = "ERROR:".style(self.red);
                 ts_msg!(self, "{prefix} {message}");
+            }
+            EventMsg::DeprecationNotice(DeprecationNoticeEvent { summary, details }) => {
+                ts_msg!(
+                    self,
+                    "{} {summary}",
+                    "deprecated:".style(self.magenta).style(self.bold)
+                );
+                if let Some(details) = details {
+                    ts_msg!(self, "  {}", details.style(self.dimmed));
+                }
             }
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 ts_msg!(self, "{}", message.style(self.dimmed));
@@ -508,6 +519,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::AgentReasoningRawContentDelta(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::ItemCompleted(_)
+            | EventMsg::AgentMessageContentDelta(_)
+            | EventMsg::ReasoningContentDelta(_)
+            | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::UndoCompleted(_)
             | EventMsg::UndoStarted(_) => {}
         }

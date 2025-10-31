@@ -173,7 +173,6 @@ pub(crate) trait ProvidesSandboxRetryData {
 #[derive(Debug)]
 pub(crate) enum ToolError {
     Rejected(String),
-    SandboxDenied(String),
     Codex(CodexErr),
 }
 

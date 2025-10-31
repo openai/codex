@@ -1,12 +1,13 @@
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+
+use crate::util::error_or_panic;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_utils_string::take_bytes_at_char_boundary;
 use codex_utils_string::take_last_bytes_at_char_boundary;
 use std::ops::Deref;
-use tracing::error;
 
 // Model-formatting limits: clients get full streams; only content sent to the model is truncated.
 pub(crate) const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
@@ -67,6 +68,14 @@ impl ConversationHistory {
         self.contents()
     }
 
+    // Returns the history prepared for sending to the model.
+    // With extra response items filtered out and GhostCommits removed.
+    pub(crate) fn get_history_for_prompt(&mut self) -> Vec<ResponseItem> {
+        let mut history = self.get_history();
+        Self::remove_ghost_snapshots(&mut history);
+        history
+    }
+
     pub(crate) fn remove_first_item(&mut self) {
         if !self.items.is_empty() {
             // Remove the oldest item (front of the list). Items are ordered from
@@ -109,6 +118,10 @@ impl ConversationHistory {
     /// Returns a clone of the contents in the transcript.
     fn contents(&self) -> Vec<ResponseItem> {
         self.items.clone()
+    }
+
+    fn remove_ghost_snapshots(items: &mut Vec<ResponseItem>) {
+        items.retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
     }
 
     fn ensure_call_outputs_present(&mut self) {
@@ -469,15 +482,6 @@ fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
     result
 }
 
-#[inline]
-fn error_or_panic(message: String) {
-    if cfg!(debug_assertions) || env!("CARGO_PKG_VERSION").contains("alpha") {
-        panic!("{message}");
-    } else {
-        error!("{message}");
-    }
-}
-
 /// Anything that is not a system message or "reasoning" message is considered
 /// an API message.
 fn is_api_message(message: &ResponseItem) -> bool {
@@ -498,6 +502,7 @@ fn is_api_message(message: &ResponseItem) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_git::GhostCommit;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::models::LocalShellAction;
@@ -569,6 +574,16 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn get_history_for_prompt_drops_ghost_commits() {
+        let items = vec![ResponseItem::GhostSnapshot {
+            ghost_commit: GhostCommit::new("ghost-1".to_string(), None, Vec::new(), Vec::new()),
+        }];
+        let mut history = create_history_with_items(items);
+        let filtered = history.get_history_for_prompt();
+        assert_eq!(filtered, vec![]);
     }
 
     #[test]

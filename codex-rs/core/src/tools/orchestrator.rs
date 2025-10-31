@@ -83,6 +83,8 @@ impl ToolOrchestrator {
         if tool.wants_escalated_first_attempt(req) {
             initial_sandbox = crate::exec::SandboxType::None;
         }
+        // Platform-specific flag gating is handled by SandboxManager::select_initial
+        // via crate::safety::get_platform_sandbox().
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
             policy: &turn_ctx.sandbox_policy,
@@ -98,15 +100,16 @@ impl ToolOrchestrator {
             }
             Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
                 if !tool.escalate_on_failure() {
-                    return Err(ToolError::SandboxDenied(
-                        "sandbox denied and no retry".to_string(),
-                    ));
+                    return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                        output,
+                    })));
                 }
-                // Under `Never` or `OnRequest`, do not retry without sandbox; surface a concise message
-                // derived from the actual output (platform-agnostic).
+                // Under `Never` or `OnRequest`, do not retry without sandbox; surface a concise
+                // sandbox denial that preserves the original output.
                 if !tool.wants_no_sandbox_approval(approval_policy) {
-                    let msg = build_never_denied_message_from_output(output.as_ref());
-                    return Err(ToolError::SandboxDenied(msg));
+                    return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                        output,
+                    })));
                 }
 
                 // Ask for approval before retrying without sandbox.
@@ -164,29 +167,6 @@ impl ToolOrchestrator {
             }
             other => other,
         }
-    }
-}
-
-fn build_never_denied_message_from_output(output: &ExecToolCallOutput) -> String {
-    let body = format!(
-        "{}\n{}\n{}",
-        output.stderr.text, output.stdout.text, output.aggregated_output.text
-    )
-    .to_lowercase();
-
-    let detail = if body.contains("permission denied") {
-        Some("Permission denied")
-    } else if body.contains("operation not permitted") {
-        Some("Operation not permitted")
-    } else if body.contains("read-only file system") {
-        Some("Read-only file system")
-    } else {
-        None
-    };
-
-    match detail {
-        Some(tag) => format!("failed in sandbox: {tag}"),
-        None => "failed in sandbox".to_string(),
     }
 }
 

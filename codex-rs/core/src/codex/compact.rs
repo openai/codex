@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use super::Session;
 use super::TurnContext;
-use super::filter_model_visible_history;
 use super::get_last_assistant_message_from_turn;
 use crate::Prompt;
 use crate::client_common::ResponseEvent;
@@ -14,7 +13,6 @@ use crate::protocol::ErrorEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
-use crate::state::TaskKind;
 use crate::truncate::truncate_middle;
 use crate::util::backoff;
 use askama::Template;
@@ -41,9 +39,8 @@ pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) {
-    let input = vec![UserInput::Text {
-        text: SUMMARIZATION_PROMPT.to_string(),
-    }];
+    let prompt = turn_context.compact_prompt().to_string();
+    let input = vec![UserInput::Text { text: prompt }];
     run_compact_task_inner(sess, turn_context, input).await;
 }
 
@@ -86,10 +83,9 @@ async fn run_compact_task_inner(
     sess.persist_rollout_items(&[rollout_item]).await;
 
     loop {
-        let turn_input = history.get_history();
-        let prompt_input = filter_model_visible_history(turn_input.clone());
+        let turn_input = history.get_history_for_prompt();
         let prompt = Prompt {
-            input: prompt_input.clone(),
+            input: turn_input.clone(),
             ..Default::default()
         };
         let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
@@ -111,7 +107,7 @@ async fn run_compact_task_inner(
                 return;
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
-                if prompt_input.len() > 1 {
+                if turn_input.len() > 1 {
                     // Trim from the beginning to preserve cache (prefix-based) and keep recent messages intact.
                     error!(
                         "Context window exceeded while compacting; removing oldest history item. Error: {e}"
@@ -150,7 +146,7 @@ async fn run_compact_task_inner(
         }
     }
 
-    let history_snapshot = sess.history_snapshot().await;
+    let history_snapshot = sess.clone_history().await.get_history();
     let summary_text = get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
     let user_messages = collect_user_messages(&history_snapshot);
     let initial_context = sess.build_initial_context(turn_context.as_ref());
@@ -257,11 +253,7 @@ async fn drain_to_completed(
     turn_context: &TurnContext,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    let mut stream = turn_context
-        .client
-        .clone()
-        .stream_with_task_kind(prompt, TaskKind::Compact)
-        .await?;
+    let mut stream = turn_context.client.clone().stream(prompt).await?;
     loop {
         let maybe_event = stream.next().await;
         let Some(event) = maybe_event else {
@@ -355,7 +347,8 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<user_instructions>do things</user_instructions>".to_string(),
+                    text: "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\ndo things\n</INSTRUCTIONS>"
+                        .to_string(),
                 }],
             },
             ResponseItem::Message {

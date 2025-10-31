@@ -20,6 +20,8 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use eventsource_stream::Eventsource;
 use futures::Stream;
 use futures::StreamExt;
@@ -41,6 +43,7 @@ pub(crate) async fn stream_chat_completions(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     otel_event_manager: &OtelEventManager,
+    session_source: &SessionSource,
 ) -> Result<ResponseStream> {
     if prompt.output_schema.is_some() {
         return Err(CodexErr::UnsupportedOperation(
@@ -343,7 +346,20 @@ pub(crate) async fn stream_chat_completions(
     loop {
         attempt += 1;
 
-        let req_builder = provider.create_request_builder(client, &None).await?;
+        let mut req_builder = provider.create_request_builder(client, &None).await?;
+
+        // Include subagent header only for subagent sessions.
+        if let SessionSource::SubAgent(sub) = session_source.clone() {
+            let subagent = if let SubAgentSource::Other(label) = sub {
+                label
+            } else {
+                serde_json::to_value(&sub)
+                    .ok()
+                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
+                    .unwrap_or_else(|| "other".to_string())
+            };
+            req_builder = req_builder.header("x-openai-subagent", subagent);
+        }
 
         let res = otel_event_manager
             .log_request(attempt, || {
@@ -413,6 +429,61 @@ pub(crate) async fn stream_chat_completions(
     }
 }
 
+async fn append_assistant_text(
+    tx_event: &mpsc::Sender<Result<ResponseEvent>>,
+    assistant_item: &mut Option<ResponseItem>,
+    text: String,
+) {
+    if assistant_item.is_none() {
+        let item = ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![],
+        };
+        *assistant_item = Some(item.clone());
+        let _ = tx_event
+            .send(Ok(ResponseEvent::OutputItemAdded(item)))
+            .await;
+    }
+
+    if let Some(ResponseItem::Message { content, .. }) = assistant_item {
+        content.push(ContentItem::OutputText { text: text.clone() });
+        let _ = tx_event
+            .send(Ok(ResponseEvent::OutputTextDelta(text.clone())))
+            .await;
+    }
+}
+
+async fn append_reasoning_text(
+    tx_event: &mpsc::Sender<Result<ResponseEvent>>,
+    reasoning_item: &mut Option<ResponseItem>,
+    text: String,
+) {
+    if reasoning_item.is_none() {
+        let item = ResponseItem::Reasoning {
+            id: String::new(),
+            summary: Vec::new(),
+            content: Some(vec![]),
+            encrypted_content: None,
+        };
+        *reasoning_item = Some(item.clone());
+        let _ = tx_event
+            .send(Ok(ResponseEvent::OutputItemAdded(item)))
+            .await;
+    }
+
+    if let Some(ResponseItem::Reasoning {
+        content: Some(content),
+        ..
+    }) = reasoning_item
+    {
+        content.push(ReasoningItemContent::ReasoningText { text: text.clone() });
+
+        let _ = tx_event
+            .send(Ok(ResponseEvent::ReasoningContentDelta(text.clone())))
+            .await;
+    }
+}
 /// Lightweight SSE processor for the Chat Completions streaming format. The
 /// output is mapped onto Codex's internal [`ResponseEvent`] so that the rest
 /// of the pipeline can stay agnostic of the underlying wire format.
@@ -440,8 +511,8 @@ async fn process_chat_sse<S>(
     }
 
     let mut fn_call_state = FunctionCallState::default();
-    let mut assistant_text = String::new();
-    let mut reasoning_text = String::new();
+    let mut assistant_item: Option<ResponseItem> = None;
+    let mut reasoning_item: Option<ResponseItem> = None;
 
     loop {
         let start = std::time::Instant::now();
@@ -482,26 +553,11 @@ async fn process_chat_sse<S>(
         if sse.data.trim() == "[DONE]" {
             // Emit any finalized items before closing so downstream consumers receive
             // terminal events for both assistant content and raw reasoning.
-            if !assistant_text.is_empty() {
-                let item = ResponseItem::Message {
-                    role: "assistant".to_string(),
-                    content: vec![ContentItem::OutputText {
-                        text: std::mem::take(&mut assistant_text),
-                    }],
-                    id: None,
-                };
+            if let Some(item) = assistant_item {
                 let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
             }
 
-            if !reasoning_text.is_empty() {
-                let item = ResponseItem::Reasoning {
-                    id: String::new(),
-                    summary: Vec::new(),
-                    content: Some(vec![ReasoningItemContent::ReasoningText {
-                        text: std::mem::take(&mut reasoning_text),
-                    }]),
-                    encrypted_content: None,
-                };
+            if let Some(item) = reasoning_item {
                 let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
             }
 
@@ -531,10 +587,7 @@ async fn process_chat_sse<S>(
                 .and_then(|c| c.as_str())
                 && !content.is_empty()
             {
-                assistant_text.push_str(content);
-                let _ = tx_event
-                    .send(Ok(ResponseEvent::OutputTextDelta(content.to_string())))
-                    .await;
+                append_assistant_text(&tx_event, &mut assistant_item, content.to_string()).await;
             }
 
             // Forward any reasoning/thinking deltas if present.
@@ -564,10 +617,7 @@ async fn process_chat_sse<S>(
 
                 if let Some(reasoning) = maybe_text {
                     // Accumulate so we can emit a terminal Reasoning item at the end.
-                    reasoning_text.push_str(&reasoning);
-                    let _ = tx_event
-                        .send(Ok(ResponseEvent::ReasoningContentDelta(reasoning)))
-                        .await;
+                    append_reasoning_text(&tx_event, &mut reasoning_item, reasoning).await;
                 }
             }
 
@@ -577,10 +627,7 @@ async fn process_chat_sse<S>(
                 // Accept either a plain string or an object with { text | content }
                 if let Some(s) = message_reasoning.as_str() {
                     if !s.is_empty() {
-                        reasoning_text.push_str(s);
-                        let _ = tx_event
-                            .send(Ok(ResponseEvent::ReasoningContentDelta(s.to_string())))
-                            .await;
+                        append_reasoning_text(&tx_event, &mut reasoning_item, s.to_string()).await;
                     }
                 } else if let Some(obj) = message_reasoning.as_object()
                     && let Some(s) = obj
@@ -589,10 +636,7 @@ async fn process_chat_sse<S>(
                         .or_else(|| obj.get("content").and_then(|v| v.as_str()))
                     && !s.is_empty()
                 {
-                    reasoning_text.push_str(s);
-                    let _ = tx_event
-                        .send(Ok(ResponseEvent::ReasoningContentDelta(s.to_string())))
-                        .await;
+                    append_reasoning_text(&tx_event, &mut reasoning_item, s.to_string()).await;
                 }
             }
 
@@ -630,15 +674,7 @@ async fn process_chat_sse<S>(
                     "tool_calls" if fn_call_state.active => {
                         // First, flush the terminal raw reasoning so UIs can finalize
                         // the reasoning stream before any exec/tool events begin.
-                        if !reasoning_text.is_empty() {
-                            let item = ResponseItem::Reasoning {
-                                id: String::new(),
-                                summary: Vec::new(),
-                                content: Some(vec![ReasoningItemContent::ReasoningText {
-                                    text: std::mem::take(&mut reasoning_text),
-                                }]),
-                                encrypted_content: None,
-                            };
+                        if let Some(item) = reasoning_item.take() {
                             let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                         }
 
@@ -655,26 +691,11 @@ async fn process_chat_sse<S>(
                     "stop" => {
                         // Regular turn without tool-call. Emit the final assistant message
                         // as a single OutputItemDone so non-delta consumers see the result.
-                        if !assistant_text.is_empty() {
-                            let item = ResponseItem::Message {
-                                role: "assistant".to_string(),
-                                content: vec![ContentItem::OutputText {
-                                    text: std::mem::take(&mut assistant_text),
-                                }],
-                                id: None,
-                            };
+                        if let Some(item) = assistant_item.take() {
                             let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                         }
                         // Also emit a terminal Reasoning item so UIs can finalize raw reasoning.
-                        if !reasoning_text.is_empty() {
-                            let item = ResponseItem::Reasoning {
-                                id: String::new(),
-                                summary: Vec::new(),
-                                content: Some(vec![ReasoningItemContent::ReasoningText {
-                                    text: std::mem::take(&mut reasoning_text),
-                                }]),
-                                encrypted_content: None,
-                            };
+                        if let Some(item) = reasoning_item.take() {
                             let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                         }
                     }
@@ -893,8 +914,8 @@ where
                 Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryPartAdded))) => {
                     continue;
                 }
-                Poll::Ready(Some(Ok(ResponseEvent::WebSearchCallBegin { call_id }))) => {
-                    return Poll::Ready(Some(Ok(ResponseEvent::WebSearchCallBegin { call_id })));
+                Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(item)))) => {
+                    return Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(item))));
                 }
             }
         }
