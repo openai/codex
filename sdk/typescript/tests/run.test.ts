@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { codexExecSpy } from "./codexExecSpy";
-import { describe, expect, it, xit } from "@jest/globals";
+import { describe, expect, it } from "@jest/globals";
 
 import { Codex } from "../src/codex";
 
@@ -308,8 +308,7 @@ describe("Codex", () => {
       await close();
     }
   });
-  // TODO(pakrym): unskip the test
-  xit("forwards images to exec", async () => {
+  it("forwards images to exec", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,
       responseBodies: [

@@ -12,6 +12,7 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
+use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::error::CodexErr;
 use codex_core::model_family::find_family_for_model;
@@ -55,6 +56,18 @@ fn sse_completed(id: &str) -> String {
 #[expect(clippy::unwrap_used)]
 fn assert_message_role(request_body: &serde_json::Value, role: &str) {
     assert_eq!(request_body["role"].as_str().unwrap(), role);
+}
+
+#[expect(clippy::expect_used)]
+fn assert_message_equals(request_body: &serde_json::Value, text: &str) {
+    let content = request_body["content"][0]["text"]
+        .as_str()
+        .expect("invalid message content");
+
+    assert_eq!(
+        content, text,
+        "expected message content '{content}' to equal '{text}'"
+    );
 }
 
 #[expect(clippy::expect_used)]
@@ -525,11 +538,12 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
 
-    let auth_manager = match CodexAuth::from_codex_home(codex_home.path()) {
-        Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
-        Ok(None) => panic!("No CodexAuth found in codex_home"),
-        Err(e) => panic!("Failed to load CodexAuth: {e}"),
-    };
+    let auth_manager =
+        match CodexAuth::from_auth_storage(codex_home.path(), AuthCredentialsStoreMode::File) {
+            Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
+            Ok(None) => panic!("No CodexAuth found in codex_home"),
+            Err(e) => panic!("Failed to load CodexAuth: {e}"),
+        };
     let conversation_manager = ConversationManager::new(auth_manager, SessionSource::Exec);
     let NewConversation {
         conversation: codex,
@@ -599,11 +613,79 @@ async fn includes_user_instructions_message_in_request() {
             .contains("be nice")
     );
     assert_message_role(&request_body["input"][0], "user");
-    assert_message_starts_with(&request_body["input"][0], "<user_instructions>");
-    assert_message_ends_with(&request_body["input"][0], "</user_instructions>");
+    assert_message_starts_with(&request_body["input"][0], "# AGENTS.md instructions for ");
+    assert_message_ends_with(&request_body["input"][0], "</INSTRUCTIONS>");
+    let ui_text = request_body["input"][0]["content"][0]["text"]
+        .as_str()
+        .expect("invalid message content");
+    assert!(ui_text.contains("<INSTRUCTIONS>"));
+    assert!(ui_text.contains("be nice"));
     assert_message_role(&request_body["input"][1], "user");
     assert_message_starts_with(&request_body["input"][1], "<environment_context>");
     assert_message_ends_with(&request_body["input"][1], "</environment_context>");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_developer_instructions_message_in_request() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock =
+        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
+            .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider = model_provider;
+    config.user_instructions = Some("be nice".to_string());
+    config.developer_instructions = Some("be useful".to_string());
+
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create new conversation")
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert!(
+        !request_body["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("be nice")
+    );
+    assert_message_role(&request_body["input"][0], "developer");
+    assert_message_equals(&request_body["input"][0], "be useful");
+    assert_message_role(&request_body["input"][1], "user");
+    assert_message_starts_with(&request_body["input"][1], "# AGENTS.md instructions for ");
+    assert_message_ends_with(&request_body["input"][1], "</INSTRUCTIONS>");
+    let ui_text = request_body["input"][1]["content"][0]["text"]
+        .as_str()
+        .expect("invalid message content");
+    assert!(ui_text.contains("<INSTRUCTIONS>"));
+    assert!(ui_text.contains("be nice"));
+    assert_message_role(&request_body["input"][2], "user");
+    assert_message_starts_with(&request_body["input"][2], "<environment_context>");
+    assert_message_ends_with(&request_body["input"][2], "</environment_context>");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -673,6 +755,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         effort,
         summary,
         conversation_id,
+        codex_protocol::protocol::SessionSource::Exec,
     );
 
     let mut prompt = Prompt::default();
@@ -1259,6 +1342,10 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Build a small SSE stream with deltas and a final assistant message.
     // We emit the same body for all 3 turns; ids vary but are unused by assertions.
     let sse_raw = r##"[
+        {"type":"response.output_item.added", "item":{
+            "type":"message", "role":"assistant",
+            "content":[{"type":"output_text","text":""}]
+        }},
         {"type":"response.output_text.delta", "delta":"Hey "},
         {"type":"response.output_text.delta", "delta":"there"},
         {"type":"response.output_text.delta", "delta":"!\n"},

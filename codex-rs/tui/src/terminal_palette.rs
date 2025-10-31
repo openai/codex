@@ -99,6 +99,10 @@ mod imp {
 
     pub(super) fn requery_default_colors() {
         if let Ok(mut cache) = default_colors_cache().lock() {
+            // Don't try to refresh if the cache is already attempted and failed.
+            if cache.attempted && cache.value.is_none() {
+                return;
+            }
             cache.refresh_with(|| query_default_colors().unwrap_or_default());
         }
     }
