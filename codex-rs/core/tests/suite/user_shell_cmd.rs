@@ -177,3 +177,55 @@ async fn user_shell_cmd_runs_under_non_on_request_policy() {
     assert_eq!(exit_code, 0);
     assert_eq!(stdout, "bang-ok");
 }
+
+#[tokio::test]
+async fn user_shell_cmd_creates_directory_under_read_only_policy() {
+    let Some(python) = detect_python_executable() else {
+        eprintln!("skipping test: python3 not found in PATH");
+        return;
+    };
+
+    let codex_home = TempDir::new().unwrap();
+    let cwd = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.approval_policy = AskForApproval::Never;
+    config.sandbox_policy = codex_core::protocol::SandboxPolicy::new_read_only_policy();
+    config.cwd = cwd.path().to_path_buf();
+
+    let conversation_manager =
+        ConversationManager::with_auth(codex_core::CodexAuth::from_api_key("dummy"));
+    let NewConversation {
+        conversation: codex,
+        ..
+    } = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create new conversation");
+
+    let dir_name = "bang-mkdir";
+    let dir_path = cwd.path().join(dir_name);
+    assert!(
+        !dir_path.exists(),
+        "expected {dir_path:?} not to exist before command"
+    );
+
+    let command = format!("{python} -c \"import pathlib; pathlib.Path('{dir_name}').mkdir()\"");
+    codex
+        .submit(Op::RunUserShellCommand { command })
+        .await
+        .unwrap();
+
+    let msg = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandEnd(_))).await;
+    let EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+        stdout, exit_code, ..
+    }) = msg
+    else {
+        unreachable!()
+    };
+    assert_eq!(exit_code, 0);
+    assert!(stdout.is_empty(), "expected no stdout, got {stdout:?}");
+    assert!(
+        dir_path.exists(),
+        "expected {dir_path:?} to be created by the command"
+    );
+}
