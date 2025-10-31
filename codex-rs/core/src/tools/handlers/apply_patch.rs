@@ -171,7 +171,7 @@ The patch must start with `*** Begin Patch` and end with `*** End Patch`. The se
 - `*** Delete File: PATH` removes a file.
 - `*** Update File: PATH` edits a file. You may add `*** Move to: PATH` to rename it.
     - Update lines should either start with @@ (start of range), ` ` (context line), `+` (add line), or `-` (delete line).
-A patch can contain multiple hunks. Paths should be absolute.".to_string(),
+A patch can contain multiple hunks. `PATH` should be absolute.".to_string(),
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
             syntax: "lark".to_string(),
