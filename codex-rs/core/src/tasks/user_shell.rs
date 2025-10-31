@@ -82,7 +82,7 @@ impl SessionTask for UserShellCommandTask {
             command: shell_invocation,
             workdir: None,
             timeout_ms: None,
-            with_escalated_permissions: Some(true),
+            with_escalated_permissions: None,
             justification: None,
         };
 

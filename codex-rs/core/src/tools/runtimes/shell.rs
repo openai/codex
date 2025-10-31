@@ -150,7 +150,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
     }
 
     fn wants_escalated_first_attempt(&self, req: &ShellRequest) -> bool {
-        req.with_escalated_permissions.unwrap_or(false)
+        req.is_user_shell_command || req.with_escalated_permissions.unwrap_or(false)
     }
 }
 
