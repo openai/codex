@@ -25,8 +25,9 @@ pub enum SlashCommand {
     Mcp,
     Logout,
     Quit,
+    Exit,
     Feedback,
-    #[cfg(debug_assertions)]
+    Rollout,
     TestApproval,
 }
 
@@ -40,7 +41,7 @@ impl SlashCommand {
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Undo => "ask Codex to undo a turn",
-            SlashCommand::Quit => "exit Codex",
+            SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Status => "show current session configuration and token usage",
@@ -48,7 +49,7 @@ impl SlashCommand {
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
-            #[cfg(debug_assertions)]
+            SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
         }
     }
@@ -75,15 +76,25 @@ impl SlashCommand {
             | SlashCommand::Status
             | SlashCommand::Mcp
             | SlashCommand::Feedback
-            | SlashCommand::Quit => true,
-
-            #[cfg(debug_assertions)]
+            | SlashCommand::Quit
+            | SlashCommand::Exit => true,
+            SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
+        }
+    }
+
+    fn is_visible(self) -> bool {
+        match self {
+            SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
+            _ => true,
         }
     }
 }
 
 /// Return all built-in commands in a Vec paired with their command string.
 pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
-    SlashCommand::iter().map(|c| (c.command(), c)).collect()
+    SlashCommand::iter()
+        .filter(|command| command.is_visible())
+        .map(|c| (c.command(), c))
+        .collect()
 }

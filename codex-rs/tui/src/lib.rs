@@ -144,8 +144,9 @@ pub async fn run_main(
         config_profile: cli.config_profile.clone(),
         codex_linux_sandbox_exe,
         base_instructions: None,
+        developer_instructions: None,
+        compact_prompt: None,
         include_apply_patch_tool: None,
-        include_view_image_tool: None,
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: cli.web_search.then_some(true),
         experimental_sandbox_command_assessment: None,
@@ -315,7 +316,11 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
 
-    let auth_manager = AuthManager::shared(initial_config.codex_home.clone(), false);
+    let auth_manager = AuthManager::shared(
+        initial_config.codex_home.clone(),
+        false,
+        initial_config.cli_auth_credentials_store_mode,
+    );
     let login_status = get_login_status(&initial_config);
     let should_show_trust_screen = should_show_trust_screen(&initial_config);
     let should_show_windows_wsl_screen =
@@ -476,7 +481,7 @@ fn get_login_status(config: &Config) -> LoginStatus {
         // Reading the OpenAI API key is an async operation because it may need
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
-        match CodexAuth::from_codex_home(&codex_home) {
+        match CodexAuth::from_auth_storage(&codex_home, config.cli_auth_credentials_store_mode) {
             Ok(Some(auth)) => LoginStatus::AuthMode(auth.mode),
             Ok(None) => LoginStatus::NotAuthenticated,
             Err(err) => {
@@ -507,14 +512,16 @@ async fn load_config_or_exit(
 /// or if the current cwd project is already trusted. If not, we need to
 /// show the trust screen.
 fn should_show_trust_screen(config: &Config) -> bool {
-    if config.did_user_set_custom_approval_policy_or_sandbox_mode {
-        // if the user has overridden either approval policy or sandbox mode,
-        // skip the trust flow
-        false
-    } else {
-        // otherwise, skip iff the active project is trusted
-        !config.active_project.is_trusted()
+    if cfg!(target_os = "windows") {
+        // Native Windows cannot enforce sandboxed write access without WSL; skip the trust prompt entirely.
+        return false;
     }
+    if config.did_user_set_custom_approval_policy_or_sandbox_mode {
+        // Respect explicit approval/sandbox overrides made by the user.
+        return false;
+    }
+    // otherwise, skip iff the active project is trusted
+    !config.active_project.is_trusted()
 }
 
 fn should_show_onboarding(
@@ -542,4 +549,39 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
     }
 
     login_status == LoginStatus::NotAuthenticated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::config::ConfigOverrides;
+    use codex_core::config::ConfigToml;
+    use codex_core::config::ProjectConfig;
+    use tempfile::TempDir;
+
+    #[test]
+    fn windows_skips_trust_prompt() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            temp_dir.path().to_path_buf(),
+        )?;
+        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
+        config.active_project = ProjectConfig { trust_level: None };
+
+        let should_show = should_show_trust_screen(&config);
+        if cfg!(target_os = "windows") {
+            assert!(
+                !should_show,
+                "Windows trust prompt should always be skipped on native Windows"
+            );
+        } else {
+            assert!(
+                should_show,
+                "Non-Windows should still show trust prompt when project is untrusted"
+            );
+        }
+        Ok(())
+    }
 }

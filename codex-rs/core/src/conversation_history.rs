@@ -1,9 +1,20 @@
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+
+use crate::util::error_or_panic;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_utils_string::take_bytes_at_char_boundary;
+use codex_utils_string::take_last_bytes_at_char_boundary;
 use std::ops::Deref;
-use tracing::error;
+
+// Model-formatting limits: clients get full streams; only content sent to the model is truncated.
+pub(crate) const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
+pub(crate) const MODEL_FORMAT_MAX_LINES: usize = 256; // lines
+pub(crate) const MODEL_FORMAT_HEAD_LINES: usize = MODEL_FORMAT_MAX_LINES / 2;
+pub(crate) const MODEL_FORMAT_TAIL_LINES: usize = MODEL_FORMAT_MAX_LINES - MODEL_FORMAT_HEAD_LINES; // 128
+pub(crate) const MODEL_FORMAT_HEAD_BYTES: usize = MODEL_FORMAT_MAX_BYTES / 2;
 
 /// Transcript of conversation history
 #[derive(Debug, Clone, Default)]
@@ -47,13 +58,22 @@ impl ConversationHistory {
                 continue;
             }
 
-            self.items.push(item.clone());
+            let processed = Self::process_item(&item);
+            self.items.push(processed);
         }
     }
 
     pub(crate) fn get_history(&mut self) -> Vec<ResponseItem> {
         self.normalize_history();
         self.contents()
+    }
+
+    // Returns the history prepared for sending to the model.
+    // With extra response items filtered out and GhostCommits removed.
+    pub(crate) fn get_history_for_prompt(&mut self) -> Vec<ResponseItem> {
+        let mut history = self.get_history();
+        Self::remove_ghost_snapshots(&mut history);
+        history
     }
 
     pub(crate) fn remove_first_item(&mut self) {
@@ -66,6 +86,22 @@ impl ConversationHistory {
             // running a full normalization pass.
             self.remove_corresponding_for(&removed);
         }
+    }
+
+    pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
+        self.items = items;
+    }
+
+    pub(crate) fn update_token_info(
+        &mut self,
+        usage: &TokenUsage,
+        model_context_window: Option<i64>,
+    ) {
+        self.token_info = TokenUsageInfo::new_or_append(
+            &self.token_info,
+            &Some(usage.clone()),
+            model_context_window,
+        );
     }
 
     /// This function enforces a couple of invariants on the in-memory history:
@@ -82,6 +118,10 @@ impl ConversationHistory {
     /// Returns a clone of the contents in the transcript.
     fn contents(&self) -> Vec<ResponseItem> {
         self.items.clone()
+    }
+
+    fn remove_ghost_snapshots(items: &mut Vec<ResponseItem>) {
+        items.retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
     }
 
     fn ensure_call_outputs_present(&mut self) {
@@ -110,7 +150,7 @@ impl ConversationHistory {
                                 call_id: call_id.clone(),
                                 output: FunctionCallOutputPayload {
                                     content: "aborted".to_string(),
-                                    success: None,
+                                    ..Default::default()
                                 },
                             },
                         ));
@@ -157,7 +197,7 @@ impl ConversationHistory {
                                     call_id: call_id.clone(),
                                     output: FunctionCallOutputPayload {
                                         content: "aborted".to_string(),
-                                        success: None,
+                                        ..Default::default()
                                     },
                                 },
                             ));
@@ -253,10 +293,6 @@ impl ConversationHistory {
         }
     }
 
-    pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
-        self.items = items;
-    }
-
     /// Removes the corresponding paired item for the provided `item`, if any.
     ///
     /// Pairs:
@@ -326,26 +362,124 @@ impl ConversationHistory {
         }
     }
 
-    pub(crate) fn update_token_info(
-        &mut self,
-        usage: &TokenUsage,
-        model_context_window: Option<i64>,
-    ) {
-        self.token_info = TokenUsageInfo::new_or_append(
-            &self.token_info,
-            &Some(usage.clone()),
-            model_context_window,
-        );
+    fn process_item(item: &ResponseItem) -> ResponseItem {
+        match item {
+            ResponseItem::FunctionCallOutput { call_id, output } => {
+                let truncated = format_output_for_model_body(output.content.as_str());
+                let truncated_items = output.content_items.as_ref().map(|items| {
+                    items
+                        .iter()
+                        .map(|it| match it {
+                            FunctionCallOutputContentItem::InputText { text } => {
+                                FunctionCallOutputContentItem::InputText {
+                                    text: format_output_for_model_body(text),
+                                }
+                            }
+                            FunctionCallOutputContentItem::InputImage { image_url } => {
+                                FunctionCallOutputContentItem::InputImage {
+                                    image_url: image_url.clone(),
+                                }
+                            }
+                        })
+                        .collect()
+                });
+                ResponseItem::FunctionCallOutput {
+                    call_id: call_id.clone(),
+                    output: FunctionCallOutputPayload {
+                        content: truncated,
+                        content_items: truncated_items,
+                        success: output.success,
+                    },
+                }
+            }
+            ResponseItem::CustomToolCallOutput { call_id, output } => {
+                let truncated = format_output_for_model_body(output);
+                ResponseItem::CustomToolCallOutput {
+                    call_id: call_id.clone(),
+                    output: truncated,
+                }
+            }
+            ResponseItem::Message { .. }
+            | ResponseItem::Reasoning { .. }
+            | ResponseItem::LocalShellCall { .. }
+            | ResponseItem::FunctionCall { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::CustomToolCall { .. }
+            | ResponseItem::GhostSnapshot { .. }
+            | ResponseItem::Other => item.clone(),
+        }
     }
 }
 
-#[inline]
-fn error_or_panic(message: String) {
-    if cfg!(debug_assertions) || env!("CARGO_PKG_VERSION").contains("alpha") {
-        panic!("{message}");
-    } else {
-        error!("{message}");
+pub(crate) fn format_output_for_model_body(content: &str) -> String {
+    // Head+tail truncation for the model: show the beginning and end with an elision.
+    // Clients still receive full streams; only this formatted summary is capped.
+    let total_lines = content.lines().count();
+    if content.len() <= MODEL_FORMAT_MAX_BYTES && total_lines <= MODEL_FORMAT_MAX_LINES {
+        return content.to_string();
     }
+    let output = truncate_formatted_exec_output(content, total_lines);
+    format!("Total output lines: {total_lines}\n\n{output}")
+}
+
+fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
+    let segments: Vec<&str> = content.split_inclusive('\n').collect();
+    let head_take = MODEL_FORMAT_HEAD_LINES.min(segments.len());
+    let tail_take = MODEL_FORMAT_TAIL_LINES.min(segments.len().saturating_sub(head_take));
+    let omitted = segments.len().saturating_sub(head_take + tail_take);
+
+    let head_slice_end: usize = segments
+        .iter()
+        .take(head_take)
+        .map(|segment| segment.len())
+        .sum();
+    let tail_slice_start: usize = if tail_take == 0 {
+        content.len()
+    } else {
+        content.len()
+            - segments
+                .iter()
+                .rev()
+                .take(tail_take)
+                .map(|segment| segment.len())
+                .sum::<usize>()
+    };
+    let head_slice = &content[..head_slice_end];
+    let tail_slice = &content[tail_slice_start..];
+    let truncated_by_bytes = content.len() > MODEL_FORMAT_MAX_BYTES;
+    // this is a bit wrong. We are counting metadata lines and not just shell output lines.
+    let marker = if omitted > 0 {
+        Some(format!(
+            "\n[... omitted {omitted} of {total_lines} lines ...]\n\n"
+        ))
+    } else if truncated_by_bytes {
+        Some(format!(
+            "\n[... output truncated to fit {MODEL_FORMAT_MAX_BYTES} bytes ...]\n\n"
+        ))
+    } else {
+        None
+    };
+
+    let marker_len = marker.as_ref().map_or(0, String::len);
+    let base_head_budget = MODEL_FORMAT_HEAD_BYTES.min(MODEL_FORMAT_MAX_BYTES);
+    let head_budget = base_head_budget.min(MODEL_FORMAT_MAX_BYTES.saturating_sub(marker_len));
+    let head_part = take_bytes_at_char_boundary(head_slice, head_budget);
+    let mut result = String::with_capacity(MODEL_FORMAT_MAX_BYTES.min(content.len()));
+
+    result.push_str(head_part);
+    if let Some(marker_text) = marker.as_ref() {
+        result.push_str(marker_text);
+    }
+
+    let remaining = MODEL_FORMAT_MAX_BYTES.saturating_sub(result.len());
+    if remaining == 0 {
+        return result;
+    }
+
+    let tail_part = take_last_bytes_at_char_boundary(tail_slice, remaining);
+    result.push_str(tail_part);
+
+    result
 }
 
 /// Anything that is not a system message or "reasoning" message is considered
@@ -368,6 +502,7 @@ fn is_api_message(message: &ResponseItem) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_git::GhostCommit;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::models::LocalShellAction;
@@ -442,6 +577,16 @@ mod tests {
     }
 
     #[test]
+    fn get_history_for_prompt_drops_ghost_commits() {
+        let items = vec![ResponseItem::GhostSnapshot {
+            ghost_commit: GhostCommit::new("ghost-1".to_string(), None, Vec::new(), Vec::new()),
+        }];
+        let mut history = create_history_with_items(items);
+        let filtered = history.get_history_for_prompt();
+        assert_eq!(filtered, vec![]);
+    }
+
+    #[test]
     fn remove_first_item_removes_matching_output_for_function_call() {
         let items = vec![
             ResponseItem::FunctionCall {
@@ -454,7 +599,7 @@ mod tests {
                 call_id: "call-1".to_string(),
                 output: FunctionCallOutputPayload {
                     content: "ok".to_string(),
-                    success: None,
+                    ..Default::default()
                 },
             },
         ];
@@ -470,7 +615,7 @@ mod tests {
                 call_id: "call-2".to_string(),
                 output: FunctionCallOutputPayload {
                     content: "ok".to_string(),
-                    success: None,
+                    ..Default::default()
                 },
             },
             ResponseItem::FunctionCall {
@@ -504,7 +649,7 @@ mod tests {
                 call_id: "call-3".to_string(),
                 output: FunctionCallOutputPayload {
                     content: "ok".to_string(),
-                    success: None,
+                    ..Default::default()
                 },
             },
         ];
@@ -531,6 +676,184 @@ mod tests {
         let mut h = create_history_with_items(items);
         h.remove_first_item();
         assert_eq!(h.contents(), vec![]);
+    }
+
+    #[test]
+    fn record_items_truncates_function_call_output_content() {
+        let mut history = ConversationHistory::new();
+        let long_line = "a very long line to trigger truncation\n";
+        let long_output = long_line.repeat(2_500);
+        let item = ResponseItem::FunctionCallOutput {
+            call_id: "call-100".to_string(),
+            output: FunctionCallOutputPayload {
+                content: long_output.clone(),
+                success: Some(true),
+                ..Default::default()
+            },
+        };
+
+        history.record_items([&item]);
+
+        assert_eq!(history.items.len(), 1);
+        match &history.items[0] {
+            ResponseItem::FunctionCallOutput { output, .. } => {
+                assert_ne!(output.content, long_output);
+                assert!(
+                    output.content.starts_with("Total output lines:"),
+                    "expected truncated summary, got {}",
+                    output.content
+                );
+            }
+            other => panic!("unexpected history item: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn record_items_truncates_custom_tool_call_output_content() {
+        let mut history = ConversationHistory::new();
+        let line = "custom output that is very long\n";
+        let long_output = line.repeat(2_500);
+        let item = ResponseItem::CustomToolCallOutput {
+            call_id: "tool-200".to_string(),
+            output: long_output.clone(),
+        };
+
+        history.record_items([&item]);
+
+        assert_eq!(history.items.len(), 1);
+        match &history.items[0] {
+            ResponseItem::CustomToolCallOutput { output, .. } => {
+                assert_ne!(output, &long_output);
+                assert!(
+                    output.starts_with("Total output lines:"),
+                    "expected truncated summary, got {output}"
+                );
+            }
+            other => panic!("unexpected history item: {other:?}"),
+        }
+    }
+
+    // The following tests were adapted from tools::mod truncation tests to
+    // target the new truncation functions in conversation_history.
+
+    use regex_lite::Regex;
+
+    fn assert_truncated_message_matches(message: &str, line: &str, total_lines: usize) {
+        let pattern = truncated_message_pattern(line, total_lines);
+        let regex = Regex::new(&pattern).unwrap_or_else(|err| {
+            panic!("failed to compile regex {pattern}: {err}");
+        });
+        let captures = regex
+            .captures(message)
+            .unwrap_or_else(|| panic!("message failed to match pattern {pattern}: {message}"));
+        let body = captures
+            .name("body")
+            .expect("missing body capture")
+            .as_str();
+        assert!(
+            body.len() <= MODEL_FORMAT_MAX_BYTES,
+            "body exceeds byte limit: {} bytes",
+            body.len()
+        );
+    }
+
+    fn truncated_message_pattern(line: &str, total_lines: usize) -> String {
+        let head_take = MODEL_FORMAT_HEAD_LINES.min(total_lines);
+        let tail_take = MODEL_FORMAT_TAIL_LINES.min(total_lines.saturating_sub(head_take));
+        let omitted = total_lines.saturating_sub(head_take + tail_take);
+        let escaped_line = regex_lite::escape(line);
+        if omitted == 0 {
+            return format!(
+                r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} output truncated to fit {MODEL_FORMAT_MAX_BYTES} bytes \.{{3}}]\n\n.*)$",
+            );
+        }
+        format!(
+            r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} omitted {omitted} of {total_lines} lines \.{{3}}]\n\n.*)$",
+        )
+    }
+
+    #[test]
+    fn format_exec_output_truncates_large_error() {
+        let line = "very long execution error line that should trigger truncation\n";
+        let large_error = line.repeat(2_500); // way beyond both byte and line limits
+
+        let truncated = format_output_for_model_body(&large_error);
+
+        let total_lines = large_error.lines().count();
+        assert_truncated_message_matches(&truncated, line, total_lines);
+        assert_ne!(truncated, large_error);
+    }
+
+    #[test]
+    fn format_exec_output_marks_byte_truncation_without_omitted_lines() {
+        let long_line = "a".repeat(MODEL_FORMAT_MAX_BYTES + 50);
+        let truncated = format_output_for_model_body(&long_line);
+
+        assert_ne!(truncated, long_line);
+        let marker_line =
+            format!("[... output truncated to fit {MODEL_FORMAT_MAX_BYTES} bytes ...]");
+        assert!(
+            truncated.contains(&marker_line),
+            "missing byte truncation marker: {truncated}"
+        );
+        assert!(
+            !truncated.contains("omitted"),
+            "line omission marker should not appear when no lines were dropped: {truncated}"
+        );
+    }
+
+    #[test]
+    fn format_exec_output_returns_original_when_within_limits() {
+        let content = "example output\n".repeat(10);
+
+        assert_eq!(format_output_for_model_body(&content), content);
+    }
+
+    #[test]
+    fn format_exec_output_reports_omitted_lines_and_keeps_head_and_tail() {
+        let total_lines = MODEL_FORMAT_MAX_LINES + 100;
+        let content: String = (0..total_lines)
+            .map(|idx| format!("line-{idx}\n"))
+            .collect();
+
+        let truncated = format_output_for_model_body(&content);
+        let omitted = total_lines - MODEL_FORMAT_MAX_LINES;
+        let expected_marker = format!("[... omitted {omitted} of {total_lines} lines ...]");
+
+        assert!(
+            truncated.contains(&expected_marker),
+            "missing omitted marker: {truncated}"
+        );
+        assert!(
+            truncated.contains("line-0\n"),
+            "expected head line to remain: {truncated}"
+        );
+
+        let last_line = format!("line-{}\n", total_lines - 1);
+        assert!(
+            truncated.contains(&last_line),
+            "expected tail line to remain: {truncated}"
+        );
+    }
+
+    #[test]
+    fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
+        let total_lines = MODEL_FORMAT_MAX_LINES + 42;
+        let long_line = "x".repeat(256);
+        let content: String = (0..total_lines)
+            .map(|idx| format!("line-{idx}-{long_line}\n"))
+            .collect();
+
+        let truncated = format_output_for_model_body(&content);
+
+        assert!(
+            truncated.contains("[... omitted 42 of 298 lines ...]"),
+            "expected omitted marker when line count exceeds limit: {truncated}"
+        );
+        assert!(
+            !truncated.contains("output truncated to fit"),
+            "line omission marker should take precedence over byte marker: {truncated}"
+        );
     }
 
     //TODO(aibrahim): run CI in release mode.
@@ -560,7 +883,7 @@ mod tests {
                     call_id: "call-x".to_string(),
                     output: FunctionCallOutputPayload {
                         content: "aborted".to_string(),
-                        success: None,
+                        ..Default::default()
                     },
                 },
             ]
@@ -637,7 +960,7 @@ mod tests {
                     call_id: "shell-1".to_string(),
                     output: FunctionCallOutputPayload {
                         content: "aborted".to_string(),
-                        success: None,
+                        ..Default::default()
                     },
                 },
             ]
@@ -651,7 +974,7 @@ mod tests {
             call_id: "orphan-1".to_string(),
             output: FunctionCallOutputPayload {
                 content: "ok".to_string(),
-                success: None,
+                ..Default::default()
             },
         }];
         let mut h = create_history_with_items(items);
@@ -691,7 +1014,7 @@ mod tests {
                 call_id: "c2".to_string(),
                 output: FunctionCallOutputPayload {
                     content: "ok".to_string(),
-                    success: None,
+                    ..Default::default()
                 },
             },
             // Will get an inserted custom tool output
@@ -733,7 +1056,7 @@ mod tests {
                     call_id: "c1".to_string(),
                     output: FunctionCallOutputPayload {
                         content: "aborted".to_string(),
-                        success: None,
+                        ..Default::default()
                     },
                 },
                 ResponseItem::CustomToolCall {
@@ -763,7 +1086,7 @@ mod tests {
                     call_id: "s1".to_string(),
                     output: FunctionCallOutputPayload {
                         content: "aborted".to_string(),
-                        success: None,
+                        ..Default::default()
                     },
                 },
             ]
@@ -828,7 +1151,7 @@ mod tests {
             call_id: "orphan-1".to_string(),
             output: FunctionCallOutputPayload {
                 content: "ok".to_string(),
-                success: None,
+                ..Default::default()
             },
         }];
         let mut h = create_history_with_items(items);
@@ -862,7 +1185,7 @@ mod tests {
                 call_id: "c2".to_string(),
                 output: FunctionCallOutputPayload {
                     content: "ok".to_string(),
-                    success: None,
+                    ..Default::default()
                 },
             },
             ResponseItem::CustomToolCall {

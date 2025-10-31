@@ -72,6 +72,9 @@ pub(crate) enum AppEvent {
         preset: ApprovalPreset,
     },
 
+    /// Show Windows Subsystem for Linux setup instructions for auto mode.
+    ShowWindowsAutoModeInstructions,
+
     /// Update the current approval policy in the running app and widget.
     UpdateAskForApprovalPolicy(AskForApproval),
 

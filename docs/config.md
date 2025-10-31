@@ -312,12 +312,12 @@ Though using this option may also be necessary if you try to use Codex in enviro
 
 ### tools.\*
 
-Use the optional `[tools]` table to toggle built-in tools that the agent may call. Both keys default to `false` (tools stay disabled) unless you opt in:
+Use the optional `[tools]` table to toggle built-in tools that the agent may call. `web_search` stays off unless you opt in, while `view_image` is now enabled by default:
 
 ```toml
 [tools]
 web_search = true   # allow Codex to issue first-party web searches without prompting you
-view_image = true   # let Codex attach local images (paths in your workspace) to the model request
+view_image = false  # disable image uploads (they're enabled by default)
 ```
 
 `web_search` is also recognized under the legacy name `web_search_request`. The `view_image` toggle is useful when you want to include screenshots or diagrams from your repo without pasting them manually. Codex still respects sandboxing: it can only attach files inside the workspace roots you allow.
@@ -836,7 +836,9 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 
 > [!NOTE] > `tui.notifications` is built‑in and limited to the TUI session. For programmatic or cross‑environment notifications—or to integrate with OS‑specific notifiers—use the top‑level `notify` option to run an external program that receives event JSON. The two settings are independent and can be used together.
 
-## Forcing a login method
+## Authentication and authorization
+
+### Forcing a login method
 
 To force users on a given machine to use a specific login method or workspace, use a combination of [managed configurations](https://developers.openai.com/codex/security#managed-configuration) as well as either or both of the following fields:
 
@@ -851,6 +853,22 @@ forced_chatgpt_workspace_id = "00000000-0000-0000-0000-000000000000"
 If the active credentials don't match the config, the user will be logged out and Codex will exit.
 
 If `forced_chatgpt_workspace_id` is set but `forced_login_method` is not set, API key login will still work.
+
+### Control where login credentials are stored
+
+```toml
+cli_auth_credentials_store = "keyring"
+```
+
+Valid values:
+
+- `file` (default) – Store credentials in `auth.json` under `$CODEX_HOME`.
+- `keyring` – Store credentials in the operating system keyring via the [`keyring` crate](https://crates.io/crates/keyring); the CLI reports an error if secure storage is unavailable. Backends by OS:
+  - macOS: macOS Keychain
+  - Windows: Windows Credential Manager
+  - Linux: DBus‑based Secret Service, the kernel keyutils, or a combination
+  - FreeBSD/OpenBSD: DBus‑based Secret Service
+- `auto` – Save credentials to the operating system keyring when available; otherwise, fall back to `auth.json` under `$CODEX_HOME`.
 
 ## Config reference
 
@@ -908,6 +926,7 @@ If `forced_chatgpt_workspace_id` is set but `forced_login_method` is not set, AP
 | `experimental_use_exec_command_tool`             | boolean                                                           | Use experimental exec command tool.                                                                                        |
 | `projects.<path>.trust_level`                    | string                                                            | Mark project/worktree as trusted (only `"trusted"` is recognized).                                                         |
 | `tools.web_search`                               | boolean                                                           | Enable web search tool (alias: `web_search_request`) (default: false).                                                     |
+| `tools.view_image`                               | boolean                                                           | Enable or disable the `view_image` tool so Codex can attach local image files from the workspace (default: true).          |
 | `forced_login_method`                            | `chatgpt` \| `api`                                                | Only allow Codex to be used with ChatGPT or API keys.                                                                      |
 | `forced_chatgpt_workspace_id`                    | string (uuid)                                                     | Only allow Codex to be used with the specified ChatGPT workspace.                                                          |
-| `tools.view_image`                               | boolean                                                           | Enable the `view_image` tool so Codex can attach local image files from the workspace (default: false).                    |
+| `cli_auth_credentials_store`                     | `file` \| `keyring` \| `auto`                                     | Where to store CLI login credentials (default: `file`).                                                                    |
