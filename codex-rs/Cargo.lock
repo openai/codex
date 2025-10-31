@@ -871,6 +871,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-protocol",
+ "mcp-types",
  "paste",
  "pretty_assertions",
  "schemars 0.8.22",
