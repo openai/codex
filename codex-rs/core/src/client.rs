@@ -216,10 +216,12 @@ impl ModelClient {
         let verbosity = if self.config.model_family.support_verbosity {
             self.config.model_verbosity
         } else {
-            warn!(
-                "model_verbosity is set but ignored as the model does not support verbosity: {}",
-                self.config.model_family.family
-            );
+            if self.config.model_verbosity.is_some() {
+                warn!(
+                    "model_verbosity is set but ignored as the model does not support verbosity: {}",
+                    self.config.model_family.family
+                );
+            }
             None
         };
 
