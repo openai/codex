@@ -126,7 +126,9 @@ pub fn generate_types(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
 }
 
 pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
+    let v2_out_dir = out_dir.join("v2");
     ensure_dir(out_dir)?;
+    ensure_dir(&v2_out_dir)?;
 
     ClientRequest::export_all_to(out_dir)?;
     export_client_responses(out_dir)?;
@@ -137,7 +139,7 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     ServerNotification::export_all_to(out_dir)?;
 
     generate_index_ts(out_dir)?;
-    generate_index_ts(&out_dir.join("v2"))?;
+    generate_index_ts(&v2_out_dir)?;
 
     // Ensure our header is present on all TS files (root + subdirs like v2/).
     let ts_files = ts_files_in_recursive(out_dir)?;
