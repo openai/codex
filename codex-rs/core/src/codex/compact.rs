@@ -23,7 +23,6 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
 use tracing::error;
-use uuid::Uuid;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
@@ -247,33 +246,13 @@ fn build_compacted_history_with_limit(
         summary_text.to_string()
     };
 
-    let call_id = deterministic_compact_call_id(&selected_messages, &summary_text);
-    history.push(ResponseItem::CustomToolCall {
+    history.push(ResponseItem::Message {
         id: None,
-        status: Some("completed".to_string()),
-        call_id: call_id.clone(),
-        name: "compactor".to_string(),
-        input: String::new(),
-    });
-    history.push(ResponseItem::CustomToolCallOutput {
-        call_id,
-        output: summary_text,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText { text: summary_text }],
     });
 
     history
-}
-
-fn deterministic_compact_call_id(user_messages: &[String], summary_text: &str) -> String {
-    // Required for testing purpose.
-    let payload = serde_json::json!({
-        "summary": summary_text,
-        "messages": user_messages,
-    });
-    if let Ok(bytes) = serde_json::to_vec(&payload) {
-        Uuid::new_v5(&Uuid::NAMESPACE_OID, &bytes).to_string()
-    } else {
-        Uuid::new_v4().to_string()
-    }
 }
 
 async fn drain_to_completed(
@@ -411,11 +390,10 @@ mod tests {
             "SUMMARY",
             max_bytes,
         );
-        assert_eq!(history.len(), 3);
+        assert_eq!(history.len(), 2);
 
         let truncated_message = &history[0];
-        let tool_call = &history[1];
-        let tool_output = &history[2];
+        let summary_message = &history[1];
 
         let truncated_text = match truncated_message {
             ResponseItem::Message { role, content, .. } if role == "user" => {
@@ -433,57 +411,34 @@ mod tests {
             "truncated user message should not include the full oversized user text"
         );
 
-        match tool_call {
-            ResponseItem::CustomToolCall { name, .. } => {
-                assert_eq!(name, "compactor");
+        let summary_text = match summary_message {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                content_items_to_text(content).unwrap_or_default()
             }
-            other => panic!("expected CustomToolCall, got {other:?}"),
-        }
-
-        match tool_output {
-            ResponseItem::CustomToolCallOutput { output, .. } => {
-                assert_eq!(output, "SUMMARY");
-            }
-            other => panic!("expected CustomToolCallOutput, got {other:?}"),
-        }
+            other => panic!("unexpected item in history: {other:?}"),
+        };
+        assert_eq!(summary_text, "SUMMARY");
     }
 
     #[test]
-    fn build_compacted_history_produces_stable_call_id() {
+    fn build_compacted_history_appends_summary_message() {
         let initial_context: Vec<ResponseItem> = Vec::new();
         let user_messages = vec!["first user message".to_string()];
         let summary_text = "summary text";
 
-        let history1 =
-            build_compacted_history(initial_context.clone(), &user_messages, summary_text);
-        let history2 = build_compacted_history(initial_context, &user_messages, summary_text);
+        let history = build_compacted_history(initial_context, &user_messages, summary_text);
+        assert!(
+            !history.is_empty(),
+            "expected compacted history to include summary"
+        );
 
-        let call_id1 = extract_compactor_call_id(&history1);
-        let call_id2 = extract_compactor_call_id(&history2);
-
-        assert_eq!(call_id1, call_id2);
-    }
-
-    fn extract_compactor_call_id(history: &[ResponseItem]) -> String {
-        let call_id = history
-            .iter()
-            .find_map(|item| match item {
-                ResponseItem::CustomToolCall { name, call_id, .. } if name == "compactor" => {
-                    Some(call_id.clone())
-                }
-                _ => None,
-            })
-            .expect("compactor call id missing");
-
-        let output_call_id = history
-            .iter()
-            .find_map(|item| match item {
-                ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id.clone()),
-                _ => None,
-            })
-            .expect("compactor call output missing");
-
-        assert_eq!(call_id, output_call_id);
-        call_id
+        let last = history.last().expect("history should have a summary entry");
+        let summary = match last {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                content_items_to_text(content).unwrap_or_default()
+            }
+            other => panic!("expected summary message, found {other:?}"),
+        };
+        assert_eq!(summary, summary_text);
     }
 }

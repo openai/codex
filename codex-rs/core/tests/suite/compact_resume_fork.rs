@@ -66,6 +66,27 @@ fn is_ghost_snapshot_message(item: &Value) -> bool {
         .is_some_and(|text| text.trim_start().starts_with("<ghost_snapshot>"))
 }
 
+fn extract_summary_message(request: &Value, summary_text: &str) -> Value {
+    request
+        .get("input")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("type").and_then(Value::as_str) == Some("message")
+                    && item.get("role").and_then(Value::as_str) == Some("user")
+                    && item
+                        .get("content")
+                        .and_then(Value::as_array)
+                        .and_then(|arr| arr.first())
+                        .and_then(|entry| entry.get("text"))
+                        .and_then(Value::as_str)
+                        == Some(summary_text)
+            })
+        })
+        .cloned()
+        .unwrap_or_else(|| panic!("expected summary message {summary_text}"))
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 /// Scenario: compact an initial conversation, resume it, fork one turn back, and
 /// ensure the model-visible history matches expectations at each request.
@@ -157,34 +178,9 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .unwrap_or_default()
         .to_string();
     let expected_model = OPENAI_DEFAULT_MODEL;
-    let extract_compactor_items = |request: &Value| -> (Value, Value) {
-        let mut call = None;
-        let mut output = None;
-        if let Some(input) = request.get("input").and_then(|v| v.as_array()) {
-            for item in input {
-                match item.get("type").and_then(|v| v.as_str()) {
-                    Some("custom_tool_call")
-                        if item.get("name").and_then(|v| v.as_str()) == Some("compactor") =>
-                    {
-                        call = Some(item.clone());
-                    }
-                    Some("custom_tool_call_output") => {
-                        output = Some(item.clone());
-                    }
-                    _ => {}
-                }
-            }
-        }
-        let call = call.expect("expected compactor call");
-        let output = output.expect("expected compactor output");
-        (call, output)
-    };
-    let (compactor_call_after_compact, compactor_output_after_compact) =
-        extract_compactor_items(&requests[2]);
-    let (compactor_call_after_resume, compactor_output_after_resume) =
-        extract_compactor_items(&requests[3]);
-    let (compactor_call_after_fork, compactor_output_after_fork) =
-        extract_compactor_items(&requests[4]);
+    let summary_after_compact = extract_summary_message(&requests[2], SUMMARY_TEXT);
+    let summary_after_resume = extract_summary_message(&requests[3], SUMMARY_TEXT);
+    let summary_after_fork = extract_summary_message(&requests[4], SUMMARY_TEXT);
     let user_turn_1 = json!(
     {
       "model": expected_model,
@@ -338,8 +334,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
             }
           ]
         },
-        compactor_call_after_compact,
-        compactor_output_after_compact,
+        summary_after_compact,
         {
           "type": "message",
           "role": "user",
@@ -399,8 +394,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
             }
           ]
         },
-        compactor_call_after_resume,
-        compactor_output_after_resume,
+        summary_after_resume,
         {
           "type": "message",
           "role": "user",
@@ -480,8 +474,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
             }
           ]
         },
-        compactor_call_after_fork,
-        compactor_output_after_fork,
+        summary_after_fork,
         {
           "type": "message",
           "role": "user",
@@ -622,32 +615,9 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         .to_string();
 
     // Build expected final request input: initial context + forked user message +
-    // compacted call/output + post-compact user message + resumed user message.
-    let extract_compactor_items = |request: &Value| -> (Value, Value) {
-        let mut call = None;
-        let mut output = None;
-        if let Some(input) = request.get("input").and_then(|v| v.as_array()) {
-            for item in input {
-                match item.get("type").and_then(|v| v.as_str()) {
-                    Some("custom_tool_call")
-                        if item.get("name").and_then(|v| v.as_str()) == Some("compactor") =>
-                    {
-                        call = Some(item.clone());
-                    }
-                    Some("custom_tool_call_output") => {
-                        output = Some(item.clone());
-                    }
-                    _ => {}
-                }
-            }
-        }
-        (
-            call.expect("compactor call"),
-            output.expect("compactor output"),
-        )
-    };
-    let (call_after_second_compact, output_after_second_compact) =
-        extract_compactor_items(&requests[requests.len() - 3]);
+    // compacted summary + post-compact user message + resumed user message.
+    let summary_after_second_compact =
+        extract_summary_message(&requests[requests.len() - 3], SUMMARY_TEXT);
 
     let mut expected = json!([
       {
@@ -683,8 +653,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
               }
             ]
           },
-          call_after_second_compact,
-          output_after_second_compact,
+          summary_after_second_compact,
           {
             "type": "message",
             "role": "user",

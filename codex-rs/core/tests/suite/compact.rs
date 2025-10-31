@@ -13,7 +13,6 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
-use std::collections::HashSet;
 use std::collections::VecDeque;
 use tempfile::TempDir;
 
@@ -205,57 +204,23 @@ async fn summarize_context_three_requests_and_instructions() {
     );
 
     let mut messages: Vec<(String, String)> = Vec::new();
-    let mut compactor_call_ids: HashSet<String> = HashSet::new();
-    let mut compactor_output: Option<String> = None;
 
     for item in input3 {
-        match item.get("type").and_then(|v| v.as_str()) {
-            Some("message") => {
-                let role = item
-                    .get("role")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                let text = item
-                    .get("content")
-                    .and_then(|v| v.as_array())
-                    .and_then(|arr| arr.first())
-                    .and_then(|entry| entry.get("text"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                messages.push((role, text));
-            }
-            Some("custom_tool_call") => {
-                let name = item
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                if name == "compactor" {
-                    let call_id = item
-                        .get("call_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    compactor_call_ids.insert(call_id);
-                }
-            }
-            Some("custom_tool_call_output") => {
-                let output = item
-                    .get("output")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                let call_id = item
-                    .get("call_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                if compactor_call_ids.contains(&call_id) && compactor_output.is_none() {
-                    compactor_output = Some(output);
-                }
-            }
-            _ => {}
+        if let Some("message") = item.get("type").and_then(|v| v.as_str()) {
+            let role = item
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let text = item
+                .get("content")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|entry| entry.get("text"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            messages.push((role, text));
         }
     }
 
@@ -275,11 +240,11 @@ async fn summarize_context_three_requests_and_instructions() {
         "third request should include the original user message"
     );
     assert!(
-        !compactor_call_ids.is_empty(),
-        "expected a compactor tool call"
+        messages
+            .iter()
+            .any(|(r, t)| r == "user" && t == SUMMARY_TEXT),
+        "third request should include the summary message"
     );
-    let compactor_output = compactor_output.expect("expected a compactor tool call output");
-    assert_eq!(compactor_output, SUMMARY_TEXT);
     assert!(
         !messages
             .iter()
@@ -603,9 +568,17 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     let input_resume = body_resume.get("input").and_then(|v| v.as_array()).unwrap();
     assert!(
-        input_resume.iter().any(
-            |item| item.get("type").and_then(|v| v.as_str()) == Some("custom_tool_call_output")
-        ),
+        input_resume.iter().any(|item| {
+            item.get("type").and_then(|v| v.as_str()) == Some("message")
+                && item.get("role").and_then(|v| v.as_str()) == Some("user")
+                && item
+                    .get("content")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|entry| entry.get("text"))
+                    .and_then(|v| v.as_str())
+                    == Some(AUTO_SUMMARY_TEXT)
+        }),
         "resume request should include compacted history"
     );
 
@@ -638,16 +611,9 @@ async fn auto_compact_runs_after_token_limit_hit() {
         user_texts.iter().any(|text| text == POST_AUTO_USER_MSG),
         "auto compact follow-up request should include the new user message"
     );
-    let compactor_output = input_follow_up
-        .iter()
-        .find(|item| item.get("type").and_then(|v| v.as_str()) == Some("custom_tool_call_output"))
-        .and_then(|item| item.get("output"))
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-    assert_eq!(
-        compactor_output, AUTO_SUMMARY_TEXT,
-        "compactor tool output should contain the summary text"
+    assert!(
+        user_texts.iter().any(|text| text == AUTO_SUMMARY_TEXT),
+        "auto compact follow-up request should include the summary message"
     );
 }
 
@@ -1192,14 +1158,12 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
             "type": "message",
         }),
         json!({
-            "input": "",
-            "name": "compactor",
-            "status": "completed",
-            "type": "custom_tool_call",
-        }),
-        json!({
-            "output": second_summary,
-            "type": "custom_tool_call_output",
+            "content": vec![json!({
+                "text": second_summary,
+                "type": "input_text",
+            })],
+            "role": "user",
+            "type": "message",
         }),
         json!({
             "content": vec![json!({
