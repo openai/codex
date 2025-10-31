@@ -470,6 +470,11 @@ impl CodexMessageProcessor {
         }
     }
 
+    /// Handle a generic JSON-RPC cancellation for a previously started operation.
+    /// This is a fire-and-forget path; no response.
+    pub async fn cancel_request(&self, id: RequestId) {}
+
+    // Legacy endpoint for cancelling a LoginChatGpt request. Please use $/cancelRequest instead.
     async fn cancel_login_chatgpt(&mut self, request_id: RequestId, login_id: Uuid) {
         let mut guard = self.active_login.lock().await;
         if guard.as_ref().map(|l| l.login_id) == Some(login_id) {

@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
+use codex_app_server_protocol::CancelRequestParams;
 use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeResponse;
 
@@ -125,9 +127,22 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn process_notification(&self, notification: JSONRPCNotification) {
-        // Currently, we do not expect to receive any notifications from the
-        // client, so we just log them.
         tracing::info!("<- notification: {:?}", notification);
+
+        if let Ok(value) = serde_json::to_value(&notification)
+            && let Ok(typed) = serde_json::from_value::<ClientNotification>(value)
+        {
+            match typed {
+                ClientNotification::CancelRequest(CancelRequestParams { id }) => {
+                    // Map $/cancelRequest to a cancellation inside Codex.
+                    self.codex_message_processor.cancel_request(id).await;
+                }
+                ClientNotification::Initialized => {
+                    // Already handled during handshake; ignore.
+                }
+            }
+        }
+        // Unknown or untyped notification: nothing to do.
     }
 
     /// Handle a standalone JSON-RPC response originating from the peer.

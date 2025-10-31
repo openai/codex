@@ -413,6 +413,18 @@ impl TryFrom<JSONRPCNotification> for ServerNotification {
 #[strum(serialize_all = "camelCase")]
 pub enum ClientNotification {
     Initialized,
+    /// LSP-style cancellation of an in-flight JSON-RPC request.
+    /// Shape: { "method": "$/cancelRequest", "params": { "id": <request-id> } }
+    #[serde(rename = "$/cancelRequest")]
+    #[ts(rename = "$/cancelRequest")]
+    #[strum(serialize = "$/cancelRequest")]
+    CancelRequest(CancelRequestParams),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelRequestParams {
+    pub id: RequestId,
 }
 
 #[cfg(test)]
@@ -493,6 +505,22 @@ mod tests {
         assert_eq!(
             json!({
                 "method": "initialized",
+            }),
+            serde_json::to_value(&notification)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_cancel_request_notification() -> Result<()> {
+        let notification = ClientNotification::CancelRequest(CancelRequestParams {
+            id: RequestId::Integer(7),
+        });
+
+        assert_eq!(
+            json!({
+                "method": "$/cancelRequest",
+                "params": { "id": 7 }
             }),
             serde_json::to_value(&notification)?,
         );
