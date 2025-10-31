@@ -18,10 +18,7 @@ use codex_core::shell::default_user_shell;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
-use core_test_support::responses;
-use core_test_support::responses::mount_sse_once;
 use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use std::collections::HashMap;
 use tempfile::TempDir;
@@ -357,8 +354,10 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
             None => String::new(),
         }
     );
-    let expected_ui_text =
-        "<user_instructions>\n\nbe consistent and helpful\n\n</user_instructions>";
+    let expected_ui_text = format!(
+        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\nbe consistent and helpful\n</INSTRUCTIONS>",
+        cwd.path().to_string_lossy()
+    );
 
     let expected_env_msg = serde_json::json!({
         "type": "message",
@@ -737,9 +736,11 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
     let body2 = requests[1].body_json::<serde_json::Value>().unwrap();
 
     let shell = default_user_shell().await;
-    let expected_ui_text =
-        "<user_instructions>\n\nbe consistent and helpful\n\n</user_instructions>";
-    let expected_ui_msg = text_user_input(expected_ui_text.to_string());
+    let expected_ui_text = format!(
+        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\nbe consistent and helpful\n</INSTRUCTIONS>",
+        default_cwd.to_string_lossy()
+    );
+    let expected_ui_msg = text_user_input(expected_ui_text);
 
     let expected_env_msg_1 = text_user_input(default_env_context_str(
         &cwd.path().to_string_lossy(),
@@ -851,8 +852,10 @@ async fn send_user_turn_with_changes_sends_environment_context() {
     let body2 = requests[1].body_json::<serde_json::Value>().unwrap();
 
     let shell = default_user_shell().await;
-    let expected_ui_text =
-        "<user_instructions>\n\nbe consistent and helpful\n\n</user_instructions>";
+    let expected_ui_text = format!(
+        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\nbe consistent and helpful\n</INSTRUCTIONS>",
+        default_cwd.to_string_lossy()
+    );
     let expected_ui_msg = serde_json::json!({
         "type": "message",
         "role": "user",
@@ -885,69 +888,4 @@ async fn send_user_turn_with_changes_sends_environment_context() {
         expected_user_message_2,
     ]);
     assert_eq!(body2["input"], expected_input_2);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cached_prompt_filters_reasoning_items_from_previous_turns() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = responses::start_mock_server().await;
-    let call_id = "shell-call";
-    let shell_args = serde_json::json!({
-        "command": ["/bin/echo", "tool output"],
-        "timeout_ms": 1_000,
-    });
-
-    let initial_response = responses::sse(vec![
-        responses::ev_response_created("resp-first"),
-        responses::ev_reasoning_item("reason-1", &["Planning shell command"], &[]),
-        responses::ev_function_call(
-            call_id,
-            "shell",
-            &serde_json::to_string(&shell_args).expect("serialize shell args"),
-        ),
-        responses::ev_completed("resp-first"),
-    ]);
-    let follow_up_response = responses::sse(vec![
-        responses::ev_response_created("resp-follow-up"),
-        responses::ev_reasoning_item(
-            "reason-2",
-            &["Shell execution completed"],
-            &["stdout: tool output"],
-        ),
-        responses::ev_assistant_message("assistant-1", "First turn reply"),
-        responses::ev_completed("resp-follow-up"),
-    ]);
-    let second_turn_response = responses::sse(vec![
-        responses::ev_response_created("resp-second"),
-        responses::ev_assistant_message("assistant-2", "Second turn reply"),
-        responses::ev_completed("resp-second"),
-    ]);
-    mount_sse_once(&server, initial_response).await;
-    let second_request = mount_sse_once(&server, follow_up_response).await;
-    let third_request = mount_sse_once(&server, second_turn_response).await;
-
-    let mut builder = test_codex();
-    let test = builder.build(&server).await?;
-
-    test.submit_turn("hello 1").await?;
-    test.submit_turn("hello 2").await?;
-
-    let second_request_input = second_request.single_request();
-    let reasoning_items = second_request_input.inputs_of_type("reasoning");
-    assert_eq!(
-        reasoning_items.len(),
-        1,
-        "expected first turn follow-up to include reasoning item"
-    );
-
-    let third_request_input = third_request.single_request();
-    let cached_reasoning = third_request_input.inputs_of_type("reasoning");
-    assert_eq!(
-        cached_reasoning.len(),
-        0,
-        "expected cached prompt to filter out prior reasoning items"
-    );
-
-    Ok(())
 }

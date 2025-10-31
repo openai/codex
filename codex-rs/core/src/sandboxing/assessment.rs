@@ -17,6 +17,7 @@ use codex_protocol::ConversationId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SandboxCommandAssessment;
+use codex_protocol::protocol::SessionSource;
 use futures::StreamExt;
 use serde_json::json;
 use tokio::time::timeout;
@@ -53,6 +54,7 @@ pub(crate) async fn assess_command(
     auth_manager: Arc<AuthManager>,
     parent_otel: &OtelEventManager,
     conversation_id: ConversationId,
+    session_source: SessionSource,
     call_id: &str,
     command: &[String],
     sandbox_policy: &SandboxPolicy,
@@ -141,6 +143,7 @@ pub(crate) async fn assess_command(
         config.model_reasoning_effort,
         config.model_reasoning_summary,
         conversation_id,
+        session_source,
     );
 
     let start = Instant::now();
