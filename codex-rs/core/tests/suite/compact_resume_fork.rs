@@ -9,13 +9,13 @@
 
 use super::compact::FIRST_REPLY;
 use super::compact::SUMMARY_TEXT;
+use super::compact::TEST_COMPACT_PROMPT;
 use codex_core::CodexAuth;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
-use codex_core::codex::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
 use codex_core::config::OPENAI_DEFAULT_MODEL;
 use codex_core::protocol::EventMsg;
@@ -285,7 +285,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
           "content": [
             {
               "type": "input_text",
-              "text": SUMMARIZATION_PROMPT
+              "text": TEST_COMPACT_PROMPT
             }
           ]
         }
@@ -835,6 +835,7 @@ async fn start_test_conversation(
     let home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
+    config.compact_prompt = Some(TEST_COMPACT_PROMPT.to_string());
 
     let manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
     let NewConversation { conversation, .. } = manager

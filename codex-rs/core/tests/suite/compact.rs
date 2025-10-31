@@ -3,6 +3,7 @@ use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
+use codex_core::config::Config;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -16,7 +17,6 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use tempfile::TempDir;
 
-use codex_core::codex::compact::SUMMARIZATION_PROMPT;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
@@ -51,6 +51,8 @@ const FUNCTION_CALL_LIMIT_MSG: &str = "function call limit push";
 const POST_AUTO_USER_MSG: &str = "post auto follow-up";
 const COMPACT_PROMPT_MARKER: &str =
     "You are performing a CONTEXT CHECKPOINT COMPACTION for a tool.";
+pub(super) const TEST_COMPACT_PROMPT: &str =
+    "You are performing a CONTEXT CHECKPOINT COMPACTION for a tool.\nTest-only compact prompt.";
 
 fn auto_summary(summary: &str) -> String {
     summary.to_string()
@@ -71,6 +73,10 @@ fn drop_call_id(value: &mut serde_json::Value) {
         }
         _ => {}
     }
+}
+
+fn set_test_compact_prompt(config: &mut Config) {
+    config.compact_prompt = Some(TEST_COMPACT_PROMPT.to_string());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -122,6 +128,7 @@ async fn summarize_context_three_requests_and_instructions() {
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
+    set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
     let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
     let NewConversation {
@@ -185,7 +192,7 @@ async fn summarize_context_three_requests_and_instructions() {
     assert_eq!(last2.get("role").unwrap().as_str().unwrap(), "user");
     let text2 = last2["content"][0]["text"].as_str().unwrap();
     assert_eq!(
-        text2, SUMMARIZATION_PROMPT,
+        text2, TEST_COMPACT_PROMPT,
         "expected summarize trigger, got `{text2}`"
     );
 
@@ -276,7 +283,7 @@ async fn summarize_context_three_requests_and_instructions() {
     assert!(
         !messages
             .iter()
-            .any(|(_, text)| text.contains(SUMMARIZATION_PROMPT)),
+            .any(|(_, text)| text.contains(TEST_COMPACT_PROMPT)),
         "third request should not include the summarize trigger"
     );
 
@@ -375,7 +382,7 @@ async fn manual_compact_uses_custom_prompt() {
         if text == custom_prompt {
             found_custom_prompt = true;
         }
-        if text == SUMMARIZATION_PROMPT {
+        if text == TEST_COMPACT_PROMPT {
             found_default_prompt = true;
         }
     }
@@ -456,6 +463,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
+    set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
     let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
     let codex = conversation_manager
@@ -589,7 +597,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .and_then(|text| text.as_str())
         .unwrap_or_default();
     assert_eq!(
-        last_text, SUMMARIZATION_PROMPT,
+        last_text, TEST_COMPACT_PROMPT,
         "auto compact should send the summarization prompt as a user message",
     );
 
@@ -695,6 +703,7 @@ async fn auto_compact_persists_rollout_entries() {
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
+    set_test_compact_prompt(&mut config);
     let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
     let NewConversation {
         conversation: codex,
@@ -805,6 +814,7 @@ async fn auto_compact_stops_after_failed_attempt() {
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
+    set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200);
     let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
     let codex = conversation_manager
@@ -853,7 +863,7 @@ async fn auto_compact_stops_after_failed_attempt() {
                 .and_then(|items| items.first())
                 .and_then(|entry| entry.get("text"))
                 .and_then(|text| text.as_str())
-                .map(|text| text == SUMMARIZATION_PROMPT)
+                .map(|text| text == TEST_COMPACT_PROMPT)
                 .unwrap_or(false)
     });
     assert!(
@@ -900,6 +910,7 @@ async fn manual_compact_retries_after_context_window_error() {
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
+    set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
     let codex = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"))
         .new_conversation(config)
@@ -955,7 +966,7 @@ async fn manual_compact_retries_after_context_window_error() {
             .and_then(|items| items.first())
             .and_then(|entry| entry.get("text"))
             .and_then(|text| text.as_str()),
-        Some(SUMMARIZATION_PROMPT),
+        Some(TEST_COMPACT_PROMPT),
         "compact attempt should include summarization prompt"
     );
     assert_eq!(
@@ -966,7 +977,7 @@ async fn manual_compact_retries_after_context_window_error() {
             .and_then(|items| items.first())
             .and_then(|entry| entry.get("text"))
             .and_then(|text| text.as_str()),
-        Some(SUMMARIZATION_PROMPT),
+        Some(TEST_COMPACT_PROMPT),
         "retry attempt should include summarization prompt"
     );
     assert_eq!(
@@ -1041,6 +1052,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
+    set_test_compact_prompt(&mut config);
     let codex = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"))
         .new_conversation(config)
         .await
@@ -1111,13 +1123,13 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         "first turn request missing first user message"
     );
     assert!(
-        !contains_user_text(&first_turn_input, SUMMARIZATION_PROMPT),
+        !contains_user_text(&first_turn_input, TEST_COMPACT_PROMPT),
         "first turn request should not include summarization prompt"
     );
 
     let first_compact_input = requests[1].input();
     assert!(
-        contains_user_text(&first_compact_input, SUMMARIZATION_PROMPT),
+        contains_user_text(&first_compact_input, TEST_COMPACT_PROMPT),
         "first compact request should include summarization prompt"
     );
     assert!(
@@ -1137,7 +1149,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
 
     let second_compact_input = requests[3].input();
     assert!(
-        contains_user_text(&second_compact_input, SUMMARIZATION_PROMPT),
+        contains_user_text(&second_compact_input, TEST_COMPACT_PROMPT),
         "second compact request should include summarization prompt"
     );
     assert!(
@@ -1244,6 +1256,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
+    set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200);
     let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
     let codex = conversation_manager
@@ -1355,6 +1368,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
+    set_test_compact_prompt(&mut config);
     config.model_context_window = Some(context_window);
     config.model_auto_compact_token_limit = Some(limit);
 
