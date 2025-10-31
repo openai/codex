@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::Session;
 use super::TurnContext;
 use super::get_last_assistant_message_from_turn;
-use crate::client::StreamPayload;
+use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -86,8 +86,7 @@ async fn run_compact_task_inner(
         let turn_input = history.get_history_for_prompt();
         let turn_input_len = turn_input.len();
         let (prompt, _) = crate::state::build_prompt_from_items(turn_input, None);
-        let payload = StreamPayload { prompt };
-        let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), payload).await;
+        let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), prompt).await;
 
         match attempt_result {
             Ok(()) => {
@@ -250,9 +249,9 @@ fn build_compacted_history_with_limit(
 async fn drain_to_completed(
     sess: &Session,
     turn_context: &TurnContext,
-    payload: StreamPayload,
+    prompt: Prompt,
 ) -> CodexResult<()> {
-    let mut stream = turn_context.client.clone().stream(&payload).await?;
+    let mut stream = turn_context.client.clone().stream(&prompt).await?;
     loop {
         let maybe_event = stream.next().await;
         let Some(event) = maybe_event else {

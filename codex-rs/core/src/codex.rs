@@ -52,7 +52,6 @@ use tracing::info;
 use tracing::warn;
 
 use crate::client::ModelClient;
-use crate::client::StreamPayload;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
@@ -1937,17 +1936,15 @@ async fn run_turn(
     prompt.parallel_tool_calls = parallel_tool_calls;
     prompt.output_schema = turn_context.final_output_json_schema.clone();
 
-    let payload = StreamPayload { prompt };
-
     let mut retries = 0;
     loop {
-        let attempt_payload = payload.clone();
+        let attempt_prompt = prompt.clone();
         match try_run_turn(
             Arc::clone(&router),
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
-            attempt_payload,
+            attempt_prompt,
             cancellation_token.child_token(),
         )
         .await
@@ -2028,10 +2025,10 @@ async fn try_run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
-    payload: StreamPayload,
+    prompt: Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
-    let supports_responses_api_chaining = payload.prompt.store_response;
+    let supports_responses_api_chaining = prompt.store_response;
 
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),
@@ -2046,7 +2043,7 @@ async fn try_run_turn(
     let mut stream = turn_context
         .client
         .clone()
-        .stream(&payload)
+        .stream(&prompt)
         .or_cancel(&cancellation_token)
         .await??;
 

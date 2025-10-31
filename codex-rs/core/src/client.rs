@@ -71,11 +71,6 @@ impl fmt::Debug for ModelClient {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct StreamPayload {
-    pub prompt: Prompt,
-}
-
 type ApiClientStream = BoxStream<'static, ApiClientResult<ResponseEvent>>;
 
 enum ModelBackend {
@@ -178,8 +173,8 @@ impl ModelClient {
             && self.config.features.enabled(Feature::ResponsesApiChaining)
     }
 
-    pub async fn stream(&self, payload: &StreamPayload) -> Result<ResponseStream> {
-        let mut prompt = payload.prompt.clone();
+    pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        let mut prompt = prompt.clone();
         self.populate_prompt(&mut prompt);
         if self.provider.wire_api == WireApi::Responses
             && let Some(path) = &*CODEX_RS_SSE_FIXTURE
@@ -287,8 +282,7 @@ impl ModelClient {
         prompt.instructions = instructions;
         prompt.store_response = false;
         prompt.previous_response_id = None;
-        let payload = StreamPayload { prompt };
-        self.stream(&payload).await
+        self.stream(&prompt).await
     }
 
     pub fn get_provider(&self) -> ModelProviderInfo {

@@ -6,12 +6,12 @@ use std::time::Instant;
 
 use crate::AuthManager;
 use crate::client::ModelClient;
-use crate::client::StreamPayload;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
 use crate::protocol::SandboxPolicy;
 use askama::Template;
-use codex_api_client::{ModelProviderInfo, Prompt};
+use codex_api_client::ModelProviderInfo;
+use codex_api_client::Prompt;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ContentItem;
@@ -130,8 +130,6 @@ pub(crate) async fn assess_command(
         instructions: system_prompt,
         ..Default::default()
     };
-    let payload = StreamPayload { prompt };
-
     let child_otel =
         parent_otel.with_model(config.model.as_str(), config.model_family.slug.as_str());
 
@@ -148,7 +146,7 @@ pub(crate) async fn assess_command(
 
     let start = Instant::now();
     let assessment_result = timeout(SANDBOX_ASSESSMENT_TIMEOUT, async move {
-        let mut stream = client.stream(&payload).await?;
+        let mut stream = client.stream(&prompt).await?;
         let mut last_json: Option<String> = None;
         while let Some(event) = stream.next().await {
             match event {
