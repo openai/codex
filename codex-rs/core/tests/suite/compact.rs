@@ -9,6 +9,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
+use codex_core::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
@@ -52,6 +53,8 @@ const COMPACT_PROMPT_MARKER: &str =
     "You are performing a CONTEXT CHECKPOINT COMPACTION for a tool.";
 pub(super) const TEST_COMPACT_PROMPT: &str =
     "You are performing a CONTEXT CHECKPOINT COMPACTION for a tool.\nTest-only compact prompt.";
+
+pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start new a new conversation when possible to keep conversations small and targeted.";
 
 fn auto_summary(summary: &str) -> String {
     summary.to_string()
@@ -150,6 +153,11 @@ async fn summarize_context_three_requests_and_instructions() {
 
     // 2) Summarize – second hit should include the summarization prompt.
     codex.submit(Op::Compact).await.unwrap();
+    let warning_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    let EventMsg::Warning(WarningEvent { message }) = warning_event else {
+        panic!("expected warning event after compact");
+    };
+    assert_eq!(message, COMPACT_WARNING_MESSAGE);
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // 3) Next user input – third hit; history should include only the summary.
@@ -324,6 +332,11 @@ async fn manual_compact_uses_custom_prompt() {
         .conversation;
 
     codex.submit(Op::Compact).await.expect("trigger compact");
+    let warning_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    let EventMsg::Warning(WarningEvent { message }) = warning_event else {
+        panic!("expected warning event after compact");
+    };
+    assert_eq!(message, COMPACT_WARNING_MESSAGE);
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     let requests = server.received_requests().await.expect("collect requests");
@@ -895,7 +908,6 @@ async fn manual_compact_retries_after_context_window_error() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     codex.submit(Op::Compact).await.unwrap();
-
     let EventMsg::BackgroundEvent(event) =
         wait_for_event(&codex, |ev| matches!(ev, EventMsg::BackgroundEvent(_))).await
     else {
@@ -906,6 +918,11 @@ async fn manual_compact_retries_after_context_window_error() {
         "background event should mention trimmed item count: {}",
         event.message
     );
+    let warning_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    let EventMsg::Warning(WarningEvent { message }) = warning_event else {
+        panic!("expected warning event after compact retry");
+    };
+    assert_eq!(message, COMPACT_WARNING_MESSAGE);
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     let requests = request_log.requests();

@@ -13,6 +13,7 @@ use crate::protocol::ErrorEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
+use crate::protocol::WarningEvent;
 use crate::truncate::truncate_middle;
 use crate::util::backoff;
 use codex_protocol::items::TurnItem;
@@ -161,6 +162,11 @@ async fn run_compact_task_inner(
         message: "Compact task completed".to_string(),
     });
     sess.send_event(&turn_context, event).await;
+
+    let warning = EventMsg::Warning(WarningEvent {
+        message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start new a new conversation when possible to keep conversations small and targeted.".to_string(),
+    });
+    sess.send_event(&turn_context, warning).await;
 }
 
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
@@ -354,7 +360,8 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<user_instructions>do things</user_instructions>".to_string(),
+                    text: "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\ndo things\n</INSTRUCTIONS>"
+                        .to_string(),
                 }],
             },
             ResponseItem::Message {

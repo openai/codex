@@ -25,6 +25,7 @@ pub enum SlashCommand {
     Mcp,
     Logout,
     Quit,
+    Exit,
     Feedback,
     Rollout,
     TestApproval,
@@ -40,7 +41,7 @@ impl SlashCommand {
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Undo => "ask Codex to undo a turn",
-            SlashCommand::Quit => "exit Codex",
+            SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Status => "show current session configuration and token usage",
@@ -75,7 +76,8 @@ impl SlashCommand {
             | SlashCommand::Status
             | SlashCommand::Mcp
             | SlashCommand::Feedback
-            | SlashCommand::Quit => true,
+            | SlashCommand::Quit
+            | SlashCommand::Exit => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
         }

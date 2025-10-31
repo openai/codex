@@ -172,9 +172,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.99"
+version = "1.0.100"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0674a1ddeecb70197781e945de4b3b8ffb61fa939a5597bcf48503737663100"
+checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
 name = "app_test_support"
@@ -891,7 +891,7 @@ dependencies = [
  "pretty_assertions",
  "similar",
  "tempfile",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
  "tree-sitter",
  "tree-sitter-bash",
 ]
@@ -983,6 +983,7 @@ dependencies = [
  "codex-rmcp-client",
  "codex-stdio-to-uds",
  "codex-tui",
+ "codex-windows-sandbox",
  "ctor 0.5.0",
  "owo-colors",
  "predicates",
@@ -1031,7 +1032,7 @@ dependencies = [
  "diffy",
  "serde",
  "serde_json",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -1072,6 +1073,7 @@ dependencies = [
  "codex-utils-readiness",
  "codex-utils-string",
  "codex-utils-tokenizer",
+ "codex-windows-sandbox",
  "core-foundation 0.9.4",
  "core_test_support",
  "dirs",
@@ -1082,7 +1084,7 @@ dependencies = [
  "futures",
  "http",
  "image",
- "indexmap 2.10.0",
+ "indexmap 2.12.0",
  "keyring",
  "landlock",
  "libc",
@@ -1106,7 +1108,7 @@ dependencies = [
  "strum_macros 0.27.2",
  "tempfile",
  "test-log",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
  "time",
  "tokio",
  "tokio-test",
@@ -1212,7 +1214,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "tempfile",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
  "ts-rs",
  "walkdir",
 ]
@@ -1504,7 +1506,7 @@ dependencies = [
  "codex-utils-cache",
  "image",
  "tempfile",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
  "tokio",
 ]
 
@@ -1532,7 +1534,7 @@ version = "0.0.0"
 dependencies = [
  "assert_matches",
  "async-trait",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
  "time",
  "tokio",
 ]
@@ -1547,8 +1549,20 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "pretty_assertions",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
  "tiktoken-rs",
+]
+
+[[package]]
+name = "codex-windows-sandbox"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs-next",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2708,7 +2722,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "http",
- "indexmap 2.10.0",
+ "indexmap 2.12.0",
  "slab",
  "tokio",
  "tokio-util",
@@ -2751,6 +2765,12 @@ dependencies = [
  "equivalent",
  "foldhash",
 ]
+
+[[package]]
+name = "hashbrown"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5419bdc4f6a9207fbeba6d11b604d481addf78ecd10c11ad51e76c2f6482748d"
 
 [[package]]
 name = "heck"
@@ -3187,13 +3207,14 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.10.0"
+version = "2.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe4cd85333e22411419a0bcae1297d25e58c9443848b11dc6a86fefe8c78a661"
+checksum = "6717a8d2a5a929a1a2eb43a12812498ed141a0bcfb7e8f7844fbdbe4303bba9f"
 dependencies = [
  "equivalent",
- "hashbrown 0.15.4",
+ "hashbrown 0.16.0",
  "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -3481,7 +3502,7 @@ checksum = "b3d2ef408b88e913bfc6594f5e693d57676f6463ded7d8bf994175364320c706"
 dependencies = [
  "enumflags2",
  "libc",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -4161,7 +4182,7 @@ dependencies = [
  "futures-sink",
  "js-sys",
  "pin-project-lite",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
  "tracing",
 ]
 
@@ -4204,7 +4225,7 @@ dependencies = [
  "prost",
  "reqwest",
  "serde_json",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
  "tokio",
  "tonic",
  "tracing",
@@ -4244,7 +4265,7 @@ dependencies = [
  "percent-encoding",
  "rand 0.9.2",
  "serde_json",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
  "tokio",
  "tokio-stream",
 ]
@@ -4355,7 +4376,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4c5cc86750666a3ed20bdaf5ca2a0344f9c67674cae0515bec2da16fbaa47db"
 dependencies = [
  "fixedbitset",
- "indexmap 2.10.0",
+ "indexmap 2.12.0",
 ]
 
 [[package]]
@@ -4423,7 +4444,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3af6b589e163c5a788fab00ce0c0366f6efbb9959c2f9874b224936af7fce7e1"
 dependencies = [
  "base64",
- "indexmap 2.10.0",
+ "indexmap 2.12.0",
  "quick-xml",
  "serde",
  "time",
@@ -4589,7 +4610,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a3ef4f2f0422f23a82ec9f628ea2acd12871c81a9362b02c43c1aa86acfc3ba1"
 dependencies = [
  "futures",
- "indexmap 2.10.0",
+ "indexmap 2.12.0",
  "nix 0.30.1",
  "tokio",
  "tracing",
@@ -4676,7 +4697,7 @@ dependencies = [
  "rustc-hash 2.1.1",
  "rustls",
  "socket2 0.6.0",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
  "tokio",
  "tracing",
  "web-time",
@@ -4697,7 +4718,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
  "tinyvec",
  "tracing",
  "web-time",
@@ -4858,7 +4879,7 @@ checksum = "dd6f9d3d47bdd2ad6945c5015a226ec6155d0bcdfd8f7cd29f86b71f8de99d2b"
 dependencies = [
  "getrandom 0.2.16",
  "libredox",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -5009,7 +5030,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sse-stream",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -5534,7 +5555,7 @@ version = "1.0.145"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "402a6f66d8c709116cf22f558eab210f5a50187f702eb4d7e5ef38d9a7f1c79c"
 dependencies = [
- "indexmap 2.10.0",
+ "indexmap 2.12.0",
  "itoa",
  "memchr",
  "ryu",
@@ -5595,7 +5616,7 @@ dependencies = [
  "chrono",
  "hex",
  "indexmap 1.9.3",
- "indexmap 2.10.0",
+ "indexmap 2.12.0",
  "schemars 0.9.0",
  "schemars 1.0.4",
  "serde",
@@ -6178,11 +6199,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.16"
+version = "2.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3467d614147380f2e4e374161426ff399c91084acd2363eaf549172b3d5e60c0"
+checksum = "f63587ca0f12b72a0600bcba1d40081f830876000bb46dd2337a3051618f4fc8"
 dependencies = [
- "thiserror-impl 2.0.16",
+ "thiserror-impl 2.0.17",
 ]
 
 [[package]]
@@ -6198,9 +6219,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.16"
+version = "2.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c5e1be1c48b9172ee610da68fd9cd2770e7a4056cb3fc98710ee6906f0c7960"
+checksum = "3ff15c8ecd7de3849db632e14d18d2571fa09dfc5ed93479bc4485c7a517c913"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6419,7 +6440,7 @@ version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75129e1dc5000bfbaa9fee9d1b21f974f9fbad9daec557a521ee6e080825f6e8"
 dependencies = [
- "indexmap 2.10.0",
+ "indexmap 2.12.0",
  "serde",
  "serde_spanned",
  "toml_datetime",
@@ -6443,7 +6464,7 @@ version = "0.23.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7211ff1b8f0d3adae1663b7da9ffe396eabe1ca25f0b0bee42b0da29a9ddce93"
 dependencies = [
- "indexmap 2.10.0",
+ "indexmap 2.12.0",
  "toml_datetime",
  "toml_parser",
  "toml_writer",
@@ -6502,7 +6523,7 @@ checksum = "d039ad9159c98b70ecfd540b2573b97f7f52c3e8d9f8ad57a24b916a536975f9"
 dependencies = [
  "futures-core",
  "futures-util",
- "indexmap 2.10.0",
+ "indexmap 2.12.0",
  "pin-project-lite",
  "slab",
  "sync_wrapper",
@@ -6680,7 +6701,7 @@ checksum = "adc5f880ad8d8f94e88cb81c3557024cf1a8b75e3b504c50481ed4f5a6006ff3"
 dependencies = [
  "regex",
  "streaming-iterator",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
  "tree-sitter",
 ]
 
@@ -6703,7 +6724,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ef1b7a6d914a34127ed8e1fa927eb7088903787bcded4fa3eef8f85ee1568be"
 dependencies = [
  "serde_json",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
  "ts-rs-macros",
  "uuid",
 ]

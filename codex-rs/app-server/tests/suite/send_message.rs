@@ -313,10 +313,11 @@ fn assert_instructions_message(item: &ResponseItem) {
         ResponseItem::Message { role, content, .. } => {
             assert_eq!(role, "user");
             let texts = content_texts(content);
+            let is_instructions = texts
+                .iter()
+                .any(|text| text.starts_with("# AGENTS.md instructions for "));
             assert!(
-                texts
-                    .iter()
-                    .any(|text| text.contains("<user_instructions>")),
+                is_instructions,
                 "expected instructions message, got {texts:?}"
             );
         }

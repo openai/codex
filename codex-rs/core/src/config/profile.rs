@@ -24,7 +24,6 @@ pub struct ConfigProfile {
     pub experimental_instructions_file: Option<PathBuf>,
     pub experimental_compact_prompt_file: Option<PathBuf>,
     pub include_apply_patch_tool: Option<bool>,
-    pub include_view_image_tool: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_exec_command_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
