@@ -1,5 +1,6 @@
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::Op;
@@ -137,4 +138,42 @@ async fn user_shell_cmd_can_be_interrupted() {
         unreachable!()
     };
     assert_eq!(ev.reason, TurnAbortReason::Interrupted);
+}
+
+#[tokio::test]
+async fn user_shell_cmd_runs_under_non_on_request_policy() {
+    let Some(python) = detect_python_executable() else {
+        eprintln!("skipping test: python3 not found in PATH");
+        return;
+    };
+
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.approval_policy = AskForApproval::Never;
+
+    let conversation_manager =
+        ConversationManager::with_auth(codex_core::CodexAuth::from_api_key("dummy"));
+    let NewConversation {
+        conversation: codex,
+        ..
+    } = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create new conversation");
+
+    let command = format!("{python} -c \"import sys; sys.stdout.write('bang-ok')\"");
+    codex
+        .submit(Op::RunUserShellCommand { command })
+        .await
+        .unwrap();
+
+    let msg = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandEnd(_))).await;
+    let EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+        stdout, exit_code, ..
+    }) = msg
+    else {
+        unreachable!()
+    };
+    assert_eq!(exit_code, 0);
+    assert_eq!(stdout, "bang-ok");
 }
