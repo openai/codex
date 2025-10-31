@@ -1,4 +1,3 @@
-use anyhow::Context;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
@@ -9,6 +8,7 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::RequestId;
+use codex_core::auth::AuthCredentialsStoreMode;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use pretty_assertions::assert_eq;
@@ -28,28 +28,18 @@ const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_account_rate_limits_requires_auth() -> Result<()> {
-    let codex_home = TempDir::new().context("create codex home tempdir")?;
+    let codex_home = TempDir::new()?;
 
-    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)])
-        .await
-        .context("spawn mcp process")?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
-        .await
-        .context("initialize timeout")?
-        .context("initialize request")?;
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let request_id = mcp
-        .send_get_account_rate_limits_request()
-        .await
-        .context("send account/rateLimits/read")?;
+    let request_id = mcp.send_get_account_rate_limits_request().await?;
 
     let error: JSONRPCError = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
-    .await
-    .context("account/rateLimits/read timeout")?
-    .context("account/rateLimits/read error")?;
+    .await??;
 
     assert_eq!(error.id, RequestId::Integer(request_id));
     assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
@@ -63,30 +53,20 @@ async fn get_account_rate_limits_requires_auth() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_account_rate_limits_requires_chatgpt_auth() -> Result<()> {
-    let codex_home = TempDir::new().context("create codex home tempdir")?;
+    let codex_home = TempDir::new()?;
 
-    let mut mcp = McpProcess::new(codex_home.path())
-        .await
-        .context("spawn mcp process")?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
-        .await
-        .context("initialize timeout")?
-        .context("initialize request")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
-    let request_id = mcp
-        .send_get_account_rate_limits_request()
-        .await
-        .context("send account/rateLimits/read")?;
+    let request_id = mcp.send_get_account_rate_limits_request().await?;
 
     let error: JSONRPCError = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
-    .await
-    .context("account/rateLimits/read timeout")?
-    .context("account/rateLimits/read error")?;
+    .await??;
 
     assert_eq!(error.id, RequestId::Integer(request_id));
     assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
@@ -100,18 +80,18 @@ async fn get_account_rate_limits_requires_chatgpt_auth() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
-    let codex_home = TempDir::new().context("create codex home tempdir")?;
+    let codex_home = TempDir::new()?;
     write_chatgpt_auth(
         codex_home.path(),
         ChatGptAuthFixture::new("chatgpt-token")
             .account_id("account-123")
             .plan_type("pro"),
-    )
-    .context("write chatgpt auth")?;
+        AuthCredentialsStoreMode::File,
+    )?;
 
     let server = MockServer::start().await;
     let server_url = server.uri();
-    write_chatgpt_base_url(codex_home.path(), &server_url).context("write chatgpt base url")?;
+    write_chatgpt_base_url(codex_home.path(), &server_url)?;
 
     let primary_reset_timestamp = chrono::DateTime::parse_from_rfc3339("2025-01-01T00:02:00Z")
         .expect("parse primary reset timestamp")
@@ -147,29 +127,18 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)])
-        .await
-        .context("spawn mcp process")?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
-        .await
-        .context("initialize timeout")?
-        .context("initialize request")?;
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let request_id = mcp
-        .send_get_account_rate_limits_request()
-        .await
-        .context("send account/rateLimits/read")?;
+    let request_id = mcp.send_get_account_rate_limits_request().await?;
 
     let response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
-    .await
-    .context("account/rateLimits/read timeout")?
-    .context("account/rateLimits/read response")?;
+    .await??;
 
-    let received: GetAccountRateLimitsResponse =
-        to_response(response).context("deserialize rate limit response")?;
+    let received: GetAccountRateLimitsResponse = to_response(response)?;
 
     let expected = GetAccountRateLimitsResponse {
         rate_limits: RateLimitSnapshot {
@@ -195,16 +164,13 @@ async fn login_with_api_key(mcp: &mut McpProcess, api_key: &str) -> Result<()> {
         .send_login_api_key_request(LoginApiKeyParams {
             api_key: api_key.to_string(),
         })
-        .await
-        .context("send loginApiKey")?;
+        .await?;
 
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
-    .await
-    .context("loginApiKey timeout")?
-    .context("loginApiKey response")?;
+    .await??;
 
     Ok(())
 }

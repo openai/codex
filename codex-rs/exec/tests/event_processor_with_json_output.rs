@@ -12,15 +12,19 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use codex_exec::exec_events::AgentMessageItem;
 use codex_exec::exec_events::CommandExecutionItem;
 use codex_exec::exec_events::CommandExecutionStatus;
+use codex_exec::exec_events::ErrorItem;
 use codex_exec::exec_events::ItemCompletedEvent;
 use codex_exec::exec_events::ItemStartedEvent;
 use codex_exec::exec_events::ItemUpdatedEvent;
 use codex_exec::exec_events::McpToolCallItem;
+use codex_exec::exec_events::McpToolCallItemError;
+use codex_exec::exec_events::McpToolCallItemResult;
 use codex_exec::exec_events::McpToolCallStatus;
 use codex_exec::exec_events::PatchApplyStatus;
 use codex_exec::exec_events::PatchChangeKind;
@@ -41,7 +45,10 @@ use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use mcp_types::CallToolResult;
+use mcp_types::ContentBlock;
+use mcp_types::TextContent;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -239,7 +246,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
     let invocation = McpInvocation {
         server: "server_a".to_string(),
         tool: "tool_x".to_string(),
-        arguments: None,
+        arguments: Some(json!({ "key": "value" })),
     };
 
     let begin = event(
@@ -258,6 +265,9 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
                 details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                     server: "server_a".to_string(),
                     tool: "tool_x".to_string(),
+                    arguments: json!({ "key": "value" }),
+                    result: None,
+                    error: None,
                     status: McpToolCallStatus::InProgress,
                 }),
             },
@@ -286,6 +296,12 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
                 details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                     server: "server_a".to_string(),
                     tool: "tool_x".to_string(),
+                    arguments: json!({ "key": "value" }),
+                    result: Some(McpToolCallItemResult {
+                        content: Vec::new(),
+                        structured_content: None,
+                    }),
+                    error: None,
                     status: McpToolCallStatus::Completed,
                 }),
             },
@@ -299,7 +315,7 @@ fn mcp_tool_call_failure_sets_failed_status() {
     let invocation = McpInvocation {
         server: "server_b".to_string(),
         tool: "tool_y".to_string(),
-        arguments: None,
+        arguments: Some(json!({ "param": 42 })),
     };
 
     let begin = event(
@@ -329,7 +345,89 @@ fn mcp_tool_call_failure_sets_failed_status() {
                 details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                     server: "server_b".to_string(),
                     tool: "tool_y".to_string(),
+                    arguments: json!({ "param": 42 }),
+                    result: None,
+                    error: Some(McpToolCallItemError {
+                        message: "tool exploded".to_string(),
+                    }),
                     status: McpToolCallStatus::Failed,
+                }),
+            },
+        })]
+    );
+}
+
+#[test]
+fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let invocation = McpInvocation {
+        server: "server_c".to_string(),
+        tool: "tool_z".to_string(),
+        arguments: None,
+    };
+
+    let begin = event(
+        "m5",
+        EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+            call_id: "call-3".to_string(),
+            invocation: invocation.clone(),
+        }),
+    );
+    let begin_events = ep.collect_thread_events(&begin);
+    assert_eq!(
+        begin_events,
+        vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+            item: ThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::McpToolCall(McpToolCallItem {
+                    server: "server_c".to_string(),
+                    tool: "tool_z".to_string(),
+                    arguments: serde_json::Value::Null,
+                    result: None,
+                    error: None,
+                    status: McpToolCallStatus::InProgress,
+                }),
+            },
+        })]
+    );
+
+    let end = event(
+        "m6",
+        EventMsg::McpToolCallEnd(McpToolCallEndEvent {
+            call_id: "call-3".to_string(),
+            invocation,
+            duration: Duration::from_millis(10),
+            result: Ok(CallToolResult {
+                content: vec![ContentBlock::TextContent(TextContent {
+                    annotations: None,
+                    text: "done".to_string(),
+                    r#type: "text".to_string(),
+                })],
+                is_error: None,
+                structured_content: Some(json!({ "status": "ok" })),
+            }),
+        }),
+    );
+    let events = ep.collect_thread_events(&end);
+    assert_eq!(
+        events,
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::McpToolCall(McpToolCallItem {
+                    server: "server_c".to_string(),
+                    tool: "tool_z".to_string(),
+                    arguments: serde_json::Value::Null,
+                    result: Some(McpToolCallItemResult {
+                        content: vec![ContentBlock::TextContent(TextContent {
+                            annotations: None,
+                            text: "done".to_string(),
+                            r#type: "text".to_string(),
+                        })],
+                        structured_content: Some(json!({ "status": "ok" })),
+                    }),
+                    error: None,
+                    status: McpToolCallStatus::Completed,
                 }),
             },
         })]
@@ -445,6 +543,28 @@ fn error_event_produces_error() {
 }
 
 #[test]
+fn warning_event_produces_error_item() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let out = ep.collect_thread_events(&event(
+        "e1",
+        EventMsg::Warning(WarningEvent {
+            message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start new a new conversation when possible to keep conversations small and targeted.".to_string(),
+        }),
+    ));
+    assert_eq!(
+        out,
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::Error(ErrorItem {
+                    message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start new a new conversation when possible to keep conversations small and targeted.".to_string(),
+                }),
+            },
+        })]
+    );
+}
+
+#[test]
 fn stream_error_event_produces_error() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let out = ep.collect_thread_events(&event(
@@ -506,6 +626,7 @@ fn exec_command_end_success_produces_completed_command_item() {
             command: vec!["bash".to_string(), "-lc".to_string(), "echo hi".to_string()],
             cwd: std::env::current_dir().unwrap(),
             parsed_cmd: Vec::new(),
+            is_user_shell_command: false,
         }),
     );
     let out_begin = ep.collect_thread_events(&begin);
@@ -566,6 +687,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
             command: vec!["sh".to_string(), "-c".to_string(), "exit 1".to_string()],
             cwd: std::env::current_dir().unwrap(),
             parsed_cmd: Vec::new(),
+            is_user_shell_command: false,
         }),
     );
     assert_eq!(

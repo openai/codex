@@ -1,6 +1,7 @@
 use codex_app_server_protocol::AuthMode;
 use codex_common::CliConfigOverrides;
 use codex_core::CodexAuth;
+use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::logout;
@@ -17,11 +18,13 @@ use std::path::PathBuf;
 pub async fn login_with_chatgpt(
     codex_home: PathBuf,
     forced_chatgpt_workspace_id: Option<String>,
+    cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
     let opts = ServerOptions::new(
         codex_home,
         CLIENT_ID.to_string(),
         forced_chatgpt_workspace_id,
+        cli_auth_credentials_store_mode,
     );
     let server = run_login_server(opts)?;
 
@@ -43,7 +46,13 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
 
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
 
-    match login_with_chatgpt(config.codex_home, forced_chatgpt_workspace_id).await {
+    match login_with_chatgpt(
+        config.codex_home,
+        forced_chatgpt_workspace_id,
+        config.cli_auth_credentials_store_mode,
+    )
+    .await
+    {
         Ok(_) => {
             eprintln!("Successfully logged in");
             std::process::exit(0);
@@ -66,7 +75,11 @@ pub async fn run_login_with_api_key(
         std::process::exit(1);
     }
 
-    match login_with_api_key(&config.codex_home, &api_key) {
+    match login_with_api_key(
+        &config.codex_home,
+        &api_key,
+        config.cli_auth_credentials_store_mode,
+    ) {
         Ok(_) => {
             eprintln!("Successfully logged in");
             std::process::exit(0);
@@ -121,6 +134,7 @@ pub async fn run_login_with_device_code(
         config.codex_home,
         client_id.unwrap_or(CLIENT_ID.to_string()),
         forced_chatgpt_workspace_id,
+        config.cli_auth_credentials_store_mode,
     );
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
@@ -140,7 +154,7 @@ pub async fn run_login_with_device_code(
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
-    match CodexAuth::from_codex_home(&config.codex_home) {
+    match CodexAuth::from_auth_storage(&config.codex_home, config.cli_auth_credentials_store_mode) {
         Ok(Some(auth)) => match auth.mode {
             AuthMode::ApiKey => match auth.get_token().await {
                 Ok(api_key) => {
@@ -171,7 +185,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
 pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
-    match logout(&config.codex_home) {
+    match logout(&config.codex_home, config.cli_auth_credentials_store_mode) {
         Ok(true) => {
             eprintln!("Successfully logged out");
             std::process::exit(0);
