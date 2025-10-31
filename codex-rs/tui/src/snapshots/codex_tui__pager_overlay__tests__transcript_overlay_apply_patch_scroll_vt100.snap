@@ -1,0 +1,15 @@
+---
+source: tui/src/pager_overlay.rs
+expression: snapshot
+---
+/ T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / / / / /
+• Added foo.txt (+2 -0)
+    1 +hello
+    2 +world
+
+• Added foo.txt (+2 -0)
+    1 +hello
+    2 +world
+─────────────────────────────────────────────────────────────────────────── 0% ─
+ ↑/↓ to scroll   pgup/pgdn to page   home/end to jump
+ q to quit   esc to edit prev

@@ -15,8 +15,7 @@ name = "codex-protocol-ts"
 path = "src/main.rs"
 
 [dependencies]
-anyhow = "1"
-mcp-types = { path = "../mcp-types" }
-codex-protocol = { path = "../protocol" }
-ts-rs = "11"
-clap = { version = "4", features = ["derive"] }
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-app-server-protocol = { workspace = true }
+ts-rs = { workspace = true }

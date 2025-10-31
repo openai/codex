@@ -101,6 +101,7 @@ impl AsciiAnimation {
         true
     }
 
+    #[allow(dead_code)]
     pub(crate) fn request_frame(&self) {
         if !self.enabled {
             return;
