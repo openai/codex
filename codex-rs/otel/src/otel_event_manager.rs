@@ -6,9 +6,11 @@ use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::InputItem;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SandboxRiskCategory;
+use codex_protocol::protocol::SandboxRiskLevel;
+use codex_protocol::user_input::UserInput;
 use eventsource_stream::Event as StreamEvent;
 use eventsource_stream::EventStreamError as StreamError;
 use reqwest::Error;
@@ -33,6 +35,7 @@ pub struct OtelEventMetadata {
     conversation_id: ConversationId,
     auth_mode: Option<String>,
     account_id: Option<String>,
+    account_email: Option<String>,
     model: String,
     slug: String,
     log_user_prompts: bool,
@@ -46,11 +49,13 @@ pub struct OtelEventManager {
 }
 
 impl OtelEventManager {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         conversation_id: ConversationId,
         model: &str,
         slug: &str,
         account_id: Option<String>,
+        account_email: Option<String>,
         auth_mode: Option<AuthMode>,
         log_user_prompts: bool,
         terminal_type: String,
@@ -60,6 +65,7 @@ impl OtelEventManager {
                 conversation_id,
                 auth_mode: auth_mode.map(|m| m.to_string()),
                 account_id,
+                account_email,
                 model: model.to_owned(),
                 slug: slug.to_owned(),
                 log_user_prompts,
@@ -82,8 +88,8 @@ impl OtelEventManager {
         provider_name: &str,
         reasoning_effort: Option<ReasoningEffort>,
         reasoning_summary: ReasoningSummary,
-        context_window: Option<u64>,
-        max_output_tokens: Option<u64>,
+        context_window: Option<i64>,
+        max_output_tokens: Option<i64>,
         auto_compact_token_limit: Option<i64>,
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
@@ -98,6 +104,7 @@ impl OtelEventManager {
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
             user.account_id = self.metadata.account_id,
+            user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
@@ -136,6 +143,7 @@ impl OtelEventManager {
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
             user.account_id = self.metadata.account_id,
+            user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
@@ -205,6 +213,7 @@ impl OtelEventManager {
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
             user.account_id = self.metadata.account_id,
+            user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
@@ -226,6 +235,7 @@ impl OtelEventManager {
                 app.version = %self.metadata.app_version,
                 auth_mode = self.metadata.auth_mode,
                 user.account_id = self.metadata.account_id,
+                user.email = self.metadata.account_email,
                 terminal.type = %self.metadata.terminal_type,
                 model = %self.metadata.model,
                 slug = %self.metadata.slug,
@@ -240,6 +250,7 @@ impl OtelEventManager {
                 app.version = %self.metadata.app_version,
                 auth_mode = self.metadata.auth_mode,
                 user.account_id = self.metadata.account_id,
+                user.email = self.metadata.account_email,
                 terminal.type = %self.metadata.terminal_type,
                 model = %self.metadata.model,
                 slug = %self.metadata.slug,
@@ -262,6 +273,7 @@ impl OtelEventManager {
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
             user.account_id = self.metadata.account_id,
+            user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
@@ -271,11 +283,11 @@ impl OtelEventManager {
 
     pub fn sse_event_completed(
         &self,
-        input_token_count: u64,
-        output_token_count: u64,
-        cached_token_count: Option<u64>,
-        reasoning_token_count: Option<u64>,
-        tool_token_count: u64,
+        input_token_count: i64,
+        output_token_count: i64,
+        cached_token_count: Option<i64>,
+        reasoning_token_count: Option<i64>,
+        tool_token_count: i64,
     ) {
         tracing::event!(
             tracing::Level::INFO,
@@ -286,6 +298,7 @@ impl OtelEventManager {
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
             user.account_id = self.metadata.account_id,
+            user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
@@ -297,11 +310,11 @@ impl OtelEventManager {
         );
     }
 
-    pub fn user_prompt(&self, items: &[InputItem]) {
+    pub fn user_prompt(&self, items: &[UserInput]) {
         let prompt = items
             .iter()
             .flat_map(|item| match item {
-                InputItem::Text { text } => Some(text.as_str()),
+                UserInput::Text { text } => Some(text.as_str()),
                 _ => None,
             })
             .collect::<String>();
@@ -320,6 +333,7 @@ impl OtelEventManager {
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
             user.account_id = self.metadata.account_id,
+            user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
@@ -343,6 +357,7 @@ impl OtelEventManager {
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
             user.account_id = self.metadata.account_id,
+            user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
@@ -350,6 +365,63 @@ impl OtelEventManager {
             call_id = %call_id,
             decision = %decision.to_string().to_lowercase(),
             source = %source.to_string(),
+        );
+    }
+
+    pub fn sandbox_assessment(
+        &self,
+        call_id: &str,
+        status: &str,
+        risk_level: Option<SandboxRiskLevel>,
+        risk_categories: &[SandboxRiskCategory],
+        duration: Duration,
+    ) {
+        let level = risk_level.map(|level| level.as_str());
+        let categories = if risk_categories.is_empty() {
+            String::new()
+        } else {
+            risk_categories
+                .iter()
+                .map(SandboxRiskCategory::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        tracing::event!(
+            tracing::Level::INFO,
+            event.name = "codex.sandbox_assessment",
+            event.timestamp = %timestamp(),
+            conversation.id = %self.metadata.conversation_id,
+            app.version = %self.metadata.app_version,
+            auth_mode = self.metadata.auth_mode,
+            user.account_id = self.metadata.account_id,
+            user.email = self.metadata.account_email,
+            terminal.type = %self.metadata.terminal_type,
+            model = %self.metadata.model,
+            slug = %self.metadata.slug,
+            call_id = %call_id,
+            status = %status,
+            risk_level = level,
+            risk_categories = categories,
+            duration_ms = %duration.as_millis(),
+        );
+    }
+
+    pub fn sandbox_assessment_latency(&self, call_id: &str, duration: Duration) {
+        tracing::event!(
+            tracing::Level::INFO,
+            event.name = "codex.sandbox_assessment_latency",
+            event.timestamp = %timestamp(),
+            conversation.id = %self.metadata.conversation_id,
+            app.version = %self.metadata.app_version,
+            auth_mode = self.metadata.auth_mode,
+            user.account_id = self.metadata.account_id,
+            user.email = self.metadata.account_email,
+            terminal.type = %self.metadata.terminal_type,
+            model = %self.metadata.model,
+            slug = %self.metadata.slug,
+            call_id = %call_id,
+            duration_ms = %duration.as_millis(),
         );
     }
 
@@ -383,7 +455,8 @@ impl OtelEventManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
-            user.account_id = self.metadata.account_id,
+            user.account_id= self.metadata.account_id,
+            user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
@@ -408,6 +481,7 @@ impl OtelEventManager {
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
             user.account_id = self.metadata.account_id,
+            user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
@@ -437,6 +511,7 @@ impl OtelEventManager {
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
             user.account_id = self.metadata.account_id,
+            user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
