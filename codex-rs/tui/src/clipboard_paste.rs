@@ -1,5 +1,5 @@
-use codex_protocol::platform::is_running_under_wsl;
-use codex_protocol::platform::try_map_windows_drive_to_wsl_path;
+use codex_core::environment_context::get_operating_system_info;
+use codex_core::environment_context::try_map_windows_drive_to_wsl_path;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::Builder;
@@ -146,7 +146,11 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
             use PasteImageError::ClipboardUnavailable;
             use PasteImageError::NoImage;
 
-            if is_running_under_wsl() && matches!(&e, ClipboardUnavailable(_) | NoImage(_)) {
+            let is_wsl = get_operating_system_info()
+                .and_then(|info| info.is_likely_windows_subsystem_for_linux)
+                .unwrap_or(false);
+
+            if is_wsl && matches!(&e, ClipboardUnavailable(_) | NoImage(_)) {
                 tracing::debug!("attempting Windows PowerShell clipboard fallback");
                 if let Some(win_path) = try_dump_windows_clipboard_image() {
                     tracing::debug!("powershell produced path: {}", win_path);

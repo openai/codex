@@ -2,7 +2,7 @@ use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::render::line_utils::prefix_lines;
 use crate::ui_consts::FOOTER_INDENT_COLS;
-use codex_protocol::platform::is_running_under_wsl;
+use codex_core::environment_context::get_operating_system_info;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -91,10 +91,13 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             vec![line]
         }
         FooterMode::ShortcutOverlay => {
+            let is_wsl = get_operating_system_info()
+                .and_then(|info| info.is_likely_windows_subsystem_for_linux)
+                .unwrap_or(false);
             let state = ShortcutsState {
                 use_shift_enter_hint: props.use_shift_enter_hint,
                 esc_backtrack_hint: props.esc_backtrack_hint,
-                is_wsl: is_running_under_wsl(),
+                is_wsl,
             };
             shortcut_overlay_lines(state)
         }

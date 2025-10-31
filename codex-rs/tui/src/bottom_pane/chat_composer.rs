@@ -52,8 +52,8 @@ use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_file_search::FileMatch;
-use codex_protocol::platform::is_running_under_wsl;
-use codex_protocol::platform::try_map_windows_drive_to_wsl_path;
+use codex_core::environment_context::get_operating_system_info;
+use codex_core::environment_context::try_map_windows_drive_to_wsl_path;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
@@ -956,7 +956,9 @@ impl ChatComposer {
         } = key_event
             && modifiers.contains(KeyModifiers::CONTROL)
             && modifiers.contains(KeyModifiers::ALT)
-            && is_running_under_wsl()
+            && get_operating_system_info()
+                .and_then(|info| info.is_likely_windows_subsystem_for_linux)
+                .unwrap_or(false)
         {
             match paste_image_to_temp_png() {
                 Ok((path, info)) => {
