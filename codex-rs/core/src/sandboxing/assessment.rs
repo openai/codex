@@ -11,7 +11,7 @@ use crate::client_common::ResponseEvent;
 use crate::config::Config;
 use crate::protocol::SandboxPolicy;
 use askama::Template;
-use codex_api_client::ModelProviderInfo;
+use codex_api_client::{ModelProviderInfo, Prompt};
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ContentItem;
@@ -120,19 +120,16 @@ pub(crate) async fn assess_command(
         .trim()
         .to_string();
 
-    let prompt_items = vec![ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText { text: user_prompt }],
-    }];
-    let (mut prompt, _) = crate::state::build_prompt_from_items(prompt_items, None);
-    prompt.output_schema = Some(sandbox_assessment_schema());
-    prompt.instructions = crate::client_common::compute_full_instructions(
-        Some(system_prompt.as_str()),
-        &config.model_family,
-        false,
-    )
-    .into_owned();
+    let prompt = Prompt {
+        input: vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText { text: user_prompt }],
+        }],
+        output_schema: Some(sandbox_assessment_schema()),
+        instructions: system_prompt,
+        ..Default::default()
+    };
     let payload = StreamPayload { prompt };
 
     let child_otel =
