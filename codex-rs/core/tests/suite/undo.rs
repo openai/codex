@@ -95,13 +95,37 @@ async fn run_apply_patch_turn(
     harness.submit(prompt).await
 }
 
-async fn expect_successful_undo(codex: &Arc<CodexConversation>) -> Result<UndoCompletedEvent> {
+async fn invoke_undo(codex: &Arc<CodexConversation>) -> Result<UndoCompletedEvent> {
     codex.submit(Op::Undo).await?;
     let event = wait_for_event_match(codex, |msg| match msg {
         EventMsg::UndoCompleted(done) => Some(done.clone()),
         _ => None,
     })
     .await;
+    Ok(event)
+}
+
+async fn expect_successful_undo(codex: &Arc<CodexConversation>) -> Result<UndoCompletedEvent> {
+    let event = invoke_undo(codex).await?;
+    assert!(
+        event.success,
+        "expected undo to succeed but failed with message {:?}",
+        event.message
+    );
+    Ok(event)
+}
+
+async fn expect_failed_undo(codex: &Arc<CodexConversation>) -> Result<UndoCompletedEvent> {
+    let event = invoke_undo(codex).await?;
+    assert!(
+        !event.success,
+        "expected undo to fail but succeeded with message {:?}",
+        event.message
+    );
+    assert_eq!(
+        event.message.as_deref(),
+        Some("No ghost snapshot available to undo.")
+    );
     Ok(event)
 }
 
@@ -340,6 +364,233 @@ async fn undo_does_not_touch_unrelated_files() -> Result<()> {
     );
     assert_eq!(fs::read_to_string(&ignored)?, "ignored before\n");
     assert!(!temp.exists());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn undo_sequential_turns_consumes_snapshots() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = undo_harness().await?;
+    init_git_repo(harness.cwd())?;
+
+    let story = harness.path("story.txt");
+    fs::write(&story, "initial\n")?;
+    git(harness.cwd(), &["add", "story.txt"])?;
+    git(harness.cwd(), &["commit", "-m", "seed story"])?;
+
+    run_apply_patch_turn(
+        &harness,
+        "first change",
+        "seq-turn-1",
+        "*** Begin Patch\n*** Update File: story.txt\n@@\n-initial\n+turn one\n*** End Patch",
+        "ok",
+    )
+    .await?;
+    assert_eq!(fs::read_to_string(&story)?, "turn one\n");
+
+    run_apply_patch_turn(
+        &harness,
+        "second change",
+        "seq-turn-2",
+        "*** Begin Patch\n*** Update File: story.txt\n@@\n-turn one\n+turn two\n*** End Patch",
+        "ok",
+    )
+    .await?;
+    assert_eq!(fs::read_to_string(&story)?, "turn two\n");
+
+    run_apply_patch_turn(
+        &harness,
+        "third change",
+        "seq-turn-3",
+        "*** Begin Patch\n*** Update File: story.txt\n@@\n-turn two\n+turn three\n*** End Patch",
+        "ok",
+    )
+    .await?;
+    assert_eq!(fs::read_to_string(&story)?, "turn three\n");
+
+    let codex = Arc::clone(&harness.test().codex);
+    expect_successful_undo(&codex).await?;
+    assert_eq!(fs::read_to_string(&story)?, "turn two\n");
+
+    expect_successful_undo(&codex).await?;
+    assert_eq!(fs::read_to_string(&story)?, "turn one\n");
+
+    expect_successful_undo(&codex).await?;
+    assert_eq!(fs::read_to_string(&story)?, "initial\n");
+
+    expect_failed_undo(&codex).await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn undo_without_snapshot_reports_failure() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = undo_harness().await?;
+    let codex = Arc::clone(&harness.test().codex);
+
+    expect_failed_undo(&codex).await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn undo_restores_moves_and_renames() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = undo_harness().await?;
+    init_git_repo(harness.cwd())?;
+
+    let source = harness.path("rename_me.txt");
+    fs::write(&source, "original\n")?;
+    git(harness.cwd(), &["add", "rename_me.txt"])?;
+    git(harness.cwd(), &["commit", "-m", "add rename target"])?;
+
+    let patch = "*** Begin Patch\n*** Update File: rename_me.txt\n*** Move to: relocated/renamed.txt\n@@\n-original\n+renamed content\n*** End Patch";
+    run_apply_patch_turn(&harness, "rename file", "undo-rename", patch, "done").await?;
+
+    let destination = harness.path("relocated/renamed.txt");
+    assert!(!source.exists());
+    assert_eq!(fs::read_to_string(&destination)?, "renamed content\n");
+
+    let codex = Arc::clone(&harness.test().codex);
+    expect_successful_undo(&codex).await?;
+
+    assert_eq!(fs::read_to_string(&source)?, "original\n");
+    assert!(!destination.exists());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn undo_scopes_to_nested_workspace_prefix() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_config(|config: &mut Config| {
+        config.include_apply_patch_tool = true;
+        config.features.enable(Feature::GhostCommit);
+        let nested = config.cwd.join("nested/workspace");
+        std::fs::create_dir_all(&nested).expect("create nested workspace");
+        config.cwd = nested;
+    })
+    .await?;
+
+    init_git_repo(harness.cwd())?;
+
+    let workspace = harness.cwd().join("nested/workspace");
+    let tracked_outside = harness.path("outside.txt");
+    fs::write(&tracked_outside, "outside stable\n")?;
+    let nested_file = workspace.join("nested_file.txt");
+    fs::write(&nested_file, "original nested\n")?;
+    git(
+        harness.cwd(),
+        &["add", "outside.txt", "nested/workspace/nested_file.txt"],
+    )?;
+    git(harness.cwd(), &["commit", "-m", "seed nested workspace"])?;
+
+    run_apply_patch_turn(
+        &harness,
+        "modify nested file",
+        "undo-nested",
+        "*** Begin Patch\n*** Update File: nested_file.txt\n@@\n-original nested\n+turn update\n*** End Patch",
+        "done",
+    )
+    .await?;
+    assert_eq!(fs::read_to_string(&nested_file)?, "turn update\n");
+
+    fs::write(&tracked_outside, "outside manual\n")?;
+
+    let codex = Arc::clone(&harness.test().codex);
+    expect_successful_undo(&codex).await?;
+
+    assert_eq!(fs::read_to_string(&nested_file)?, "original nested\n");
+    assert_eq!(fs::read_to_string(&tracked_outside)?, "outside manual\n");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn undo_handles_ignored_directory_contents() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = undo_harness().await?;
+    init_git_repo(harness.cwd())?;
+
+    let gitignore = harness.path(".gitignore");
+    fs::write(&gitignore, "logs/\n")?;
+    git(harness.cwd(), &["add", ".gitignore"])?;
+    git(harness.cwd(), &["commit", "-m", "ignore logs directory"])?;
+
+    let logs_dir = harness.path("logs");
+    fs::create_dir_all(&logs_dir)?;
+    let preserved = logs_dir.join("persistent.log");
+    fs::write(&preserved, "keep me\n")?;
+
+    run_apply_patch_turn(
+        &harness,
+        "write log",
+        "undo-log",
+        "*** Begin Patch\n*** Add File: logs/session.log\n+ephemeral log\n*** End Patch",
+        "ok",
+    )
+    .await?;
+
+    let new_log = logs_dir.join("session.log");
+    assert_eq!(fs::read_to_string(&new_log)?, "ephemeral log\n");
+
+    let codex = Arc::clone(&harness.test().codex);
+    expect_successful_undo(&codex).await?;
+
+    assert!(!new_log.exists());
+    assert_eq!(fs::read_to_string(&preserved)?, "keep me\n");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn undo_preserves_manual_tracked_changes_across_turns() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = undo_harness().await?;
+    init_git_repo(harness.cwd())?;
+
+    let alpha = harness.path("alpha.txt");
+    let beta = harness.path("beta.txt");
+    fs::write(&alpha, "seed alpha\n")?;
+    fs::write(&beta, "seed beta\n")?;
+    git(harness.cwd(), &["add", "alpha.txt", "beta.txt"])?;
+    git(harness.cwd(), &["commit", "-m", "seed tracked files"])?;
+
+    run_apply_patch_turn(
+        &harness,
+        "initial edit",
+        "undo-manual-initial",
+        "*** Begin Patch\n*** Update File: alpha.txt\n@@\n-seed alpha\n+turn alpha one\n*** End Patch",
+        "ok",
+    )
+    .await?;
+
+    fs::write(&alpha, "manual alpha\n")?;
+    fs::write(&beta, "manual beta\n")?;
+
+    run_apply_patch_turn(
+        &harness,
+        "second edit",
+        "undo-manual-followup",
+        "*** Begin Patch\n*** Update File: alpha.txt\n@@\n-manual alpha\n+turn alpha two\n*** End Patch",
+        "ok",
+    )
+    .await?;
+    assert_eq!(fs::read_to_string(&alpha)?, "turn alpha two\n");
+
+    let codex = Arc::clone(&harness.test().codex);
+    expect_successful_undo(&codex).await?;
+
+    assert_eq!(fs::read_to_string(&alpha)?, "manual alpha\n");
+    assert_eq!(fs::read_to_string(&beta)?, "manual beta\n");
 
     Ok(())
 }
