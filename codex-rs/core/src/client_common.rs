@@ -358,23 +358,15 @@ pub(crate) fn create_reasoning_param_for_request(
 }
 
 pub(crate) fn create_text_param_for_request(
-    model: String,
     verbosity: Option<VerbosityConfig>,
     output_schema: &Option<Value>,
 ) -> Option<TextControls> {
     if verbosity.is_none() && output_schema.is_none() {
         return None;
     }
-    let adjusted = if model.starts_with("gpt-5-codex") {
-        match verbosity {
-            Some(VerbosityConfig::Low) => None,
-            other => other,
-        }
-    } else {
-        verbosity
-    };
+
     Some(TextControls {
-        verbosity: adjusted.map(std::convert::Into::into),
+        verbosity: verbosity.map(std::convert::Into::into),
         format: output_schema.as_ref().map(|schema| TextFormat {
             r#type: TextFormatType::JsonSchema,
             strict: true,
@@ -502,8 +494,7 @@ mod tests {
             "required": ["answer"],
         });
         let text_controls =
-            create_text_param_for_request("gpt-5".to_string(), None, &Some(schema.clone()))
-                .expect("text controls");
+            create_text_param_for_request(None, &Some(schema.clone())).expect("text controls");
 
         let req = ResponsesApiRequest {
             model: "gpt-5",
@@ -558,37 +549,5 @@ mod tests {
 
         let v = serde_json::to_value(&req).expect("json");
         assert!(v.get("text").is_none());
-    }
-
-    #[test]
-    fn gpt5_codex_omits_low_verbosity() {
-        let input: Vec<ResponseItem> = vec![];
-        let tools: Vec<serde_json::Value> = vec![];
-
-        let text_controls = create_text_param_for_request(
-            "gpt-5-codex".to_string(),
-            Some(VerbosityConfig::Low),
-            &None,
-        )
-        .expect("text controls present");
-
-        let req = ResponsesApiRequest {
-            model: "gpt-5-codex",
-            instructions: "i",
-            input: &input,
-            tools: &tools,
-            tool_choice: "auto",
-            parallel_tool_calls: true,
-            reasoning: None,
-            store: false,
-            stream: true,
-            include: vec![],
-            prompt_cache_key: None,
-            text: Some(text_controls),
-        };
-
-        let v = serde_json::to_value(&req).expect("json");
-        let text = v.get("text").expect("text field exists");
-        assert!(text.get("verbosity").is_none());
     }
 }
