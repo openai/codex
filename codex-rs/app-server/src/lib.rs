@@ -12,16 +12,19 @@ use crate::message_processor::MessageProcessor;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_feedback::CodexFeedback;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::io::{self};
 use tokio::sync::mpsc;
+use tracing::Level;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -82,6 +85,8 @@ pub async fn run_main(
             std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
         })?;
 
+    let feedback = CodexFeedback::new();
+
     let otel =
         codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION")).map_err(|e| {
             std::io::Error::new(
@@ -96,8 +101,15 @@ pub async fn run_main(
         .with_writer(std::io::stderr)
         .with_filter(EnvFilter::from_default_env());
 
+    let feedback_layer = tracing_subscriber::fmt::layer()
+        .with_writer(feedback.make_writer())
+        .with_ansi(false)
+        .with_target(false)
+        .with_filter(Targets::new().with_default(Level::TRACE));
+
     let _ = tracing_subscriber::registry()
         .with(stderr_fmt)
+        .with(feedback_layer)
         .with(otel.as_ref().map(|provider| {
             OpenTelemetryTracingBridge::new(&provider.logger).with_filter(
                 tracing_subscriber::filter::filter_fn(codex_core::otel_init::codex_export_filter),
@@ -112,6 +124,7 @@ pub async fn run_main(
             outgoing_message_sender,
             codex_linux_sandbox_exe,
             std::sync::Arc::new(config),
+            feedback.clone(),
         );
         async move {
             while let Some(msg) = incoming_rx.recv().await {

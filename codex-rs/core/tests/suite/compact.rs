@@ -261,6 +261,65 @@ async fn summarize_context_three_requests_and_instructions() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_compact_uses_custom_prompt() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let sse_stream = sse(vec![ev_completed("r1")]);
+    mount_sse_once(&server, sse_stream).await;
+
+    let custom_prompt = "Use this compact prompt instead";
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    config.compact_prompt = Some(custom_prompt.to_string());
+
+    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create conversation")
+        .conversation;
+
+    codex.submit(Op::Compact).await.expect("trigger compact");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.expect("collect requests");
+    let body = requests
+        .iter()
+        .find_map(|req| req.body_json::<serde_json::Value>().ok())
+        .expect("summary request body");
+
+    let input = body
+        .get("input")
+        .and_then(|v| v.as_array())
+        .expect("input array");
+    let mut found_custom_prompt = false;
+    let mut found_default_prompt = false;
+
+    for item in input {
+        if item["type"].as_str() != Some("message") {
+            continue;
+        }
+        let text = item["content"][0]["text"].as_str().unwrap_or_default();
+        if text == custom_prompt {
+            found_custom_prompt = true;
+        }
+        if text == SUMMARIZATION_PROMPT {
+            found_default_prompt = true;
+        }
+    }
+
+    assert!(found_custom_prompt, "custom prompt should be injected");
+    assert!(!found_default_prompt, "default prompt should be replaced");
+}
+
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]

@@ -34,6 +34,7 @@ pub struct JSONRPCRequest {
     pub id: RequestId,
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub params: Option<serde_json::Value>,
 }
 
@@ -42,6 +43,7 @@ pub struct JSONRPCRequest {
 pub struct JSONRPCNotification {
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub params: Option<serde_json::Value>,
 }
 
@@ -63,6 +65,7 @@ pub struct JSONRPCError {
 pub struct JSONRPCErrorError {
     pub code: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub data: Option<serde_json::Value>,
     pub message: String,
 }

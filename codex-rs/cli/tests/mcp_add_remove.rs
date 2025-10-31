@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use codex_core::config::load_global_mcp_servers;
-use codex_core::config_types::McpServerTransportConfig;
+use codex_core::config::types::McpServerTransportConfig;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;

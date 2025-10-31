@@ -7,6 +7,7 @@
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
+use crate::protocol::SandboxCommandAssessment;
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
@@ -18,6 +19,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::path::Path;
+use std::path::PathBuf;
 
 use futures::Future;
 use futures::future::BoxFuture;
@@ -81,6 +83,7 @@ pub(crate) struct ApprovalCtx<'a> {
     pub turn: &'a TurnContext,
     pub call_id: &'a str,
     pub retry_reason: Option<String>,
+    pub risk: Option<SandboxCommandAssessment>,
 }
 
 pub(crate) trait Approvable<Req> {
@@ -121,6 +124,11 @@ pub(crate) trait Approvable<Req> {
         }
     }
 
+    /// Decide we can request an approval for no-sandbox execution.
+    fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
+        !matches!(policy, AskForApproval::Never | AskForApproval::OnRequest)
+    }
+
     fn start_approval_async<'a>(
         &'a mut self,
         req: &'a Req,
@@ -151,10 +159,20 @@ pub(crate) struct ToolCtx<'a> {
     pub tool_name: String,
 }
 
+/// Captures the command metadata needed to re-run a tool request without sandboxing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SandboxRetryData {
+    pub command: Vec<String>,
+    pub cwd: PathBuf,
+}
+
+pub(crate) trait ProvidesSandboxRetryData {
+    fn sandbox_retry_data(&self) -> Option<SandboxRetryData>;
+}
+
 #[derive(Debug)]
 pub(crate) enum ToolError {
     Rejected(String),
-    SandboxDenied(String),
     Codex(CodexErr),
 }
 

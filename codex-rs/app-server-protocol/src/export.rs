@@ -16,6 +16,7 @@ use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
@@ -177,24 +178,16 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
 
     for (name, schema) in bundle {
         let mut schema_value = serde_json::to_value(schema)?;
-        if let Value::Object(ref mut obj) = schema_value {
-            if let Some(defs) = obj.remove("definitions")
-                && let Value::Object(defs_obj) = defs
-            {
-                for (def_name, def_schema) in defs_obj {
-                    if !SPECIAL_DEFINITIONS.contains(&def_name.as_str()) {
-                        definitions.insert(def_name, def_schema);
-                    }
-                }
-            }
+        annotate_schema(&mut schema_value, Some(name.as_str()));
 
-            if let Some(Value::Array(one_of)) = obj.get_mut("oneOf") {
-                for variant in one_of.iter_mut() {
-                    if let Some(variant_name) = variant_definition_name(&name, variant)
-                        && let Value::Object(variant_obj) = variant
-                    {
-                        variant_obj.insert("title".into(), Value::String(variant_name));
-                    }
+        if let Value::Object(ref mut obj) = schema_value
+            && let Some(defs) = obj.remove("definitions")
+            && let Value::Object(defs_obj) = defs
+        {
+            for (def_name, mut def_schema) in defs_obj {
+                if !SPECIAL_DEFINITIONS.contains(&def_name.as_str()) {
+                    annotate_schema(&mut def_schema, Some(def_name.as_str()));
+                    definitions.insert(def_name, def_schema);
                 }
             }
         }
@@ -227,9 +220,12 @@ where
 {
     let file_stem = name.trim();
     let schema = schema_for!(T);
-    write_pretty_json(out_dir.join(format!("{file_stem}.json")), &schema)
+    let mut schema_value = serde_json::to_value(schema)?;
+    annotate_schema(&mut schema_value, Some(file_stem));
+    write_pretty_json(out_dir.join(format!("{file_stem}.json")), &schema_value)
         .with_context(|| format!("Failed to write JSON schema for {file_stem}"))?;
-    Ok(schema)
+    let annotated_schema = serde_json::from_value(schema_value)?;
+    Ok(annotated_schema)
 }
 
 pub(crate) fn write_json_schema<T>(out_dir: &Path, name: &str) -> Result<()>
@@ -301,11 +297,147 @@ fn variant_definition_name(base: &str, variant: &Value) -> Option<String> {
 }
 
 fn literal_from_property<'a>(props: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
-    props
-        .get(key)
-        .and_then(|value| value.get("enum"))
-        .and_then(Value::as_array)
-        .and_then(|arr| arr.first())
+    props.get(key).and_then(string_literal)
+}
+
+fn string_literal(value: &Value) -> Option<&str> {
+    value.get("const").and_then(Value::as_str).or_else(|| {
+        value
+            .get("enum")
+            .and_then(Value::as_array)
+            .and_then(|arr| arr.first())
+            .and_then(Value::as_str)
+    })
+}
+
+fn annotate_schema(value: &mut Value, base: Option<&str>) {
+    match value {
+        Value::Object(map) => annotate_object(map, base),
+        Value::Array(items) => {
+            for item in items {
+                annotate_schema(item, base);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn annotate_object(map: &mut Map<String, Value>, base: Option<&str>) {
+    let owner = map.get("title").and_then(Value::as_str).map(str::to_owned);
+    if let Some(owner) = owner.as_deref()
+        && let Some(Value::Object(props)) = map.get_mut("properties")
+    {
+        set_discriminator_titles(props, owner);
+    }
+
+    if let Some(Value::Array(variants)) = map.get_mut("oneOf") {
+        annotate_variant_list(variants, base);
+    }
+    if let Some(Value::Array(variants)) = map.get_mut("anyOf") {
+        annotate_variant_list(variants, base);
+    }
+
+    if let Some(Value::Object(defs)) = map.get_mut("definitions") {
+        for (name, schema) in defs.iter_mut() {
+            annotate_schema(schema, Some(name.as_str()));
+        }
+    }
+
+    if let Some(Value::Object(defs)) = map.get_mut("$defs") {
+        for (name, schema) in defs.iter_mut() {
+            annotate_schema(schema, Some(name.as_str()));
+        }
+    }
+
+    if let Some(Value::Object(props)) = map.get_mut("properties") {
+        for value in props.values_mut() {
+            annotate_schema(value, base);
+        }
+    }
+
+    if let Some(items) = map.get_mut("items") {
+        annotate_schema(items, base);
+    }
+
+    if let Some(additional) = map.get_mut("additionalProperties") {
+        annotate_schema(additional, base);
+    }
+
+    for (key, child) in map.iter_mut() {
+        match key.as_str() {
+            "oneOf"
+            | "anyOf"
+            | "definitions"
+            | "$defs"
+            | "properties"
+            | "items"
+            | "additionalProperties" => {}
+            _ => annotate_schema(child, base),
+        }
+    }
+}
+
+fn annotate_variant_list(variants: &mut [Value], base: Option<&str>) {
+    let mut seen = HashSet::new();
+
+    for variant in variants.iter() {
+        if let Some(name) = variant_title(variant) {
+            seen.insert(name.to_owned());
+        }
+    }
+
+    for variant in variants.iter_mut() {
+        let mut variant_name = variant_title(variant).map(str::to_owned);
+
+        if variant_name.is_none()
+            && let Some(base_name) = base
+            && let Some(name) = variant_definition_name(base_name, variant)
+        {
+            let mut candidate = name.clone();
+            let mut index = 2;
+            while seen.contains(&candidate) {
+                candidate = format!("{name}{index}");
+                index += 1;
+            }
+            if let Some(obj) = variant.as_object_mut() {
+                obj.insert("title".into(), Value::String(candidate.clone()));
+            }
+            seen.insert(candidate.clone());
+            variant_name = Some(candidate);
+        }
+
+        if let Some(name) = variant_name.as_deref()
+            && let Some(obj) = variant.as_object_mut()
+            && let Some(Value::Object(props)) = obj.get_mut("properties")
+        {
+            set_discriminator_titles(props, name);
+        }
+
+        annotate_schema(variant, base);
+    }
+}
+
+const DISCRIMINATOR_KEYS: &[&str] = &["type", "method", "mode", "status", "role", "reason"];
+
+fn set_discriminator_titles(props: &mut Map<String, Value>, owner: &str) {
+    for key in DISCRIMINATOR_KEYS {
+        if let Some(prop_schema) = props.get_mut(*key)
+            && string_literal(prop_schema).is_some()
+            && let Value::Object(prop_obj) = prop_schema
+        {
+            if prop_obj.contains_key("title") {
+                continue;
+            }
+            let suffix = to_pascal_case(key);
+            prop_obj.insert("title".into(), Value::String(format!("{owner}{suffix}")));
+        }
+    }
+}
+
+fn variant_title(value: &Value) -> Option<&str> {
+    value
+        .as_object()
+        .and_then(|obj| obj.get("title"))
         .and_then(Value::as_str)
 }
 
@@ -401,4 +533,205 @@ fn generate_index_ts(out_dir: &Path) -> Result<PathBuf> {
     f.write_all(content.as_bytes())
         .with_context(|| format!("Failed to write {}", index_path.display()))?;
     Ok(index_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::PathBuf;
+    use uuid::Uuid;
+
+    #[test]
+    fn generated_ts_has_no_optional_nullable_fields() -> Result<()> {
+        let output_dir = std::env::temp_dir().join(format!("codex_ts_types_{}", Uuid::now_v7()));
+        fs::create_dir(&output_dir)?;
+
+        struct TempDirGuard(PathBuf);
+
+        impl Drop for TempDirGuard {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let _guard = TempDirGuard(output_dir.clone());
+
+        generate_ts(&output_dir, None)?;
+
+        let mut undefined_offenders = Vec::new();
+        let mut optional_nullable_offenders = BTreeSet::new();
+        let mut stack = vec![output_dir];
+        while let Some(dir) = stack.pop() {
+            for entry in fs::read_dir(&dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+
+                if matches!(path.extension().and_then(|ext| ext.to_str()), Some("ts")) {
+                    let contents = fs::read_to_string(&path)?;
+                    if contents.contains("| undefined") {
+                        undefined_offenders.push(path.clone());
+                    }
+
+                    const SKIP_PREFIXES: &[&str] = &[
+                        "const ",
+                        "let ",
+                        "var ",
+                        "export const ",
+                        "export let ",
+                        "export var ",
+                    ];
+
+                    let mut search_start = 0;
+                    while let Some(idx) = contents[search_start..].find("| null") {
+                        let abs_idx = search_start + idx;
+                        // Find the property-colon for this field by scanning forward
+                        // from the start of the segment and ignoring nested braces,
+                        // brackets, and parens. This avoids colons inside nested
+                        // type literals like `{ [k in string]?: string }`.
+
+                        let line_start_idx =
+                            contents[..abs_idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
+
+                        let mut segment_start_idx = line_start_idx;
+                        if let Some(rel_idx) = contents[line_start_idx..abs_idx].rfind(',') {
+                            segment_start_idx = segment_start_idx.max(line_start_idx + rel_idx + 1);
+                        }
+                        if let Some(rel_idx) = contents[line_start_idx..abs_idx].rfind('{') {
+                            segment_start_idx = segment_start_idx.max(line_start_idx + rel_idx + 1);
+                        }
+                        if let Some(rel_idx) = contents[line_start_idx..abs_idx].rfind('}') {
+                            segment_start_idx = segment_start_idx.max(line_start_idx + rel_idx + 1);
+                        }
+
+                        // Scan forward for the colon that separates the field name from its type.
+                        let mut level_brace = 0_i32;
+                        let mut level_brack = 0_i32;
+                        let mut level_paren = 0_i32;
+                        let mut in_single = false;
+                        let mut in_double = false;
+                        let mut escape = false;
+                        let mut prop_colon_idx = None;
+                        for (i, ch) in contents[segment_start_idx..abs_idx].char_indices() {
+                            let idx_abs = segment_start_idx + i;
+                            if escape {
+                                escape = false;
+                                continue;
+                            }
+                            match ch {
+                                '\\' => {
+                                    // Only treat as escape when inside a string.
+                                    if in_single || in_double {
+                                        escape = true;
+                                    }
+                                }
+                                '\'' => {
+                                    if !in_double {
+                                        in_single = !in_single;
+                                    }
+                                }
+                                '"' => {
+                                    if !in_single {
+                                        in_double = !in_double;
+                                    }
+                                }
+                                '{' if !in_single && !in_double => level_brace += 1,
+                                '}' if !in_single && !in_double => level_brace -= 1,
+                                '[' if !in_single && !in_double => level_brack += 1,
+                                ']' if !in_single && !in_double => level_brack -= 1,
+                                '(' if !in_single && !in_double => level_paren += 1,
+                                ')' if !in_single && !in_double => level_paren -= 1,
+                                ':' if !in_single
+                                    && !in_double
+                                    && level_brace == 0
+                                    && level_brack == 0
+                                    && level_paren == 0 =>
+                                {
+                                    prop_colon_idx = Some(idx_abs);
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        let Some(colon_idx) = prop_colon_idx else {
+                            search_start = abs_idx + 5;
+                            continue;
+                        };
+
+                        let mut field_prefix = contents[segment_start_idx..colon_idx].trim();
+                        if field_prefix.is_empty() {
+                            search_start = abs_idx + 5;
+                            continue;
+                        }
+
+                        if let Some(comment_idx) = field_prefix.rfind("*/") {
+                            field_prefix = field_prefix[comment_idx + 2..].trim_start();
+                        }
+
+                        if field_prefix.is_empty() {
+                            search_start = abs_idx + 5;
+                            continue;
+                        }
+
+                        if SKIP_PREFIXES
+                            .iter()
+                            .any(|prefix| field_prefix.starts_with(prefix))
+                        {
+                            search_start = abs_idx + 5;
+                            continue;
+                        }
+
+                        if field_prefix.contains('(') {
+                            search_start = abs_idx + 5;
+                            continue;
+                        }
+
+                        // If the last non-whitespace before ':' is '?', then this is an
+                        // optional field with a nullable type (i.e., "?: T | null"),
+                        // which we explicitly disallow.
+                        if field_prefix.chars().rev().find(|c| !c.is_whitespace()) == Some('?') {
+                            let line_number =
+                                contents[..abs_idx].chars().filter(|c| *c == '\n').count() + 1;
+                            let offending_line_end = contents[line_start_idx..]
+                                .find('\n')
+                                .map(|i| line_start_idx + i)
+                                .unwrap_or(contents.len());
+                            let offending_snippet =
+                                contents[line_start_idx..offending_line_end].trim();
+
+                            optional_nullable_offenders.insert(format!(
+                                "{}:{}: {offending_snippet}",
+                                path.display(),
+                                line_number
+                            ));
+                        }
+
+                        search_start = abs_idx + 5;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            undefined_offenders.is_empty(),
+            "Generated TypeScript still includes unions with `undefined` in {undefined_offenders:?}"
+        );
+
+        // If this assertion fails, it means a field was generated as
+        // "?: T | null" — i.e., both optional (undefined) and nullable (null).
+        // We only want either "?: T" or ": T | null".
+        assert!(
+            optional_nullable_offenders.is_empty(),
+            "Generated TypeScript has optional fields with nullable types (disallowed '?: T | null'), add #[ts(optional)] to fix:\n{optional_nullable_offenders:?}"
+        );
+
+        Ok(())
+    }
 }

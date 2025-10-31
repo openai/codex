@@ -362,13 +362,13 @@ mod api {
                 });
             }
 
-            let req = codex_git_apply::ApplyGitRequest {
+            let req = codex_git::ApplyGitRequest {
                 cwd: std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()),
                 diff: diff.clone(),
                 revert: false,
                 preflight,
             };
-            let r = codex_git_apply::apply_git_patch(&req)
+            let r = codex_git::apply_git_patch(&req)
                 .map_err(|e| CloudTaskError::Io(format!("git apply failed to run: {e}")))?;
 
             let status = if r.exit_code == 0 {

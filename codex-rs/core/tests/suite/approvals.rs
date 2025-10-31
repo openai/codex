@@ -268,11 +268,22 @@ impl Expectation {
                     "expected non-zero exit for {path:?}"
                 );
                 for needle in *message_contains {
-                    assert!(
-                        result.stdout.contains(needle),
-                        "stdout missing {needle:?}: {}",
-                        result.stdout
-                    );
+                    if needle.contains('|') {
+                        let options: Vec<&str> = needle.split('|').collect();
+                        let matches_any =
+                            options.iter().any(|option| result.stdout.contains(option));
+                        assert!(
+                            matches_any,
+                            "stdout missing one of {options:?}: {}",
+                            result.stdout
+                        );
+                    } else {
+                        assert!(
+                            result.stdout.contains(needle),
+                            "stdout missing {needle:?}: {}",
+                            result.stdout
+                        );
+                    }
                 }
                 assert!(
                     !path.exists(),
@@ -901,7 +912,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 message_contains: if cfg!(target_os = "linux") {
                     &["Permission denied"]
                 } else {
-                    &["failed in sandbox"]
+                    &["Permission denied|Operation not permitted|Read-only file system"]
                 },
             },
         },
@@ -1045,7 +1056,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 message_contains: if cfg!(target_os = "linux") {
                     &["Permission denied"]
                 } else {
-                    &["failed in sandbox"]
+                    &["Permission denied|Operation not permitted|Read-only file system"]
                 },
             },
         },

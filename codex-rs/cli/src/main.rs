@@ -7,6 +7,7 @@ use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
+use codex_cli::WindowsCommand;
 use codex_cli::login::read_api_key_from_stdin;
 use codex_cli::login::run_login_status;
 use codex_cli::login::run_login_with_api_key;
@@ -29,6 +30,7 @@ mod mcp_cmd;
 use crate::mcp_cmd::McpCli;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::features::is_known_feature_key;
 
 /// Codex CLI
 ///
@@ -150,6 +152,9 @@ enum SandboxCommand {
     /// Run a command under Landlock+seccomp (Linux only).
     #[clap(visible_alias = "landlock")]
     Linux(LandlockCommand),
+
+    /// Run a command under Windows restricted token (Windows only).
+    Windows(WindowsCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -286,15 +291,25 @@ struct FeatureToggles {
 }
 
 impl FeatureToggles {
-    fn to_overrides(&self) -> Vec<String> {
+    fn to_overrides(&self) -> anyhow::Result<Vec<String>> {
         let mut v = Vec::new();
-        for k in &self.enable {
-            v.push(format!("features.{k}=true"));
+        for feature in &self.enable {
+            Self::validate_feature(feature)?;
+            v.push(format!("features.{feature}=true"));
         }
-        for k in &self.disable {
-            v.push(format!("features.{k}=false"));
+        for feature in &self.disable {
+            Self::validate_feature(feature)?;
+            v.push(format!("features.{feature}=false"));
         }
-        v
+        Ok(v)
+    }
+
+    fn validate_feature(feature: &str) -> anyhow::Result<()> {
+        if is_known_feature_key(feature) {
+            Ok(())
+        } else {
+            anyhow::bail!("Unknown feature flag: {feature}")
+        }
     }
 }
 
@@ -345,9 +360,8 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     } = MultitoolCli::parse();
 
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
-    root_config_overrides
-        .raw_overrides
-        .extend(feature_toggles.to_overrides());
+    let toggle_overrides = feature_toggles.to_overrides()?;
+    root_config_overrides.raw_overrides.extend(toggle_overrides);
 
     match subcommand {
         None => {
@@ -462,6 +476,17 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 )
                 .await?;
             }
+            SandboxCommand::Windows(mut windows_cli) => {
+                prepend_config_flags(
+                    &mut windows_cli.config_overrides,
+                    root_config_overrides.clone(),
+                );
+                codex_cli::debug_sandbox::run_command_under_windows(
+                    windows_cli,
+                    codex_linux_sandbox_exe,
+                )
+                .await?;
+            }
         },
         Some(Subcommand::Apply(mut apply_cli)) => {
             prepend_config_flags(
@@ -487,7 +512,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 // Respect root-level `-c` overrides plus top-level flags like `--profile`.
                 let cli_kv_overrides = root_config_overrides
                     .parse_overrides()
-                    .map_err(|e| anyhow::anyhow!(e))?;
+                    .map_err(anyhow::Error::msg)?;
 
                 // Thread through relevant top-level flags (at minimum, `--profile`).
                 // Also honor `--search` since it maps to a feature toggle.
@@ -605,6 +630,7 @@ mod tests {
     use assert_matches::assert_matches;
     use codex_core::protocol::TokenUsage;
     use codex_protocol::ConversationId;
+    use pretty_assertions::assert_eq;
 
     fn finalize_from_args(args: &[&str]) -> TuiCli {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");
@@ -780,5 +806,33 @@ mod tests {
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn feature_toggles_known_features_generate_overrides() {
+        let toggles = FeatureToggles {
+            enable: vec!["web_search_request".to_string()],
+            disable: vec!["unified_exec".to_string()],
+        };
+        let overrides = toggles.to_overrides().expect("valid features");
+        assert_eq!(
+            overrides,
+            vec![
+                "features.web_search_request=true".to_string(),
+                "features.unified_exec=false".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn feature_toggles_unknown_feature_errors() {
+        let toggles = FeatureToggles {
+            enable: vec!["does_not_exist".to_string()],
+            disable: Vec::new(),
+        };
+        let err = toggles
+            .to_overrides()
+            .expect_err("feature should be rejected");
+        assert_eq!(err.to_string(), "Unknown feature flag: does_not_exist");
     }
 }

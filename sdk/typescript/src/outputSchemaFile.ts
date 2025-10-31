@@ -21,8 +21,7 @@ export async function createOutputSchemaFile(schema: unknown): Promise<OutputSch
   const cleanup = async () => {
     try {
       await fs.rm(schemaDir, { recursive: true, force: true });
-    }
-    catch  {
+    } catch {
       // suppress
     }
   };

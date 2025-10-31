@@ -96,6 +96,10 @@ mod imp {
 
     pub(super) fn requery_default_colors() {
         if let Ok(mut cache) = default_colors_cache().lock() {
+            // Don't try to refresh if the cache is already attempted and failed.
+            if cache.attempted && cache.value.is_none() {
+                return;
+            }
             cache.refresh_with(|| query_default_colors().unwrap_or_default());
         }
     }
@@ -114,8 +118,6 @@ mod imp {
         if !stdout_handle.is_terminal() {
             return Ok(None);
         }
-        stdout_handle.write_all(b"\x1b]10;?\x07\x1b]11;?\x07")?;
-        stdout_handle.flush()?;
 
         let mut tty = match OpenOptions::new().read(true).open("/dev/tty") {
             Ok(file) => file,
@@ -130,7 +132,10 @@ mod imp {
             }
         }
 
-        let deadline = Instant::now() + Duration::from_millis(200);
+        stdout_handle.write_all(b"\x1b]10;?\x07\x1b]11;?\x07")?;
+        stdout_handle.flush()?;
+
+        let mut deadline = Instant::now() + Duration::from_millis(200);
         let mut buffer = Vec::new();
         let mut fg = None;
         let mut bg = None;
@@ -140,6 +145,7 @@ mod imp {
             match tty.read(&mut chunk) {
                 Ok(0) => break,
                 Ok(n) => {
+                    deadline = Instant::now() + Duration::from_millis(200);
                     buffer.extend_from_slice(&chunk[..n]);
                     if fg.is_none() {
                         fg = parse_osc_color(&buffer, 10);

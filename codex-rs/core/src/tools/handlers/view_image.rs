@@ -85,6 +85,7 @@ impl ToolHandler for ViewImageHandler {
 
         Ok(ToolOutput::Function {
             content: "attached local image path".to_string(),
+            content_items: None,
             success: Some(true),
         })
     }

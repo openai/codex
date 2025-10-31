@@ -90,11 +90,13 @@ impl ToolHandler for GrepFilesHandler {
         if search_results.is_empty() {
             Ok(ToolOutput::Function {
                 content: "No matches found.".to_string(),
+                content_items: None,
                 success: Some(false),
             })
         } else {
             Ok(ToolOutput::Function {
                 content: search_results.join("\n"),
+                content_items: None,
                 success: Some(true),
             })
         }

@@ -1,6 +1,6 @@
 use crate::config::Config;
-use crate::config_types::OtelExporterKind as Kind;
-use crate::config_types::OtelHttpProtocol as Protocol;
+use crate::config::types::OtelExporterKind as Kind;
+use crate::config::types::OtelHttpProtocol as Protocol;
 use crate::default_client::originator;
 use codex_otel::config::OtelExporter;
 use codex_otel::config::OtelHttpProtocol;

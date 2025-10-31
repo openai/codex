@@ -61,6 +61,7 @@ Request `newConversation` params (subset):
 - `sandbox`: `read-only` | `workspace-write` | `danger-full-access`
 - `config`: map of additional config overrides
 - `baseInstructions`: optional instruction override
+- `compactPrompt`: optional replacement for the default compaction prompt
 - `includePlanTool` / `includeApplyPatchTool`: booleans
 
 Response: `{ conversationId, model, reasoningEffort?, rolloutPath }`

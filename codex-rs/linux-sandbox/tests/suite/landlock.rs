@@ -1,5 +1,5 @@
 #![cfg(target_os = "linux")]
-use codex_core::config_types::ShellEnvironmentPolicy;
+use codex_core::config::types::ShellEnvironmentPolicy;
 use codex_core::error::CodexErr;
 use codex_core::error::SandboxErr;
 use codex_core::exec::ExecParams;

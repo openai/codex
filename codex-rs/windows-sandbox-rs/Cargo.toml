@@ -1,0 +1,43 @@
+[package]
+name = "codex-windows-sandbox"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "codex_windows_sandbox"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+[dependencies.rand]
+version = "0.8"
+default-features = false
+features = ["std", "small_rng"]
+[dependencies.dirs-next]
+version = "2.0"
+[dependencies.windows-sys]
+version = "0.52"
+features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_SystemServices",
+    "Win32_System_Environment",
+    "Win32_System_Pipes",
+    "Win32_System_WindowsProgramming",
+    "Win32_System_IO",
+    "Win32_System_Memory",
+    "Win32_System_Kernel",
+    "Win32_System_Console",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_Networking_WinSock",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Com",
+    "Win32_Security_Authentication_Identity",
+]

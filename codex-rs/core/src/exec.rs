@@ -72,6 +72,9 @@ pub enum SandboxType {
 
     /// Only available on Linux.
     LinuxSeccomp,
+
+    /// Only available on Windows.
+    WindowsRestrictedToken,
 }
 
 #[derive(Clone)]
@@ -158,9 +161,77 @@ pub(crate) async fn execute_exec_env(
     };
 
     let start = Instant::now();
-    let raw_output_result = exec(params, sandbox_policy, stdout_stream).await;
+    let raw_output_result = exec(params, sandbox, sandbox_policy, stdout_stream).await;
     let duration = start.elapsed();
     finalize_exec_result(raw_output_result, sandbox, duration)
+}
+
+#[cfg(target_os = "windows")]
+async fn exec_windows_sandbox(
+    params: ExecParams,
+    sandbox_policy: &SandboxPolicy,
+) -> Result<RawExecToolCallOutput> {
+    use codex_windows_sandbox::run_windows_sandbox_capture;
+
+    let ExecParams {
+        command,
+        cwd,
+        env,
+        timeout_ms,
+        ..
+    } = params;
+
+    let policy_str = match sandbox_policy {
+        SandboxPolicy::DangerFullAccess => "workspace-write",
+        SandboxPolicy::ReadOnly => "read-only",
+        SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
+    };
+
+    let sandbox_cwd = cwd.clone();
+    let spawn_res = tokio::task::spawn_blocking(move || {
+        run_windows_sandbox_capture(policy_str, &sandbox_cwd, command, &cwd, env, timeout_ms)
+    })
+    .await;
+
+    let capture = match spawn_res {
+        Ok(Ok(v)) => v,
+        Ok(Err(err)) => {
+            return Err(CodexErr::Io(io::Error::other(format!(
+                "windows sandbox: {err}"
+            ))));
+        }
+        Err(join_err) => {
+            return Err(CodexErr::Io(io::Error::other(format!(
+                "windows sandbox join error: {join_err}"
+            ))));
+        }
+    };
+
+    let exit_status = synthetic_exit_status(capture.exit_code);
+    let stdout = StreamOutput {
+        text: capture.stdout,
+        truncated_after_lines: None,
+    };
+    let stderr = StreamOutput {
+        text: capture.stderr,
+        truncated_after_lines: None,
+    };
+    // Best-effort aggregate: stdout then stderr
+    let mut aggregated = Vec::with_capacity(stdout.text.len() + stderr.text.len());
+    append_all(&mut aggregated, &stdout.text);
+    append_all(&mut aggregated, &stderr.text);
+    let aggregated_output = StreamOutput {
+        text: aggregated,
+        truncated_after_lines: None,
+    };
+
+    Ok(RawExecToolCallOutput {
+        exit_status,
+        stdout,
+        stderr,
+        aggregated_output,
+        timed_out: capture.timed_out,
+    })
 }
 
 fn finalize_exec_result(
@@ -347,11 +418,17 @@ pub struct ExecToolCallOutput {
     pub timed_out: bool,
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
 async fn exec(
     params: ExecParams,
+    sandbox: SandboxType,
     sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<RawExecToolCallOutput> {
+    #[cfg(target_os = "windows")]
+    if sandbox == SandboxType::WindowsRestrictedToken {
+        return exec_windows_sandbox(params, sandbox_policy).await;
+    }
     let timeout = params.timeout_duration();
     let ExecParams {
         command,
@@ -525,8 +602,9 @@ fn synthetic_exit_status(code: i32) -> ExitStatus {
 #[cfg(windows)]
 fn synthetic_exit_status(code: i32) -> ExitStatus {
     use std::os::windows::process::ExitStatusExt;
-    #[expect(clippy::unwrap_used)]
-    std::process::ExitStatus::from_raw(code.try_into().unwrap())
+    // On Windows the raw status is a u32. Use a direct cast to avoid
+    // panicking on negative i32 values produced by prior narrowing casts.
+    std::process::ExitStatus::from_raw(code as u32)
 }
 
 #[cfg(test)]

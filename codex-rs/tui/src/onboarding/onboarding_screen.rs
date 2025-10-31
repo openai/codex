@@ -87,6 +87,7 @@ impl OnboardingScreen {
         let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
         let forced_login_method = config.forced_login_method;
         let codex_home = config.codex_home;
+        let cli_auth_credentials_store_mode = config.cli_auth_credentials_store_mode;
         let mut steps: Vec<Step> = Vec::new();
         if show_windows_wsl_screen {
             steps.push(Step::Windows(WindowsSetupWidget::new(codex_home.clone())));
@@ -106,6 +107,7 @@ impl OnboardingScreen {
                 error: None,
                 sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
                 codex_home: codex_home.clone(),
+                cli_auth_credentials_store_mode,
                 login_status,
                 auth_manager,
                 forced_chatgpt_workspace_id,
