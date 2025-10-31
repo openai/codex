@@ -182,18 +182,16 @@ impl ModelClient {
         let mut prompt = payload.prompt.clone();
         self.populate_prompt(&mut prompt);
         if self.provider.wire_api == WireApi::Responses
-            && let Some(path) = &*CODEX_RS_SSE_FIXTURE {
-                warn!(path, "Streaming from fixture");
-                let stream = stream_from_fixture(
-                    path,
-                    self.provider.clone(),
-                    self.otel_event_manager.clone(),
-                )
-                .await
-                .map_err(map_api_error)?
-                .boxed();
-                return Ok(wrap_stream(stream));
-            }
+            && let Some(path) = &*CODEX_RS_SSE_FIXTURE
+        {
+            warn!(path, "Streaming from fixture");
+            let stream =
+                stream_from_fixture(path, self.provider.clone(), self.otel_event_manager.clone())
+                    .await
+                    .map_err(map_api_error)?
+                    .boxed();
+            return Ok(wrap_stream(stream));
+        }
 
         let backend = self
             .backend

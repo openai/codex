@@ -97,8 +97,10 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         codex_protocol::protocol::SessionSource::Exec,
     );
 
-    let mut prompt = Prompt::default();
-    prompt.input = input;
+    let prompt = Prompt {
+        input,
+        ..Prompt::default()
+    };
 
     let mut stream = match client.stream_for_test(prompt).await {
         Ok(s) => s,

@@ -82,14 +82,16 @@ async fn responses_stream_includes_subagent_header_on_review() {
         SessionSource::SubAgent(codex_protocol::protocol::SubAgentSource::Review),
     );
 
-    let mut prompt = Prompt::default();
-    prompt.input = vec![ResponseItem::Message {
-        id: None,
-        role: "user".into(),
-        content: vec![ContentItem::InputText {
-            text: "hello".into(),
+    let prompt = Prompt {
+        input: vec![ResponseItem::Message {
+            id: None,
+            role: "user".into(),
+            content: vec![ContentItem::InputText {
+                text: "hello".into(),
+            }],
         }],
-    }];
+        ..Prompt::default()
+    };
 
     let mut stream = client.stream_for_test(prompt).await.expect("stream failed");
     while let Some(event) = stream.next().await {
@@ -172,14 +174,16 @@ async fn responses_stream_includes_subagent_header_on_other() {
         )),
     );
 
-    let mut prompt = Prompt::default();
-    prompt.input = vec![ResponseItem::Message {
-        id: None,
-        role: "user".into(),
-        content: vec![ContentItem::InputText {
-            text: "hello".into(),
+    let prompt = Prompt {
+        input: vec![ResponseItem::Message {
+            id: None,
+            role: "user".into(),
+            content: vec![ContentItem::InputText {
+                text: "hello".into(),
+            }],
         }],
-    }];
+        ..Prompt::default()
+    };
 
     let mut stream = client.stream_for_test(prompt).await.expect("stream failed");
     while let Some(event) = stream.next().await {

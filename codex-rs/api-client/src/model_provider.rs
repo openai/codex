@@ -121,9 +121,10 @@ impl ModelProviderInfo {
         let mut builder = client.post(url);
 
         if let Some(context) = effective_auth.as_ref()
-            && let Some(token) = context.bearer_token.as_ref() {
-                builder = builder.bearer_auth(token);
-            }
+            && let Some(token) = context.bearer_token.as_ref()
+        {
+            builder = builder.bearer_auth(token);
+        }
 
         Ok(self.apply_http_headers(builder))
     }

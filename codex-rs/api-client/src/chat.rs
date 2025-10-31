@@ -304,11 +304,10 @@ impl ChatCompletionsApiClient {
                         "content": content_value,
                     });
 
-                    if let Some(reasoning) = reasoning_by_anchor_index.get(&idx) {
-                        message
-                            .as_object_mut()
-                            .expect("message")
-                            .insert("reasoning".to_string(), json!({"text": reasoning}));
+                    if let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
+                        && let Some(obj) = message.as_object_mut()
+                    {
+                        obj.insert("reasoning".to_string(), json!({"text": reasoning}));
                     }
 
                     messages.push(message);
@@ -641,19 +640,18 @@ async fn process_chat_sse<S>(
 
                         if let Some(finish) = choice.get("finish_reason").and_then(|f| f.as_str())
                             && finish == "tool_calls"
-                            && let Some(name) = function_call_state.name.take() {
-                                let call_id =
-                                    function_call_state.call_id.take().unwrap_or_default();
-                                let arguments = std::mem::take(&mut function_call_state.arguments);
-                                let item = ResponseItem::FunctionCall {
-                                    id: None,
-                                    name,
-                                    arguments,
-                                    call_id,
-                                };
-                                let _ =
-                                    tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
-                            }
+                            && let Some(name) = function_call_state.name.take()
+                        {
+                            let call_id = function_call_state.call_id.take().unwrap_or_default();
+                            let arguments = std::mem::take(&mut function_call_state.arguments);
+                            let item = ResponseItem::FunctionCall {
+                                id: None,
+                                name,
+                                arguments,
+                                call_id,
+                            };
+                            let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+                        }
                     }
                 }
             }

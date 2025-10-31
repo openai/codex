@@ -76,10 +76,10 @@ impl ApiClient for ResponsesApiClient {
 
         if self.config.provider.is_azure_responses_endpoint()
             && let Some(input_value) = payload_json.get_mut("input")
-                && let Some(array) = input_value.as_array_mut()
-            {
-                attach_item_ids_array(array, &prompt.input);
-            }
+            && let Some(array) = input_value.as_array_mut()
+        {
+            attach_item_ids_array(array, &prompt.input);
+        }
 
         let max_attempts = self.config.provider.request_max_retries();
         for attempt in 0..=max_attempts {
@@ -122,22 +122,22 @@ impl ResponsesApiClient {
                 .unwrap_or_else(|| self.config.conversation_id.to_string()),
         });
 
-        if let Some(reasoning) = prompt.reasoning.as_ref() {
-            payload
-                .as_object_mut()
-                .expect("payload object")
-                .insert("reasoning".to_string(), serde_json::to_value(reasoning)?);
+        if let Some(reasoning) = prompt.reasoning.as_ref()
+            && let Some(obj) = payload.as_object_mut()
+        {
+            obj.insert("reasoning".to_string(), serde_json::to_value(reasoning)?);
         }
 
-        if let Some(text) = prompt.text_controls.as_ref() {
-            payload
-                .as_object_mut()
-                .expect("payload object")
-                .insert("text".to_string(), serde_json::to_value(text)?);
+        if let Some(text) = prompt.text_controls.as_ref()
+            && let Some(obj) = payload.as_object_mut()
+        {
+            obj.insert("text".to_string(), serde_json::to_value(text)?);
         }
 
-        if let Some(prev) = prompt.previous_response_id.as_ref() {
-            payload.as_object_mut().expect("payload object").insert(
+        if let Some(prev) = prompt.previous_response_id.as_ref()
+            && let Some(obj) = payload.as_object_mut()
+        {
+            obj.insert(
                 "previous_response_id".to_string(),
                 Value::String(prev.clone()),
             );
@@ -148,10 +148,12 @@ impl ResponsesApiClient {
         } else {
             Vec::new()
         };
-        payload.as_object_mut().expect("payload object").insert(
-            "include".to_string(),
-            Value::Array(include.into_iter().map(Value::String).collect()),
-        );
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert(
+                "include".to_string(),
+                Value::Array(include.into_iter().map(Value::String).collect()),
+            );
+        }
 
         Ok(payload)
     }
@@ -261,14 +263,14 @@ impl ResponsesApiClient {
 
                 if status == StatusCode::UNAUTHORIZED
                     && let Some(provider) = self.config.auth_provider.as_ref()
-                        && let Some(ctx) = auth.as_ref()
-                        && ctx.mode == AuthMode::ChatGPT
-                    {
-                        provider
-                            .refresh_token()
-                            .await
-                            .map_err(|err| StreamAttemptError::Fatal(Error::Auth(err)))?;
-                    }
+                    && let Some(ctx) = auth.as_ref()
+                    && ctx.mode == AuthMode::ChatGPT
+                {
+                    provider
+                        .refresh_token()
+                        .await
+                        .map_err(|err| StreamAttemptError::Fatal(Error::Auth(err)))?;
+                }
 
                 if !(status == StatusCode::TOO_MANY_REQUESTS
                     || status == StatusCode::UNAUTHORIZED
@@ -671,10 +673,11 @@ fn backoff(attempt: u64) -> Duration {
     Duration::from_millis(base * 100)
 }
 
-fn rate_limit_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
+fn rate_limit_regex() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
 
-    RE.get_or_init(|| Regex::new(r"Please try again in (\d+(?:\.\d+)?)(s|ms)").unwrap())
+    RE.get_or_init(|| Regex::new(r"Please try again in (\d+(?:\.\d+)?)(s|ms)").ok())
+        .as_ref()
 }
 
 fn try_parse_retry_after(err: &ErrorResponse) -> Option<Duration> {
@@ -682,8 +685,8 @@ fn try_parse_retry_after(err: &ErrorResponse) -> Option<Duration> {
         return None;
     }
 
-    let re = rate_limit_regex();
-    if let Some(message) = &err.message
+    if let Some(re) = rate_limit_regex()
+        && let Some(message) = &err.message
         && let Some(captures) = re.captures(message)
     {
         let seconds = captures.get(1);
@@ -721,8 +724,8 @@ pub async fn stream_from_fixture(
 
     let mut content = String::new();
     for line in lines {
-        let line = line
-            .map_err(|e| Error::Other(format!("failed to read fixture {display_path}: {e}")))?;
+        let line =
+            line.map_err(|e| Error::Other(format!("failed to read fixture {display_path}: {e}")))?;
         content.push_str(&line);
         content.push_str("\n\n");
     }

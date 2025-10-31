@@ -108,7 +108,7 @@ impl SessionState {
 
         // Populate prompt fields that depend only on session state.
         let (tools_json, has_freeform_apply_patch) =
-            tools_metadata_for_prompt(&tool_specs).expect("tool specs serialization");
+            tools_metadata_for_prompt(&tool_specs).unwrap_or_default();
         format_prompt_items(&mut prompt.input, has_freeform_apply_patch);
 
         let apply_patch_present = tool_specs.iter().any(|spec| spec.name() == "apply_patch");
@@ -141,8 +141,10 @@ pub(crate) fn build_prompt_from_items(
     prompt_items: Vec<ResponseItem>,
     chain_state: Option<&ResponsesApiChainState>,
 ) -> (Prompt, bool) {
-    let mut prompt = Prompt::default();
-    prompt.store_response = chain_state.is_some();
+    let mut prompt = Prompt {
+        store_response: chain_state.is_some(),
+        ..Prompt::default()
+    };
 
     if let Some(state) = chain_state {
         if let Some(last_message_id) = state.last_message_id.as_ref() {

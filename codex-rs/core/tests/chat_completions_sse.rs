@@ -97,14 +97,16 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         codex_protocol::protocol::SessionSource::Exec,
     );
 
-    let mut prompt = Prompt::default();
-    prompt.input = vec![ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "hello".to_string(),
+    let prompt = Prompt {
+        input: vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
         }],
-    }];
+        ..Prompt::default()
+    };
 
     let mut stream = match client.stream_for_test(prompt).await {
         Ok(s) => s,
