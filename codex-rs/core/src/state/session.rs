@@ -8,6 +8,7 @@ use crate::codex::SessionConfiguration;
 use crate::conversation_history::ConversationHistory;
 use crate::conversation_history::ResponsesApiChainState;
 use crate::conversation_history::format_prompt_items;
+use crate::features::Feature;
 use crate::model_family::ModelFamily;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
@@ -61,7 +62,9 @@ impl SessionState {
     }
 
     pub(crate) fn set_responses_api_chain(&mut self, chain: ResponsesApiChainState) {
-        self.history.set_responses_api_chain(chain);
+        if self.session_configuration.features.enabled(Feature::ResponsesApiChaining) {
+            self.history.set_responses_api_chain(chain);
+        }
     }
 
     // Token/rate limit helpers
@@ -142,7 +145,6 @@ pub(crate) fn build_prompt_from_items(
     chain_state: Option<&ResponsesApiChainState>,
 ) -> (Prompt, bool) {
     let mut prompt = Prompt {
-        store_response: chain_state.is_some(),
         ..Prompt::default()
     };
 

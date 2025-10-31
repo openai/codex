@@ -981,14 +981,9 @@ impl Session {
 
     async fn update_responses_api_chain_state(
         &self,
-        supports_responses_api_chaining: bool,
         response_id: Option<String>,
     ) {
         let mut state = self.state.lock().await;
-        if !supports_responses_api_chaining {
-            state.reset_responses_api_chain();
-            return;
-        }
 
         let Some(response_id) = response_id.filter(|id| !id.is_empty()) else {
             state.reset_responses_api_chain();
@@ -2028,8 +2023,6 @@ async fn try_run_turn(
     prompt: Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
-    let supports_responses_api_chaining = prompt.store_response;
-
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
@@ -2187,7 +2180,6 @@ async fn try_run_turn(
                     tracker.get_unified_diff()
                 };
                 sess.update_responses_api_chain_state(
-                    supports_responses_api_chaining,
                     Some(response_id.clone()),
                 )
                 .await;

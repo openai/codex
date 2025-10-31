@@ -114,7 +114,7 @@ impl ResponsesApiClient {
             "tools": prompt.tools,
             "tool_choice": "auto",
             "parallel_tool_calls": prompt.parallel_tool_calls,
-            "store": azure_workaround || prompt.store_response,
+            "store": azure_workaround,
             "stream": true,
             "prompt_cache_key": prompt
                 .prompt_cache_key

@@ -280,7 +280,6 @@ impl ModelClient {
             crate::client_common::compute_full_instructions(None, &self.config.model_family, false)
                 .into_owned();
         prompt.instructions = instructions;
-        prompt.store_response = false;
         prompt.previous_response_id = None;
         self.stream(&prompt).await
     }
