@@ -1,2 +1,10 @@
-You are performing a CONTEXT CHECKPOINT COMPACTION for a tool. Can you give a summary of what you are currently and the remaining tasks.
-This summary will be used by another LLM to complete the user requests.
+You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task.
+
+Include:
+- Goal / user objective
+- Current progress and key decisions made
+- Important context, constraints, or user preferences
+- What remains to be done (clear next steps)
+- Any critical data, examples, or references needed to continue
+
+Be concise, structured, and focused on helping the next LLM seamlessly continue the work.
