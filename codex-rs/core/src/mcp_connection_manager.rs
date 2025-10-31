@@ -37,8 +37,8 @@ use tokio::task::JoinSet;
 use tracing::info;
 use tracing::warn;
 
-use crate::config_types::McpServerConfig;
-use crate::config_types::McpServerTransportConfig;
+use crate::config::types::McpServerConfig;
+use crate::config::types::McpServerTransportConfig;
 
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.
@@ -49,7 +49,7 @@ const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
 
 /// Default timeout for initializing MCP server & initially listing tools.
-const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Default timeout for individual tool calls.
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);

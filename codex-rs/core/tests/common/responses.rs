@@ -35,6 +35,22 @@ impl ResponseMock {
     pub fn requests(&self) -> Vec<ResponsesRequest> {
         self.requests.lock().unwrap().clone()
     }
+
+    /// Returns true if any captured request contains a `function_call` with the
+    /// provided `call_id`.
+    pub fn saw_function_call(&self, call_id: &str) -> bool {
+        self.requests()
+            .iter()
+            .any(|req| req.has_function_call(call_id))
+    }
+
+    /// Returns the `output` string for a matching `function_call_output` with
+    /// the provided `call_id`, searching across all captured requests.
+    pub fn function_call_output_text(&self, call_id: &str) -> Option<String> {
+        self.requests()
+            .iter()
+            .find_map(|req| req.function_call_output_text(call_id))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +66,14 @@ impl ResponsesRequest {
             .as_array()
             .expect("input array not found in request")
             .clone()
+    }
+
+    pub fn inputs_of_type(&self, ty: &str) -> Vec<Value> {
+        self.input()
+            .iter()
+            .filter(|item| item.get("type").and_then(Value::as_str) == Some(ty))
+            .cloned()
+            .collect()
     }
 
     pub fn function_call_output(&self, call_id: &str) -> Value {
@@ -68,6 +92,28 @@ impl ResponsesRequest {
             })
             .cloned()
             .unwrap_or_else(|| panic!("function call output {call_id} item not found in request"))
+    }
+
+    /// Returns true if this request's `input` contains a `function_call` with
+    /// the specified `call_id`.
+    pub fn has_function_call(&self, call_id: &str) -> bool {
+        self.input().iter().any(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call")
+                && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+        })
+    }
+
+    /// If present, returns the `output` string of the `function_call_output`
+    /// entry matching `call_id` in this request's `input`.
+    pub fn function_call_output_text(&self, call_id: &str) -> Option<String> {
+        let binding = self.input();
+        let item = binding.iter().find(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+        })?;
+        item.get("output")
+            .and_then(Value::as_str)
+            .map(str::to_string)
     }
 
     pub fn header(&self, name: &str) -> Option<String> {
@@ -171,6 +217,25 @@ pub fn ev_assistant_message(id: &str, text: &str) -> Value {
     })
 }
 
+pub fn ev_message_item_added(id: &str, text: &str) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.added",
+        "item": {
+            "type": "message",
+            "role": "assistant",
+            "id": id,
+            "content": [{"type": "output_text", "text": text}]
+        }
+    })
+}
+
+pub fn ev_output_text_delta(delta: &str) -> Value {
+    serde_json::json!({
+        "type": "response.output_text.delta",
+        "delta": delta,
+    })
+}
+
 pub fn ev_reasoning_item(id: &str, summary: &[&str], raw_content: &[&str]) -> Value {
     let summary_entries: Vec<Value> = summary
         .iter()
@@ -195,6 +260,36 @@ pub fn ev_reasoning_item(id: &str, summary: &[&str], raw_content: &[&str]) -> Va
     }
 
     event
+}
+
+pub fn ev_reasoning_item_added(id: &str, summary: &[&str]) -> Value {
+    let summary_entries: Vec<Value> = summary
+        .iter()
+        .map(|text| serde_json::json!({"type": "summary_text", "text": text}))
+        .collect();
+
+    serde_json::json!({
+        "type": "response.output_item.added",
+        "item": {
+            "type": "reasoning",
+            "id": id,
+            "summary": summary_entries,
+        }
+    })
+}
+
+pub fn ev_reasoning_summary_text_delta(delta: &str) -> Value {
+    serde_json::json!({
+        "type": "response.reasoning_summary_text.delta",
+        "delta": delta,
+    })
+}
+
+pub fn ev_reasoning_text_delta(delta: &str) -> Value {
+    serde_json::json!({
+        "type": "response.reasoning_text.delta",
+        "delta": delta,
+    })
 }
 
 pub fn ev_web_search_call_added(id: &str, status: &str, query: &str) -> Value {

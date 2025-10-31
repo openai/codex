@@ -11,6 +11,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::user_input::UserInput;
 use tracing::warn;
+use uuid::Uuid;
 
 fn is_session_prefix(text: &str) -> bool {
     let trimmed = text.trim_start();
@@ -46,7 +47,7 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
     Some(UserMessageItem::new(&content))
 }
 
-fn parse_agent_message(message: &[ContentItem]) -> AgentMessageItem {
+fn parse_agent_message(id: Option<&String>, message: &[ContentItem]) -> AgentMessageItem {
     let mut content: Vec<AgentMessageContent> = Vec::new();
     for content_item in message.iter() {
         match content_item {
@@ -61,14 +62,18 @@ fn parse_agent_message(message: &[ContentItem]) -> AgentMessageItem {
             }
         }
     }
-    AgentMessageItem::new(&content)
+    let id = id.cloned().unwrap_or_else(|| Uuid::new_v4().to_string());
+    AgentMessageItem { id, content }
 }
 
 pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
     match item {
-        ResponseItem::Message { role, content, .. } => match role.as_str() {
+        ResponseItem::Message { role, content, id } => match role.as_str() {
             "user" => parse_user_message(content).map(TurnItem::UserMessage),
-            "assistant" => Some(TurnItem::AgentMessage(parse_agent_message(content))),
+            "assistant" => Some(TurnItem::AgentMessage(parse_agent_message(
+                id.as_ref(),
+                content,
+            ))),
             "system" => None,
             _ => None,
         },
