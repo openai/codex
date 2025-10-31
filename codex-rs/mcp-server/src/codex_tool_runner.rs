@@ -204,6 +204,9 @@ async fn run_codex_tool_session_inner(
                         outgoing.send_response(request_id.clone(), result).await;
                         break;
                     }
+                    EventMsg::Warning(_) => {
+                        continue;
+                    }
                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                         call_id,
                         reason,
@@ -281,7 +284,6 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::GetHistoryEntryResponse(_)
                     | EventMsg::PlanUpdate(_)
                     | EventMsg::TurnAborted(_)
-                    | EventMsg::ConversationPath(_)
                     | EventMsg::UserMessage(_)
                     | EventMsg::ShutdownComplete
                     | EventMsg::ViewImageToolCall(_)
@@ -289,7 +291,13 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::EnteredReviewMode(_)
                     | EventMsg::ItemStarted(_)
                     | EventMsg::ItemCompleted(_)
-                    | EventMsg::ExitedReviewMode(_) => {
+                    | EventMsg::AgentMessageContentDelta(_)
+                    | EventMsg::ReasoningContentDelta(_)
+                    | EventMsg::ReasoningRawContentDelta(_)
+                    | EventMsg::UndoStarted(_)
+                    | EventMsg::UndoCompleted(_)
+                    | EventMsg::ExitedReviewMode(_)
+                    | EventMsg::DeprecationNotice(_) => {
                         // For now, we do not do anything extra for these
                         // events. Note that
                         // send(codex_event_to_notification(&event)) above has
