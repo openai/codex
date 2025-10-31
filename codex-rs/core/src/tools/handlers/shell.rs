@@ -114,6 +114,7 @@ impl ShellHandler {
     ) -> Result<ToolOutput, FunctionCallError> {
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params.with_escalated_permissions.unwrap_or(false)
+            && !is_user_shell_command
             && !matches!(
                 turn.approval_policy,
                 codex_protocol::protocol::AskForApproval::OnRequest
