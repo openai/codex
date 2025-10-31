@@ -224,7 +224,7 @@ impl ModelClient {
             None
         };
 
-        // gpt-5-codex does not support `low` verbosity; omit it to avoid errors.
+        // gpt-5-codex doesn't have different verbosity levels; omit it to avoid errors.
         if self.config.model.starts_with("gpt-5-codex") {
             verbosity = None;
         }
