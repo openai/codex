@@ -447,6 +447,7 @@ fn globally_truncate_function_output_items(
                     remaining = 0;
                 }
             }
+            // todo(aibrahim): handle input images; resize
             FunctionCallOutputContentItem::InputImage { image_url } => {
                 out.push(FunctionCallOutputContentItem::InputImage {
                     image_url: image_url.clone(),
@@ -457,7 +458,7 @@ fn globally_truncate_function_output_items(
 
     if omitted_text_items > 0 {
         out.push(FunctionCallOutputContentItem::InputText {
-            text: format!("[... omitted {omitted_text_items} text items ...]"),
+            text: format!("[omitted {omitted_text_items} text items ...]"),
         });
     }
 
