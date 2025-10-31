@@ -30,6 +30,18 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 
+const FIXTURE_JSON: &str = r#"{
+    "description": "This is an example JSON file.",
+    "foo": "bar",
+    "isTest": true,
+    "testNumber": 123,
+    "testArray": [1, 2, 3],
+    "testObject": {
+        "foo": "bar"
+    }
+}
+"#;
+
 async fn submit_turn(test: &TestCodex, prompt: &str, sandbox_policy: SandboxPolicy) -> Result<()> {
     let session_model = test.session_configured.model.clone();
 
@@ -237,8 +249,8 @@ async fn shell_output_preserves_fixture_json_without_serialization() -> Result<(
     });
     let test = builder.build(&server).await?;
 
-    let fixture_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/example.json");
+    let fixture_path = test.cwd.path().join("fixture.json");
+    fs::write(&fixture_path, FIXTURE_JSON)?;
     let fixture_path_str = fixture_path.to_string_lossy().to_string();
 
     let call_id = "shell-json-fixture";
@@ -295,9 +307,8 @@ async fn shell_output_preserves_fixture_json_without_serialization() -> Result<(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let expected_output = fs::read_to_string(&fixture_path)?;
     assert_eq!(
-        stdout, expected_output,
+        stdout, FIXTURE_JSON,
         "expected shell output to match the fixture contents"
     );
 
@@ -314,8 +325,8 @@ async fn shell_output_structures_fixture_with_serialization() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let fixture_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/example.json");
+    let fixture_path = test.cwd.path().join("fixture.json");
+    fs::write(&fixture_path, FIXTURE_JSON)?;
     let fixture_path_str = fixture_path.to_string_lossy().to_string();
 
     let call_id = "shell-structured-fixture";
@@ -359,7 +370,6 @@ async fn shell_output_structures_fixture_with_serialization() -> Result<()> {
         serde_json::from_str::<Value>(output).is_err(),
         "expected structured output to be plain text"
     );
-    let expected_output = fs::read_to_string(&fixture_path)?;
     let (header, body) = output
         .split_once("Output:\n")
         .expect("structured output contains an Output section");
@@ -368,7 +378,7 @@ async fn shell_output_structures_fixture_with_serialization() -> Result<()> {
         header.trim_end(),
     );
     assert_eq!(
-        body, expected_output,
+        body, FIXTURE_JSON,
         "expected Output section to include the fixture contents"
     );
 
