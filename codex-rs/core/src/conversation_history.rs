@@ -428,7 +428,7 @@ fn globally_truncate_function_output_items(
     for it in items {
         match it {
             FunctionCallOutputContentItem::InputText { text } => {
-                if remaining == 0 {
+                if remaining <= 0 {
                     omitted_text_items += 1;
                     continue;
                 }
