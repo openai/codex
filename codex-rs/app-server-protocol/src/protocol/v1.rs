@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use codex_protocol::ConversationId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
@@ -12,6 +11,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::ConversationId;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -47,6 +47,7 @@ pub struct InitializeResponse {
 pub struct NewConversationParams {
     pub model: Option<String>,
     pub model_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub review_model: Option<String>,
     pub profile: Option<String>,
     pub cwd: Option<String>,

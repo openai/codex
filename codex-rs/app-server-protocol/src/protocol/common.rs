@@ -1,17 +1,17 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::protocol::v1;
+use crate::protocol::v2;
 use crate::JSONRPCNotification;
 use crate::JSONRPCRequest;
 use crate::RequestId;
-use crate::protocol::v1;
-use crate::protocol::v2;
-use codex_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxCommandAssessment;
+use codex_protocol::ConversationId;
 use paste::paste;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -431,6 +431,7 @@ mod tests {
             params: v1::NewConversationParams {
                 model: Some("gpt-5-codex".to_string()),
                 model_provider: None,
+                review_model: None,
                 profile: None,
                 cwd: None,
                 approval_policy: Some(AskForApproval::OnRequest),
