@@ -47,6 +47,7 @@ pub struct InitializeResponse {
 pub struct NewConversationParams {
     pub model: Option<String>,
     pub model_provider: Option<String>,
+    pub review_model: Option<String>,
     pub profile: Option<String>,
     pub cwd: Option<String>,
     pub approval_policy: Option<AskForApproval>,
@@ -285,6 +286,7 @@ pub struct UserSavedConfig {
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     pub model: Option<String>,
+    pub review_model: Option<String>,
     pub model_provider: Option<String>,
     pub approval_policy: Option<AskForApproval>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
