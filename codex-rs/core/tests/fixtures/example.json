@@ -1,0 +1,10 @@
+{
+    "description": "This is an example JSON file.",
+    "foo": "bar",
+    "isTest": true,
+    "testNumber": 123,
+    "testArray": [1, 2, 3],
+    "testObject": {
+        "foo": "bar"
+    }
+}

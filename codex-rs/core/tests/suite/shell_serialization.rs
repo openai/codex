@@ -226,6 +226,156 @@ freeform shell
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_output_preserves_fixture_json_without_serialization() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.features.disable(Feature::ApplyPatchFreeform);
+        config.model = "gpt-5".to_string();
+        config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is a model family");
+    });
+    let test = builder.build(&server).await?;
+
+    let fixture_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/example.json");
+    let fixture_path_str = fixture_path.to_string_lossy().to_string();
+
+    let call_id = "shell-json-fixture";
+    let args = json!({
+        "command": ["/usr/bin/sed", "-n", "p", fixture_path_str],
+        "timeout_ms": 1_000,
+    });
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    submit_turn(
+        &test,
+        "read the fixture JSON with sed",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("recorded requests present");
+    let bodies = request_bodies(&requests)?;
+    let output_item = find_function_call_output(&bodies, call_id).expect("shell output present");
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell output string");
+
+    let mut parsed: Value = serde_json::from_str(output)?;
+    if let Some(metadata) = parsed.get_mut("metadata").and_then(Value::as_object_mut) {
+        let _ = metadata.remove("duration_seconds");
+    }
+
+    assert_eq!(
+        parsed
+            .get("metadata")
+            .and_then(|metadata| metadata.get("exit_code"))
+            .and_then(Value::as_i64),
+        Some(0),
+        "expected zero exit code when serialization is disabled",
+    );
+    let stdout = parsed
+        .get("output")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let expected_output = fs::read_to_string(&fixture_path)?;
+    assert_eq!(
+        stdout, expected_output,
+        "expected shell output to match the fixture contents"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_output_structures_fixture_with_serialization() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::ApplyPatchFreeform);
+    });
+    let test = builder.build(&server).await?;
+
+    let fixture_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/example.json");
+    let fixture_path_str = fixture_path.to_string_lossy().to_string();
+
+    let call_id = "shell-structured-fixture";
+    let args = json!({
+        "command": ["/usr/bin/sed", "-n", "p", fixture_path_str],
+        "timeout_ms": 1_000,
+    });
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    submit_turn(
+        &test,
+        "read the fixture JSON with structured output",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("recorded requests present");
+    let bodies = request_bodies(&requests)?;
+    let output_item =
+        find_function_call_output(&bodies, call_id).expect("structured output present");
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("structured output string");
+
+    assert!(
+        serde_json::from_str::<Value>(output).is_err(),
+        "expected structured output to be plain text"
+    );
+    let expected_output = fs::read_to_string(&fixture_path)?;
+    let (header, body) = output
+        .split_once("Output:\n")
+        .expect("structured output contains an Output section");
+    assert_regex_match(
+        r"(?s)^Exit code: 0\nWall time: [0-9]+(?:\.[0-9]+)? seconds$",
+        header.trim_end(),
+    );
+    assert_eq!(
+        body, expected_output,
+        "expected Output section to include the fixture contents"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_output_for_freeform_tool_records_duration() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
