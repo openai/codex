@@ -212,7 +212,9 @@ impl ModelClient {
         };
 
         let input_with_instructions = prompt.get_formatted_input();
-        tracing::warn!("Inputs: {input_with_instructions:#?}");
+        tracing::warn!(
+            "Inputs: {input_with_instructions:#?}"
+        );
 
         let verbosity = if self.config.model_family.support_verbosity {
             self.config.model_verbosity
