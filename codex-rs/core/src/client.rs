@@ -225,9 +225,7 @@ impl ModelClient {
         };
 
         // gpt-5-codex does not support `low` verbosity; omit it to avoid errors.
-        if self.config.model_family.family.starts_with("gpt-5-codex")
-            && matches!(verbosity, Some(VerbosityConfig::Low))
-        {
+        if self.config.model_family.family.starts_with("gpt-5-codex") {
             warn!(
                 "Overriding unsupported 'low' verbosity for {} by omitting it",
                 self.config.model_family.family
