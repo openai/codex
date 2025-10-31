@@ -12,7 +12,6 @@ use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::config_types::Verbosity as VerbosityConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use eventsource_stream::Eventsource;
@@ -214,7 +213,7 @@ impl ModelClient {
 
         let input_with_instructions = prompt.get_formatted_input();
 
-        let mut verbosity = if self.config.model_family.support_verbosity {
+        let verbosity = if self.config.model_family.support_verbosity {
             self.config.model_verbosity
         } else {
             warn!(
@@ -224,17 +223,8 @@ impl ModelClient {
             None
         };
 
-        // gpt-5-codex doesn't have different verbosity levels; omit it to avoid errors.
-        if self.config.model.starts_with("gpt-5-codex") {
-            verbosity = None;
-        }
-
         // Only include `text.verbosity` for GPT-5 family models
-        let text = create_text_param_for_request(
-            self.config.model.clone(),
-            verbosity,
-            &prompt.output_schema,
-        );
+        let text = create_text_param_for_request(verbosity, &prompt.output_schema);
 
         // In general, we want to explicitly send `store: false` when using the Responses API,
         // but in practice, the Azure Responses API rejects `store: false`:
