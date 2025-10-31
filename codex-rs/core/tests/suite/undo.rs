@@ -26,6 +26,7 @@ use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 
+#[allow(clippy::expect_used)]
 async fn undo_harness() -> Result<TestCodexHarness> {
     TestCodexHarness::with_config(|config: &mut Config| {
         config.include_apply_patch_tool = true;
