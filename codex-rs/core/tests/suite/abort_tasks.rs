@@ -13,7 +13,6 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_with_timeout;
-use regex::Regex;
 use serde_json::json;
 
 /// Integration test: spawn a long‑running shell tool via a mocked Responses SSE
@@ -23,7 +22,7 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
     let command = vec![
         "bash".to_string(),
         "-lc".to_string(),
-        "sleep 1 && sleep 60".to_string(),
+        "sleep 60".to_string(),
     ];
 
     let args = json!({
@@ -81,7 +80,7 @@ async fn interrupt_tool_records_history_entries() {
     let command = vec![
         "bash".to_string(),
         "-lc".to_string(),
-        "sleep 1 && sleep 60".to_string(),
+        "sleep 60".to_string(),
     ];
     let call_id = "call-history";
 
@@ -106,7 +105,7 @@ async fn interrupt_tool_records_history_entries() {
     let fixture = test_codex().build(&server).await.unwrap();
     let codex = Arc::clone(&fixture.codex);
 
-    let wait_timeout = Duration::from_secs(5);
+    let wait_timeout = Duration::from_millis(100);
 
     codex
         .submit(Op::UserInput {
@@ -124,7 +123,6 @@ async fn interrupt_tool_records_history_entries() {
     )
     .await;
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
     codex.submit(Op::Interrupt).await.unwrap();
 
     wait_for_event_with_timeout(
@@ -161,13 +159,9 @@ async fn interrupt_tool_records_history_entries() {
         response_mock.saw_function_call(call_id),
         "function call not recorded in responses payload"
     );
-    let output = response_mock
-        .function_call_output_text(call_id)
-        .expect("missing function_call_output text");
-    let re = Regex::new(r"^aborted by user after ([0-9]+(?:\.[0-9])?)s$").expect("compile regex");
-    let caps = re
-        .captures(&output)
-        .expect("aborted message with elapsed seconds");
-    let secs: f32 = caps.get(1).unwrap().as_str().parse().unwrap();
-    assert!(secs > 0.0, "expected non-zero elapsed seconds: {secs}");
+    assert_eq!(
+        response_mock.function_call_output_text(call_id).as_deref(),
+        Some("aborted"),
+        "aborted function call output not recorded in responses payload"
+    );
 }
