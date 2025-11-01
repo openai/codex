@@ -22,6 +22,9 @@ pub(crate) async fn process_items(
                 // If the model returned a message, we need to record it.
                 items_to_record_in_conversation_history.push(item);
             }
+            (ResponseItem::WebSearchCall { .. }, _) => {
+                items_to_record_in_conversation_history.push(item);
+            }
             (
                 ResponseItem::LocalShellCall { .. },
                 Some(ResponseInputItem::FunctionCallOutput { call_id, output }),
@@ -101,4 +104,46 @@ pub(crate) async fn process_items(
             .await;
     }
     (responses, items_to_record_in_conversation_history)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codex::ProcessedResponseItem;
+    use crate::codex::make_session_and_context;
+    use codex_protocol::models::ResponseInputItem;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::models::WebSearchAction;
+    use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn records_web_search_call_without_id() {
+        let (session, turn_context) = make_session_and_context();
+        let status = Some("completed".to_string());
+        let query = "search query".to_string();
+
+        let processed_items = vec![ProcessedResponseItem {
+            item: ResponseItem::WebSearchCall {
+                id: None,
+                status: status.clone(),
+                action: WebSearchAction::Search {
+                    query: query.clone(),
+                },
+            },
+            response: None,
+        }];
+
+        let (responses, recorded_items) =
+            process_items(processed_items, &session, &turn_context).await;
+
+        assert_eq!(responses, Vec::<ResponseInputItem>::new());
+        assert_eq!(
+            recorded_items,
+            vec![ResponseItem::WebSearchCall {
+                id: None,
+                status,
+                action: WebSearchAction::Search { query },
+            }]
+        );
+    }
 }
