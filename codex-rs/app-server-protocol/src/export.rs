@@ -2,8 +2,10 @@ use crate::ClientNotification;
 use crate::ClientRequest;
 use crate::ServerNotification;
 use crate::ServerRequest;
+use crate::export_client_param_schemas;
 use crate::export_client_response_schemas;
 use crate::export_client_responses;
+use crate::export_server_param_schemas;
 use crate::export_server_response_schemas;
 use crate::export_server_responses;
 use anyhow::Context;
@@ -27,97 +29,7 @@ use std::process::Command;
 use ts_rs::TS;
 
 const HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
-
-macro_rules! for_each_schema_type {
-    ($macro:ident) => {
-        $macro!(crate::RequestId);
-        $macro!(crate::JSONRPCMessage);
-        $macro!(crate::JSONRPCRequest);
-        $macro!(crate::JSONRPCNotification);
-        $macro!(crate::JSONRPCResponse);
-        $macro!(crate::JSONRPCError);
-        $macro!(crate::JSONRPCErrorError);
-        $macro!(crate::AddConversationListenerParams);
-        $macro!(crate::AddConversationSubscriptionResponse);
-        $macro!(crate::ApplyPatchApprovalParams);
-        $macro!(crate::ApplyPatchApprovalResponse);
-        $macro!(crate::ArchiveConversationParams);
-        $macro!(crate::ArchiveConversationResponse);
-        $macro!(crate::AuthMode);
-        $macro!(crate::AuthStatusChangeNotification);
-        $macro!(crate::CancelLoginChatGptParams);
-        $macro!(crate::CancelLoginChatGptResponse);
-        $macro!(crate::ClientInfo);
-        $macro!(crate::ClientNotification);
-        $macro!(crate::ClientRequest);
-        $macro!(crate::ConversationSummary);
-        $macro!(crate::ExecCommandApprovalParams);
-        $macro!(crate::ExecCommandApprovalResponse);
-        $macro!(crate::ExecOneOffCommandParams);
-        $macro!(crate::ExecOneOffCommandResponse);
-        $macro!(crate::FuzzyFileSearchParams);
-        $macro!(crate::FuzzyFileSearchResponse);
-        $macro!(crate::FuzzyFileSearchResult);
-        $macro!(crate::GetAuthStatusParams);
-        $macro!(crate::GetAuthStatusResponse);
-        $macro!(crate::GetUserAgentResponse);
-        $macro!(crate::GetUserSavedConfigResponse);
-        $macro!(crate::GitDiffToRemoteParams);
-        $macro!(crate::GitDiffToRemoteResponse);
-        $macro!(crate::GitSha);
-        $macro!(crate::InitializeParams);
-        $macro!(crate::InitializeResponse);
-        $macro!(crate::InputItem);
-        $macro!(crate::InterruptConversationParams);
-        $macro!(crate::InterruptConversationResponse);
-        $macro!(crate::ListConversationsParams);
-        $macro!(crate::ListConversationsResponse);
-        $macro!(crate::LoginApiKeyParams);
-        $macro!(crate::LoginApiKeyResponse);
-        $macro!(crate::LoginChatGptCompleteNotification);
-        $macro!(crate::LoginChatGptResponse);
-        $macro!(crate::LogoutChatGptParams);
-        $macro!(crate::LogoutChatGptResponse);
-        $macro!(crate::NewConversationParams);
-        $macro!(crate::NewConversationResponse);
-        $macro!(crate::Profile);
-        $macro!(crate::RemoveConversationListenerParams);
-        $macro!(crate::RemoveConversationSubscriptionResponse);
-        $macro!(crate::ResumeConversationParams);
-        $macro!(crate::ResumeConversationResponse);
-        $macro!(crate::SandboxSettings);
-        $macro!(crate::SendUserMessageParams);
-        $macro!(crate::SendUserMessageResponse);
-        $macro!(crate::SendUserTurnParams);
-        $macro!(crate::SendUserTurnResponse);
-        $macro!(crate::ServerNotification);
-        $macro!(crate::ServerRequest);
-        $macro!(crate::SessionConfiguredNotification);
-        $macro!(crate::SetDefaultModelParams);
-        $macro!(crate::SetDefaultModelResponse);
-        $macro!(crate::Tools);
-        $macro!(crate::UserInfoResponse);
-        $macro!(crate::UserSavedConfig);
-        $macro!(codex_protocol::protocol::EventMsg);
-        $macro!(codex_protocol::protocol::FileChange);
-        $macro!(codex_protocol::parse_command::ParsedCommand);
-        $macro!(codex_protocol::protocol::SandboxPolicy);
-
-        // v2 protocol types (namespaced in JSON Schema under definitions.v2 and on disk under v2/)
-        $macro!(crate::protocol::v2::Account);
-        $macro!(crate::protocol::v2::LoginAccountParams);
-        $macro!(crate::protocol::v2::LoginAccountResponse);
-        $macro!(crate::protocol::v2::LogoutAccountResponse);
-        $macro!(crate::protocol::v2::GetAccountRateLimitsResponse);
-        $macro!(crate::protocol::v2::GetAccountResponse);
-        $macro!(crate::protocol::v2::ListModelsParams);
-        $macro!(crate::protocol::v2::ReasoningEffortOption);
-        $macro!(crate::protocol::v2::Model);
-        $macro!(crate::protocol::v2::ListModelsResponse);
-        $macro!(crate::protocol::v2::UploadFeedbackParams);
-        $macro!(crate::protocol::v2::UploadFeedbackResponse);
-    };
-}
+type JsonSchemaEmitter = fn(&Path) -> Result<RootSchema>;
 
 pub fn generate_types(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     generate_ts(out_dir, prettier)?;
@@ -166,19 +78,54 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
 
 pub fn generate_json(out_dir: &Path) -> Result<()> {
     ensure_dir(out_dir)?;
+    // Emit schemas for core envelope/wire types that may not be referenced
+    // by params/responses but are useful as standalone:
     let mut bundle: BTreeMap<String, RootSchema> = BTreeMap::new();
 
-    macro_rules! add_schema {
-        ($ty:path) => {{
-            let name = type_basename(stringify!($ty));
-            let schema = write_json_schema_with_return::<$ty>(out_dir, &name)?;
-            bundle.insert(name, schema);
-        }};
+    let envelope_emitters: &[(&str, JsonSchemaEmitter)] = &[
+        ("RequestId", |d| {
+            write_json_schema_with_return::<crate::RequestId>(d, "RequestId")
+        }),
+        ("JSONRPCMessage", |d| {
+            write_json_schema_with_return::<crate::JSONRPCMessage>(d, "JSONRPCMessage")
+        }),
+        ("JSONRPCRequest", |d| {
+            write_json_schema_with_return::<crate::JSONRPCRequest>(d, "JSONRPCRequest")
+        }),
+        ("JSONRPCNotification", |d| {
+            write_json_schema_with_return::<crate::JSONRPCNotification>(d, "JSONRPCNotification")
+        }),
+        ("JSONRPCResponse", |d| {
+            write_json_schema_with_return::<crate::JSONRPCResponse>(d, "JSONRPCResponse")
+        }),
+        ("JSONRPCError", |d| {
+            write_json_schema_with_return::<crate::JSONRPCError>(d, "JSONRPCError")
+        }),
+        ("JSONRPCErrorError", |d| {
+            write_json_schema_with_return::<crate::JSONRPCErrorError>(d, "JSONRPCErrorError")
+        }),
+        ("ClientRequest", |d| {
+            write_json_schema_with_return::<crate::ClientRequest>(d, "ClientRequest")
+        }),
+        ("ServerRequest", |d| {
+            write_json_schema_with_return::<crate::ServerRequest>(d, "ServerRequest")
+        }),
+        ("ClientNotification", |d| {
+            write_json_schema_with_return::<crate::ClientNotification>(d, "ClientNotification")
+        }),
+        ("ServerNotification", |d| {
+            write_json_schema_with_return::<crate::ServerNotification>(d, "ServerNotification")
+        }),
+    ];
+    for (name, emit) in envelope_emitters {
+        let schema = emit(out_dir)?;
+        bundle.insert((*name).to_string(), schema);
     }
 
-    for_each_schema_type!(add_schema);
-
+    // Have the macros generate per-type JSON for params and responses.
+    export_client_param_schemas(out_dir)?;
     export_client_response_schemas(out_dir)?;
+    export_server_param_schemas(out_dir)?;
     export_server_response_schemas(out_dir)?;
 
     let mut definitions = Map::new();
@@ -195,8 +142,39 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
         "ServerRequest",
     ];
 
-    for (name, schema) in bundle {
-        let mut schema_value = serde_json::to_value(schema)?;
+    // Merge all generated per-type JSON files (including the envelopes above)
+    // into a single definitions bundle.
+    for entry in fs::read_dir(out_dir)
+        .with_context(|| format!("Failed to read dir {}", out_dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            continue;
+        }
+        if path.extension() != Some(OsStr::new("json")) {
+            continue;
+        }
+        if path.file_name().and_then(OsStr::to_str)
+            == Some("codex_app_server_protocol.schemas.json")
+        {
+            // Skip the bundle we’re about to (re)generate.
+            continue;
+        }
+
+        let name = path
+            .file_stem()
+            .and_then(OsStr::to_str)
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow!(format!("Invalid schema file name {}", path.display())))?;
+
+        let mut schema_value: Value = serde_json::from_str(
+            &fs::read_to_string(&path)
+                .with_context(|| format!("Failed to read {}", path.display()))?,
+        )
+        .with_context(|| format!("Failed to parse JSON from {}", path.display()))?;
+
+        // Ensure the same normalization logic applies when building the bundle.
         annotate_schema(&mut schema_value, Some(name.as_str()));
 
         if let Value::Object(ref mut obj) = schema_value
@@ -210,6 +188,7 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
                 }
             }
         }
+
         definitions.insert(name, schema_value);
     }
 
@@ -259,14 +238,6 @@ fn write_pretty_json(path: PathBuf, value: &impl Serialize) -> Result<()> {
         .with_context(|| format!("Failed to serialize JSON schema to {}", path.display()))?;
     fs::write(&path, json).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
-}
-fn type_basename(type_path: &str) -> String {
-    type_path
-        .rsplit_once("::")
-        .map(|(_, name)| name)
-        .unwrap_or(type_path)
-        .trim()
-        .to_string()
 }
 
 fn variant_definition_name(base: &str, variant: &Value) -> Option<String> {

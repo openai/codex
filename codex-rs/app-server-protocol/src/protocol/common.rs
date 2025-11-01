@@ -82,6 +82,15 @@ macro_rules! client_request_definitions {
             )*
             Ok(())
         }
+
+        pub fn export_client_param_schemas(
+            out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<()> {
+            $(
+                crate::export::write_json_schema::<$params>(out_dir, stringify!($params))?;
+            )*
+            Ok(())
+        }
     };
 }
 
@@ -281,6 +290,15 @@ macro_rules! server_request_definitions {
         ) -> ::anyhow::Result<()> {
             paste! {
                 $(crate::export::write_json_schema::<[<$variant Response>]>(out_dir, stringify!([<$variant Response>]))?;)*
+            }
+            Ok(())
+        }
+
+        pub fn export_server_param_schemas(
+            out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<()> {
+            paste! {
+                $(crate::export::write_json_schema::<[<$variant Params>]>(out_dir, stringify!([<$variant Params>]))?;)*
             }
             Ok(())
         }
