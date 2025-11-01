@@ -148,23 +148,23 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
 
     // Merge all generated per-type JSON files (including the envelopes above)
     // into a single definitions bundle.
-    for entry in fs::read_dir(out_dir)
-        .with_context(|| format!("Failed to read dir {}", out_dir.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            continue;
-        }
-        if path.extension() != Some(OsStr::new("json")) {
-            continue;
-        }
-        if path.file_name().and_then(OsStr::to_str)
-            == Some("codex_app_server_protocol.schemas.json")
-        {
-            // Skip the bundle we’re about to (re)generate.
-            continue;
-        }
+    // Collect all generated JSON files recursively (including v2/),
+    // excluding the bundle we’re about to write.
+    let mut all_json_files = json_files_in_recursive(out_dir)?;
+    all_json_files.retain(|p| {
+        p.file_name().and_then(OsStr::to_str) != Some("codex_app_server_protocol.schemas.json")
+    });
+
+    for path in all_json_files {
+        // Determine a namespace by the immediate subfolder under out_dir
+        // (currently we only expect `v2`).
+        let namespace = relative_first_component(&path, out_dir).and_then(|c| {
+            if c == OsStr::new("v2") {
+                Some("v2")
+            } else {
+                None
+            }
+        });
 
         let name = path
             .file_stem()
@@ -181,19 +181,35 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
         // Ensure the same normalization logic applies when building the bundle.
         annotate_schema(&mut schema_value, Some(name.as_str()));
 
+        // If this is a v2 schema, prefix its internal definitions and $refs
+        // with the namespace (e.g., v2.) so it won’t collide with legacy.
+        if let Some(namespace) = namespace {
+            prefix_defs_and_refs(&mut schema_value, namespace);
+        }
+
         if let Value::Object(ref mut obj) = schema_value
             && let Some(defs) = obj.remove("definitions")
             && let Value::Object(defs_obj) = defs
         {
             for (def_name, mut def_schema) in defs_obj {
                 if !SPECIAL_DEFINITIONS.contains(&def_name.as_str()) {
+                    let def_key = if let Some(namespace) = namespace {
+                        format!("{namespace}.{def_name}")
+                    } else {
+                        def_name.clone()
+                    };
                     annotate_schema(&mut def_schema, Some(def_name.as_str()));
-                    definitions.insert(def_name, def_schema);
+                    definitions.insert(def_key, def_schema);
                 }
             }
         }
 
-        definitions.insert(name, schema_value);
+        let top_key = if let Some(namespace) = namespace {
+            format!("{namespace}.{name}")
+        } else {
+            name
+        };
+        definitions.insert(top_key, schema_value);
     }
 
     let mut root = Map::new();
@@ -216,15 +232,28 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_json_schema_with_return<T>(out_dir: &Path, name: &str) -> Result<RootSchema>
+fn write_json_schema_with_return<T>(out_dir: &Path, _name: &str) -> Result<RootSchema>
 where
     T: JsonSchema,
 {
-    let file_stem = name.trim();
+    // Determine the fully-qualified Rust type name to infer v2 placement and
+    // derive a clean file name (last path segment only).
+    let type_name = std::any::type_name::<T>();
+    let is_v2 = type_name.contains("::protocol::v2::");
+
+    // File stem should be just the last segment of the type (e.g., RateLimitSnapshot).
+    let file_stem = type_name.rsplit("::").next().unwrap_or(type_name).trim();
+
     let schema = schema_for!(T);
     let mut schema_value = serde_json::to_value(schema)?;
     annotate_schema(&mut schema_value, Some(file_stem));
-    write_pretty_json(out_dir.join(format!("{file_stem}.json")), &schema_value)
+    let target_dir = if is_v2 {
+        out_dir.join("v2")
+    } else {
+        out_dir.to_path_buf()
+    };
+    ensure_dir(&target_dir)?;
+    write_pretty_json(target_dir.join(format!("{file_stem}.json")), &schema_value)
         .with_context(|| format!("Failed to write JSON schema for {file_stem}"))?;
     let annotated_schema = serde_json::from_value(schema_value)?;
     Ok(annotated_schema)
@@ -518,6 +547,78 @@ fn ts_files_in_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+fn json_files_in_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in
+            fs::read_dir(&d).with_context(|| format!("Failed to read dir {}", d.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.is_file() && path.extension() == Some(OsStr::new("json")) {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+fn relative_first_component<'a>(path: &'a Path, root: &Path) -> Option<&'a OsStr> {
+    let rel = path.strip_prefix(root).ok()?;
+    rel.components().next().map(|c| match c {
+        std::path::Component::Normal(s) => s,
+        _ => OsStr::new(""),
+    })
+}
+
+fn prefix_defs_and_refs(value: &mut Value, namespace: &str) {
+    if let Some(obj) = value.as_object_mut()
+        && let Some(Value::Object(defs)) = obj.get_mut("definitions")
+    {
+        let mut renamed = Map::new();
+        let old = std::mem::take(defs);
+        for (k, v) in old {
+            let new_key = if k.starts_with(&format!("{namespace}.")) {
+                k
+            } else {
+                format!("{namespace}.{k}")
+            };
+            renamed.insert(new_key, v);
+        }
+        *defs = renamed;
+    }
+
+    rewrite_refs(value, namespace);
+}
+
+fn rewrite_refs(value: &mut Value, namespace: &str) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::String(r)) = map.get_mut("$ref") {
+                const PREFIX: &str = "#/definitions/";
+                if let Some(rest) = r.strip_prefix(PREFIX)
+                    && !rest.starts_with(&format!("{namespace}."))
+                {
+                    *r = format!("{PREFIX}{namespace}.{rest}");
+                }
+            }
+            for v in map.values_mut() {
+                rewrite_refs(v, namespace);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                rewrite_refs(v, namespace);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn generate_index_ts(out_dir: &Path) -> Result<PathBuf> {
     let mut entries: Vec<String> = Vec::new();
     let mut stems: Vec<String> = ts_files_in(out_dir)?
@@ -753,6 +854,66 @@ mod tests {
         assert!(
             optional_nullable_offenders.is_empty(),
             "Generated TypeScript has optional fields with nullable types (disallowed '?: T | null'), add #[ts(optional)] to fix:\n{optional_nullable_offenders:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn v2_json_schema_namespacing_and_refs() -> Result<()> {
+        // Generate JSON schemas into a temp directory and assert that:
+        // - v2 schemas are emitted under a `v2/` subdirectory, and
+        // - the bundled definitions include namespaced keys (e.g., v2.GetAccountRateLimitsResponse), and
+        // - refs inside v2 types point at `#/definitions/v2.*`.
+        let output_dir =
+            std::env::temp_dir().join(format!("codex_json_schemas_{}", Uuid::now_v7()));
+        fs::create_dir(&output_dir)?;
+
+        struct TempDirGuard(PathBuf);
+        impl Drop for TempDirGuard {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _guard = TempDirGuard(output_dir.clone());
+
+        generate_json(&output_dir)?;
+
+        // Ensure a v2 subdirectory exists with at least one schema file.
+        let v2_dir = output_dir.join("v2");
+        let v2_entries = fs::read_dir(&v2_dir)
+            .with_context(|| format!("Expected v2 dir at {}", v2_dir.display()))?;
+        let has_v2_file = v2_entries
+            .filter_map(std::result::Result::ok)
+            .any(|e| e.path().extension() == Some(OsStr::new("json")));
+        assert!(has_v2_file, "Expected at least one v2 JSON schema file");
+
+        // Read the bundle and assert namespaced definitions and refs exist.
+        let bundle_path = output_dir.join("codex_app_server_protocol.schemas.json");
+        let bundle: Value = serde_json::from_str(&fs::read_to_string(&bundle_path)?)?;
+        let defs = bundle
+            .get("definitions")
+            .and_then(Value::as_object)
+            .expect("bundle definitions map");
+
+        // A concrete v2 top-level schema that should be present.
+        assert!(
+            defs.contains_key("v2.GetAccountRateLimitsResponse"),
+            "v2.GetAccountRateLimitsResponse missing from bundle definitions"
+        );
+
+        let v2_resp = defs.get("v2.GetAccountRateLimitsResponse").unwrap();
+        let rate_limits_ref = v2_resp
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|p| p.get("rateLimits"))
+            .and_then(Value::as_object)
+            .and_then(|o| o.get("$ref"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        assert_eq!(
+            rate_limits_ref, "#/definitions/v2.RateLimitSnapshot",
+            "v2 $ref should be prefixed in bundle"
         );
 
         Ok(())
