@@ -300,6 +300,9 @@ server_request_definitions! {
     ApplyPatchApproval,
     /// Request to exec a command.
     ExecCommandApproval,
+    /// Request the client to perform a Responses API call and stream events back.
+    #[serde(rename = "responsesApi/call")]
+    ResponsesApiCall,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -339,6 +342,27 @@ pub struct ExecCommandApprovalResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 pub struct ApplyPatchApprovalResponse {
     pub decision: ReviewDecision,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ResponsesApiCallParams {
+    pub conversation_id: ConversationId,
+    pub call_id: String,
+    pub url: String,
+    pub headers: HashMap<String, String>,
+    pub body: serde_json::Value,
+    pub stream: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ResponsesApiCallResponse {
+    pub status: u16,
+    /// Optional request ID (e.g. cf-ray) propagated from upstream.
+    pub request_id: Option<String>,
+    /// Optional error text if the call failed without a response.completed.
+    pub error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -413,6 +437,26 @@ impl TryFrom<JSONRPCNotification> for ServerNotification {
 #[strum(serialize_all = "camelCase")]
 pub enum ClientNotification {
     Initialized,
+    /// Streamed Responses API event emitted while handling a `responsesApi/call`.
+    #[serde(rename = "responsesApi/event")]
+    #[ts(rename = "responsesApi/event")]
+    #[strum(serialize = "responsesApi/event")]
+    ResponsesApiEvent(ResponsesApiEventParams),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ResponsesApiEventParams {
+    pub call_id: String,
+    pub event: serde_json::Value,
+}
+
+impl TryFrom<JSONRPCNotification> for ClientNotification {
+    type Error = serde_json::Error;
+
+    fn try_from(value: JSONRPCNotification) -> Result<Self, Self::Error> {
+        serde_json::from_value(serde_json::to_value(value)?)
+    }
 }
 
 #[cfg(test)]
@@ -542,6 +586,61 @@ mod tests {
 
         let payload = ServerRequestPayload::ExecCommandApproval(params);
         assert_eq!(payload.request_with_id(RequestId::Integer(7)), request);
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_responses_api_call_request() -> Result<()> {
+        let conversation_id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
+        let params = ResponsesApiCallParams {
+            conversation_id,
+            call_id: "call-99".to_string(),
+            url: "https://api.openai.com/v1/responses".to_string(),
+            headers: vec![("accept".to_string(), "text/event-stream".to_string())]
+                .into_iter()
+                .collect(),
+            body: serde_json::json!({"model":"gpt-5","input": []}),
+            stream: true,
+        };
+        let request = ServerRequest::ResponsesApiCall {
+            request_id: RequestId::Integer(9),
+            params: params.clone(),
+        };
+
+        assert_eq!(
+            json!({
+                "method": "responsesApi/call",
+                "id": 9,
+                "params": {
+                    "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                    "callId": "call-99",
+                    "url": "https://api.openai.com/v1/responses",
+                    "headers": {"accept": "text/event-stream"},
+                    "body": {"model":"gpt-5","input": []},
+                    "stream": true
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_responses_api_event_notification() -> Result<()> {
+        let notification = ClientNotification::ResponsesApiEvent(ResponsesApiEventParams {
+            call_id: "call-1".to_string(),
+            event: serde_json::json!({"type":"response.created","response":{}}),
+        });
+        assert_eq!(
+            json!({
+                "method": "responsesApi/event",
+                "params": {
+                    "callId": "call-1",
+                    "event": {"type":"response.created","response":{}}
+                }
+            }),
+            serde_json::to_value(&notification)?,
+        );
         Ok(())
     }
 

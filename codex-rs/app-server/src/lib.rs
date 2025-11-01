@@ -13,6 +13,7 @@ use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_feedback::CodexFeedback;
+use std::sync::Arc;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
@@ -34,6 +35,7 @@ mod fuzzy_file_search;
 mod message_processor;
 mod models;
 mod outgoing_message;
+mod responses_delegate;
 
 /// Size of the bounded channels used to communicate between tasks. The value
 /// is a balance between throughput and memory usage – 128 messages should be
@@ -119,8 +121,18 @@ pub async fn run_main(
 
     // Task: process incoming messages.
     let processor_handle = tokio::spawn({
-        let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
-        let mut processor = MessageProcessor::new(
+        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+        // Register JSON-RPC Responses delegate if enabled
+        if config
+            .features
+            .enabled(codex_core::features::Feature::ResponsesHttpOverJsonRpc)
+        {
+            let delegate = responses_delegate::AppServerResponsesDelegate::new(
+                outgoing_message_sender.clone(),
+            );
+            let _ = codex_core::responses_delegate::register_delegate(Arc::new(delegate));
+        }
+        let mut processor = MessageProcessor::new_with_arc(
             outgoing_message_sender,
             codex_linux_sandbox_exe,
             std::sync::Arc::new(config),

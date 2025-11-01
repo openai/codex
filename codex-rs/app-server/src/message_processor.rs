@@ -62,6 +62,37 @@ impl MessageProcessor {
         }
     }
 
+    pub(crate) fn new_with_arc(
+        outgoing: Arc<OutgoingMessageSender>,
+        codex_linux_sandbox_exe: Option<PathBuf>,
+        config: Arc<Config>,
+        feedback: CodexFeedback,
+    ) -> Self {
+        let auth_manager = AuthManager::shared(
+            config.codex_home.clone(),
+            false,
+            config.cli_auth_credentials_store_mode,
+        );
+        let conversation_manager = Arc::new(ConversationManager::new(
+            auth_manager.clone(),
+            SessionSource::VSCode,
+        ));
+        let codex_message_processor = CodexMessageProcessor::new(
+            auth_manager,
+            conversation_manager,
+            outgoing.clone(),
+            codex_linux_sandbox_exe,
+            config,
+            feedback,
+        );
+
+        Self {
+            outgoing,
+            codex_message_processor,
+            initialized: false,
+        }
+    }
+
     pub(crate) async fn process_request(&mut self, request: JSONRPCRequest) {
         let request_id = request.id.clone();
         let request_json = match serde_json::to_value(&request) {
@@ -140,9 +171,17 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn process_notification(&self, notification: JSONRPCNotification) {
-        // Currently, we do not expect to receive any notifications from the
-        // client, so we just log them.
         tracing::info!("<- notification: {:?}", notification);
+
+        // Route client-originated Responses API events to core when present.
+        if let Ok(client_notif) =
+            codex_app_server_protocol::ClientNotification::try_from(notification)
+            && let codex_app_server_protocol::ClientNotification::ResponsesApiEvent(params) = client_notif {
+                let _ = codex_core::responses_delegate::incoming_event(
+                    &params.call_id,
+                    params.event,
+                );
+            }
     }
 
     /// Handle a standalone JSON-RPC response originating from the peer.

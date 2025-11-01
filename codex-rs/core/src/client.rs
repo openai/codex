@@ -22,6 +22,7 @@ use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
@@ -49,6 +50,7 @@ use crate::error::Result;
 use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
 use crate::error::UsageLimitReachedError;
+use crate::features::Feature;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_family::ModelFamily;
 use crate::model_provider_info::ModelProviderInfo;
@@ -57,6 +59,7 @@ use crate::openai_model_info::get_model_info;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::RateLimitWindow;
 use crate::protocol::TokenUsage;
+use crate::responses_delegate;
 use crate::token_data::PlanType;
 use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::util::backoff;
@@ -289,6 +292,71 @@ impl ModelClient {
         payload_json: &Value,
         auth_manager: &Option<Arc<AuthManager>>,
     ) -> std::result::Result<ResponseStream, StreamAttemptError> {
+        // Optional JSON-RPC delegation path: when enabled, forward the HTTP call to the client
+        // and consume streamed events via client notifications.
+        if self
+            .config
+            .features
+            .enabled(Feature::ResponsesHttpOverJsonRpc)
+            && responses_delegate::has_delegate()
+        {
+            // Always fetch the latest auth for URL construction.
+            let auth = auth_manager.as_ref().and_then(|m| m.auth());
+            let url = self.provider.get_full_url(&auth);
+
+            // Build headers the same way as the direct path.
+            let mut headers: HashMap<String, String> = HashMap::new();
+            headers.insert("accept".to_string(), "text/event-stream".to_string());
+            headers.insert(
+                "conversation_id".to_string(),
+                self.conversation_id.to_string(),
+            );
+            headers.insert("session_id".to_string(), self.conversation_id.to_string());
+
+            if let SessionSource::SubAgent(sub) = &self.session_source {
+                let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
+                    label.clone()
+                } else {
+                    serde_json::to_value(sub)
+                        .ok()
+                        .and_then(|v| v.as_str().map(std::string::ToString::to_string))
+                        .unwrap_or_else(|| "other".to_string())
+                };
+                headers.insert("x-openai-subagent".to_string(), subagent);
+            }
+
+            // Prepare event channels: JSON envelopes (from client) -> ResponseEvent (for core).
+            let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
+            let (tx_json, rx_json) = mpsc::channel::<serde_json::Value>(1600);
+
+            // Register this call so incoming events can be delivered.
+            let call_id = uuid::Uuid::new_v4().to_string();
+            responses_delegate::register_call_channel(call_id.clone(), tx_json);
+
+            // Start processing JSON events into internal ResponseEvent stream.
+            let provider = self.provider.clone();
+            let otel = self.otel_event_manager.clone();
+            tokio::spawn(async move {
+                process_responses_json_events(rx_json, tx_event, provider, otel).await;
+                // cleanup is handled by whoever drops the channel; no op here
+            });
+
+            // Kick off the delegated call via the registered delegate.
+            if let Some(()) = responses_delegate::with_delegate(|d| {
+                d.start_call(codex_app_server_protocol::ResponsesApiCallParams {
+                    conversation_id: self.conversation_id,
+                    call_id: call_id.clone(),
+                    url: url.clone(),
+                    headers: headers.clone(),
+                    body: payload_json.clone(),
+                    stream: true,
+                });
+            }) {
+                // no-op; d.start_call is fire-and-forget
+            }
+
+            return Ok(ResponseStream { rx_event });
+        }
         // Always fetch the latest auth in case a prior attempt refreshed the token.
         let auth = auth_manager.as_ref().and_then(|m| m.auth());
 
@@ -926,6 +994,166 @@ async fn stream_from_fixture(
         otel_event_manager,
     ));
     Ok(ResponseStream { rx_event })
+}
+
+/// Process Responses API events delivered as raw JSON envelopes (via JSON-RPC)
+/// into internal `ResponseEvent`s, mirroring the SSE handler.
+pub(crate) async fn process_responses_json_events(
+    mut rx_json: mpsc::Receiver<serde_json::Value>,
+    tx_event: mpsc::Sender<Result<ResponseEvent>>,
+    _provider: ModelProviderInfo,
+    otel_event_manager: OtelEventManager,
+) {
+    let mut response_completed: Option<ResponseCompleted> = None;
+    let mut response_error: Option<CodexErr> = None;
+
+    while let Some(raw) = rx_json.recv().await {
+        let event: SseEvent = match serde_json::from_value(raw) {
+            Ok(event) => event,
+            Err(e) => {
+                debug!("Failed to parse Responses event JSON: {e}");
+                continue;
+            }
+        };
+
+        match event.kind.as_str() {
+            "response.output_item.done" => {
+                let Some(item_val) = event.item else { continue };
+                let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) else {
+                    debug!("failed to parse ResponseItem from output_item.done");
+                    continue;
+                };
+
+                let ev = ResponseEvent::OutputItemDone(item);
+                if tx_event.send(Ok(ev)).await.is_err() {
+                    return;
+                }
+            }
+            "response.output_text.delta" => {
+                if let Some(delta) = event.delta {
+                    let ev = ResponseEvent::OutputTextDelta(delta);
+                    if tx_event.send(Ok(ev)).await.is_err() {
+                        return;
+                    }
+                }
+            }
+            "response.reasoning_summary_text.delta" => {
+                if let Some(delta) = event.delta {
+                    let ev = ResponseEvent::ReasoningSummaryDelta(delta);
+                    if tx_event.send(Ok(ev)).await.is_err() {
+                        return;
+                    }
+                }
+            }
+            "response.reasoning_text.delta" => {
+                if let Some(delta) = event.delta {
+                    let ev = ResponseEvent::ReasoningContentDelta(delta);
+                    if tx_event.send(Ok(ev)).await.is_err() {
+                        return;
+                    }
+                }
+            }
+            "response.created" => {
+                if event.response.is_some() {
+                    let _ = tx_event.send(Ok(ResponseEvent::Created {})).await;
+                }
+            }
+            "response.failed" => {
+                if let Some(resp_val) = event.response {
+                    response_error = Some(CodexErr::Stream(
+                        "response.failed event received".to_string(),
+                        None,
+                    ));
+
+                    let error = resp_val.get("error");
+
+                    if let Some(error) = error {
+                        match serde_json::from_value::<Error>(error.clone()) {
+                            Ok(error) => {
+                                if is_context_window_error(&error) {
+                                    response_error = Some(CodexErr::ContextWindowExceeded);
+                                } else {
+                                    let delay = try_parse_retry_after(&error);
+                                    let message = error.message.clone().unwrap_or_default();
+                                    response_error = Some(CodexErr::Stream(message, delay));
+                                }
+                            }
+                            Err(e) => {
+                                let msg = format!("failed to parse ErrorResponse: {e}");
+                                debug!(msg);
+                                response_error = Some(CodexErr::Stream(msg, None))
+                            }
+                        }
+                    }
+                }
+            }
+            "response.completed" => {
+                if let Some(resp_val) = event.response {
+                    match serde_json::from_value::<ResponseCompleted>(resp_val) {
+                        Ok(r) => {
+                            response_completed = Some(r);
+                        }
+                        Err(e) => {
+                            let error = format!("failed to parse ResponseCompleted: {e}");
+                            debug!(error);
+                            response_error = Some(CodexErr::Stream(error, None));
+                            continue;
+                        }
+                    };
+                };
+            }
+            "response.output_item.added" => {
+                let Some(item_val) = event.item else { continue };
+                let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) else {
+                    debug!("failed to parse ResponseItem from output_item.added");
+                    continue;
+                };
+                let ev = ResponseEvent::OutputItemAdded(item);
+                if tx_event.send(Ok(ev)).await.is_err() {
+                    return;
+                }
+            }
+            "response.reasoning_summary_part.added" => {
+                let ev = ResponseEvent::ReasoningSummaryPartAdded;
+                if tx_event.send(Ok(ev)).await.is_err() {
+                    return;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Channel closed – synthesize a final event or emit an error consistent with SSE path.
+    match response_completed {
+        Some(ResponseCompleted {
+            id: response_id,
+            usage,
+        }) => {
+            if let Some(u) = usage.as_ref() {
+                otel_event_manager.sse_event_completed(
+                    u.input_tokens,
+                    u.output_tokens,
+                    u.input_tokens_details.as_ref().map(|d| d.cached_tokens),
+                    u.output_tokens_details.as_ref().map(|d| d.reasoning_tokens),
+                    u.total_tokens,
+                );
+            }
+            let _ = tx_event
+                .send(Ok(ResponseEvent::Completed {
+                    response_id,
+                    token_usage: usage.map(Into::into),
+                }))
+                .await;
+        }
+        None => {
+            let error = response_error.unwrap_or(CodexErr::Stream(
+                "stream closed before response.completed".into(),
+                None,
+            ));
+            otel_event_manager.see_event_completed_failed(&error);
+            let _ = tx_event.send(Err(error)).await;
+        }
+    }
 }
 
 fn rate_limit_regex() -> &'static Regex {

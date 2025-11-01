@@ -45,6 +45,8 @@ pub enum Feature {
     GhostCommit,
     /// Enable Windows sandbox (restricted token) on Windows.
     WindowsSandbox,
+    /// Delegate `/v1/responses` HTTP over app-server JSON-RPC.
+    ResponsesHttpOverJsonRpc,
 }
 
 impl Feature {
@@ -297,6 +299,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::WindowsSandbox,
         key: "enable_experimental_windows_sandbox",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResponsesHttpOverJsonRpc,
+        key: "responses_http_over_jsonrpc",
         stage: Stage::Experimental,
         default_enabled: false,
     },
