@@ -438,6 +438,10 @@ pub enum EventMsg {
     /// Error while executing a submission
     Error(ErrorEvent),
 
+    /// Warning issued while processing a submission. Unlike `Error`, this
+    /// indicates the task continued but the user should still be notified.
+    Warning(WarningEvent),
+
     /// Agent has started a task
     TaskStarted(TaskStartedEvent),
 
@@ -669,6 +673,11 @@ pub struct ExitedReviewModeEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ErrorEvent {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct WarningEvent {
     pub message: String,
 }
 

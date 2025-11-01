@@ -3,9 +3,16 @@
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_core::config::types::McpServerConfig;
+use codex_core::config::types::McpServerTransportConfig;
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::EventMsg;
+use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -18,10 +25,13 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use escargot::CargoBuild;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashMap;
+use std::time::Duration;
 use wiremock::matchers::any;
 
 // Verifies byte-truncation formatting for function error output (RespondToModel errors)
@@ -264,6 +274,108 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
     assert!(
         byte_marker.is_match(&output),
         "expected byte truncation marker, got: {output}"
+    );
+
+    Ok(())
+}
+
+// Verifies that an MCP image tool output is serialized as content_items array with
+// the image preserved and no truncation summary appended (since there are no text items).
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let call_id = "rmcp-image-no-trunc";
+    let server_name = "rmcp";
+    let tool_name = format!("mcp__{server_name}__image");
+
+    mount_sse_once_match(
+        &server,
+        any(),
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, &tool_name, "{}"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let final_mock = mount_sse_once_match(
+        &server,
+        any(),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    // Build the stdio rmcp server and pass a tiny PNG via data URL so it can construct ImageContent.
+    let rmcp_test_server_bin = CargoBuild::new()
+        .package("codex-rmcp-client")
+        .bin("test_stdio_server")
+        .run()?
+        .path()
+        .to_string_lossy()
+        .into_owned();
+
+    // 1x1 PNG data URL
+    let openai_png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/ee9bQAAAABJRU5ErkJggg==";
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.features.enable(Feature::RmcpClient);
+        config.mcp_servers.insert(
+            server_name.to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: rmcp_test_server_bin,
+                    args: Vec::new(),
+                    env: Some(HashMap::from([(
+                        "MCP_TEST_IMAGE_DATA_URL".to_string(),
+                        openai_png.to_string(),
+                    )])),
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                startup_timeout_sec: Some(Duration::from_secs(10)),
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+        );
+    });
+    let fixture = builder.build(&server).await?;
+    let session_model = fixture.session_configured.model.clone();
+
+    fixture
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "call the rmcp image tool".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: fixture.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    // Wait for completion to ensure the outbound request is captured.
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    let output_item = final_mock.single_request().function_call_output(call_id);
+    // Expect exactly one array element: the image item; and no trailing summary text.
+    let output = output_item.get("output").expect("output");
+    assert!(output.is_array(), "expected array output");
+    let arr = output.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "no truncation summary should be appended");
+    assert_eq!(
+        arr[0],
+        json!({"type": "input_image", "image_url": openai_png})
     );
 
     Ok(())

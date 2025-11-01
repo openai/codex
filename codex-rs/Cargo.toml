@@ -128,7 +128,7 @@ icu_provider = { version = "2.1", features = ["sync"] }
 icu_locale_core = "2.1"
 ignore = "0.4.23"
 image = { version = "^0.25.8", default-features = false }
-indexmap = "2.6.0"
+indexmap = "2.12.0"
 insta = "1.43.2"
 itertools = "0.14.0"
 keyring = "3.6"
@@ -276,6 +276,7 @@ opt-level = 0
 # Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
+crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
 
 # Uncomment to debug local changes.
 # rmcp = { path = "../../rust-sdk/crates/rmcp" }
