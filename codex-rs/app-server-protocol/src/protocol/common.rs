@@ -9,7 +9,6 @@ use crate::protocol::v2;
 use codex_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxCommandAssessment;
 use paste::paste;
@@ -439,7 +438,7 @@ pub enum ServerNotification {
     #[serde(rename = "account/rateLimits/updated")]
     #[ts(rename = "account/rateLimits/updated")]
     #[strum(serialize = "account/rateLimits/updated")]
-    AccountRateLimitsUpdated(RateLimitSnapshot),
+    AccountRateLimitsUpdated(v2::AccountRateLimitsUpdatedNotification),
 
     /// DEPRECATED NOTIFICATIONS below
     /// Authentication status changed

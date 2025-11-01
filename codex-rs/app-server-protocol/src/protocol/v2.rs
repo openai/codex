@@ -429,3 +429,13 @@ pub struct TodoItem {
     pub text: String,
     pub completed: bool,
 }
+
+// === Server Notifications ===
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountRateLimitsUpdatedNotification {
+    // TODO: create our own RateLimitSnapshot type that doesn't depend on codex_protocol
+    // so we can camelcase that bad boy.
+    pub rate_limits: RateLimitSnapshot,
+}
