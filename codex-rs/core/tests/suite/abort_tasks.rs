@@ -81,7 +81,7 @@ async fn interrupt_tool_records_history_entries() {
     let command = vec![
         "bash".to_string(),
         "-lc".to_string(),
-        "sleep 1 && sleep 60".to_string(),
+        "sleep 60".to_string(),
     ];
     let call_id = "call-history";
 
@@ -106,7 +106,7 @@ async fn interrupt_tool_records_history_entries() {
     let fixture = test_codex().build(&server).await.unwrap();
     let codex = Arc::clone(&fixture.codex);
 
-    let wait_timeout = Duration::from_secs(5);
+    let wait_timeout = Duration::from_millis(100);
 
     codex
         .submit(Op::UserInput {
