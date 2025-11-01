@@ -102,6 +102,20 @@ macro_rules! for_each_schema_type {
         $macro!(codex_protocol::protocol::FileChange);
         $macro!(codex_protocol::parse_command::ParsedCommand);
         $macro!(codex_protocol::protocol::SandboxPolicy);
+
+        // v2 protocol types (namespaced in JSON Schema under definitions.v2 and on disk under v2/)
+        $macro!(crate::protocol::v2::Account);
+        $macro!(crate::protocol::v2::LoginAccountParams);
+        $macro!(crate::protocol::v2::LoginAccountResponse);
+        $macro!(crate::protocol::v2::LogoutAccountResponse);
+        $macro!(crate::protocol::v2::GetAccountRateLimitsResponse);
+        $macro!(crate::protocol::v2::GetAccountResponse);
+        $macro!(crate::protocol::v2::ListModelsParams);
+        $macro!(crate::protocol::v2::ReasoningEffortOption);
+        $macro!(crate::protocol::v2::Model);
+        $macro!(crate::protocol::v2::ListModelsResponse);
+        $macro!(crate::protocol::v2::UploadFeedbackParams);
+        $macro!(crate::protocol::v2::UploadFeedbackResponse);
     };
 }
 
@@ -112,7 +126,9 @@ pub fn generate_types(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
 }
 
 pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
+    let v2_out_dir = out_dir.join("v2");
     ensure_dir(out_dir)?;
+    ensure_dir(&v2_out_dir)?;
 
     ClientRequest::export_all_to(out_dir)?;
     export_client_responses(out_dir)?;
@@ -123,12 +139,15 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     ServerNotification::export_all_to(out_dir)?;
 
     generate_index_ts(out_dir)?;
+    generate_index_ts(&v2_out_dir)?;
 
-    let ts_files = ts_files_in(out_dir)?;
+    // Ensure our header is present on all TS files (root + subdirs like v2/).
+    let ts_files = ts_files_in_recursive(out_dir)?;
     for file in &ts_files {
         prepend_header_if_missing(file)?;
     }
 
+    // Optionally run Prettier on all generated TS files.
     if let Some(prettier_bin) = prettier
         && !ts_files.is_empty()
     {
@@ -504,6 +523,26 @@ fn ts_files_in(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+fn ts_files_in_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in
+            fs::read_dir(&d).with_context(|| format!("Failed to read dir {}", d.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.is_file() && path.extension() == Some(OsStr::new("ts")) {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
 fn generate_index_ts(out_dir: &Path) -> Result<PathBuf> {
     let mut entries: Vec<String> = Vec::new();
     let mut stems: Vec<String> = ts_files_in(out_dir)?
@@ -518,6 +557,14 @@ fn generate_index_ts(out_dir: &Path) -> Result<PathBuf> {
 
     for name in stems {
         entries.push(format!("export type {{ {name} }} from \"./{name}\";\n"));
+    }
+
+    // If this is the root out_dir and a ./v2 folder exists with TS files,
+    // expose it as a namespace to avoid symbol collisions at the root.
+    let v2_dir = out_dir.join("v2");
+    let has_v2_ts = ts_files_in(&v2_dir).map(|v| !v.is_empty()).unwrap_or(false);
+    if has_v2_ts {
+        entries.push("export * as v2 from \"./v2\";\n".to_string());
     }
 
     let mut content =
@@ -546,6 +593,7 @@ mod tests {
 
     #[test]
     fn generated_ts_has_no_optional_nullable_fields() -> Result<()> {
+        // Assert that there are no types of the form "?: T | null" in the generated TS files.
         let output_dir = std::env::temp_dir().join(format!("codex_ts_types_{}", Uuid::now_v7()));
         fs::create_dir(&output_dir)?;
 
