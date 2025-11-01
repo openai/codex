@@ -234,10 +234,17 @@ fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<()> {
         stderr.contains("model: gpt-5-high"),
         "stderr missing model override: {stderr}"
     );
-    assert!(
-        stderr.contains("sandbox: workspace-write"),
-        "stderr missing sandbox override: {stderr}"
-    );
+    if cfg!(target_os = "windows") {
+        assert!(
+            stderr.contains("sandbox: read-only"),
+            "stderr missing downgraded sandbox note: {stderr}"
+        );
+    } else {
+        assert!(
+            stderr.contains("sandbox: workspace-write"),
+            "stderr missing sandbox override: {stderr}"
+        );
+    }
 
     let resumed_path = find_session_file_containing_marker(&sessions_dir, &marker2)
         .expect("no resumed session file containing marker2");

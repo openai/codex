@@ -37,6 +37,7 @@ pub(crate) struct SelectionItem {
     pub name: String,
     pub display_shortcut: Option<KeyBinding>,
     pub description: Option<String>,
+    pub selected_description: Option<String>,
     pub is_current: bool,
     pub actions: Vec<SelectionAction>,
     pub dismiss_on_select: bool,
@@ -193,12 +194,16 @@ impl ListSelectionView {
                     } else {
                         format!("{prefix} {n}. {name_with_marker}")
                     };
+                    let description = is_selected
+                        .then(|| item.selected_description.clone())
+                        .flatten()
+                        .or_else(|| item.description.clone());
                     GenericDisplayRow {
                         name: display_name,
                         display_shortcut: item.display_shortcut,
                         match_indices: None,
                         is_current: item.is_current,
-                        description: item.description.clone(),
+                        description,
                     }
                 })
             })
