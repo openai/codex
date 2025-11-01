@@ -4,7 +4,9 @@
 
 The Enrichment Village initiative establishes a regenerative learning ecology that synthesizes scientific inquiry, dance-informed pedagogy, and entrepreneurial incubation into a unified mentorship ecosystem. Its core proposition is that enrichment is not an accessory layer but the infrastructure that enables knowledge, culture, and venture creation to co-evolve. Participants learn by teaching in a recursive loop—Mirror → Breath → Rhythm → Proof → Grace—that compounds curiosity, ethical intelligence, and creative capacity across generations.
 
-The Northeast Pilot Cluster launches the model through an NYC Metro flagship and regional satellites that share a commons of research labs, community studios, and open-source governance tools. Financing combines founding partnerships, tuition and residency revenue, licensing of the curriculum stack, and creative royalties. Impact is measured through auditable metrics that quantify ethical alignment, mentorship throughput, and cultural return on investment.
+This prospectus is dedicated to and co-inspired by the community vision seed articulated by **Sgt. Brandon N. Mohamed of Kingston, NY**. His call to transform a vacant Kingston mall into a hub for social and emotional development ignited the Enrichment Village blueprint. Sgt. Mohamed’s investment in his community—through National Guard service, and through elevating worship production as a church audio engineer whose digital innovation opened pathways for professionally rendered, humane faith experiences—models the civic stewardship that Enrichment Village seeks to multiply. In honoring his spark of unique genius, the Village pledges to keep every derivative, contribution, and iteration accessible to the public that nurtured the idea, inviting perpetual co-authorship and reinvestment from neighbors who see themselves as pixels in a larger living imagination.
+
+The Northeast Pilot Cluster launches the model through an NYC Metro flagship and regional satellites that share a commons of research labs, community studios, and open-source governance tools. Financing combines founding partnerships, tuition and residency revenue, licensing of the curriculum stack, creative royalties, and a transparent profit-share architecture that rewards social good alongside financial performance. Impact is measured through auditable metrics that quantify ethical alignment, mentorship throughput, and cultural return on investment.
 
 ## Conceptual Foundations
 
@@ -77,6 +79,7 @@ Week 1   Week 2   Week 3   Week 4   Week 5   Week 6
 - **Sentient Cents Ledger:** A local token measures contribution, ethical yield, and creative labor, anchoring exchange between labs, commons, and archive.
 - **Council Rhythm:** Quarterly governance rotation mirrors 6–8 week creative sprints, ensuring diverse stewardship of resources and cultural norms.
 - **Transparency Engine:** An adaptive-ethics dashboard aggregates Grace Load metrics, mentorship throughput, and cultural ROI for open review.
+- **Community Catalyst Profit Share:** A dedicated pool (target 12% of annual net surplus) distributes transparent capital gains to community stakeholders, prioritizing catalysts like Sgt. Mohamed whose vision seeds guide expansion. Payouts are indexed to social impact indicators—mentorship throughput, accessibility milestones, and faith-community program reach—ensuring that financial rewards mirror documented public welfare gains.
 
 ## Financial Model
 
