@@ -82,7 +82,10 @@ impl ToolHandler for ShellHandler {
                 )
                 .await
             }
-            ToolPayload::LocalShell { params } => {
+            ToolPayload::LocalShell {
+                params,
+                is_user_shell_command,
+            } => {
                 let exec_params = Self::to_exec_params(params, turn.as_ref());
                 Self::run_exec_like(
                     tool_name.as_str(),
@@ -91,7 +94,7 @@ impl ToolHandler for ShellHandler {
                     turn,
                     tracker,
                     call_id,
-                    true,
+                    is_user_shell_command,
                 )
                 .await
             }
