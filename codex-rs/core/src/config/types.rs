@@ -349,6 +349,20 @@ pub struct Tui {
     /// Defaults to `false`.
     #[serde(default)]
     pub notifications: Notifications,
+
+    /// Hide the startup tips showing command examples.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub hide_startup_tips: Option<bool>,
+
+    /// Hide the session header showing version, model, and directory info.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub hide_session_header: Option<bool>,
+
+    /// Custom placeholder text for the input area.
+    #[serde(default)]
+    pub input_placeholder: Option<String>,
 }
 
 /// Settings for notices we display to users via the tui and app-server clients

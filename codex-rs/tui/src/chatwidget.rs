@@ -980,8 +980,7 @@ impl ChatWidget {
             auth_manager,
             feedback,
         } = common;
-        let mut rng = rand::rng();
-        let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
+        let placeholder = get_placeholder_text(&config);
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
         Self {
@@ -1044,8 +1043,7 @@ impl ChatWidget {
             auth_manager,
             feedback,
         } = common;
-        let mut rng = rand::rng();
-        let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
+        let placeholder = get_placeholder_text(&config);
 
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
@@ -2448,6 +2446,15 @@ const EXAMPLE_PROMPTS: [&str; 6] = [
     "Write tests for @filename",
     "Improve documentation in @filename",
 ];
+
+fn get_placeholder_text(config: &Config) -> String {
+    if let Some(custom_placeholder) = &config.tui_input_placeholder {
+        custom_placeholder.clone()
+    } else {
+        let mut rng = rand::rng();
+        EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string()
+    }
+}
 
 // Extract the first bold (Markdown) element in the form **...** from `s`.
 // Returns the inner text if found; otherwise `None`.

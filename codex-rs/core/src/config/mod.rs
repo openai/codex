@@ -160,6 +160,15 @@ pub struct Config {
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
 
+    /// Hide the startup tips showing command examples.
+    pub tui_hide_startup_tips: Option<bool>,
+
+    /// Hide the session header showing version, model, and directory info.
+    pub tui_hide_session_header: Option<bool>,
+
+    /// Custom placeholder text for the input area.
+    pub tui_input_placeholder: Option<String>,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -1170,6 +1179,9 @@ impl Config {
                 .as_ref()
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
+            tui_hide_startup_tips: cfg.tui.as_ref().and_then(|t| t.hide_startup_tips),
+            tui_hide_session_header: cfg.tui.as_ref().and_then(|t| t.hide_session_header),
+            tui_input_placeholder: cfg.tui.as_ref().and_then(|t| t.input_placeholder.clone()),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -1338,6 +1350,49 @@ persistence = "none"
         let tui = parsed.tui.expect("config should include tui section");
 
         assert_eq!(tui.notifications, Notifications::Enabled(false));
+    }
+
+    #[test]
+    fn tui_config_parses_customization_fields() {
+        let cfg_with_all = r#"
+[tui]
+hide_startup_tips = true
+hide_session_header = true
+input_placeholder = "Custom placeholder"
+"#;
+
+        let parsed = toml::from_str::<ConfigToml>(cfg_with_all)
+            .expect("TUI config with customization fields should succeed");
+        let tui = parsed.tui.expect("config should include tui section");
+
+        assert_eq!(tui.hide_startup_tips, Some(true));
+        assert_eq!(tui.hide_session_header, Some(true));
+        assert_eq!(tui.input_placeholder, Some("Custom placeholder".to_string()));
+
+        let cfg_empty = r#"
+[tui]
+"#;
+
+        let parsed_empty = toml::from_str::<ConfigToml>(cfg_empty)
+            .expect("TUI config without customization fields should succeed");
+        let tui_empty = parsed_empty.tui.expect("config should include tui section");
+
+        assert_eq!(tui_empty.hide_startup_tips, None);
+        assert_eq!(tui_empty.hide_session_header, None);
+        assert_eq!(tui_empty.input_placeholder, None);
+
+        let cfg_false = r#"
+[tui]
+hide_startup_tips = false
+hide_session_header = false
+"#;
+
+        let parsed_false = toml::from_str::<ConfigToml>(cfg_false)
+            .expect("TUI config with false values should succeed");
+        let tui_false = parsed_false.tui.expect("config should include tui section");
+
+        assert_eq!(tui_false.hide_startup_tips, Some(false));
+        assert_eq!(tui_false.hide_session_header, Some(false));
     }
 
     #[test]
@@ -2912,6 +2967,9 @@ model_verbosity = "high"
                 notices: Default::default(),
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
+                tui_hide_startup_tips: None,
+                tui_hide_session_header: None,
+                tui_input_placeholder: None,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -2984,6 +3042,9 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_hide_startup_tips: None,
+            tui_hide_session_header: None,
+            tui_input_placeholder: None,
             otel: OtelConfig::default(),
         };
 
@@ -3071,6 +3132,9 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_hide_startup_tips: None,
+            tui_hide_session_header: None,
+            tui_input_placeholder: None,
             otel: OtelConfig::default(),
         };
 
@@ -3144,6 +3208,9 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_hide_startup_tips: None,
+            tui_hide_session_header: None,
+            tui_input_placeholder: None,
             otel: OtelConfig::default(),
         };
 

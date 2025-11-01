@@ -829,12 +829,25 @@ notifications = true
 # You can optionally filter to specific notification types.
 # Available types are "agent-turn-complete" and "approval-requested".
 notifications = [ "agent-turn-complete", "approval-requested" ]
+
+# Hide the startup tips showing command examples like /init, /status, etc.
+# Defaults to false (tips are shown).
+hide_startup_tips = true
+
+# Hide the session header showing "OpenAI Codex (vX)", model, and directory info.
+# Defaults to false (header is shown).
+hide_session_header = true
+
+# Custom placeholder text for the input area. If not set, a random example
+# from the built-in list will be used.
+input_placeholder = "Ask me anything..."
 ```
 
 > [!NOTE]
 > Codex emits desktop notifications using terminal escape codes. Not all terminals support these (notably, macOS Terminal.app and VS Code's terminal do not support custom notifications. iTerm2, Ghostty and WezTerm do support these notifications).
 
-> [!NOTE] > `tui.notifications` is built‑in and limited to the TUI session. For programmatic or cross‑environment notifications—or to integrate with OS‑specific notifiers—use the top‑level `notify` option to run an external program that receives event JSON. The two settings are independent and can be used together.
+> [!NOTE]
+> `tui.notifications` is built‑in and limited to the TUI session. For programmatic or cross‑environment notifications—or to integrate with OS‑specific notifiers—use the top‑level `notify` option to run an external program that receives event JSON. The two settings are independent and can be used together.
 
 ## Authentication and authorization
 
@@ -914,6 +927,9 @@ Valid values:
 | `file_opener`                                    | `vscode` \| `vscode-insiders` \| `windsurf` \| `cursor` \| `none` | URI scheme for clickable citations (default: `vscode`).                                                                    |
 | `tui`                                            | table                                                             | TUI‑specific options.                                                                                                      |
 | `tui.notifications`                              | boolean \| array<string>                                          | Enable desktop notifications in the tui (default: false).                                                                  |
+| `tui.hide_startup_tips`                          | boolean                                                           | Hide startup command tips (default: false).                                                                                |
+| `tui.hide_session_header`                        | boolean                                                           | Hide session header with version/model info (default: false).                                                              |
+| `tui.input_placeholder`                          | string                                                            | Custom input placeholder text (optional).                                                                                  |
 | `hide_agent_reasoning`                           | boolean                                                           | Hide model reasoning events.                                                                                               |
 | `show_raw_agent_reasoning`                       | boolean                                                           | Show raw reasoning (when available).                                                                                       |
 | `model_reasoning_effort`                         | `minimal` \| `low` \| `medium` \| `high`                          | Responses API reasoning effort.                                                                                            |

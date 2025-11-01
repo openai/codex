@@ -81,13 +81,19 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             is_task_running: props.is_task_running,
         })],
         FooterMode::ShortcutSummary => {
-            let mut line = context_window_line(props.context_window_percent);
-            line.push_span(" · ".dim());
-            line.extend(vec![
-                key_hint::plain(KeyCode::Char('?')).into(),
-                " for shortcuts".dim(),
-            ]);
-            vec![line]
+            if props.is_task_running {
+                vec![context_window_line(props.context_window_percent)]
+            } else {
+                let mut line = context_window_line(props.context_window_percent);
+                if props.context_window_percent.is_some() {
+                    line.push_span(" · ".dim());
+                }
+                line.extend(vec![
+                    key_hint::plain(KeyCode::Char('?')).into(),
+                    " for shortcuts".dim(),
+                ]);
+                vec![line]
+            }
         }
         FooterMode::ShortcutOverlay => shortcut_overlay_lines(ShortcutsState {
             use_shift_enter_hint: props.use_shift_enter_hint,
@@ -222,8 +228,18 @@ fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
 }
 
 fn context_window_line(percent: Option<i64>) -> Line<'static> {
-    let percent = percent.unwrap_or(100).clamp(0, 100);
-    Line::from(vec![Span::from(format!("{percent}% context left")).dim()])
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    match percent {
+        Some(percent) => {
+            let percent = percent.min(100).max(0) as u8;
+            spans.push(format!("{percent}%").bold());
+            spans.push(" context left".dim());
+        }
+        None => {
+            spans.push("? for shortcuts".dim());
+        }
+    }
+    Line::from(spans)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
