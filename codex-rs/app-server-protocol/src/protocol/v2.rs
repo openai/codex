@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub enum SortOrder {
     Asc,
     Desc,

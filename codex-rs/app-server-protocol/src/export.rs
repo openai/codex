@@ -147,30 +147,25 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
     ];
 
     // Merge all generated per-type JSON files (including the envelopes above)
-    // into a single definitions bundle.
-    for entry in fs::read_dir(out_dir)
-        .with_context(|| format!("Failed to read dir {}", out_dir.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            continue;
-        }
-        if path.extension() != Some(OsStr::new("json")) {
-            continue;
-        }
+    // into a single definitions bundle. Also recognize a v2 namespace so that
+    // types like RateLimitSnapshot can co-exist between legacy and v2.
+    let json_files = json_files_in_recursive(out_dir)?;
+    for path in json_files {
+        // Skip the bundle we’re about to (re)generate.
         if path.file_name().and_then(OsStr::to_str)
             == Some("codex_app_server_protocol.schemas.json")
         {
-            // Skip the bundle we’re about to (re)generate.
             continue;
         }
 
-        let name = path
+        let file_stem = path
             .file_stem()
             .and_then(OsStr::to_str)
-            .map(str::to_owned)
             .ok_or_else(|| anyhow!(format!("Invalid schema file name {}", path.display())))?;
+
+        // Determine namespace and logical type name from either the stem
+        // (e.g., "v2::Type") or the directory layout (e.g., ".../v2/Type.json").
+        let (ns_opt, logical_name) = detect_namespace(&path, file_stem);
 
         let mut schema_value: Value = serde_json::from_str(
             &fs::read_to_string(&path)
@@ -178,9 +173,17 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
         )
         .with_context(|| format!("Failed to parse JSON from {}", path.display()))?;
 
-        // Ensure the same normalization logic applies when building the bundle.
-        annotate_schema(&mut schema_value, Some(name.as_str()));
+        // Normalize; use the original stem as the base so existing naming rules apply.
+        annotate_schema(&mut schema_value, Some(file_stem));
 
+        if let Some(ref ns) = ns_opt {
+            // Rewrite internal $ref targets to point to the namespaced location
+            // under the bundle's definitions.
+            rewrite_refs_to_namespace(&mut schema_value, ns);
+        }
+
+        // Pull embedded definitions out and insert into our bundle map at the
+        // appropriate namespace.
         if let Value::Object(ref mut obj) = schema_value
             && let Some(defs) = obj.remove("definitions")
             && let Value::Object(defs_obj) = defs
@@ -188,12 +191,35 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
             for (def_name, mut def_schema) in defs_obj {
                 if !SPECIAL_DEFINITIONS.contains(&def_name.as_str()) {
                     annotate_schema(&mut def_schema, Some(def_name.as_str()));
-                    definitions.insert(def_name, def_schema);
+                    if let Some(ref ns) = ns_opt {
+                        definitions
+                            .entry(ns.to_string())
+                            .or_insert_with(|| Value::Object(Map::new()));
+                        if let Value::Object(defs_ns) =
+                            definitions.get_mut(ns).expect("just inserted v2 namespace")
+                        {
+                            defs_ns.insert(def_name, def_schema);
+                        }
+                    } else {
+                        definitions.insert(def_name, def_schema);
+                    }
                 }
             }
         }
 
-        definitions.insert(name, schema_value);
+        // Insert the schema root itself into the bundle under the namespace.
+        if let Some(ref ns) = ns_opt {
+            definitions
+                .entry(ns.to_string())
+                .or_insert_with(|| Value::Object(Map::new()));
+            if let Value::Object(defs_ns) =
+                definitions.get_mut(ns).expect("just inserted v2 namespace")
+            {
+                defs_ns.insert(logical_name.to_string(), schema_value);
+            }
+        } else {
+            definitions.insert(logical_name.to_string(), schema_value);
+        }
     }
 
     let mut root = Map::new();
@@ -224,7 +250,19 @@ where
     let schema = schema_for!(T);
     let mut schema_value = serde_json::to_value(schema)?;
     annotate_schema(&mut schema_value, Some(file_stem));
-    write_pretty_json(out_dir.join(format!("{file_stem}.json")), &schema_value)
+    // If the name looks like a namespaced path (e.g., "v2::Type"), mirror
+    // the TypeScript layout and write to out_dir/v2/Type.json. Otherwise
+    // write alongside the legacy files.
+    let (ns_opt, logical_name) = split_namespace(file_stem);
+    let out_path = if let Some(ns) = ns_opt {
+        let dir = out_dir.join(ns);
+        ensure_dir(&dir)?;
+        dir.join(format!("{logical_name}.json"))
+    } else {
+        out_dir.join(format!("{file_stem}.json"))
+    };
+
+    write_pretty_json(out_path, &schema_value)
         .with_context(|| format!("Failed to write JSON schema for {file_stem}"))?;
     let annotated_schema = serde_json::from_value(schema_value)?;
     Ok(annotated_schema)
@@ -242,6 +280,77 @@ fn write_pretty_json(path: PathBuf, value: &impl Serialize) -> Result<()> {
         .with_context(|| format!("Failed to serialize JSON schema to {}", path.display()))?;
     fs::write(&path, json).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
+}
+
+/// Detect a namespace from a schema file path and stem.
+/// Supports both legacy on-disk names like "v2::Type.json" and the new
+/// directory layout ".../v2/Type.json".
+fn detect_namespace(path: &Path, stem: &str) -> (Option<String>, String) {
+    // Prefer directory-based detection.
+    if let Some(parent) = path.parent()
+        && parent.file_name().and_then(OsStr::to_str) == Some("v2")
+    {
+        return (Some("v2".to_string()), stem.to_string());
+    }
+    split_namespace(stem)
+}
+
+/// Split a "ns::Type" name into (Some(ns), Type). Returns (None, name) if no ns.
+fn split_namespace(name: &str) -> (Option<String>, String) {
+    if let Some(idx) = name.find("::") {
+        let (ns, rest) = name.split_at(idx);
+        // rest starts with "::"
+        let typ = &rest[2..];
+        return (Some(ns.to_string()), typ.to_string());
+    }
+    (None, name.to_string())
+}
+
+/// Recursively rewrite $ref values that point at "#/definitions/..." so that
+/// they point to a namespaced location under the bundle.
+fn rewrite_refs_to_namespace(value: &mut Value, ns: &str) {
+    match value {
+        Value::Object(obj) => {
+            if let Some(Value::String(r)) = obj.get_mut("$ref")
+                && let Some(suffix) = r.strip_prefix("#/definitions/")
+            {
+                *r = format!("#/definitions/{ns}/{suffix}");
+            }
+            for v in obj.values_mut() {
+                rewrite_refs_to_namespace(v, ns);
+            }
+        }
+        Value::Array(items) => {
+            for v in items.iter_mut() {
+                rewrite_refs_to_namespace(v, ns);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn json_files_in_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in
+            fs::read_dir(&d).with_context(|| format!("Failed to read dir {}", d.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                // Skip known non-protocol directories.
+                if path.file_name().and_then(OsStr::to_str) == Some("serde_json") {
+                    continue;
+                }
+                stack.push(path);
+            } else if path.is_file() && path.extension() == Some(OsStr::new("json")) {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
 }
 
 fn variant_definition_name(base: &str, variant: &Value) -> Option<String> {
