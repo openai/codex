@@ -788,8 +788,9 @@ mod tests {
                 "method": "model/list",
                 "id": 6,
                 "params": {
-                    "pageSize": null,
-                    "cursor": null
+                    "limit": null,
+                    "cursor": null,
+                    "order": null,
                 }
             }),
             serde_json::to_value(&request)?,
