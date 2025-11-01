@@ -120,7 +120,10 @@ impl ToolRouter {
                         Ok(Some(ToolCall {
                             tool_name: "local_shell".to_string(),
                             call_id,
-                            payload: ToolPayload::LocalShell { params },
+                            payload: ToolPayload::LocalShell {
+                                params,
+                                is_user_shell_command: false,
+                            },
                         }))
                     }
                 }
