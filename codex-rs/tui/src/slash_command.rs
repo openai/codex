@@ -17,6 +17,8 @@ pub enum SlashCommand {
     Review,
     #[strum(serialize = "secreview")]
     SecReview,
+    /// Validate high-risk findings from the last security review
+    Validate,
     New,
     Init,
     Compact,
@@ -40,6 +42,7 @@ impl SlashCommand {
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::SecReview => "run an AppSec security review over the repo",
+            SlashCommand::Validate => "validate high-risk findings (web + api)",
             SlashCommand::Undo => "restore the workspace to the last Codex snapshot",
             SlashCommand::Quit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
@@ -71,6 +74,7 @@ impl SlashCommand {
             | SlashCommand::Approvals
             | SlashCommand::Review
             | SlashCommand::SecReview
+            | SlashCommand::Validate
             | SlashCommand::Logout => false,
             SlashCommand::Diff
             | SlashCommand::Mention

@@ -508,6 +508,7 @@ struct SecurityReviewFollowUpState {
 }
 
 #[allow(dead_code)]
+#[derive(Clone)]
 struct SecurityReviewArtifactsState {
     repo_root: PathBuf,
     snapshot_path: PathBuf,
@@ -1688,6 +1689,79 @@ impl ChatWidget {
             }
             SlashCommand::SecReview => {
                 self.open_security_review_popup();
+            }
+            SlashCommand::Validate => {
+                // Web/API validation for high-risk findings from the last review
+                if self.bottom_pane.is_task_running() || self.security_review_context.is_some() {
+                    self.add_error_message(
+                        "Cannot run /validate while a task is in progress.".to_string(),
+                    );
+                    self.request_redraw();
+                    return;
+                }
+                let Some(artifacts) = self.security_review_artifacts.clone() else {
+                    self.add_error_message(
+                        "No security review results to validate. Run /secreview first.".to_string(),
+                    );
+                    self.request_redraw();
+                    return;
+                };
+
+                self.bottom_pane.set_task_running(true);
+                self.bottom_pane
+                    .update_status_header("Validating findings — preparing".to_string());
+
+                let provider = self.config.model_provider.clone();
+                let auth = self.auth_manager.auth();
+                let model = self.config.model.clone();
+                let tx = self.app_event_tx.clone();
+                let repo_path = self.config.cwd.clone();
+                tokio::spawn(async move {
+                    use crate::security_review::run_web_validation;
+                    match run_web_validation(
+                        repo_path,
+                        artifacts.snapshot_path.clone(),
+                        artifacts.bugs_path.clone(),
+                        artifacts.report_path.clone(),
+                        artifacts.report_html_path.clone(),
+                        provider,
+                        auth,
+                        model,
+                        Some(tx.clone()),
+                    )
+                    .await
+                    {
+                        Ok(_) => {
+                            tx.send(AppEvent::SecurityReviewLog(
+                                "Validation complete; report updated.".to_string(),
+                            ));
+                        }
+                        Err(err) => {
+                            tx.send(AppEvent::SecurityReviewLog(format!(
+                                "Validation failed: {}",
+                                err.message
+                            )));
+                        }
+                    }
+                    // Clear the in-progress flag regardless of outcome.
+                    tx.send(AppEvent::SecurityReviewComplete {
+                        result: crate::security_review::SecurityReviewResult {
+                            findings_summary: String::new(),
+                            bug_summary_table: None,
+                            bugs: Vec::new(),
+                            bugs_path: artifacts.bugs_path,
+                            report_path: artifacts.report_path,
+                            report_html_path: artifacts.report_html_path,
+                            snapshot_path: artifacts.snapshot_path,
+                            metadata_path: artifacts.metadata_path,
+                            api_overview_path: artifacts.api_overview_path,
+                            classification_json_path: artifacts.classification_json_path,
+                            classification_table_path: artifacts.classification_table_path,
+                            logs: vec![],
+                            token_usage: codex_core::protocol::TokenUsage::default(),
+                        },
+                    });
+                });
             }
             SlashCommand::Model => {
                 self.open_model_popup();
@@ -2911,6 +2985,65 @@ impl ChatWidget {
         if let Some(ctx) = self.security_review_context.as_mut() {
             ctx.include_paths = if paths.is_empty() { Vec::new() } else { paths };
         }
+    }
+
+    pub(crate) fn show_registration_prompt(
+        &mut self,
+        url: Option<String>,
+        responder: tokio::sync::oneshot::Sender<Option<String>>,
+    ) {
+        if let Some(link) = url.as_ref() {
+            // Try to open the URL in the default browser.
+            let link_clone = link.clone();
+            tokio::spawn(async move {
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = tokio::process::Command::new("open")
+                        .arg(&link_clone)
+                        .status()
+                        .await;
+                }
+                #[cfg(all(unix, not(target_os = "macos")))]
+                {
+                    let _ = tokio::process::Command::new("xdg-open")
+                        .arg(&link_clone)
+                        .status()
+                        .await;
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = tokio::process::Command::new("rundll32.exe")
+                        .arg("url.dll,FileProtocolHandler")
+                        .arg(&link_clone)
+                        .status()
+                        .await;
+                }
+            });
+        }
+
+        let hint = if let Some(link) = url.as_ref() {
+            format!(
+                "We attempted to auto-register accounts but failed. A login/signup page was opened: {link}\n\nRegister at least two test accounts, then paste credentials as `user:pass, user2:pass2` and press Enter."
+            )
+        } else {
+            "We attempted to auto-register accounts but failed. Register at least two test accounts, then paste credentials as `user:pass, user2:pass2` and press Enter.".to_string()
+        };
+
+        use std::sync::Arc;
+        use std::sync::Mutex;
+        let responder_cell = Arc::new(Mutex::new(Some(responder)));
+        let responder_cell_clone = responder_cell;
+        let view = CustomPromptView::new(
+            "Register test accounts".to_string(),
+            hint,
+            None,
+            Box::new(move |input: String| {
+                if let Some(tx) = responder_cell_clone.lock().ok().and_then(|mut g| g.take()) {
+                    let _ = tx.send(Some(input));
+                }
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
     }
 
     pub(crate) fn on_security_review_log(&mut self, message: String) {

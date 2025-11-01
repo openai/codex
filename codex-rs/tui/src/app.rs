@@ -416,6 +416,9 @@ impl App {
             AppEvent::SecurityReviewScopeResolved { paths } => {
                 self.chat_widget.on_security_review_scope_resolved(paths);
             }
+            AppEvent::OpenRegistrationPrompt { url, responder } => {
+                self.chat_widget.show_registration_prompt(url, responder);
+            }
             AppEvent::SecurityReviewCommandStatus {
                 id,
                 summary,

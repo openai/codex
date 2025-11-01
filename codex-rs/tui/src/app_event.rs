@@ -132,6 +132,13 @@ pub(crate) enum AppEvent {
         responder: oneshot::Sender<bool>,
     },
 
+    /// Prompt the user to register at least two accounts and paste credentials.
+    /// The responder receives `Some(raw_input)` when the user submits text, or `None` if dismissed.
+    OpenRegistrationPrompt {
+        url: Option<String>,
+        responder: oneshot::Sender<Option<String>>,
+    },
+
     /// Notify that the security review scope has been resolved to specific paths.
     SecurityReviewScopeResolved {
         paths: Vec<String>,
