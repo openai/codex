@@ -28,8 +28,9 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
 
     let request_id = mcp
         .send_list_models_request(ModelListParams {
-            page_size: Some(100),
             cursor: None,
+            limit: Some(100),
+            order: None,
         })
         .await?;
 
@@ -39,7 +40,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
     )
     .await??;
 
-    let ModelListResponse { items, next_cursor } = to_response::<ModelListResponse>(response)?;
+    let ModelListResponse { data, next_cursor } = to_response::<ModelListResponse>(response)?;
 
     let expected_models = vec![
         Model {
@@ -98,7 +99,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
         },
     ];
 
-    assert_eq!(items, expected_models);
+    assert_eq!(data, expected_models);
     assert!(next_cursor.is_none());
     Ok(())
 }
@@ -112,8 +113,9 @@ async fn list_models_pagination_works() -> Result<()> {
 
     let first_request = mcp
         .send_list_models_request(ModelListParams {
-            page_size: Some(1),
             cursor: None,
+            limit: Some(1),
+            order: None,
         })
         .await?;
 
@@ -124,7 +126,7 @@ async fn list_models_pagination_works() -> Result<()> {
     .await??;
 
     let ModelListResponse {
-        items: first_items,
+        data: first_items,
         next_cursor: first_cursor,
     } = to_response::<ModelListResponse>(first_response)?;
 
@@ -134,8 +136,9 @@ async fn list_models_pagination_works() -> Result<()> {
 
     let second_request = mcp
         .send_list_models_request(ModelListParams {
-            page_size: Some(1),
             cursor: Some(next_cursor.clone()),
+            limit: Some(1),
+            order: None,
         })
         .await?;
 
@@ -146,7 +149,7 @@ async fn list_models_pagination_works() -> Result<()> {
     .await??;
 
     let ModelListResponse {
-        items: second_items,
+        data: second_items,
         next_cursor: second_cursor,
     } = to_response::<ModelListResponse>(second_response)?;
 
@@ -165,8 +168,9 @@ async fn list_models_rejects_invalid_cursor() -> Result<()> {
 
     let request_id = mcp
         .send_list_models_request(ModelListParams {
-            page_size: None,
             cursor: Some("invalid".to_string()),
+            limit: None,
+            order: None,
         })
         .await?;
 

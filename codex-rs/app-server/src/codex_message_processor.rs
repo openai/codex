@@ -56,6 +56,7 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
+use codex_app_server_protocol::SortOrder;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_backend_client::Client as BackendClient;
@@ -173,6 +174,56 @@ impl CodexMessageProcessor {
         match request {
             ClientRequest::Initialize { .. } => {
                 panic!("Initialize should be handled in MessageProcessor");
+            }
+            // === v2 Thread/Turn APIs (stubs) ===
+            ClientRequest::ThreadStart {
+                request_id,
+                params: _,
+            } => {
+                self.send_unimplemented_error(request_id, "thread/start")
+                    .await;
+            }
+            ClientRequest::ThreadResume {
+                request_id,
+                params: _,
+            } => {
+                self.send_unimplemented_error(request_id, "thread/resume")
+                    .await;
+            }
+            ClientRequest::ThreadArchive {
+                request_id,
+                params: _,
+            } => {
+                self.send_unimplemented_error(request_id, "thread/archive")
+                    .await;
+            }
+            ClientRequest::ThreadList {
+                request_id,
+                params: _,
+            } => {
+                self.send_unimplemented_error(request_id, "thread/list")
+                    .await;
+            }
+            ClientRequest::ThreadCompact {
+                request_id,
+                params: _,
+            } => {
+                self.send_unimplemented_error(request_id, "thread/compact")
+                    .await;
+            }
+            ClientRequest::TurnStart {
+                request_id,
+                params: _,
+            } => {
+                self.send_unimplemented_error(request_id, "turn/start")
+                    .await;
+            }
+            ClientRequest::TurnInterrupt {
+                request_id,
+                params: _,
+            } => {
+                self.send_unimplemented_error(request_id, "turn/interrupt")
+                    .await;
             }
             ClientRequest::NewConversation { request_id, params } => {
                 // Do not tokio::spawn() to process new_conversation()
@@ -953,20 +1004,34 @@ impl CodexMessageProcessor {
     }
 
     async fn list_models(&self, request_id: RequestId, params: ModelListParams) {
-        let ModelListParams { page_size, cursor } = params;
-        let models = supported_models();
+        let ModelListParams {
+            cursor,
+            limit,
+            order,
+        } = params;
+
+        let mut models = supported_models();
+
+        // Sort models according to requested order; default to descending.
+        match order.unwrap_or(SortOrder::Desc) {
+            SortOrder::Asc => models.sort_by(|a, b| a.id.cmp(&b.id)),
+            SortOrder::Desc => models.sort_by(|a, b| b.id.cmp(&a.id)),
+        }
+
         let total = models.len();
 
         if total == 0 {
             let response = ModelListResponse {
-                items: Vec::new(),
+                data: Vec::new(),
                 next_cursor: None,
             };
             self.outgoing.send_response(request_id, response).await;
             return;
         }
 
-        let effective_page_size = page_size.unwrap_or(total).max(1).min(total);
+        // Determine pagination window
+        let default_limit = total as i32;
+        let effective_limit = limit.unwrap_or(default_limit).max(1).min(default_limit) as usize;
         let start = match cursor {
             Some(cursor) => match cursor.parse::<usize>() {
                 Ok(idx) => idx,
@@ -993,14 +1058,15 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let end = start.saturating_add(effective_page_size).min(total);
-        let items = models[start..end].to_vec();
+        let end = start.saturating_add(effective_limit).min(total);
+        let data = models[start..end].to_vec();
         let next_cursor = if end < total {
             Some(end.to_string())
         } else {
             None
         };
-        let response = ModelListResponse { items, next_cursor };
+
+        let response = ModelListResponse { data, next_cursor };
         self.outgoing.send_response(request_id, response).await;
     }
 
