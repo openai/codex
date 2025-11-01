@@ -189,9 +189,23 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
     let mut definitions_root = Map::new();
     let mut definitions_v2 = Map::new();
 
-    // Collect the set of v2 type names so we can selectively rewrite $refs
-    // that point at these names (and only these names).
-    let v2_names: HashSet<String> = bundle_v2.keys().cloned().collect();
+    // Collect the set of ALL v2 definition names so we can selectively rewrite
+    // $refs that point at these names (and only these names). This must include
+    // hoisted nested definitions that schemars emits under `definitions` for
+    // v2 types (e.g., AccountApiKey, enum variant structs, etc.), not just the
+    // top-level type names we bundle.
+    let mut v2_names: HashSet<String> = bundle_v2.keys().cloned().collect();
+    for (_name, schema) in &bundle_v2 {
+        // Serialize the schema to peek at its hoisted `definitions` keys.
+        if let Ok(Value::Object(obj)) = serde_json::to_value(schema) {
+            if let Some(Value::Object(defs)) = obj.get("definitions") {
+                v2_names.extend(defs.keys().cloned());
+            }
+            if let Some(Value::Object(defs)) = obj.get("$defs") {
+                v2_names.extend(defs.keys().cloned());
+            }
+        }
+    }
 
     const SPECIAL_DEFINITIONS: &[&str] = &[
         "ClientNotification",
