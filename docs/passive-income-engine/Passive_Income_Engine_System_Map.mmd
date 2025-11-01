@@ -1,0 +1,56 @@
+%% Passive Income Engine — System Map
+flowchart TD
+    subgraph Inputs["Investor Inputs"]
+        goals["Investor Goals & Risk Appetite"]
+        compliance["Compliance Constraints"]
+    end
+
+    subgraph DataLayer["Data Acquisition Layer"]
+        marketFeeds["Market Data Connectors\n(CEX/DEX, Aggregators)"]
+        defiOracles["DeFi Oracles & Yield Indexers"]
+        chainData["On-chain Indexers"]
+        altSignals["Alternative Data Signals"]
+    end
+
+    subgraph Core["Strategy Orchestration Core"]
+        strategyLab["Strategy Lab"]
+        riskEngine["Risk & Guardrails Engine"]
+        scheduler["Automation Scheduler"]
+    end
+
+    subgraph Execution["Execution Layer"]
+        walletManager["Wallet & Account Manager"]
+        smartContracts["Smart Contract Executors"]
+        exchangeAPIs["Exchange & Broker APIs"]
+    end
+
+    subgraph Feedback["Monitoring & Analytics"]
+        telemetry["Telemetry Pipeline"]
+        reports["Investor Dashboard"]
+        alerts["Alerting Service"]
+    end
+
+    goals --> strategyLab
+    compliance --> riskEngine
+
+    marketFeeds --> strategyLab
+    defiOracles --> strategyLab
+    chainData --> strategyLab
+    altSignals --> strategyLab
+
+    strategyLab --> riskEngine
+    riskEngine --> scheduler
+    scheduler --> walletManager
+
+    walletManager --> smartContracts
+    walletManager --> exchangeAPIs
+
+    smartContracts --> telemetry
+    exchangeAPIs --> telemetry
+
+    telemetry --> reports
+    telemetry --> alerts
+    telemetry --> strategyLab
+
+    alerts --> goals
+    reports --> goals
