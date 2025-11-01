@@ -13,7 +13,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_with_timeout;
-use regex::Regex;
+use regex_lite::Regex;
 use serde_json::json;
 
 /// Integration test: spawn a long‑running shell tool via a mocked Responses SSE
