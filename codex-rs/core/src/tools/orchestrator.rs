@@ -54,12 +54,21 @@ impl ToolOrchestrator {
         let mut already_approved = false;
 
         if needs_initial_approval {
+            let mut risk = None;
+
+            if let Some(metadata) = req.sandbox_retry_data() {
+                risk = tool_ctx
+                    .session
+                    .assess_sandbox_command(turn_ctx, &tool_ctx.call_id, &metadata.command, None)
+                    .await;
+            }
+
             let approval_ctx = ApprovalCtx {
                 session: tool_ctx.session,
                 turn: turn_ctx,
                 call_id: &tool_ctx.call_id,
                 retry_reason: None,
-                risk: None,
+                risk,
             };
             let decision = tool.start_approval_async(req, approval_ctx).await;
 
