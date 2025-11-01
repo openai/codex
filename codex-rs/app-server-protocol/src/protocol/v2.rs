@@ -1,7 +1,6 @@
 use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningEffort;
-use codex_protocol::protocol::RateLimitSnapshot;
 use mcp_types::ContentBlock as McpContentBlock;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -435,7 +434,48 @@ pub struct TodoItem {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AccountRateLimitsUpdatedNotification {
-    // TODO: create our own RateLimitSnapshot type that doesn't depend on codex_protocol
-    // so we can camelcase that bad boy.
     pub rate_limits: RateLimitSnapshot,
+}
+
+// CamelCased copy of codex_protocol::protocol::{RateLimitSnapshot, RateLimitWindow}
+// for the v2 surface. This avoids leaking snake_case into the v2 wire format.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RateLimitSnapshot {
+    pub primary: Option<RateLimitWindow>,
+    pub secondary: Option<RateLimitWindow>,
+}
+
+impl From<codex_protocol::protocol::RateLimitSnapshot> for RateLimitSnapshot {
+    fn from(value: codex_protocol::protocol::RateLimitSnapshot) -> Self {
+        Self {
+            primary: value.primary.map(RateLimitWindow::from),
+            secondary: value.secondary.map(RateLimitWindow::from),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RateLimitWindow {
+    /// Percentage (0-100) of the window that has been consumed.
+    pub used_percent: f64,
+    /// Rolling window duration, in minutes.
+    #[ts(type = "number | null")]
+    pub window_minutes: Option<i64>,
+    /// Unix timestamp (seconds since epoch) when the window resets.
+    #[ts(type = "number | null")]
+    pub resets_at: Option<i64>,
+}
+
+impl From<codex_protocol::protocol::RateLimitWindow> for RateLimitWindow {
+    fn from(value: codex_protocol::protocol::RateLimitWindow) -> Self {
+        Self {
+            used_percent: value.used_percent,
+            window_minutes: value.window_minutes,
+            resets_at: value.resets_at,
+        }
+    }
 }
