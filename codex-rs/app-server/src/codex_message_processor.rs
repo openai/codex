@@ -186,7 +186,7 @@ impl CodexMessageProcessor {
             ClientRequest::ListConversations { request_id, params } => {
                 self.handle_list_conversations(request_id, params).await;
             }
-            ClientRequest::ListModels { request_id, params } => {
+            ClientRequest::ModelList { request_id, params } => {
                 self.list_models(request_id, params).await;
             }
             ClientRequest::LoginAccount {
@@ -288,7 +288,7 @@ impl CodexMessageProcessor {
             } => {
                 self.get_account_rate_limits(request_id).await;
             }
-            ClientRequest::UploadFeedback { request_id, params } => {
+            ClientRequest::FeedbackUpload { request_id, params } => {
                 self.upload_feedback(request_id, params).await;
             }
         }

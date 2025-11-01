@@ -144,7 +144,7 @@ client_request_definitions! {
 
     #[serde(rename = "model/list")]
     #[ts(rename = "model/list")]
-    ListModels {
+    ModelList {
         params: v2::ModelListParams,
         response: v2::ModelListResponse,
     },
@@ -172,7 +172,7 @@ client_request_definitions! {
 
     #[serde(rename = "feedback/upload")]
     #[ts(rename = "feedback/upload")]
-    UploadFeedback {
+    FeedbackUpload {
         params: v2::FeedbackUploadParams,
         response: v2::FeedbackUploadResponse,
     },
@@ -729,7 +729,7 @@ mod tests {
 
     #[test]
     fn serialize_list_models() -> Result<()> {
-        let request = ClientRequest::ListModels {
+        let request = ClientRequest::ModelList {
             request_id: RequestId::Integer(6),
             params: v2::ModelListParams::default(),
         };
