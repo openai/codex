@@ -96,11 +96,57 @@ macro_rules! client_request_definitions {
 
 client_request_definitions! {
     /// NEW APIs
+    // Thread lifecycle
+    #[serde(rename = "thread/start")]
+    #[ts(rename = "thread/start")]
+    ThreadStart {
+        params: v2::ThreadStartParams,
+        response: v2::ThreadStartResponse,
+    },
+    #[serde(rename = "thread/resume")]
+    #[ts(rename = "thread/resume")]
+    ThreadResume {
+        params: v2::ThreadResumeParams,
+        response: v2::ThreadResumeResponse,
+    },
+    #[serde(rename = "thread/archive")]
+    #[ts(rename = "thread/archive")]
+    ThreadArchive {
+        params: v2::ThreadArchiveParams,
+        response: v2::ThreadArchiveResponse,
+    },
+    #[serde(rename = "thread/list")]
+    #[ts(rename = "thread/list")]
+    ThreadList {
+        params: v2::ThreadListParams,
+        response: v2::ThreadListResponse,
+    },
+    #[serde(rename = "thread/compact")]
+    #[ts(rename = "thread/compact")]
+    ThreadCompact {
+        params: v2::ThreadCompactParams,
+        response: v2::ThreadCompactResponse,
+    },
+
+    // Turn lifecycle
+    #[serde(rename = "turn/start")]
+    #[ts(rename = "turn/start")]
+    TurnStart {
+        params: v2::TurnStartParams,
+        response: v2::TurnStartResponse,
+    },
+    #[serde(rename = "turn/interrupt")]
+    #[ts(rename = "turn/interrupt")]
+    TurnInterrupt {
+        params: v2::TurnInterruptParams,
+        response: v2::TurnInterruptResponse,
+    },
+
     #[serde(rename = "model/list")]
     #[ts(rename = "model/list")]
     ListModels {
-        params: v2::ListModelsParams,
-        response: v2::ListModelsResponse,
+        params: v2::ModelListParams,
+        response: v2::ModelListResponse,
     },
 
     #[serde(rename = "account/login")]
@@ -127,8 +173,8 @@ client_request_definitions! {
     #[serde(rename = "feedback/upload")]
     #[ts(rename = "feedback/upload")]
     UploadFeedback {
-        params: v2::UploadFeedbackParams,
-        response: v2::UploadFeedbackResponse,
+        params: v2::FeedbackUploadParams,
+        response: v2::FeedbackUploadResponse,
     },
 
     #[serde(rename = "account/read")]
@@ -685,7 +731,7 @@ mod tests {
     fn serialize_list_models() -> Result<()> {
         let request = ClientRequest::ListModels {
             request_id: RequestId::Integer(6),
-            params: v2::ListModelsParams::default(),
+            params: v2::ModelListParams::default(),
         };
         assert_eq!(
             json!({

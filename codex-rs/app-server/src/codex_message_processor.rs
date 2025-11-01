@@ -18,6 +18,8 @@ use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::ExecOneOffCommandParams;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
+use codex_app_server_protocol::FeedbackUploadParams;
+use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::FuzzyFileSearchParams;
 use codex_app_server_protocol::FuzzyFileSearchResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
@@ -32,12 +34,12 @@ use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::ListConversationsResponse;
-use codex_app_server_protocol::ListModelsParams;
-use codex_app_server_protocol::ListModelsResponse;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::LoginApiKeyResponse;
 use codex_app_server_protocol::LoginChatGptCompleteNotification;
 use codex_app_server_protocol::LoginChatGptResponse;
+use codex_app_server_protocol::ModelListParams;
+use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RemoveConversationListenerParams;
@@ -54,8 +56,6 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
-use codex_app_server_protocol::UploadFeedbackParams;
-use codex_app_server_protocol::UploadFeedbackResponse;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_backend_client::Client as BackendClient;
@@ -952,13 +952,13 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn list_models(&self, request_id: RequestId, params: ListModelsParams) {
-        let ListModelsParams { page_size, cursor } = params;
+    async fn list_models(&self, request_id: RequestId, params: ModelListParams) {
+        let ModelListParams { page_size, cursor } = params;
         let models = supported_models();
         let total = models.len();
 
         if total == 0 {
-            let response = ListModelsResponse {
+            let response = ModelListResponse {
                 items: Vec::new(),
                 next_cursor: None,
             };
@@ -1000,7 +1000,7 @@ impl CodexMessageProcessor {
         } else {
             None
         };
-        let response = ListModelsResponse { items, next_cursor };
+        let response = ModelListResponse { items, next_cursor };
         self.outgoing.send_response(request_id, response).await;
     }
 
@@ -1590,8 +1590,8 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn upload_feedback(&self, request_id: RequestId, params: UploadFeedbackParams) {
-        let UploadFeedbackParams {
+    async fn upload_feedback(&self, request_id: RequestId, params: FeedbackUploadParams) {
+        let FeedbackUploadParams {
             classification,
             reason,
             conversation_id,
@@ -1636,7 +1636,7 @@ impl CodexMessageProcessor {
 
         match upload_result {
             Ok(()) => {
-                let response = UploadFeedbackResponse { thread_id };
+                let response = FeedbackUploadResponse { thread_id };
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
