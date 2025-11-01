@@ -2,9 +2,11 @@ use crate::ClientNotification;
 use crate::ClientRequest;
 use crate::ServerNotification;
 use crate::ServerRequest;
+use crate::export_client_notification_schemas;
 use crate::export_client_param_schemas;
 use crate::export_client_response_schemas;
 use crate::export_client_responses;
+use crate::export_server_notification_schemas;
 use crate::export_server_param_schemas;
 use crate::export_server_response_schemas;
 use crate::export_server_responses;
@@ -122,11 +124,13 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
         bundle.insert((*name).to_string(), schema);
     }
 
-    // Have the macros generate per-type JSON for params and responses.
+    // Have the macros generate per-type JSON for params, responses, and notifications.
     export_client_param_schemas(out_dir)?;
     export_client_response_schemas(out_dir)?;
     export_server_param_schemas(out_dir)?;
     export_server_response_schemas(out_dir)?;
+    export_client_notification_schemas(out_dir)?;
+    export_server_notification_schemas(out_dir)?;
 
     let mut definitions = Map::new();
 
