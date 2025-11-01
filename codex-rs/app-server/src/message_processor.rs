@@ -134,7 +134,6 @@ impl MessageProcessor {
         {
             match typed {
                 ClientNotification::CancelRequest(CancelRequestParams { id }) => {
-                    // Map $/cancelRequest to a cancellation inside Codex.
                     self.codex_message_processor.cancel_request(id).await;
                 }
                 ClientNotification::Initialized => {
@@ -142,7 +141,6 @@ impl MessageProcessor {
                 }
             }
         }
-        // Unknown or untyped notification: nothing to do.
     }
 
     /// Handle a standalone JSON-RPC response originating from the peer.

@@ -3,6 +3,8 @@ use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::CancelLoginChatGptParams;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
+use codex_app_server_protocol::CancelRequestParams;
+use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::JSONRPCError;
@@ -10,6 +12,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginChatGptResponse;
 use codex_app_server_protocol::LogoutChatGptResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerNotification;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_login::login_with_api_key;
 use serial_test::serial;
@@ -202,5 +205,46 @@ async fn login_chatgpt_includes_forced_workspace_query_param() -> Result<()> {
         login.auth_url.contains("allowed_workspace_id=ws-forced"),
         "auth URL should include forced workspace"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(login_port)]
+async fn login_chatgpt_cancelled_via_cancel_request() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let login_request_id = mcp.send_login_chat_gpt_request().await?;
+
+    let login_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(login_request_id)),
+    )
+    .await??;
+    let login: LoginChatGptResponse = to_response(login_resp)?;
+
+    // Cancel the in-flight request using LSP-style $/cancelRequest.
+    mcp.send_notification(ClientNotification::CancelRequest(CancelRequestParams {
+        id: RequestId::Integer(login_request_id),
+    }))
+    .await?;
+
+    // Expect a loginChatGptComplete notification indicating cancellation (success = false).
+    let note = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("loginChatGptComplete"),
+    )
+    .await??;
+
+    let parsed: ServerNotification = note.try_into()?;
+    let ServerNotification::LoginChatGptComplete(payload) = parsed else {
+        anyhow::bail!("expected loginChatGptComplete notification");
+    };
+    assert_eq!(payload.login_id, login.login_id);
+    assert!(!payload.success);
+    assert!(payload.error.is_some());
     Ok(())
 }

@@ -118,11 +118,14 @@ use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::cancellation_registry::CancellationRegistry;
+
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 struct ActiveLogin {
     shutdown_handle: ShutdownHandle,
     login_id: Uuid,
+    request_id: RequestId,
 }
 
 impl ActiveLogin {
@@ -144,6 +147,7 @@ pub(crate) struct CodexMessageProcessor {
     pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<RequestId>>>>,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     feedback: CodexFeedback,
+    cancellation_registry: CancellationRegistry,
 }
 
 impl CodexMessageProcessor {
@@ -166,6 +170,7 @@ impl CodexMessageProcessor {
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             feedback,
+            cancellation_registry: CancellationRegistry::default(),
         }
     }
 
@@ -391,12 +396,21 @@ impl CodexMessageProcessor {
                     let mut guard = self.active_login.lock().await;
                     if let Some(existing) = guard.take() {
                         existing.drop();
+                        self.cancellation_registry.remove(&existing.request_id);
                     }
                     *guard = Some(ActiveLogin {
                         shutdown_handle: shutdown_handle.clone(),
                         login_id,
+                        request_id: request_id.clone(),
                     });
                 }
+
+                // Register cancellation for this request id so $/cancelRequest works.
+                let shutdown_for_cancel = shutdown_handle.clone();
+                self.cancellation_registry
+                    .insert(request_id.clone(), move || {
+                        shutdown_for_cancel.shutdown();
+                    });
 
                 let response = LoginChatGptResponse {
                     login_id,
@@ -407,6 +421,8 @@ impl CodexMessageProcessor {
                 let outgoing_clone = self.outgoing.clone();
                 let active_login = self.active_login.clone();
                 let auth_manager = self.auth_manager.clone();
+                let cancellation_registry = self.cancellation_registry.clone();
+                let request_id_for_task = request_id.clone();
                 tokio::spawn(async move {
                     let (success, error_msg) = match tokio::time::timeout(
                         LOGIN_CHATGPT_TIMEOUT,
@@ -451,6 +467,8 @@ impl CodexMessageProcessor {
                     if guard.as_ref().map(|l| l.login_id) == Some(login_id) {
                         *guard = None;
                     }
+
+                    cancellation_registry.remove(&request_id_for_task);
                 });
 
                 LoginChatGptReply::Response(response)
@@ -470,9 +488,22 @@ impl CodexMessageProcessor {
         }
     }
 
-    /// Handle a generic JSON-RPC cancellation for a previously started operation.
-    /// This is a fire-and-forget path; no response.
-    pub async fn cancel_request(&self, id: RequestId) {}
+    /// Handle a generic JSON-RPC `$ /cancelRequest` for a previously started operation.
+    ///
+    /// Note: individual request handlers that wish to be cancellable must
+    /// register a cancellation action in the `CancellationRegistry` using the
+    /// original JSON-RPC `request_id` when they start work. This method looks up
+    /// that action by id and triggers it if found. It is fire-and-forget; no
+    /// JSON-RPC response is sent.
+    pub async fn cancel_request(&self, id: RequestId) {
+        let found = self.cancellation_registry.cancel(&id);
+        if !found {
+            tracing::debug!(
+                "$/cancelRequest for unknown or already-finished id: {:?}",
+                id
+            );
+        }
+    }
 
     // Legacy endpoint for cancelling a LoginChatGpt request. Please use $/cancelRequest instead.
     async fn cancel_login_chatgpt(&mut self, request_id: RequestId, login_id: Uuid) {
