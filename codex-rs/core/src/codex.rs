@@ -2843,7 +2843,7 @@ mod tests {
 
         // Kick off a simple shell command via the helper.
         let mut previous_context: Option<Arc<TurnContext>> = None;
-        run_user_shell_command(
+        crate::codex::handlers::run_user_shell_command(
             &sess,
             "sub-user-shell".to_string(),
             "echo hello-codex".to_string(),
@@ -2868,21 +2868,32 @@ mod tests {
         assert!(saw_exec_end, "did not observe ExecCommandEnd event");
 
         // Inspect conversation history for the paired items (LocalShellCall -> FunctionCallOutput).
-        let history = sess.clone_history().await.get_history();
+        // Recording happens after ExecCommandEnd, so allow a brief window for the history write.
         let mut found_pair = false;
-        for idx in (0..history.len()).rev() {
-            if let ResponseItem::LocalShellCall { call_id: Some(cid), .. } = &history[idx] {
-                if let Some(next) = history.get(idx + 1) {
-                    if let ResponseItem::FunctionCallOutput { call_id, output } = next {
-                        if call_id == cid && output.content.contains("hello-codex") {
-                            found_pair = true;
-                            break;
+        let mut last_history_snapshot = Vec::new();
+        for _ in 0..50 {
+            let history = sess.clone_history().await.get_history();
+            last_history_snapshot = history.clone();
+            let mut seen = false;
+            for idx in (0..history.len()).rev() {
+                if let ResponseItem::LocalShellCall { call_id: Some(cid), .. } = &history[idx] {
+                    if let Some(next) = history.get(idx + 1) {
+                        if let ResponseItem::FunctionCallOutput { call_id, output } = next {
+                            if call_id == cid && output.content.contains("hello-codex") {
+                                seen = true;
+                                break;
+                            }
                         }
                     }
                 }
             }
+            if seen {
+                found_pair = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        assert!(found_pair, "expected LocalShellCall followed by FunctionCallOutput with matching call_id and output containing 'hello-codex'\nFull history: {:?}", history);
+        assert!(found_pair, "expected LocalShellCall followed by FunctionCallOutput with matching call_id and output containing 'hello-codex'\nFull history: {:?}", last_history_snapshot);
     }
 
     fn sample_rollout(
