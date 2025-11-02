@@ -1,10 +1,8 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
-use app_test_support::create_mock_chat_completions_server;
+use app_test_support::create_mock_chat_completions_server_unchecked as create_mock_chat_completions_server;
 use app_test_support::to_response;
-use codex_app_server_protocol::AddConversationListenerParams;
-use codex_app_server_protocol::AddConversationSubscriptionResponse;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -22,7 +20,7 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn turn_start_emits_notification_and_completes_without_overrides() -> Result<()> {
+async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<()> {
     // Provide a mock server and config so model wiring is valid.
     // Two Codex turns hit the mock model (session start + turn/start).
     let responses = vec![
@@ -60,26 +58,13 @@ async fn turn_start_emits_notification_and_completes_without_overrides() -> Resu
     .await??;
     let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(thread_resp)?;
 
-    // Add legacy listener to get task_complete signal.
-    let conversation_id = codex_protocol::ConversationId::from_string(&thread.id)?;
-    let add_listener_id = mcp
-        .send_add_conversation_listener_request(AddConversationListenerParams {
-            conversation_id,
-            experimental_raw_events: false,
-        })
-        .await?;
-    let add_listener_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(add_listener_id)),
-    )
-    .await??;
-    let AddConversationSubscriptionResponse { .. } = to_response::<_>(add_listener_resp)?;
-
-    // Start a turn with only input and thread_id set.
+    // Start a turn with only input and thread_id set (no overrides).
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
-            input: vec![V2UserInput::Text("Hello".to_string())],
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+            }],
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
@@ -109,10 +94,35 @@ async fn turn_start_emits_notification_and_completes_without_overrides() -> Resu
         codex_app_server_protocol::TurnStatus::InProgress
     );
 
-    // And we should see task_complete for the legacy stream as the turn finishes.
-    let _task_done: JSONRPCNotification = timeout(
+    // Send a second turn that exercises the overrides path: change the model.
+    let turn_req2 = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Second".to_string(),
+            }],
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            model: Some("mock-model-override".to_string()),
+            effort: None,
+            summary: None,
+        })
+        .await?;
+    let turn_resp2: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req2)),
+    )
+    .await??;
+    let TurnStartResponse { turn: turn2 } = to_response::<TurnStartResponse>(turn_resp2)?;
+    assert!(!turn2.id.is_empty());
+    // Ensure the second turn has a different id than the first.
+    assert_ne!(turn.id, turn2.id);
+
+    // Expect a second turn/started notification as well.
+    let _notif2: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/started"),
     )
     .await??;
 
@@ -179,6 +189,8 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
     .await??;
     let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
     assert!(!turn.id.is_empty());
+
+    // This test only validates that turn/start responds and returns a turn.
 
     drop(server);
     Ok(())

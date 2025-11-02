@@ -416,19 +416,12 @@ pub struct TurnInterruptResponse {}
 // User input types
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum UserInput {
-    Text(String),
-    Image(ImageInput),
-    LocalImage { path: PathBuf },
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum ImageInput {
-    #[serde(rename = "image")]
+    Text { text: String },
     Image { url: String },
+    LocalImage { path: PathBuf },
 }
 
 // Thread items

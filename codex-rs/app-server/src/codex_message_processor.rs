@@ -29,7 +29,6 @@ use codex_app_server_protocol::GetConversationSummaryResponse;
 use codex_app_server_protocol::GetUserAgentResponse;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
-use codex_app_server_protocol::ImageInput as V2ImageInput;
 use codex_app_server_protocol::InputItem as WireInputItem;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::InterruptConversationResponse;
@@ -981,10 +980,8 @@ impl CodexMessageProcessor {
             .input
             .into_iter()
             .map(|item| match item {
-                V2UserInput::Text(text) => CoreInputItem::Text { text },
-                V2UserInput::Image(V2ImageInput::Image { url }) => {
-                    CoreInputItem::Image { image_url: url }
-                }
+                V2UserInput::Text { text } => CoreInputItem::Text { text },
+                V2UserInput::Image { url } => CoreInputItem::Image { image_url: url },
                 V2UserInput::LocalImage { path } => CoreInputItem::LocalImage { path },
             })
             .collect();
