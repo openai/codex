@@ -31,6 +31,7 @@ use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SetDefaultModelParams;
+use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadStartParams;
 
 use codex_app_server_protocol::JSONRPCError;
@@ -315,6 +316,15 @@ impl McpProcess {
     /// Send a `loginChatGpt` JSON-RPC request.
     pub async fn send_login_chat_gpt_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("loginChatGpt", None).await
+    }
+
+    /// Send a `thread/archive` JSON-RPC request (v2).
+    pub async fn send_thread_archive_request(
+        &mut self,
+        params: ThreadArchiveParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/archive", params).await
     }
 
     /// Send a `cancelLoginChatGpt` JSON-RPC request.

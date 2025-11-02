@@ -60,6 +60,8 @@ use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
 use codex_app_server_protocol::SortOrder;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
@@ -193,12 +195,8 @@ impl CodexMessageProcessor {
                 self.send_unimplemented_error(request_id, "thread/resume")
                     .await;
             }
-            ClientRequest::ThreadArchive {
-                request_id,
-                params: _,
-            } => {
-                self.send_unimplemented_error(request_id, "thread/archive")
-                    .await;
+            ClientRequest::ThreadArchive { request_id, params } => {
+                self.thread_archive(request_id, params).await;
             }
             ClientRequest::ThreadList {
                 request_id,
@@ -940,6 +938,172 @@ impl CodexMessageProcessor {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!("error creating thread: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn thread_archive(&self, request_id: RequestId, params: ThreadArchiveParams) {
+        // Resolve conversation id from v2 thread id string.
+        let conversation_id = match ConversationId::from_string(&params.thread.id) {
+            Ok(id) => id,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("invalid thread id: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        // Locate rollout path from conversation id.
+        let rollout_path = match find_conversation_path_by_id_str(
+            &self.config.codex_home,
+            &conversation_id.to_string(),
+        )
+        .await
+        {
+            Ok(Some(p)) => p,
+            Ok(None) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("no rollout found for conversation id {conversation_id}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!(
+                        "failed to locate conversation id {conversation_id}: {err}"
+                    ),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        // The remaining logic mirrors archive_conversation(), but returns
+        // ThreadArchiveResponse for v2.
+
+        let rollout_folder = self.config.codex_home.join(codex_core::SESSIONS_SUBDIR);
+        let canonical_rollout_path = tokio::fs::canonicalize(&rollout_path).await;
+        let canonical_rollout_path = if let Ok(path) = canonical_rollout_path
+            && path.starts_with(&rollout_folder)
+        {
+            path
+        } else {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!(
+                    "rollout path `{}` must be in sessions directory",
+                    rollout_path.display()
+                ),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        };
+
+        let required_suffix = format!("{conversation_id}.jsonl");
+        let Some(file_name) = canonical_rollout_path.file_name().map(OsStr::to_owned) else {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!(
+                    "rollout path `{}` missing file name",
+                    rollout_path.display()
+                ),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        };
+
+        if !file_name
+            .to_string_lossy()
+            .ends_with(required_suffix.as_str())
+        {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!(
+                    "rollout path `{}` does not match conversation id {conversation_id}",
+                    rollout_path.display()
+                ),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let removed_conversation = self
+            .conversation_manager
+            .remove_conversation(&conversation_id)
+            .await;
+        if let Some(conversation) = removed_conversation {
+            info!("conversation {conversation_id} was active; shutting down");
+            let conversation_clone = conversation.clone();
+            let notify = Arc::new(tokio::sync::Notify::new());
+            let notify_clone = notify.clone();
+
+            let is_shutdown = tokio::spawn(async move {
+                loop {
+                    select! {
+                        _ = notify_clone.notified() => {
+                            break;
+                        }
+                        event = conversation_clone.next_event() => {
+                            if let Ok(event) = event && matches!(event.msg, EventMsg::ShutdownComplete) {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+
+            match conversation.submit(Op::Shutdown).await {
+                Ok(_) => {
+                    select! {
+                        _ = is_shutdown => {}
+                        _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                            warn!("conversation {conversation_id} shutdown timed out; proceeding with archive");
+                            notify.notify_one();
+                        }
+                    }
+                }
+                Err(err) => {
+                    error!("failed to submit Shutdown to conversation {conversation_id}: {err}");
+                    notify.notify_one();
+                }
+            }
+        }
+
+        let result: std::io::Result<()> = async {
+            let archive_folder = self
+                .config
+                .codex_home
+                .join(codex_core::ARCHIVED_SESSIONS_SUBDIR);
+            tokio::fs::create_dir_all(&archive_folder).await?;
+            tokio::fs::rename(&canonical_rollout_path, &archive_folder.join(&file_name)).await?;
+            Ok(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                let response = ThreadArchiveResponse {};
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to archive conversation: {err}"),
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
