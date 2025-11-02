@@ -1781,7 +1781,7 @@ pub(crate) async fn run_task(
             })
             .flat_map(|content| {
                 content.iter().filter_map(|item| match item {
-                    ContentItem::OutputText { text } => Some(text.clone()),
+                    ContentItem::OutputText { text } | ContentItem::InputText { text } => Some(text.clone()),
                     _ => None,
                 })
             })
