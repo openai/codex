@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::config_types::ReasoningSummary;
 use mcp_types::ContentBlock as McpContentBlock;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -47,6 +49,69 @@ v2_enum_from_core!(
         ReadOnly, WorkspaceWrite, DangerFullAccess
     }
 );
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "mode", rename_all = "camelCase")]
+#[ts(tag = "mode")]
+#[ts(export_to = "v2/")]
+pub enum SandboxPolicy {
+    DangerFullAccess,
+    ReadOnly,
+    WorkspaceWrite {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        writable_roots: Vec<PathBuf>,
+        #[serde(default)]
+        network_access: bool,
+        #[serde(default)]
+        exclude_tmpdir_env_var: bool,
+        #[serde(default)]
+        exclude_slash_tmp: bool,
+    },
+}
+
+impl SandboxPolicy {
+    pub fn to_core(&self) -> codex_protocol::protocol::SandboxPolicy {
+        match self {
+            SandboxPolicy::DangerFullAccess => {
+                codex_protocol::protocol::SandboxPolicy::DangerFullAccess
+            }
+            SandboxPolicy::ReadOnly => codex_protocol::protocol::SandboxPolicy::ReadOnly,
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                network_access,
+                exclude_tmpdir_env_var,
+                exclude_slash_tmp,
+            } => codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
+                writable_roots: writable_roots.clone(),
+                network_access: *network_access,
+                exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
+                exclude_slash_tmp: *exclude_slash_tmp,
+            },
+        }
+    }
+}
+
+impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
+    fn from(value: codex_protocol::protocol::SandboxPolicy) -> Self {
+        match value {
+            codex_protocol::protocol::SandboxPolicy::DangerFullAccess => {
+                SandboxPolicy::DangerFullAccess
+            }
+            codex_protocol::protocol::SandboxPolicy::ReadOnly => SandboxPolicy::ReadOnly,
+            codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                network_access,
+                exclude_tmpdir_env_var,
+                exclude_slash_tmp,
+            } => SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                network_access,
+                exclude_tmpdir_env_var,
+                exclude_slash_tmp,
+            },
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -284,6 +349,7 @@ pub struct Thread {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct Turn {
+    pub id: String,
     pub items: Vec<ThreadItem>,
     pub status: TurnStatus,
     pub error: Option<TurnError>,
@@ -314,16 +380,25 @@ pub enum TurnStatus {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
-    pub model: String,
-    pub effort: ReasoningEffort,
-    pub summary: String,
+    // Override the working directory for this turn and subsequent turns.
+    pub cwd: Option<PathBuf>,
+    // Override the approval policy for this turn and subsequent turns.
+    pub approval_policy: Option<AskForApproval>,
+    // Override the sandbox policy for this turn and subsequent turns.
+    pub sandbox_policy: Option<SandboxPolicy>,
+    // Override the model for this turn and subsequent turns.
+    pub model: Option<String>,
+    // Override the reasoning effort for this turn and subsequent turns.
+    pub effort: Option<ReasoningEffort>,
+    // Override the reasoning summary for this turn and subsequent turns.
+    pub summary: Option<ReasoningSummary>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TurnStartResponse {
-    pub turn_id: String,
+    pub turn: Turn,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -345,6 +420,7 @@ pub struct TurnInterruptResponse {}
 pub enum UserInput {
     Text(String),
     Image(ImageInput),
+    LocalImage { path: PathBuf },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

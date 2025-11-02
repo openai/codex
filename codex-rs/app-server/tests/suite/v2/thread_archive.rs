@@ -52,11 +52,17 @@ async fn thread_archive_moves_rollout_into_archived_directory() -> Result<()> {
         .path()
         .join(SESSIONS_SUBDIR)
         .join(format!("{}.jsonl", thread.id));
-    assert!(rollout_path.exists(), "expected {} to exist", rollout_path.display());
+    assert!(
+        rollout_path.exists(),
+        "expected {} to exist",
+        rollout_path.display()
+    );
 
     // Archive the thread.
     let archive_id = mcp
-        .send_thread_archive_request(ThreadArchiveParams { thread: thread.clone() })
+        .send_thread_archive_request(ThreadArchiveParams {
+            thread: thread.clone(),
+        })
         .await?;
     let archive_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -93,4 +99,3 @@ approval_policy = "never"
 sandbox_mode = "read-only"
 "#
 }
-

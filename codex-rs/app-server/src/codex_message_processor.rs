@@ -29,6 +29,7 @@ use codex_app_server_protocol::GetConversationSummaryResponse;
 use codex_app_server_protocol::GetUserAgentResponse;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
+use codex_app_server_protocol::ImageInput as V2ImageInput;
 use codex_app_server_protocol::InputItem as WireInputItem;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::InterruptConversationResponse;
@@ -71,6 +72,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::UserInfoResponse;
+use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_backend_client::Client as BackendClient;
 use codex_core::AuthManager;
@@ -209,12 +211,8 @@ impl CodexMessageProcessor {
                 self.send_unimplemented_error(request_id, "thread/compact")
                     .await;
             }
-            ClientRequest::TurnStart {
-                request_id,
-                params: _,
-            } => {
-                self.send_unimplemented_error(request_id, "turn/start")
-                    .await;
+            ClientRequest::TurnStart { request_id, params } => {
+                self.turn_start(request_id, params).await;
             }
             ClientRequest::TurnInterrupt {
                 request_id,
@@ -935,6 +933,117 @@ impl CodexMessageProcessor {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!("error creating thread: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn turn_start(
+        &self,
+        request_id: RequestId,
+        params: codex_app_server_protocol::TurnStartParams,
+    ) {
+        // Resolve conversation id from v2 thread id string.
+        let conversation_id = match ConversationId::from_string(&params.thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("invalid thread id: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let Ok(conversation) = self
+            .conversation_manager
+            .get_conversation(conversation_id)
+            .await
+        else {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("conversation not found: {conversation_id}"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        };
+
+        // Keep a copy of v2 inputs for the notification payload.
+        let v2_inputs_for_notif = params.input.clone();
+
+        // Map v2 input items to core input items.
+        let mapped_items: Vec<CoreInputItem> = params
+            .input
+            .into_iter()
+            .map(|item| match item {
+                V2UserInput::Text(text) => CoreInputItem::Text { text },
+                V2UserInput::Image(V2ImageInput::Image { url }) => {
+                    CoreInputItem::Image { image_url: url }
+                }
+                V2UserInput::LocalImage { path } => CoreInputItem::LocalImage { path },
+            })
+            .collect();
+
+        let has_any_overrides = params.cwd.is_some()
+            || params.approval_policy.is_some()
+            || params.sandbox_policy.is_some()
+            || params.model.is_some()
+            || params.effort.is_some()
+            || params.summary.is_some();
+
+        // If any overrides are provided, update the session turn context first.
+        if has_any_overrides {
+            let _ = conversation
+                .submit(Op::OverrideTurnContext {
+                    cwd: params.cwd,
+                    approval_policy: params
+                        .approval_policy
+                        .map(codex_app_server_protocol::AskForApproval::to_core),
+                    sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
+                    model: params.model,
+                    effort: params.effort.map(Some),
+                    summary: params.summary,
+                })
+                .await;
+        }
+
+        // Start the turn by submitting the user input. Return its submission id as turn_id.
+        let turn_id = conversation
+            .submit(Op::UserInput {
+                items: mapped_items,
+            })
+            .await;
+
+        match turn_id {
+            Ok(turn_id) => {
+                let turn = codex_app_server_protocol::Turn {
+                    id: turn_id.clone(),
+                    items: vec![codex_app_server_protocol::ThreadItem::UserMessage {
+                        id: turn_id,
+                        content: v2_inputs_for_notif,
+                    }],
+                    status: codex_app_server_protocol::TurnStatus::InProgress,
+                    error: None,
+                };
+
+                let response = codex_app_server_protocol::TurnStartResponse { turn: turn.clone() };
+                self.outgoing.send_response(request_id, response).await;
+
+                // Emit v2 turn/started notification.
+                let notif = codex_app_server_protocol::TurnStartedNotification { turn };
+                self.outgoing
+                    .send_server_notification(ServerNotification::TurnStarted(notif))
+                    .await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to start turn: {err}"),
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
