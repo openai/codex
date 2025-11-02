@@ -5,7 +5,6 @@ use std::fs::{self};
 use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use codex_protocol::ConversationId;
 use serde_json::Value;
@@ -13,11 +12,9 @@ use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::{self};
 use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 use tracing::info;
 use tracing::warn;
 
@@ -46,20 +43,10 @@ use codex_protocol::protocol::SessionSource;
 /// $ jq -C . ~/.codex/sessions/rollout-2025-05-07T17-24-21-5973b6c0-94b8-487b-a530-2aeb6098ae0e.jsonl
 /// $ fx ~/.codex/sessions/rollout-2025-05-07T17-24-21-5973b6c0-94b8-487b-a530-2aeb6098ae0e.jsonl
 /// ```
+#[derive(Clone)]
 pub struct RolloutRecorder {
     tx: Sender<RolloutCmd>,
     pub(crate) rollout_path: PathBuf,
-    writer_task: Arc<Mutex<Option<JoinHandle<std::io::Result<()>>>>>,
-}
-
-impl Clone for RolloutRecorder {
-    fn clone(&self) -> Self {
-        Self {
-            tx: self.tx.clone(),
-            rollout_path: self.rollout_path.clone(),
-            writer_task: Arc::clone(&self.writer_task),
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -185,14 +172,9 @@ impl RolloutRecorder {
         // Spawn a Tokio task that owns the file handle and performs async
         // writes. Using `tokio::fs::File` keeps everything on the async I/O
         // driver instead of blocking the runtime.
-        let writer_task =
-            tokio::task::spawn(async move { rollout_writer(file, rx, meta, cwd).await });
+        tokio::task::spawn(rollout_writer(file, rx, meta, cwd));
 
-        Ok(Self {
-            tx,
-            rollout_path,
-            writer_task: Arc::new(Mutex::new(Some(writer_task))),
-        })
+        Ok(Self { tx, rollout_path })
     }
 
     pub(crate) async fn record_items(&self, items: &[RolloutItem]) -> std::io::Result<()> {
@@ -298,27 +280,16 @@ impl RolloutRecorder {
 
     pub async fn shutdown(&self) -> std::io::Result<()> {
         let (tx_done, rx_done) = oneshot::channel();
-        if let Err(e) = self.tx.send(RolloutCmd::Shutdown { ack: tx_done }).await {
-            warn!("failed to send rollout shutdown command: {e}");
-            return Err(IoError::other(format!(
-                "failed to send rollout shutdown command: {e}"
-            )));
-        }
-
-        rx_done
-            .await
-            .map_err(|e| IoError::other(format!("failed waiting for rollout shutdown: {e}")))?;
-
-        let mut guard = self.writer_task.lock().await;
-        if let Some(handle) = guard.take() {
-            match handle.await {
-                Ok(result) => result,
-                Err(join_err) => Err(IoError::other(format!(
-                    "failed joining rollout writer task: {join_err}"
-                ))),
+        match self.tx.send(RolloutCmd::Shutdown { ack: tx_done }).await {
+            Ok(_) => rx_done
+                .await
+                .map_err(|e| IoError::other(format!("failed waiting for rollout shutdown: {e}"))),
+            Err(e) => {
+                warn!("failed to send rollout shutdown command: {e}");
+                Err(IoError::other(format!(
+                    "failed to send rollout shutdown command: {e}"
+                )))
             }
-        } else {
-            Ok(())
         }
     }
 }
@@ -416,9 +387,7 @@ async fn rollout_writer(
                 let _ = ack.send(());
             }
             RolloutCmd::Shutdown { ack } => {
-                let result = writer.shutdown().await;
                 let _ = ack.send(());
-                return result;
             }
         }
     }
@@ -451,9 +420,5 @@ impl JsonlWriter {
         self.file.write_all(json.as_bytes()).await?;
         self.file.flush().await?;
         Ok(())
-    }
-
-    async fn shutdown(mut self) -> std::io::Result<()> {
-        self.file.flush().await
     }
 }
