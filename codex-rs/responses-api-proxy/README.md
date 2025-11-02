@@ -40,12 +40,26 @@ curl --fail --silent --show-error "${PROXY_BASE_URL}/shutdown"
 ## CLI
 
 ```
-codex-responses-api-proxy [--port <PORT>] [--server-info <FILE>] [--http-shutdown]
+codex-responses-api-proxy [--port <PORT>] [--server-info <FILE>] [--http-shutdown] [--upstream-url <URL>] [--auth-header-name <NAME>] [--auth-header-prefix <PREFIX>]
 ```
 
 - `--port <PORT>`: Port to bind on `127.0.0.1`. If omitted, an ephemeral port is chosen.
 - `--server-info <FILE>`: If set, the proxy writes a single line of JSON with `{ "port": <PORT>, "pid": <PID> }` once listening.
 - `--http-shutdown`: If set, enables `GET /shutdown` to exit the process with code `0`.
+- `--upstream-url <URL>`: Absolute URL to forward requests to. Defaults to `https://api.openai.com/v1/responses`.
+- `--auth-header-name <NAME>`: Header name used for authentication upstream. Defaults to `Authorization`.
+- `--auth-header-prefix <PREFIX>`: Prefix prepended to the API key when forming the header value. Defaults to `Bearer ` (note the trailing space). Pass an empty string for providers like Azure that expect the raw key value.
+
+For Azure, for example:
+
+```shell
+printenv AZURE_OPENAI_API_KEY | env -u AZURE_OPENAI_API_KEY codex-responses-api-proxy \
+  --http-shutdown \
+  --server-info /tmp/server-info.json \
+  --upstream-url "https://YOUR_PROJECT_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT/responses?api-version=2025-04-01-preview" \
+  --auth-header-name api-key \
+  --auth-header-prefix ''
+```
 
 ## Notes
 
