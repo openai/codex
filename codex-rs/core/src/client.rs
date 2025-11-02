@@ -26,7 +26,6 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
 use tracing::debug;
-use tracing::error;
 use tracing::trace;
 use tracing::warn;
 
@@ -252,7 +251,6 @@ impl ModelClient {
             prompt_cache_key: Some(self.conversation_id.to_string()),
             text,
         };
-        error!("payload: {:?}", payload);
 
         let mut payload_json = serde_json::to_value(&payload)?;
         if azure_workaround {

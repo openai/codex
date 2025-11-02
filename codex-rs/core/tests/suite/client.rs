@@ -34,6 +34,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
 use futures::StreamExt;
+use serde_json::Value;
 use serde_json::json;
 use std::io::Write;
 use std::sync::Arc;
@@ -1463,5 +1464,103 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
         serde_json::Value::Array(actual_tail.to_vec()),
         r3_tail_expected,
         "request 3 tail mismatch",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preserves_web_search_call_across_turns() {
+    skip_if_no_network!();
+
+    let server = responses::start_mock_server().await;
+
+    let web_search_id = "search-1";
+    let web_search_query = "rust weather";
+    let turn_one_body = responses::sse(vec![
+        responses::ev_response_created("resp-turn1"),
+        responses::ev_web_search_call_added(web_search_id, "in_progress", web_search_query),
+        responses::ev_web_search_call_done(web_search_id, "completed", web_search_query),
+        responses::ev_assistant_message("assistant-turn1", "Search finished."),
+        responses::ev_completed("resp-turn1"),
+    ]);
+    let turn_two_body = responses::sse(vec![
+        responses::ev_response_created("resp-turn2"),
+        responses::ev_assistant_message("assistant-turn2", "Continuing conversation."),
+        responses::ev_completed("resp-turn2"),
+    ]);
+    let response_mock =
+        responses::mount_sse_sequence(&server, vec![turn_one_body, turn_two_body]).await;
+
+    let mut model_provider = built_in_model_providers()["openai"].clone();
+    model_provider.base_url = Some(format!("{}/v1", server.uri()));
+
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider = model_provider;
+
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let NewConversation {
+        conversation: codex,
+        ..
+    } = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create new conversation");
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "first turn".into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "second turn".into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = response_mock.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected two requests to the responses API"
+    );
+
+    let turn_two_input = requests[1].input();
+    let web_search_items: Vec<Value> = turn_two_input
+        .into_iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("web_search_call"))
+        .collect();
+    assert_eq!(
+        web_search_items.len(),
+        1,
+        "expected exactly one web_search_call item in the second turn"
+    );
+
+    let item = &web_search_items[0];
+    assert_eq!(
+        item.get("id").and_then(Value::as_str),
+        Some(web_search_id),
+        "web search id changed between turns"
+    );
+    assert_eq!(
+        item.get("status").and_then(Value::as_str),
+        Some("completed"),
+        "web search status preserved between turns"
+    );
+    assert_eq!(
+        item.get("action")
+            .and_then(|action| action.get("query"))
+            .and_then(Value::as_str),
+        Some(web_search_query),
+        "web search query changed between turns"
     );
 }

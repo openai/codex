@@ -3,7 +3,6 @@ use crate::codex::TurnContext;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use tracing::error;
 use tracing::warn;
 
 /// Process streamed `ResponseItem`s from the model into the pair of:
@@ -89,7 +88,6 @@ pub(crate) async fn process_items(
             }
             (ResponseItem::WebSearchCall { .. }, None) => {
                 items_to_record_in_conversation_history.push(item.clone());
-                error!("WebSearchCall: {item:?}");
             }
             _ => {
                 warn!("Unexpected response item: {item:?} with response: {response:?}");
