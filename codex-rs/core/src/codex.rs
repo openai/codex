@@ -2834,6 +2834,57 @@ mod tests {
         }
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn user_shell_command_records_history_pair() {
+        use codex_protocol::models::ResponseItem;
+        use std::time::Duration;
+
+        let (sess, _tc, rx) = make_session_and_context_with_rx();
+
+        // Kick off a simple shell command via the helper.
+        let mut previous_context: Option<Arc<TurnContext>> = None;
+        run_user_shell_command(
+            &sess,
+            "sub-user-shell".to_string(),
+            "echo hello-codex".to_string(),
+            &mut previous_context,
+        )
+        .await;
+
+        // Wait until we observe ExecCommandEnd to ensure command finished and history appended.
+        let mut saw_exec_end = false;
+        for _ in 0..50 {
+            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(event)) => match event.msg {
+                    EventMsg::ExecCommandEnd(_) => {
+                        saw_exec_end = true;
+                        break;
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        assert!(saw_exec_end, "did not observe ExecCommandEnd event");
+
+        // Inspect conversation history for the paired items (LocalShellCall -> FunctionCallOutput).
+        let history = sess.clone_history().await.get_history();
+        let mut found_pair = false;
+        for idx in (0..history.len()).rev() {
+            if let ResponseItem::LocalShellCall { call_id: Some(cid), .. } = &history[idx] {
+                if let Some(next) = history.get(idx + 1) {
+                    if let ResponseItem::FunctionCallOutput { call_id, output } = next {
+                        if call_id == cid && output.content.contains("hello-codex") {
+                            found_pair = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(found_pair, "expected LocalShellCall followed by FunctionCallOutput with matching call_id and output containing 'hello-codex'\nFull history: {:?}", history);
+    }
+
     fn sample_rollout(
         session: &Session,
         turn_context: &TurnContext,
