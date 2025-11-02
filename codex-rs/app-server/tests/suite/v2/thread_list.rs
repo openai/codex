@@ -25,7 +25,6 @@ async fn thread_list_basic_empty() -> Result<()> {
         .send_thread_list_request(ThreadListParams {
             cursor: None,
             limit: Some(10),
-            order: None,
             model_providers: None,
         })
         .await?;
@@ -140,7 +139,6 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         .send_thread_list_request(ThreadListParams {
             cursor: None,
             limit: Some(2),
-            order: None,
             model_providers: None,
         })
         .await?;
@@ -161,7 +159,6 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         .send_thread_list_request(ThreadListParams {
             cursor: Some(cursor1),
             limit: Some(2),
-            order: None,
             model_providers: None,
         })
         .await?;
@@ -204,7 +201,8 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
         .join("02");
     std::fs::create_dir_all(&dir)?;
     let file_path = dir.join(format!("rollout-2025-01-02T11-00-00-{uuid}.jsonl"));
-    let lines = [json!({
+    let lines = [
+        json!({
             "timestamp": "2025-01-02T11:00:00Z",
             "type": "session_meta",
             "payload": {
@@ -230,7 +228,8 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
             "type":"event_msg",
             "payload": {"type":"user_message","message":"X","kind":"plain"}
         })
-        .to_string()];
+        .to_string(),
+    ];
     std::fs::write(file_path, lines.join("\n") + "\n")?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -241,7 +240,6 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
         .send_thread_list_request(ThreadListParams {
             cursor: None,
             limit: Some(10),
-            order: None,
             model_providers: Some(vec!["other_provider".to_string()]),
         })
         .await?;

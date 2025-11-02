@@ -1114,7 +1114,6 @@ impl CodexMessageProcessor {
         let ThreadListParams {
             cursor,
             limit,
-            order: _,
             model_providers,
         } = params;
 
