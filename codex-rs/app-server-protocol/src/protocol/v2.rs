@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningEffort;
@@ -8,6 +10,43 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use ts_rs::TS;
 use uuid::Uuid;
+
+// Macro to declare a camelCased API v2 enum mirroring a core enum which
+// tends to use kebab-case.
+macro_rules! v2_enum_from_core {
+    (
+        pub enum $Name:ident from $Src:path { $( $Variant:ident ),+ $(,)? }
+    ) => {
+        #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+        #[serde(rename_all = "camelCase")]
+        #[ts(export_to = "v2/")]
+        pub enum $Name { $( $Variant ),+ }
+
+        impl $Name {
+            pub fn to_core(self) -> $Src {
+                match self { $( $Name::$Variant => <$Src>::$Variant ),+ }
+            }
+        }
+
+        impl From<$Src> for $Name {
+            fn from(value: $Src) -> Self {
+                match value { $( <$Src>::$Variant => $Name::$Variant ),+ }
+            }
+        }
+    };
+}
+
+v2_enum_from_core!(
+    pub enum AskForApproval from codex_protocol::protocol::AskForApproval {
+        UnlessTrusted, OnFailure, OnRequest, Never
+    }
+);
+
+v2_enum_from_core!(
+    pub enum SandboxMode from codex_protocol::config_types::SandboxMode {
+        ReadOnly, WorkspaceWrite, DangerFullAccess
+    }
+);
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -151,20 +190,32 @@ pub struct FeedbackUploadResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadStartParams {}
+pub struct ThreadStartParams {
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub profile: Option<String>,
+    pub cwd: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
+    pub sandbox: Option<SandboxMode>,
+    pub config: Option<HashMap<String, serde_json::Value>>,
+    pub base_instructions: Option<String>,
+    pub developer_instructions: Option<String>,
+    pub compact_prompt: Option<String>,
+    pub include_apply_patch_tool: Option<bool>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadStartResponse {
-    pub thread_id: String,
+    pub thread: Thread,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadResumeParams {
-    pub thread_id: String,
+    pub thread: Thread,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -178,7 +229,7 @@ pub struct ThreadResumeResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadArchiveParams {
-    pub thread_id: String,
+    pub thread: Thread,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
