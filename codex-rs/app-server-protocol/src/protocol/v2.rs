@@ -247,6 +247,9 @@ pub struct ThreadListParams {
     pub limit: Option<i32>,
     /// Optional sort order; defaults to descending.
     pub order: Option<SortOrder>,
+    /// Optional provider filter; when set, only sessions recorded under these
+    /// providers are returned. When present but empty, includes all providers.
+    pub model_providers: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

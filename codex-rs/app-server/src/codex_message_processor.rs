@@ -1115,6 +1115,7 @@ impl CodexMessageProcessor {
             cursor,
             limit,
             order: _,
+            model_providers,
         } = params;
 
         let page_size = limit.unwrap_or(25).max(1) as usize;
@@ -1126,8 +1127,13 @@ impl CodexMessageProcessor {
         };
         let cursor_ref = cursor_obj.as_ref();
 
-        // v2 API does not filter by provider unless specified; include all.
-        let model_provider_slice: Option<&[String]> = None;
+        // v2: include all providers by default; if provided, honor non-empty filters.
+        let model_provider_vec = match model_providers {
+            Some(v) if v.is_empty() => None,
+            Some(v) => Some(v),
+            None => None,
+        };
+        let model_provider_slice = model_provider_vec.as_deref();
         let fallback_provider = self.config.model_provider_id.clone();
 
         let page = match RolloutRecorder::list_conversations(
