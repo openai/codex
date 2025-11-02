@@ -39,16 +39,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
-            model_provider: None,
-            profile: None,
-            cwd: None,
-            approval_policy: None,
-            sandbox: None,
-            config: None,
-            base_instructions: None,
-            developer_instructions: None,
-            compact_prompt: None,
-            include_apply_patch_tool: None,
+            ..Default::default()
         })
         .await?;
     let thread_resp: JSONRPCResponse = timeout(
@@ -148,16 +139,7 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
-            model_provider: None,
-            profile: None,
-            cwd: None,
-            approval_policy: None,
-            sandbox: None,
-            config: None,
-            base_instructions: None,
-            developer_instructions: None,
-            compact_prompt: None,
-            include_apply_patch_tool: None,
+            ..Default::default()
         })
         .await?;
     let thread_resp: JSONRPCResponse = timeout(

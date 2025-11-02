@@ -26,16 +26,7 @@ async fn thread_resume_returns_existing_thread() -> Result<()> {
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("o3".to_string()),
-            model_provider: None,
-            profile: None,
-            cwd: None,
-            approval_policy: None,
-            sandbox: None,
-            config: None,
-            base_instructions: None,
-            developer_instructions: None,
-            compact_prompt: None,
-            include_apply_patch_tool: None,
+            ..Default::default()
         })
         .await?;
     let start_resp: JSONRPCResponse = timeout(

@@ -31,16 +31,7 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("o3".to_string()),
-            model_provider: None,
-            profile: None,
-            cwd: None,
-            approval_policy: None,
-            sandbox: None,
-            config: None,
-            base_instructions: None,
-            developer_instructions: None,
-            compact_prompt: None,
-            include_apply_patch_tool: None,
+            ..Default::default()
         })
         .await?;
 
