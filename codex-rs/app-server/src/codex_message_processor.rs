@@ -43,7 +43,7 @@ use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
-use codex_app_server_protocol::RateLimitSnapshot;
+use codex_app_server_protocol::RateLimitSnapshot as V2RateLimitSnapshot;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::RequestId;
@@ -59,6 +59,11 @@ use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
 use codex_app_server_protocol::SortOrder;
+use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStartedNotification;
+use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_backend_client::Client as BackendClient;
@@ -99,7 +104,7 @@ use codex_protocol::ConversationId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
@@ -177,13 +182,9 @@ impl CodexMessageProcessor {
             ClientRequest::Initialize { .. } => {
                 panic!("Initialize should be handled in MessageProcessor");
             }
-            // === v2 Thread/Turn APIs (stubs) ===
-            ClientRequest::ThreadStart {
-                request_id,
-                params: _,
-            } => {
-                self.send_unimplemented_error(request_id, "thread/start")
-                    .await;
+            // === v2 Thread/Turn APIs ===
+            ClientRequest::ThreadStart { request_id, params } => {
+                self.thread_start(request_id, params).await;
             }
             ClientRequest::ThreadResume {
                 request_id,
@@ -648,9 +649,7 @@ impl CodexMessageProcessor {
     async fn get_account_rate_limits(&self, request_id: RequestId) {
         match self.fetch_account_rate_limits().await {
             Ok(rate_limits) => {
-                let response = GetAccountRateLimitsResponse {
-                    rate_limits: rate_limits.into(),
-                };
+                let response = GetAccountRateLimitsResponse { rate_limits };
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(error) => {
@@ -659,7 +658,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn fetch_account_rate_limits(&self) -> Result<RateLimitSnapshot, JSONRPCErrorError> {
+    async fn fetch_account_rate_limits(&self) -> Result<V2RateLimitSnapshot, JSONRPCErrorError> {
         let Some(auth) = self.auth_manager.auth() else {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -687,6 +686,7 @@ impl CodexMessageProcessor {
         client
             .get_rate_limits()
             .await
+            .map(|rl: CoreRateLimitSnapshot| rl.into())
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to fetch codex rate limits: {err}"),
@@ -871,6 +871,75 @@ impl CodexMessageProcessor {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!("error creating conversation: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn thread_start(&self, request_id: RequestId, params: ThreadStartParams) {
+        // Map v2 ThreadStartParams onto the existing NewConversationParams so we
+        // can reuse the same config derivation and conversation manager flow.
+        let overrides = NewConversationParams {
+            model: params.model,
+            model_provider: params.model_provider,
+            profile: params.profile,
+            cwd: params.cwd,
+            approval_policy: params
+                .approval_policy
+                .map(codex_app_server_protocol::AskForApproval::to_core),
+            sandbox: params
+                .sandbox
+                .map(codex_app_server_protocol::SandboxMode::to_core),
+            config: params.config,
+            base_instructions: params.base_instructions,
+            developer_instructions: params.developer_instructions,
+            compact_prompt: params.compact_prompt,
+            include_apply_patch_tool: params.include_apply_patch_tool,
+        };
+
+        let config = match derive_config_from_params(
+            overrides,
+            self.codex_linux_sandbox_exe.clone(),
+        )
+        .await
+        {
+            Ok(config) => config,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("error deriving config: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self.conversation_manager.new_conversation(config).await {
+            Ok(new_conv) => {
+                let thread = Thread {
+                    id: new_conv.conversation_id.to_string(),
+                    turn: Vec::<Turn>::new(),
+                };
+
+                // Send response first to complete the RPC.
+                let response = ThreadStartResponse {
+                    thread: thread.clone(),
+                };
+                self.outgoing.send_response(request_id, response).await;
+
+                // Emit thread/started notification for v2 stream consumers.
+                let notif = ThreadStartedNotification { thread };
+                self.outgoing
+                    .send_server_notification(ServerNotification::ThreadStarted(notif))
+                    .await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("error creating thread: {err}"),
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
@@ -1790,7 +1859,7 @@ async fn apply_bespoke_event_handling(
         }
         EventMsg::TokenCount(token_count_event) => {
             if let Some(rate_limits) = token_count_event.rate_limits {
-                let snapshot: RateLimitSnapshot = rate_limits.into();
+                let snapshot: V2RateLimitSnapshot = rate_limits.into();
                 outgoing
                     .send_server_notification(ServerNotification::AccountRateLimitsUpdated(
                         AccountRateLimitsUpdatedNotification {
