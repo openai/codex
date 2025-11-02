@@ -12,8 +12,8 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use clap::Parser;
+use reqwest::Url;
 use reqwest::blocking::Client;
-use reqwest::header::AUTHORIZATION;
 use reqwest::header::HOST;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
@@ -44,6 +44,10 @@ pub struct Args {
     /// Enable HTTP shutdown endpoint at GET /shutdown
     #[arg(long)]
     pub http_shutdown: bool,
+
+    /// Absolute URL the proxy should forward requests to (defaults to OpenAI).
+    #[arg(long, default_value = "https://api.openai.com/v1/responses")]
+    pub upstream_url: String,
 }
 
 #[derive(Serialize)]
@@ -52,9 +56,35 @@ struct ServerInfo {
     pid: u32,
 }
 
+#[derive(Clone)]
+struct ForwardConfig {
+    upstream_url: Url,
+    host_header: HeaderValue,
+    auth_header_value: &'static str,
+}
+
 /// Entry point for the library main, for parity with other crates.
 pub fn run_main(args: Args) -> Result<()> {
-    let auth_header = read_auth_header_from_stdin()?;
+    let upstream_url = Url::parse(&args.upstream_url).context("parsing --upstream-url")?;
+
+    let mut host = upstream_url
+        .host_str()
+        .map(str::to_string)
+        .context("upstream URL must include a host")?;
+    if let Some(port) = upstream_url.port() {
+        host.push(':');
+        host.push_str(&port.to_string());
+    }
+    let host_header =
+        HeaderValue::from_str(&host).context("constructing Host header from upstream URL")?;
+
+    let auth_header = read_auth_header_from_stdin("Bearer ").context("reading API key")?;
+
+    let forward_config = Arc::new(ForwardConfig {
+        upstream_url,
+        host_header,
+        auth_header_value: auth_header,
+    });
 
     let (listener, bound_addr) = bind_listener(args.port)?;
     if let Some(path) = args.server_info.as_ref() {
@@ -75,13 +105,14 @@ pub fn run_main(args: Args) -> Result<()> {
     let http_shutdown = args.http_shutdown;
     for request in server.incoming_requests() {
         let client = client.clone();
+        let forward_config = forward_config.clone();
         std::thread::spawn(move || {
             if http_shutdown && request.method() == &Method::Get && request.url() == "/shutdown" {
                 let _ = request.respond(Response::new_empty(StatusCode(200)));
                 std::process::exit(0);
             }
 
-            if let Err(e) = forward_request(&client, auth_header, request) {
+            if let Err(e) = forward_request(&client, &forward_config, request) {
                 eprintln!("forwarding error: {e}");
             }
         });
@@ -115,7 +146,7 @@ fn write_server_info(path: &Path, port: u16) -> Result<()> {
     Ok(())
 }
 
-fn forward_request(client: &Client, auth_header: &'static str, mut req: Request) -> Result<()> {
+fn forward_request(client: &Client, config: &ForwardConfig, mut req: Request) -> Result<()> {
     // Only allow POST /v1/responses exactly, no query string.
     let method = req.method().clone();
     let url_path = req.url().to_string();
@@ -153,15 +184,14 @@ fn forward_request(client: &Client, auth_header: &'static str, mut req: Request)
 
     // As part of our effort to to keep `auth_header` secret, we use a
     // combination of `from_static()` and `set_sensitive(true)`.
-    let mut auth_header_value = HeaderValue::from_static(auth_header);
+    let mut auth_header_value = HeaderValue::from_static(config.auth_header_value);
     auth_header_value.set_sensitive(true);
-    headers.insert(AUTHORIZATION, auth_header_value);
+    headers.insert(HeaderName::from_static("authorization"), auth_header_value);
 
-    headers.insert(HOST, HeaderValue::from_static("api.openai.com"));
+    headers.insert(HOST, config.host_header.clone());
 
-    let upstream = "https://api.openai.com/v1/responses";
     let upstream_resp = client
-        .post(upstream)
+        .post(config.upstream_url.clone())
         .headers(headers)
         .body(body)
         .send()
