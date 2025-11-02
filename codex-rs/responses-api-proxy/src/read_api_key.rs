@@ -6,11 +6,10 @@ use zeroize::Zeroize;
 /// Use a generous buffer size to avoid truncation and to allow for longer API
 /// keys in the future.
 const BUFFER_SIZE: usize = 1024;
-const AUTH_HEADER_PREFIX: &[u8] = b"Bearer ";
 
-/// Reads the auth token from stdin and returns a static `Authorization` header
-/// value with the auth token used with `Bearer`. The header value is returned
-/// as a `&'static str` whose bytes are locked in memory to avoid accidental
+/// Reads the auth token from stdin and returns a static Authorization header
+/// value that starts with "Bearer ". The header value is returned as a
+/// `&'static str` whose bytes are locked in memory to avoid accidental
 /// exposure.
 #[cfg(unix)]
 pub(crate) fn read_auth_header_from_stdin() -> Result<&'static str> {
@@ -81,9 +80,9 @@ where
     // one to create the String (with the exact size) for the header value,
     // which we then immediately protect with mlock(2).
     let mut buf = [0u8; BUFFER_SIZE];
-    buf[..AUTH_HEADER_PREFIX.len()].copy_from_slice(AUTH_HEADER_PREFIX);
+    buf[..7].copy_from_slice(b"Bearer ");
 
-    let prefix_len = AUTH_HEADER_PREFIX.len();
+    let prefix_len = 7;
     let capacity = buf.len() - prefix_len;
     let mut total_read = 0usize; // number of bytes read into the token region
     let mut saw_newline = false;
@@ -121,7 +120,7 @@ where
     if total_read == capacity && !saw_newline && !saw_eof {
         buf.zeroize();
         return Err(anyhow!(
-            "OPENAI_API_KEY is too large to fit in the 512-byte buffer"
+            "API key is too large to fit in the 512-byte buffer"
         ));
     }
 
@@ -130,14 +129,14 @@ where
         total -= 1;
     }
 
-    if total == AUTH_HEADER_PREFIX.len() {
+    if total == prefix_len {
         buf.zeroize();
         return Err(anyhow!(
-            "OPENAI_API_KEY must be provided via stdin (e.g. printenv OPENAI_API_KEY | codex responses-api-proxy)"
+            "API key must be provided via stdin (e.g. printenv OPENAI_API_KEY | codex responses-api-proxy)"
         ));
     }
 
-    if let Err(err) = validate_auth_header_bytes(&buf[AUTH_HEADER_PREFIX.len()..total]) {
+    if let Err(err) = validate_auth_header_bytes(&buf[prefix_len..total]) {
         buf.zeroize();
         return Err(err);
     }
@@ -214,7 +213,7 @@ fn validate_auth_header_bytes(key_bytes: &[u8]) -> Result<()> {
     }
 
     Err(anyhow!(
-        "OPENAI_API_KEY may only contain ASCII letters, numbers, '-' or '_'"
+        "API key may only contain ASCII letters, numbers, '-' or '_'"
     ))
 }
 
@@ -283,14 +282,13 @@ mod tests {
 
     #[test]
     fn errors_when_buffer_filled() {
-        let err = read_auth_header_with(|buf| {
-            let data = vec![b'a'; BUFFER_SIZE - AUTH_HEADER_PREFIX.len()];
-            buf[..data.len()].copy_from_slice(&data);
+        let err = read_auth_header_with(|_| {
+            let data = vec![b'a'; BUFFER_SIZE - "Bearer ".len()];
             Ok(data.len())
         })
         .unwrap_err();
         let message = format!("{err:#}");
-        assert!(message.contains("OPENAI_API_KEY is too large to fit in the 512-byte buffer"));
+        assert!(message.contains("API key is too large to fit in the 512-byte buffer"));
     }
 
     #[test]
@@ -317,9 +315,7 @@ mod tests {
         .unwrap_err();
 
         let message = format!("{err:#}");
-        assert!(
-            message.contains("OPENAI_API_KEY may only contain ASCII letters, numbers, '-' or '_'")
-        );
+        assert!(message.contains("API key may only contain ASCII letters, numbers, '-' or '_'"));
     }
 
     #[test]
@@ -337,8 +333,6 @@ mod tests {
         .unwrap_err();
 
         let message = format!("{err:#}");
-        assert!(
-            message.contains("OPENAI_API_KEY may only contain ASCII letters, numbers, '-' or '_'")
-        );
+        assert!(message.contains("API key may only contain ASCII letters, numbers, '-' or '_'"));
     }
 }
