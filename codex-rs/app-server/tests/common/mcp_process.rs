@@ -32,6 +32,8 @@ use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadListParams;
+use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadStartParams;
 
 use codex_app_server_protocol::JSONRPCError;
@@ -325,6 +327,24 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/archive", params).await
+    }
+
+    /// Send a `thread/list` JSON-RPC request (v2).
+    pub async fn send_thread_list_request(
+        &mut self,
+        params: ThreadListParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/list", params).await
+    }
+
+    /// Send a `thread/resume` JSON-RPC request (v2).
+    pub async fn send_thread_resume_request(
+        &mut self,
+        params: ThreadResumeParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/resume", params).await
     }
 
     /// Send a `cancelLoginChatGpt` JSON-RPC request.
