@@ -439,7 +439,7 @@ pub struct AccountRateLimitsUpdatedNotification {
 }
 
 // CamelCased copy of codex_protocol::protocol::{RateLimitSnapshot, RateLimitWindow}
-// for the v2 surface. This avoids leaking snake_case into the v2 wire format.
+// for the v2 API. This avoids leaking snake_case into the v2 wire format.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

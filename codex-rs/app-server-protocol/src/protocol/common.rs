@@ -351,7 +351,7 @@ macro_rules! server_request_definitions {
 }
 
 /// Generates `ServerNotification` enum and helpers, including a JSON Schema
-/// exporter for each variant payload type.
+/// exporter for each notification.
 macro_rules! server_notification_definitions {
     (
         $(
@@ -397,8 +397,8 @@ macro_rules! server_notification_definitions {
     };
 }
 
-/// Generates `ClientNotification` enum and a JSON Schema exporter for
-/// any payload-bearing variants (unit variants produce no payload schema).
+/// Notifications sent from the client to the server.
+/// Generates `ClientNotification` enum and a JSON Schema exporter.
 macro_rules! client_notification_definitions {
     (
         $(
@@ -406,7 +406,6 @@ macro_rules! client_notification_definitions {
             $variant:ident $( ( $payload:ty ) )?
         ),* $(,)?
     ) => {
-        /// Notification sent from the client to the server.
         #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
         #[serde(tag = "method", content = "params", rename_all = "camelCase")]
         #[strum(serialize_all = "camelCase")]
