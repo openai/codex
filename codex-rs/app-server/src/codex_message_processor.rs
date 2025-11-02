@@ -1172,9 +1172,23 @@ impl CodexMessageProcessor {
         // Verify that the rollout path is in the sessions directory or else
         // a malicious client could specify an arbitrary path.
         let rollout_folder = self.config.codex_home.join(codex_core::SESSIONS_SUBDIR);
+        let canonical_sessions_dir = match tokio::fs::canonicalize(&rollout_folder).await {
+            Ok(path) => path,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!(
+                        "failed to archive conversation: unable to resolve sessions directory: {err}"
+                    ),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
         let canonical_rollout_path = tokio::fs::canonicalize(&rollout_path).await;
         let canonical_rollout_path = if let Ok(path) = canonical_rollout_path
-            && path.starts_with(&rollout_folder)
+            && path.starts_with(&canonical_sessions_dir)
         {
             path
         } else {
