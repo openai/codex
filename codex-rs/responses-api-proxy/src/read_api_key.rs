@@ -121,7 +121,7 @@ where
     if total_read == capacity && !saw_newline && !saw_eof {
         buf.zeroize();
         return Err(anyhow!(
-            "OPENAI_API_KEY is too large to fit in the 512-byte buffer"
+            "API key is too large to fit in the {BUFFER_SIZE}-byte buffer"
         ));
     }
 
@@ -130,14 +130,14 @@ where
         total -= 1;
     }
 
-    if total == AUTH_HEADER_PREFIX.len() {
+    if total == prefix_len {
         buf.zeroize();
         return Err(anyhow!(
-            "OPENAI_API_KEY must be provided via stdin (e.g. printenv OPENAI_API_KEY | codex responses-api-proxy)"
+            "API key must be provided via stdin (e.g. printenv OPENAI_API_KEY | codex responses-api-proxy)"
         ));
     }
 
-    if let Err(err) = validate_auth_header_bytes(&buf[AUTH_HEADER_PREFIX.len()..total]) {
+    if let Err(err) = validate_auth_header_bytes(&buf[prefix_len..total]) {
         buf.zeroize();
         return Err(err);
     }
@@ -214,7 +214,7 @@ fn validate_auth_header_bytes(key_bytes: &[u8]) -> Result<()> {
     }
 
     Err(anyhow!(
-        "OPENAI_API_KEY may only contain ASCII letters, numbers, '-' or '_'"
+        "API key may only contain ASCII letters, numbers, '-' or '_'"
     ))
 }
 
@@ -283,14 +283,15 @@ mod tests {
 
     #[test]
     fn errors_when_buffer_filled() {
-        let err = read_auth_header_with(|buf| {
-            let data = vec![b'a'; BUFFER_SIZE - AUTH_HEADER_PREFIX.len()];
-            buf[..data.len()].copy_from_slice(&data);
+        let err = read_auth_header_with(|_| {
+            let data = vec![b'a'; BUFFER_SIZE - "Bearer ".len()];
             Ok(data.len())
         })
         .unwrap_err();
         let message = format!("{err:#}");
-        assert!(message.contains("OPENAI_API_KEY is too large to fit in the 512-byte buffer"));
+        let expected_error =
+            format!("API key is too large to fit in the {BUFFER_SIZE}-byte buffer");
+        assert!(message.contains(&expected_error));
     }
 
     #[test]
@@ -317,9 +318,7 @@ mod tests {
         .unwrap_err();
 
         let message = format!("{err:#}");
-        assert!(
-            message.contains("OPENAI_API_KEY may only contain ASCII letters, numbers, '-' or '_'")
-        );
+        assert!(message.contains("API key may only contain ASCII letters, numbers, '-' or '_'"));
     }
 
     #[test]
@@ -337,8 +336,6 @@ mod tests {
         .unwrap_err();
 
         let message = format!("{err:#}");
-        assert!(
-            message.contains("OPENAI_API_KEY may only contain ASCII letters, numbers, '-' or '_'")
-        );
+        assert!(message.contains("API key may only contain ASCII letters, numbers, '-' or '_'"));
     }
 }
