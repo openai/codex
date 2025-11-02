@@ -51,7 +51,7 @@ async fn thread_archive_moves_rollout_into_archived_directory() -> Result<()> {
     // Archive the thread.
     let archive_id = mcp
         .send_thread_archive_request(ThreadArchiveParams {
-            thread: thread.clone(),
+            thread_id: thread.id.clone(),
         })
         .await?;
     let archive_resp: JSONRPCResponse = timeout(

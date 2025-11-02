@@ -39,7 +39,7 @@ async fn thread_resume_returns_existing_thread() -> Result<()> {
     // Resume it via v2 API.
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
-            thread: thread.clone(),
+            thread_id: thread.id.clone(),
         })
         .await?;
     let resume_resp: JSONRPCResponse = timeout(

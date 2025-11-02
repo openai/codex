@@ -1050,7 +1050,7 @@ impl CodexMessageProcessor {
 
     async fn thread_archive(&self, request_id: RequestId, params: ThreadArchiveParams) {
         // Resolve conversation id from v2 thread id string.
-        let conversation_id = match ConversationId::from_string(&params.thread.id) {
+        let conversation_id = match ConversationId::from_string(&params.thread_id) {
             Ok(id) => id,
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -1307,7 +1307,7 @@ impl CodexMessageProcessor {
 
     async fn thread_resume(&self, request_id: RequestId, params: ThreadResumeParams) {
         // Convert thread id string into ConversationId.
-        let conversation_id = match ConversationId::from_string(&params.thread.id) {
+        let conversation_id = match ConversationId::from_string(&params.thread_id) {
             Ok(id) => id,
             Err(err) => {
                 let error = JSONRPCErrorError {
