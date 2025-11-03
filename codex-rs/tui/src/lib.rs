@@ -558,8 +558,8 @@ mod tests {
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ConfigToml;
     use codex_core::config::ProjectConfig;
-    use serial_test::serial;
     use codex_core::set_windows_sandbox_enabled;
+    use serial_test::serial;
     use tempfile::TempDir;
 
     #[test]
