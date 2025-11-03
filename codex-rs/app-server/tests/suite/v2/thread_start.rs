@@ -43,7 +43,6 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(resp)?;
     assert!(!thread.id.is_empty(), "thread id should not be empty");
-    assert!(thread.turn.is_empty(), "thread should start with no turns");
 
     // A corresponding thread/started notification should arrive.
     let notif: JSONRPCNotification = timeout(

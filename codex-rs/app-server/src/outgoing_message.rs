@@ -183,7 +183,7 @@ mod tests {
                     primary: Some(RateLimitWindow {
                         used_percent: 25,
                         window_duration_mins: Some(15),
-                        resets_at_ms: Some(123),
+                        resets_at: Some(123),
                     }),
                     secondary: None,
                 },
@@ -197,8 +197,8 @@ mod tests {
                 "params": {
                     "rateLimits": {
                         "primary": {
-                            "usedPercent": 25.0,
-                            "windowMinutes": 15,
+                            "usedPercent": 25,
+                            "windowDurationMins": 15,
                             "resetsAt": 123
                         },
                         "secondary": null

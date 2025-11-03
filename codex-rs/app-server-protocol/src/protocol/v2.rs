@@ -644,17 +644,17 @@ pub struct RateLimitWindow {
     /// Rolling window duration, in minutes.
     #[ts(type = "number | null")]
     pub window_duration_mins: Option<i64>,
-    /// Unix timestamp (milliseconds since epoch) when the window resets.
+    /// Unix timestamp (seconds since epoch) when the window resets.
     #[ts(type = "number | null")]
-    pub resets_at_ms: Option<i64>,
+    pub resets_at: Option<i64>,
 }
 
 impl From<codex_protocol::protocol::RateLimitWindow> for RateLimitWindow {
     fn from(value: codex_protocol::protocol::RateLimitWindow) -> Self {
         Self {
-            used_percent: value.used_percent as i64,
+            used_percent: value.used_percent.round() as i64,
             window_duration_mins: value.window_minutes,
-            resets_at_ms: value.resets_at.map(|ms| ms * 1000),
+            resets_at: value.resets_at,
         }
     }
 }
