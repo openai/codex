@@ -3,6 +3,7 @@ mod storage;
 use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 #[cfg(test)]
 use serial_test::serial;
 use std::env;
@@ -37,6 +38,38 @@ pub struct CodexAuth {
     pub(crate) client: CodexHttpClient,
 }
 
+#[derive(Debug)]
+enum RefreshTokenError {
+    RefreshTokenExpired,
+    Other(std::io::Error),
+}
+
+impl RefreshTokenError {
+    fn other(message: impl Into<String>) -> Self {
+        RefreshTokenError::Other(std::io::Error::other(message.into()))
+    }
+}
+
+impl From<std::io::Error> for RefreshTokenError {
+    fn from(value: std::io::Error) -> Self {
+        RefreshTokenError::Other(value)
+    }
+}
+
+impl From<reqwest::Error> for RefreshTokenError {
+    fn from(value: reqwest::Error) -> Self {
+        RefreshTokenError::Other(std::io::Error::other(value))
+    }
+}
+
+impl From<serde_json::Error> for RefreshTokenError {
+    fn from(value: serde_json::Error) -> Self {
+        RefreshTokenError::Other(std::io::Error::other(value))
+    }
+}
+
+const REFRESH_TOKEN_EXPIRED_MESSAGE: &str = "refresh token expired";
+
 impl PartialEq for CodexAuth {
     fn eq(&self, other: &Self) -> bool {
         self.mode == other.mode
@@ -47,6 +80,27 @@ impl PartialEq for CodexAuth {
 const TOKEN_REFRESH_INTERVAL: i64 = 8;
 
 impl CodexAuth {
+    fn clear_cached_auth(&self) -> std::io::Result<()> {
+        self.storage.delete()?;
+        if let Ok(mut auth_lock) = self.auth_dot_json.lock() {
+            *auth_lock = None;
+        }
+        Ok(())
+    }
+
+    fn handle_refresh_token_error(
+        &self,
+        error: RefreshTokenError,
+    ) -> std::io::Result<std::io::Error> {
+        match error {
+            RefreshTokenError::RefreshTokenExpired => {
+                self.clear_cached_auth()?;
+                Ok(std::io::Error::other(REFRESH_TOKEN_EXPIRED_MESSAGE))
+            }
+            RefreshTokenError::Other(inner) => Ok(inner),
+        }
+    }
+
     pub async fn refresh_token(&self) -> Result<String, std::io::Error> {
         tracing::info!("Refreshing token");
 
@@ -55,9 +109,13 @@ impl CodexAuth {
             .ok_or(std::io::Error::other("Token data is not available."))?;
         let token = token_data.refresh_token;
 
-        let refresh_response = try_refresh_token(token, &self.client)
-            .await
-            .map_err(std::io::Error::other)?;
+        let refresh_response = match try_refresh_token(token, &self.client).await {
+            Ok(response) => response,
+            Err(error) => {
+                let io_error = self.handle_refresh_token_error(error)?;
+                return Err(io_error);
+            }
+        };
 
         let updated = update_tokens(
             &self.storage,
@@ -99,15 +157,23 @@ impl CodexAuth {
                 ..
             }) => {
                 if last_refresh < Utc::now() - chrono::Duration::days(TOKEN_REFRESH_INTERVAL) {
-                    let refresh_response = tokio::time::timeout(
+                    let refresh_result = tokio::time::timeout(
                         Duration::from_secs(60),
                         try_refresh_token(tokens.refresh_token.clone(), &self.client),
                     )
-                    .await
-                    .map_err(|_| {
-                        std::io::Error::other("timed out while refreshing OpenAI API key")
-                    })?
-                    .map_err(std::io::Error::other)?;
+                    .await;
+                    let refresh_response = match refresh_result {
+                        Ok(Ok(response)) => response,
+                        Ok(Err(error)) => {
+                            let io_error = self.handle_refresh_token_error(error)?;
+                            return Err(io_error);
+                        }
+                        Err(_) => {
+                            return Err(std::io::Error::other(
+                                "timed out while refreshing OpenAI API key",
+                            ));
+                        }
+                    };
 
                     let updated_auth_dot_json = update_tokens(
                         &self.storage,
@@ -425,7 +491,7 @@ async fn update_tokens(
 async fn try_refresh_token(
     refresh_token: String,
     client: &CodexHttpClient,
-) -> std::io::Result<RefreshResponse> {
+) -> Result<RefreshResponse, RefreshTokenError> {
     let refresh_request = RefreshRequest {
         client_id: CLIENT_ID,
         grant_type: "refresh_token",
@@ -439,22 +505,51 @@ async fn try_refresh_token(
         .header("Content-Type", "application/json")
         .json(&refresh_request)
         .send()
-        .await
-        .map_err(std::io::Error::other)?;
+        .await?;
 
-    if response.status().is_success() {
-        let refresh_response = response
-            .json::<RefreshResponse>()
-            .await
-            .map_err(std::io::Error::other)?;
+    let status = response.status();
+    if status.is_success() {
+        let refresh_response = response.json::<RefreshResponse>().await?;
         Ok(refresh_response)
     } else {
-        Err(std::io::Error::other(format!(
-            "Failed to refresh token: {}: {}",
-            response.status(),
-            try_parse_error_message(&response.text().await.unwrap_or_default()),
-        )))
+        let body = response.bytes().await?;
+        if is_refresh_token_expired_response(&body) {
+            return Err(RefreshTokenError::RefreshTokenExpired);
+        }
+
+        let body_text = String::from_utf8_lossy(&body);
+        let parsed_message = try_parse_error_message(&body_text);
+        let trimmed = parsed_message.trim();
+        let message = if trimmed.is_empty() {
+            format!("Failed to refresh token: {status}")
+        } else {
+            format!("Failed to refresh token: {status}: {trimmed}")
+        };
+        Err(RefreshTokenError::other(message))
     }
+}
+
+fn is_refresh_token_expired_response(body: &[u8]) -> bool {
+    if let Ok(value) = serde_json::from_slice::<Value>(body) {
+        let code_matches = ["/error/code", "/error/error", "/error", "/code"]
+            .iter()
+            .any(|pointer| {
+                value.pointer(pointer).and_then(Value::as_str) == Some("refresh_token_expired")
+            });
+        if code_matches {
+            return true;
+        }
+
+        if value
+            .pointer("/error_description")
+            .and_then(Value::as_str)
+            .is_some_and(|desc| desc.contains("refresh_token_expired"))
+        {
+            return true;
+        }
+    }
+
+    String::from_utf8_lossy(body).contains("refresh_token_expired")
 }
 
 #[derive(Serialize)]
@@ -495,6 +590,9 @@ mod tests {
     use crate::token_data::KnownPlan;
     use crate::token_data::PlanType;
 
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
     use base64::Engine;
     use codex_protocol::config_types::ForcedLoginMethod;
     use pretty_assertions::assert_eq;
@@ -532,6 +630,38 @@ mod tests {
         assert_eq!(tokens.id_token.raw_jwt, fake_jwt);
         assert_eq!(tokens.access_token, "new-access-token");
         assert_eq!(tokens.refresh_token, "new-refresh-token");
+    }
+
+    #[test]
+    fn handle_refresh_token_error_clears_auth_state() -> std::io::Result<()> {
+        let dir = tempdir()?;
+        write_auth_file(
+            AuthFileParams {
+                openai_api_key: None,
+                chatgpt_plan_type: "pro".to_string(),
+                chatgpt_account_id: None,
+            },
+            dir.path(),
+        )?;
+
+        let storage = create_auth_storage(dir.path().to_path_buf(), AuthCredentialsStoreMode::File);
+        let auth_dot_json = storage.load()?.expect("auth.json should exist after setup");
+
+        let auth = CodexAuth {
+            mode: AuthMode::ChatGPT,
+            api_key: None,
+            auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
+            storage: storage.clone(),
+            client: crate::default_client::create_client(),
+        };
+
+        let error = auth
+            .handle_refresh_token_error(RefreshTokenError::RefreshTokenExpired)?
+            .to_string();
+        assert_eq!(error, REFRESH_TOKEN_EXPIRED_MESSAGE);
+        assert!(storage.load()?.is_none(), "storage should be cleared");
+        assert!(auth.get_current_auth_json().is_none());
+        Ok(())
     }
 
     #[test]
@@ -976,9 +1106,16 @@ impl AuthManager {
                 self.reload();
                 Ok(Some(token))
             }
-            Err(e) => {
-                tracing::error!("Failed to refresh token: {}", e);
-                Err(e)
+            Err(err) => {
+                if err.to_string() == REFRESH_TOKEN_EXPIRED_MESSAGE
+                    && let Err(logout_err) = self.logout()
+                {
+                    tracing::warn!(
+                        "Failed to clear auth after refresh token expired: {logout_err}"
+                    );
+                }
+                tracing::error!("Failed to refresh token: {err}");
+                Err(err)
             }
         }
     }
