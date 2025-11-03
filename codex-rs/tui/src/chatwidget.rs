@@ -2872,13 +2872,11 @@ impl ChatWidget {
             progress_percent: Some(0),
         });
 
-        let annotated_scope_prompt = if matches!(mode, SecurityReviewMode::Bugs) {
-            scope_prompt
-                .as_ref()
-                .map(|prompt| annotate_scope_prompt(prompt.as_str()))
-        } else {
-            None
-        };
+        // Enable auto-scope when a scope prompt is provided (options 3 and 4).
+        // We annotate the prompt for both Full and Bugs modes.
+        let annotated_scope_prompt = scope_prompt
+            .as_ref()
+            .map(|prompt| annotate_scope_prompt(prompt.as_str()));
 
         let request = SecurityReviewRequest {
             repo_path,

@@ -1429,8 +1429,7 @@ pub(crate) async fn run_security_review(
     let mut include_paths = request.include_paths.clone();
     let git_link_info = build_git_link_info(&repo_path).await;
 
-    if matches!(request.mode, SecurityReviewMode::Bugs)
-        && include_paths.is_empty()
+    if include_paths.is_empty()
         && let Some(prompt) = request.auto_scope_prompt.as_ref().and_then(|value| {
             let trimmed = value.trim();
             if trimmed.is_empty() {
@@ -1440,11 +1439,8 @@ pub(crate) async fn run_security_review(
             }
         })
     {
-        let auto_scope_model = if request.triage_model.trim().is_empty() {
-            AUTO_SCOPE_MODEL
-        } else {
-            request.triage_model.as_str()
-        };
+        // Always use the fast model for auto-scope regardless of triage_model.
+        let auto_scope_model = AUTO_SCOPE_MODEL;
 
         record(format!(
             "Auto-detecting review scope from user prompt: {prompt}"
@@ -3168,10 +3164,13 @@ fn parse_include_flag(value: &Value) -> Option<bool> {
 }
 
 fn parse_raw_auto_scope_selection(map: &Map<String, Value>) -> Option<RawAutoScopeSelection> {
+    // Be tolerant: default to include=true when the model omits the flag.
+    // Older prompts mandated an explicit include flag, but newer responses
+    // often omit it when the intent is clearly to include the path.
     let include = map
         .get("include")
         .and_then(parse_include_flag)
-        .unwrap_or(false);
+        .unwrap_or(true);
     if !include {
         return None;
     }
@@ -3861,6 +3860,18 @@ ALL
 
         let result = parse_paths(input).expect("expected selections");
         assert_eq!(result, vec![("backend".to_string(), None)],);
+    }
+
+    #[test]
+    fn defaults_to_include_when_flag_missing() {
+        // Model may omit `include`; treat as include=true.
+        let input = r#"
+{"path": "api"}
+{"path": "docs", "include": false}
+"#;
+
+        let result = parse_paths(input).expect("expected selections");
+        assert_eq!(result, vec![("api".to_string(), None)],);
     }
 }
 
