@@ -1460,6 +1460,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "mcp-types",
+ "once_cell",
  "opentelemetry-appender-tracing",
  "pathdiff",
  "pretty_assertions",

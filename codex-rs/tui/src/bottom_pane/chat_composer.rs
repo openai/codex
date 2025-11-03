@@ -36,7 +36,7 @@ use crate::bottom_pane::prompt_args::prompt_argument_names;
 use crate::bottom_pane::prompt_args::prompt_command_with_arg_placeholders;
 use crate::bottom_pane::prompt_args::prompt_has_numeric_placeholders;
 use crate::slash_command::SlashCommand;
-use crate::slash_command::built_in_slash_commands;
+use crate::slash_command::resolve_slash_command;
 use crate::style::user_message_style;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
@@ -932,9 +932,7 @@ impl ChatComposer {
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
                 if let Some((name, rest)) = parse_slash_name(first_line)
                     && rest.is_empty()
-                    && let Some((_n, cmd)) = built_in_slash_commands()
-                        .into_iter()
-                        .find(|(n, _)| *n == name)
+                    && let Some(cmd) = resolve_slash_command(name)
                 {
                     self.textarea.set_text("");
                     return (InputResult::Command(cmd), true);
@@ -1003,9 +1001,7 @@ impl ChatComposer {
                 if let Some((name, _rest)) = parse_slash_name(&text) {
                     let treat_as_plain_text = input_starts_with_space || name.contains('/');
                     if !treat_as_plain_text {
-                        let is_builtin = built_in_slash_commands()
-                            .into_iter()
-                            .any(|(command_name, _)| command_name == name);
+                        let is_builtin = resolve_slash_command(name).is_some();
                         let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
                         let is_known_prompt = name
                             .strip_prefix(&prompt_prefix)

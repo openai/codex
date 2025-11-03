@@ -71,6 +71,7 @@ strum_macros = { workspace = true }
 supports-color = { workspace = true }
 tempfile = { workspace = true }
 textwrap = { workspace = true }
+once_cell = "1"
 tree-sitter-highlight = { workspace = true }
 tree-sitter-bash = { workspace = true }
 tokio = { workspace = true, features = [

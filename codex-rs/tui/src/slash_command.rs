@@ -24,6 +24,7 @@ pub enum SlashCommand {
     Status,
     Mcp,
     Logout,
+    #[strum(serialize = "exit")]
     Quit,
     Exit,
     Feedback,
@@ -83,6 +84,22 @@ impl SlashCommand {
         }
     }
 
+    /// Additional slash names that map to this command.
+    pub fn aliases(self) -> &'static [&'static str] {
+        match self {
+            SlashCommand::Quit => &["exit", "e"],
+            _ => &[],
+        }
+    }
+
+    /// Return true if `name` matches this command's canonical name or an alias.
+    pub fn matches_name(self, name: &str) -> bool {
+        if self.command() == name {
+            return true;
+        }
+        self.aliases().contains(&name)
+    }
+
     fn is_visible(self) -> bool {
         match self {
             SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
@@ -97,4 +114,10 @@ pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
         .filter(|command| command.is_visible())
         .map(|c| (c.command(), c))
         .collect()
+}
+
+/// Resolve a slash command name (including aliases) to the corresponding command.
+pub fn resolve_slash_command(name: &str) -> Option<SlashCommand> {
+    use std::str::FromStr;
+    SlashCommand::from_str(name).ok()
 }
