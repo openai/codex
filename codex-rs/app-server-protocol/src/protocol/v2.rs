@@ -377,17 +377,17 @@ pub enum TurnStatus {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
-    // Override the working directory for this turn and subsequent turns.
+    /// Override the working directory for this turn and subsequent turns.
     pub cwd: Option<PathBuf>,
-    // Override the approval policy for this turn and subsequent turns.
+    /// Override the approval policy for this turn and subsequent turns.
     pub approval_policy: Option<AskForApproval>,
-    // Override the sandbox policy for this turn and subsequent turns.
+    /// Override the sandbox policy for this turn and subsequent turns.
     pub sandbox_policy: Option<SandboxPolicy>,
-    // Override the model for this turn and subsequent turns.
+    /// Override the model for this turn and subsequent turns.
     pub model: Option<String>,
-    // Override the reasoning effort for this turn and subsequent turns.
+    /// Override the reasoning effort for this turn and subsequent turns.
     pub effort: Option<ReasoningEffort>,
-    // Override the reasoning summary for this turn and subsequent turns.
+    /// Override the reasoning summary for this turn and subsequent turns.
     pub summary: Option<ReasoningSummary>,
 }
 
@@ -586,22 +586,7 @@ pub struct TurnCompletedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct TurnFailedNotification {
-    // TODO: should the error be stored on the Turn object, and we return that instead?
-    pub error: TurnError,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
 pub struct ItemStartedNotification {
-    pub item: ThreadItem,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ItemUpdatedNotification {
     pub item: ThreadItem,
 }
 
@@ -610,13 +595,6 @@ pub struct ItemUpdatedNotification {
 #[ts(export_to = "v2/")]
 pub struct ItemCompletedNotification {
     pub item: ThreadItem,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadErrorNotification {
-    pub message: String,
 }
 
 // Item-specific progress notifications

@@ -513,11 +513,6 @@ server_notification_definitions! {
     #[strum(serialize = "thread/started")]
     ThreadStarted(v2::ThreadStartedNotification),
 
-    #[serde(rename = "thread/error")]
-    #[ts(rename = "thread/error")]
-    #[strum(serialize = "thread/error")]
-    ThreadError(v2::ThreadErrorNotification),
-
     #[serde(rename = "turn/started")]
     #[ts(rename = "turn/started")]
     #[strum(serialize = "turn/started")]
@@ -528,20 +523,10 @@ server_notification_definitions! {
     #[strum(serialize = "turn/completed")]
     TurnCompleted(v2::TurnCompletedNotification),
 
-    #[serde(rename = "turn/failed")]
-    #[ts(rename = "turn/failed")]
-    #[strum(serialize = "turn/failed")]
-    TurnFailed(v2::TurnFailedNotification),
-
     #[serde(rename = "item/started")]
     #[ts(rename = "item/started")]
     #[strum(serialize = "item/started")]
     ItemStarted(v2::ItemStartedNotification),
-
-    #[serde(rename = "item/updated")]
-    #[ts(rename = "item/updated")]
-    #[strum(serialize = "item/updated")]
-    ItemUpdated(v2::ItemUpdatedNotification),
 
     #[serde(rename = "item/completed")]
     #[ts(rename = "item/completed")]
