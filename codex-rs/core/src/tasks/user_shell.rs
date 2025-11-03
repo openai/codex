@@ -1,28 +1,26 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::user_input::UserInput;
-use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use uuid::Uuid;
 
 use crate::codex::TurnContext;
+use crate::exec::SandboxType;
+use crate::exec::StdoutStream;
+use crate::exec::execute_exec_env;
+use crate::exec_env::create_env;
 use crate::protocol::EventMsg;
 use crate::protocol::TaskStartedEvent;
+use crate::sandboxing::ExecEnv;
 use crate::state::TaskKind;
-use crate::tools::context::ToolPayload;
-use crate::tools::parallel::ToolCallRuntime;
-use crate::tools::router::ToolCall;
-use crate::tools::router::ToolRouter;
-use crate::turn_diff_tracker::TurnDiffTracker;
+use crate::tools::events::ToolEmitter;
+use crate::tools::events::ToolEventCtx;
+use crate::tools::sandboxing::ToolError;
 
 use super::SessionTask;
 use super::SessionTaskContext;
-
-const USER_SHELL_TOOL_NAME: &str = "local_shell";
-
 #[derive(Clone)]
 pub(crate) struct UserShellCommandTask {
     command: String,
@@ -78,34 +76,40 @@ impl SessionTask for UserShellCommandTask {
             }
         };
 
-        let params = ShellToolCallParams {
-            command: shell_invocation,
-            workdir: None,
+        let command = shell_invocation;
+        let cwd = turn_context.resolve_path(None);
+        let call_id = Uuid::new_v4().to_string();
+        let emitter = ToolEmitter::shell(command.clone(), cwd.clone(), true);
+        let event_ctx = ToolEventCtx::new(session.as_ref(), turn_context.as_ref(), &call_id, None);
+        emitter.begin(event_ctx).await;
+
+        let exec_env = ExecEnv {
+            command,
+            cwd: cwd.clone(),
+            env: create_env(&turn_context.shell_environment_policy),
             timeout_ms: None,
+            sandbox: SandboxType::None,
             with_escalated_permissions: None,
             justification: None,
+            arg0: None,
         };
 
-        let tool_call = ToolCall {
-            tool_name: USER_SHELL_TOOL_NAME.to_string(),
-            call_id: Uuid::new_v4().to_string(),
-            payload: ToolPayload::LocalShell {
-                params,
-                is_user_shell_command: true,
-            },
+        let stdout_stream = StdoutStream {
+            sub_id: turn_context.sub_id.clone(),
+            call_id: call_id.clone(),
+            tx_event: session.get_tx_event(),
         };
 
-        let router = Arc::new(ToolRouter::from_config(&turn_context.tools_config, None));
-        let tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
-        let runtime = ToolCallRuntime::new(
-            Arc::clone(&router),
-            Arc::clone(&session),
-            Arc::clone(&turn_context),
-            Arc::clone(&tracker),
-        );
+        let exec_result = tokio::select! {
+            _ = cancellation_token.cancelled() => {
+                return None;
+            }
+            res = execute_exec_env(exec_env, &turn_context.sandbox_policy, Some(stdout_stream)) => res,
+        };
 
-        if let Err(err) = runtime
-            .handle_tool_call(tool_call, cancellation_token)
+        let event_ctx = ToolEventCtx::new(session.as_ref(), turn_context.as_ref(), &call_id, None);
+        if let Err(err) = emitter
+            .finish(event_ctx, exec_result.map_err(ToolError::Codex))
             .await
         {
             error!("user shell command failed: {err:?}");
