@@ -292,7 +292,7 @@ fn detect_namespace(path: &Path, stem: &str) -> (Option<String>, String) {
     if let Some(parent) = path.parent()
         && parent.file_name().and_then(OsStr::to_str) == Some("v2")
     {
-        return (Some("v2".to_string()), stem.to_string());
+        return (Some("v2".to_string()), stem.trim().to_string());
     }
     split_namespace(stem)
 }
@@ -301,11 +301,12 @@ fn detect_namespace(path: &Path, stem: &str) -> (Option<String>, String) {
 fn split_namespace(name: &str) -> (Option<String>, String) {
     if let Some(idx) = name.find("::") {
         let (ns, rest) = name.split_at(idx);
-        // rest starts with "::"
-        let typ = &rest[2..];
+        // rest starts with "::"; trim components to handle stringify! spacing (e.g., "v2 :: Type").
+        let ns = ns.trim();
+        let typ = rest[2..].trim();
         return (Some(ns.to_string()), typ.to_string());
     }
-    (None, name.to_string())
+    (None, name.trim().to_string())
 }
 
 /// Recursively rewrite $ref values that point at "#/definitions/..." so that
