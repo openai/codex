@@ -1140,15 +1140,13 @@ impl CodexMessageProcessor {
         let canonical_sessions_dir = match tokio::fs::canonicalize(&rollout_folder).await {
             Ok(path) => path,
             Err(err) => {
-                let error = JSONRPCErrorError {
+                return Err(JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!(
                         "failed to archive conversation: unable to resolve sessions directory: {err}"
                     ),
                     data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
+                });
             }
         };
         let canonical_rollout_path = tokio::fs::canonicalize(rollout_path).await;
@@ -1157,16 +1155,14 @@ impl CodexMessageProcessor {
         {
             path
         } else {
-            let error = JSONRPCErrorError {
+            return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: format!(
                     "rollout path `{}` must be in sessions directory",
                     rollout_path.display()
                 ),
                 data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
+            });
         };
 
         // Verify file name matches conversation id.
