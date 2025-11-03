@@ -1,0 +1,128 @@
+{
+  "name": "patch_txt",
+  "description": "Edit and patch text and markdown files for book writing. Supports multiple edit modes: search/replace, line range replacement, append/prepend, insert before/after markers, and unified diffs.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "file": {
+        "type": "string",
+        "description": "Path to the .md or .txt file to edit"
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "search_replace",
+          "line_range",
+          "append",
+          "prepend",
+          "insert_after",
+          "insert_before",
+          "unified_diff"
+        ],
+        "description": "The type of edit operation to perform"
+      },
+      "search": {
+        "type": "string",
+        "description": "Text to search for (required for search_replace mode)"
+      },
+      "replace": {
+        "type": "string",
+        "description": "Text to replace with (required for search_replace mode)"
+      },
+      "count": {
+        "type": "integer",
+        "description": "Maximum number of replacements, -1 for all (search_replace mode)",
+        "default": -1
+      },
+      "case_sensitive": {
+        "type": "boolean",
+        "description": "Whether search is case-sensitive (search_replace mode)",
+        "default": true
+      },
+      "start": {
+        "type": "integer",
+        "description": "Starting line number, 1-indexed (required for line_range mode)"
+      },
+      "end": {
+        "type": "integer",
+        "description": "Ending line number, 1-indexed, inclusive (required for line_range mode)"
+      },
+      "content": {
+        "type": "string",
+        "description": "Content to insert/append/prepend/replace with (required for most modes)"
+      },
+      "marker": {
+        "type": "string",
+        "description": "Text marker to insert before/after (required for insert_after/insert_before modes)"
+      },
+      "first_only": {
+        "type": "boolean",
+        "description": "Only affect first occurrence of marker (insert modes)",
+        "default": true
+      },
+      "diff": {
+        "type": "string",
+        "description": "Unified diff text (required for unified_diff mode)"
+      },
+      "dry_run": {
+        "type": "boolean",
+        "description": "Preview changes without applying them",
+        "default": false
+      },
+      "no_backup": {
+        "type": "boolean",
+        "description": "Do not create .bak backup file",
+        "default": false
+      }
+    },
+    "required": ["file", "mode"]
+  },
+  "examples": [
+    {
+      "description": "Fix a typo in a book chapter",
+      "input": {
+        "file": "chapter1.md",
+        "mode": "search_replace",
+        "search": "teh",
+        "replace": "the"
+      }
+    },
+    {
+      "description": "Replace lines 10-15 with new content",
+      "input": {
+        "file": "chapter2.md",
+        "mode": "line_range",
+        "start": 10,
+        "end": 15,
+        "content": "This is the new paragraph that replaces lines 10-15.\n\nIt can span multiple paragraphs."
+      }
+    },
+    {
+      "description": "Add a new chapter to the end of the book",
+      "input": {
+        "file": "book.md",
+        "mode": "append",
+        "content": "\n## Chapter 5: The Final Chapter\n\nThis is where everything comes together..."
+      }
+    },
+    {
+      "description": "Insert a note after a specific heading",
+      "input": {
+        "file": "notes.md",
+        "mode": "insert_after",
+        "marker": "## Important Points",
+        "content": "> **Note:** This section was updated on 2025-01-15"
+      }
+    },
+    {
+      "description": "Preview changes without applying them",
+      "input": {
+        "file": "draft.txt",
+        "mode": "search_replace",
+        "search": "old phrase",
+        "replace": "new phrase",
+        "dry_run": true
+      }
+    }
+  ]
+}
