@@ -139,7 +139,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         .send_thread_list_request(ThreadListParams {
             cursor: None,
             limit: Some(2),
-            model_providers: None,
+            model_providers: Some(vec!["mock_provider".to_string()]),
         })
         .await?;
     let page1_resp: JSONRPCResponse = timeout(
@@ -159,7 +159,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         .send_thread_list_request(ThreadListParams {
             cursor: Some(cursor1),
             limit: Some(2),
-            model_providers: None,
+            model_providers: Some(vec!["mock_provider".to_string()]),
         })
         .await?;
     let page2_resp: JSONRPCResponse = timeout(

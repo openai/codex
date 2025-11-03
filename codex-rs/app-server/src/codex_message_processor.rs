@@ -113,7 +113,6 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_utils_json_to_toml::json_to_toml;
@@ -1298,81 +1297,25 @@ impl CodexMessageProcessor {
 
         let page_size = limit.unwrap_or(25).max(1) as usize;
 
-        // Decode cursor string to Cursor via serde (Cursor implements Deserialize from string)
-        let cursor_obj: Option<RolloutCursor> = match cursor {
-            Some(s) => serde_json::from_str::<RolloutCursor>(&format!("\"{s}\"")).ok(),
-            None => None,
-        };
-        let cursor_ref = cursor_obj.as_ref();
-
-        // v2: include all providers by default; if provided, honor non-empty filters.
-        let model_provider_vec = match model_providers {
-            Some(v) if v.is_empty() => None,
-            Some(v) => Some(v),
-            None => None,
-        };
-        let model_provider_slice = model_provider_vec.as_deref();
-        let fallback_provider = self.config.model_provider_id.clone();
-
-        let page = match RolloutRecorder::list_conversations(
-            &self.config.codex_home,
-            page_size,
-            cursor_ref,
-            INTERACTIVE_SESSION_SOURCES,
-            model_provider_slice,
-            fallback_provider.as_str(),
-        )
-        .await
+        // Reuse canonical legacy listing logic and adapt results to v2 types.
+        let (summaries, next_cursor) = match self
+            .list_conversations_common(page_size, cursor, model_providers)
+            .await
         {
-            Ok(p) => p,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to list threads: {err}"),
-                    data: None,
-                };
+            Ok(r) => r,
+            Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
         };
 
-        let mut data = Vec::new();
-        for item in page.items.into_iter() {
-            if let Some(summary) =
-                extract_conversation_summary(item.path.clone(), &item.head, &fallback_provider)
-            {
-                data.push(Thread {
-                    id: summary.conversation_id.to_string(),
-                    turn: Vec::<Turn>::new(),
-                });
-                continue;
-            }
-            if let Some(first) = item.head.first() {
-                if let Ok(meta) = serde_json::from_value::<SessionMeta>(first.clone()) {
-                    data.push(Thread {
-                        id: meta.id.to_string(),
-                        turn: Vec::<Turn>::new(),
-                    });
-                    continue;
-                }
-                if let Ok(line) = serde_json::from_value::<SessionMetaLine>(first.clone()) {
-                    data.push(Thread {
-                        id: line.meta.id.to_string(),
-                        turn: Vec::<Turn>::new(),
-                    });
-                    continue;
-                }
-            }
-        }
-
-        // Encode next_cursor as a plain string
-        let next_cursor = match page.next_cursor {
-            Some(c) => match serde_json::to_value(&c) {
-                Ok(serde_json::Value::String(s)) => Some(s),
-                _ => None,
-            },
-            None => None,
-        };
+        let data = summaries
+            .into_iter()
+            .map(|s| Thread {
+                id: s.conversation_id.to_string(),
+                turn: Vec::<Turn>::new(),
+            })
+            .collect();
 
         let response = ThreadListResponse { data, next_cursor };
         self.outgoing.send_response(request_id, response).await;
@@ -1560,16 +1503,40 @@ impl CodexMessageProcessor {
         let ListConversationsParams {
             page_size,
             cursor,
-            model_providers: model_provider,
+            model_providers,
         } = params;
-        let page_size = page_size.unwrap_or(25);
+
+        let page_size = page_size.unwrap_or(25).max(1);
+
+        let (items, next_cursor) = match self
+            .list_conversations_common(page_size, cursor, model_providers)
+            .await
+        {
+            Ok(r) => r,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let response = ListConversationsResponse { items, next_cursor };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn list_conversations_common(
+        &self,
+        page_size: usize,
+        cursor: Option<String>,
+        model_providers: Option<Vec<String>>,
+    ) -> Result<(Vec<ConversationSummary>, Option<String>), JSONRPCErrorError> {
         // Decode the optional cursor string to a Cursor via serde (Cursor implements Deserialize from string)
         let cursor_obj: Option<RolloutCursor> = match cursor {
             Some(s) => serde_json::from_str::<RolloutCursor>(&format!("\"{s}\"")).ok(),
             None => None,
         };
         let cursor_ref = cursor_obj.as_ref();
-        let model_provider_filter = match model_provider {
+
+        let model_provider_filter = match model_providers {
             Some(providers) => {
                 if providers.is_empty() {
                     None
@@ -1579,7 +1546,6 @@ impl CodexMessageProcessor {
             }
             None => Some(vec![self.config.model_provider_id.clone()]),
         };
-        let model_provider_slice = model_provider_filter.as_deref();
         let fallback_provider = self.config.model_provider_id.clone();
 
         let page = match RolloutRecorder::list_conversations(
@@ -1587,20 +1553,18 @@ impl CodexMessageProcessor {
             page_size,
             cursor_ref,
             INTERACTIVE_SESSION_SOURCES,
-            model_provider_slice,
+            model_provider_filter.as_deref(),
             fallback_provider.as_str(),
         )
         .await
         {
             Ok(p) => p,
             Err(err) => {
-                let error = JSONRPCErrorError {
+                return Err(JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!("failed to list conversations: {err}"),
                     data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
+                });
             }
         };
 
@@ -1608,7 +1572,7 @@ impl CodexMessageProcessor {
             .items
             .into_iter()
             .filter_map(|it| extract_conversation_summary(it.path, &it.head, &fallback_provider))
-            .collect();
+            .collect::<Vec<_>>();
 
         // Encode next_cursor as a plain string
         let next_cursor = match page.next_cursor {
@@ -1619,8 +1583,7 @@ impl CodexMessageProcessor {
             None => None,
         };
 
-        let response = ListConversationsResponse { items, next_cursor };
-        self.outgoing.send_response(request_id, response).await;
+        Ok((items, next_cursor))
     }
 
     async fn list_models(&self, request_id: RequestId, params: ModelListParams) {
