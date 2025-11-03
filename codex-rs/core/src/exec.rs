@@ -171,8 +171,8 @@ async fn exec_windows_sandbox(
     params: ExecParams,
     sandbox_policy: &SandboxPolicy,
 ) -> Result<RawExecToolCallOutput> {
-    use codex_windows_sandbox::run_windows_sandbox_capture;
     use crate::config::find_codex_home;
+    use codex_windows_sandbox::run_windows_sandbox_capture;
 
     let ExecParams {
         command,
