@@ -1,27 +1,26 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::user_input::UserInput;
-use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use uuid::Uuid;
 
 use crate::codex::TurnContext;
+use crate::exec::SandboxType;
+use crate::exec::StdoutStream;
+use crate::exec_env::create_env;
 use crate::protocol::EventMsg;
 use crate::protocol::TaskStartedEvent;
+use crate::sandboxing::ExecEnv;
 use crate::state::TaskKind;
-use crate::tools::context::ToolPayload;
-use crate::tools::parallel::ToolCallRuntime;
-use crate::tools::router::ToolCall;
-use crate::tools::router::ToolRouter;
-use crate::turn_diff_tracker::TurnDiffTracker;
+use crate::tools::events::ToolEmitter;
+use crate::tools::events::ToolEventCtx;
+use crate::tools::sandboxing::ToolError;
 
 use super::SessionTask;
 use super::SessionTaskContext;
 
-const USER_SHELL_TOOL_NAME: &str = "local_shell";
 
 #[derive(Clone)]
 pub(crate) struct UserShellCommandTask {
@@ -53,9 +52,8 @@ impl SessionTask for UserShellCommandTask {
         let session = session.clone_session();
         session.send_event(turn_context.as_ref(), event).await;
 
-        // Execute the user's script under their default shell when known; this
-        // allows commands that use shell features (pipes, &&, redirects, etc.).
-        // We do not source rc files or otherwise reformat the script.
+        // Execute the user's script under their default shell when known. Use
+        // execute_exec_env directly to avoid approvals/sandbox overhead.
         let shell_invocation = match session.user_shell() {
             crate::shell::Shell::Zsh(zsh) => vec![
                 zsh.shell_path.clone(),
@@ -78,38 +76,56 @@ impl SessionTask for UserShellCommandTask {
             }
         };
 
-        let params = ShellToolCallParams {
+        // Emit shell begin event to keep UI consistent with tool runs.
+        let call_id = Uuid::new_v4().to_string();
+        let emitter = ToolEmitter::shell(shell_invocation.clone(), turn_context.cwd.clone(), true);
+        let event_ctx = ToolEventCtx::new(session.as_ref(), turn_context.as_ref(), &call_id, None);
+        emitter.begin(event_ctx).await;
+
+        let env = ExecEnv {
             command: shell_invocation,
-            workdir: None,
+            cwd: turn_context.cwd.clone(),
+            env: create_env(&turn_context.shell_environment_policy),
             timeout_ms: None,
+            sandbox: SandboxType::None,
             with_escalated_permissions: None,
             justification: None,
+            arg0: None,
         };
+        let stream = Some(StdoutStream {
+            sub_id: turn_context.sub_id.clone(),
+            call_id: call_id.clone(),
+            tx_event: session.get_tx_event(),
+        });
 
-        let tool_call = ToolCall {
-            tool_name: USER_SHELL_TOOL_NAME.to_string(),
-            call_id: Uuid::new_v4().to_string(),
-            payload: ToolPayload::LocalShell {
-                params,
-                is_user_shell_command: true,
-            },
-        };
+        let policy = turn_context.sandbox_policy.clone();
+        let mut exec_task = tokio::spawn(async move {
+            crate::exec::execute_exec_env(env, &policy, stream).await
+        });
 
-        let router = Arc::new(ToolRouter::from_config(&turn_context.tools_config, None));
-        let tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
-        let runtime = ToolCallRuntime::new(
-            Arc::clone(&router),
-            Arc::clone(&session),
-            Arc::clone(&turn_context),
-            Arc::clone(&tracker),
-        );
-
-        if let Err(err) = runtime
-            .handle_tool_call(tool_call, cancellation_token)
-            .await
-        {
-            error!("user shell command failed: {err:?}");
+        tokio::select! {
+            res = &mut exec_task => {
+                match res {
+                    Ok(Ok(output)) => {
+                        let event_ctx = ToolEventCtx::new(session.as_ref(), turn_context.as_ref(), &call_id, None);
+                        let _ = emitter.finish(event_ctx, Ok(output)).await;
+                    }
+                    Ok(Err(err)) => {
+                        let event_ctx = ToolEventCtx::new(session.as_ref(), turn_context.as_ref(), &call_id, None);
+                        let _ = emitter.finish(event_ctx, Err(ToolError::Codex(err))).await;
+                    }
+                    Err(join_err) => {
+                        error!("user shell exec task join error: {join_err:?}");
+                    }
+                }
+            }
+            _ = cancellation_token.cancelled() => {
+                exec_task.abort();
+                // Session will emit TurnAborted; do not finish emitter to avoid
+                // emitting ExecCommandEnd for an interrupted run.
+            }
         }
+
         None
     }
 }
