@@ -22,3 +22,4 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
 ] }
 wiremock = { workspace = true }
+uuid = { workspace = true }

@@ -13,7 +13,7 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn thread_resume_returns_existing_thread() -> Result<()> {
     let server = create_mock_chat_completions_server(vec![]).await;
     let codex_home = TempDir::new()?;
@@ -25,7 +25,7 @@ async fn thread_resume_returns_existing_thread() -> Result<()> {
     // Start a thread.
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("o3".to_string()),
+            model: Some("gpt-5-codex".to_string()),
             ..Default::default()
         })
         .await?;
@@ -63,7 +63,7 @@ fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io
             r#"
 model = "mock-model"
 approval_policy = "never"
-sandbox_mode = "danger-full-access"
+sandbox_mode = "workspace-write"
 
 model_provider = "mock_provider"
 

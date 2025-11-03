@@ -1,3 +1,4 @@
+mod model_list;
 mod thread_archive;
 mod thread_list;
 mod thread_resume;

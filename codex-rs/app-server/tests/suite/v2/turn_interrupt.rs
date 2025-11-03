@@ -19,7 +19,7 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     // Use a portable sleep command to keep the turn running.
     #[cfg(target_os = "windows")]
@@ -104,8 +104,6 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     let _resp: TurnInterruptResponse = to_response::<TurnInterruptResponse>(interrupt_resp)?;
 
     // No fields to assert on; successful deserialization confirms proper response shape.
-
-    drop(server);
     Ok(())
 }
 
@@ -118,7 +116,7 @@ fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io
             r#"
 model = "mock-model"
 approval_policy = "never"
-sandbox_mode = "danger-full-access"
+sandbox_mode = "workspace-write"
 
 model_provider = "mock_provider"
 

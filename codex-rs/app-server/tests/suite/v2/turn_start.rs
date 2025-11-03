@@ -21,6 +21,7 @@ use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use std::env;
 use std::path::Path;
@@ -29,7 +30,7 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<()> {
     // Provide a mock server and config so model wiring is valid.
     // Three Codex turns hit the mock model (session start + two turn/start calls).
@@ -136,11 +137,10 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     )
     .await??;
 
-    drop(server);
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn turn_start_accepts_local_image_input() -> Result<()> {
     // Two Codex turns hit the mock model (session start + turn/start).
     let responses = vec![
@@ -194,12 +194,10 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
     assert!(!turn.id.is_empty());
 
     // This test only validates that turn/start responds and returns a turn.
-
-    drop(server);
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!("Skipping v2 exec approval toggle test due to sandbox network disabled.");
@@ -335,16 +333,14 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     )
     .await??;
 
-    drop(server);
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
-    if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!("Skipping v2 sandbox/cwd test due to sandbox network disabled.");
-        return Ok(());
-    }
+    // When returning Result from a test, pass an Ok(()) to the skip macro
+    // so the early return type matches. The no-arg form returns unit.
+    skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
@@ -431,7 +427,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     )
     .await??;
 
-    // second turn with danger-full-access and second_cwd, ensure exec begins in second_cwd
+    // second turn with workspace-write and second_cwd, ensure exec begins in second_cwd
     let second_turn = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
@@ -482,7 +478,6 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     )
     .await??;
 
-    drop(server);
     Ok(())
 }
 
@@ -495,7 +490,7 @@ fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()
             r#"
 model = "mock-model"
 approval_policy = "never"
-sandbox_mode = "danger-full-access"
+sandbox_mode = "workspace-write"
 
 model_provider = "mock_provider"
 
@@ -518,7 +513,7 @@ fn create_config_toml_untrusted(codex_home: &Path, server_uri: &str) -> std::io:
             r#"
 model = "mock-model"
 approval_policy = "untrusted"
-sandbox_mode = "danger-full-access"
+sandbox_mode = "workspace-write"
 
 model_provider = "mock_provider"
 
