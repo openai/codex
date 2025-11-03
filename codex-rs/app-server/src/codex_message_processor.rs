@@ -4,6 +4,7 @@ use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
@@ -341,6 +342,14 @@ impl CodexMessageProcessor {
                 self.outgoing
                     .send_server_notification(ServerNotification::AuthStatusChange(payload))
                     .await;
+
+                // Also emit the v2 account/updated notification mirroring the same payload.
+                let payload_v2 = AccountUpdatedNotification {
+                    auth_method: self.auth_manager.auth().map(|auth| auth.mode),
+                };
+                self.outgoing
+                    .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
+                    .await;
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -444,6 +453,16 @@ impl CodexMessageProcessor {
                         outgoing_clone
                             .send_server_notification(ServerNotification::AuthStatusChange(payload))
                             .await;
+
+                        // Also send the v2 account/updated notification.
+                        let payload_v2 = AccountUpdatedNotification {
+                            auth_method: current_auth_method,
+                        };
+                        outgoing_clone
+                            .send_server_notification(ServerNotification::AccountUpdated(
+                                payload_v2,
+                            ))
+                            .await;
                     }
 
                     // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
@@ -528,6 +547,14 @@ impl CodexMessageProcessor {
         };
         self.outgoing
             .send_server_notification(ServerNotification::AuthStatusChange(payload))
+            .await;
+
+        // Also emit the v2 account/updated notification.
+        let payload_v2 = AccountUpdatedNotification {
+            auth_method: current_auth_method,
+        };
+        self.outgoing
+            .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
             .await;
     }
 

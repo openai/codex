@@ -141,6 +141,8 @@ pub(crate) struct OutgoingError {
 
 #[cfg(test)]
 mod tests {
+    use codex_app_server_protocol::AccountUpdatedNotification;
+    use codex_app_server_protocol::AuthMode;
     use codex_app_server_protocol::LoginChatGptCompleteNotification;
     use codex_protocol::protocol::RateLimitSnapshot;
     use codex_protocol::protocol::RateLimitWindow;
@@ -197,6 +199,26 @@ mod tests {
                         "resets_at": 123,
                     },
                     "secondary": null,
+                },
+            }),
+            serde_json::to_value(jsonrpc_notification)
+                .expect("ensure the notification serializes correctly"),
+            "ensure the notification serializes correctly"
+        );
+    }
+
+    #[test]
+    fn verify_account_updated_notification_serialization() {
+        let notification = ServerNotification::AccountUpdated(AccountUpdatedNotification {
+            auth_method: Some(AuthMode::ApiKey),
+        });
+
+        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
+        assert_eq!(
+            json!({
+                "method": "account/updated",
+                "params": {
+                    "authMethod": "apikey"
                 },
             }),
             serde_json::to_value(jsonrpc_notification)
