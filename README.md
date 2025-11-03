@@ -75,6 +75,7 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
 
 - [**Getting started**](./docs/getting-started.md)
   - [CLI usage](./docs/getting-started.md#cli-usage)
+  - [Slash Commands](./docs/slash_commands.md)
   - [Running with a prompt as input](./docs/getting-started.md#running-with-a-prompt-as-input)
   - [Example prompts](./docs/getting-started.md#example-prompts)
   - [Custom prompts](./docs/prompts.md)
