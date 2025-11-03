@@ -155,6 +155,10 @@ pub(crate) struct CodexMessageProcessor {
     codex_linux_sandbox_exe: Option<PathBuf>,
     config: Arc<Config>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
+    // Map conversations to their active listener subscription ids (legacy + v2 auto-attached).
+    conversation_listener_index: HashMap<ConversationId, Vec<Uuid>>,
+    // Reverse lookup from subscription id to conversation id for clean removal.
+    subscription_to_conversation: HashMap<Uuid, ConversationId>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<RequestId>>>>,
@@ -178,6 +182,8 @@ impl CodexMessageProcessor {
             codex_linux_sandbox_exe,
             config,
             conversation_listeners: HashMap::new(),
+            conversation_listener_index: HashMap::new(),
+            subscription_to_conversation: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
@@ -870,7 +876,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_start(&self, request_id: RequestId, params: ThreadStartParams) {
+    async fn thread_start(&mut self, request_id: RequestId, params: ThreadStartParams) {
         // Map v2 ThreadStartParams onto the existing NewConversationParams so we
         // can reuse the same config derivation and conversation manager flow.
         let overrides = NewConversationParams {
@@ -927,6 +933,19 @@ impl CodexMessageProcessor {
                 self.outgoing
                     .send_server_notification(ServerNotification::ThreadStarted(notif))
                     .await;
+
+                // Auto-attach a conversation listener when starting a thread.
+                // Use the same behavior as the v1 API with experimental_raw_events=false.
+                if let Err(err) = self
+                    .attach_conversation_listener(new_conv.conversation_id, false)
+                    .await
+                {
+                    tracing::warn!(
+                        "failed to attach listener for conversation {}: {}",
+                        new_conv.conversation_id,
+                        err.message
+                    );
+                }
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -1048,7 +1067,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_archive(&self, request_id: RequestId, params: ThreadArchiveParams) {
+    async fn thread_archive(&mut self, request_id: RequestId, params: ThreadArchiveParams) {
         // Resolve conversation id from v2 thread id string.
         let conversation_id = match ConversationId::from_string(&params.thread_id) {
             Ok(id) => id,
@@ -1106,7 +1125,7 @@ impl CodexMessageProcessor {
     }
 
     async fn archive_conversation_common(
-        &self,
+        &mut self,
         conversation_id: ConversationId,
         rollout_path: &Path,
     ) -> Result<(), JSONRPCErrorError> {
@@ -1159,6 +1178,10 @@ impl CodexMessageProcessor {
                 data: None,
             });
         }
+
+        // Proactively cancel any listeners for this conversation so our
+        // shutdown wait does not race with listener tasks consuming events.
+        self.cancel_conversation_listeners(conversation_id);
 
         // If the conversation is active, request shutdown and wait briefly.
         if let Some(conversation) = self
@@ -1305,7 +1328,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn thread_resume(&self, request_id: RequestId, params: ThreadResumeParams) {
+    async fn thread_resume(&mut self, request_id: RequestId, params: ThreadResumeParams) {
         // Convert thread id string into ConversationId.
         let conversation_id = match ConversationId::from_string(&params.thread_id) {
             Ok(id) => id,
@@ -1397,6 +1420,18 @@ impl CodexMessageProcessor {
                     },
                 };
                 self.outgoing.send_response(request_id, response).await;
+
+                // Auto-attach a conversation listener when resuming a thread.
+                if let Err(err) = self
+                    .attach_conversation_listener(conversation_id, false)
+                    .await
+                {
+                    tracing::warn!(
+                        "failed to attach listener for conversation {}: {}",
+                        conversation_id,
+                        err.message
+                    );
+                }
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -1764,7 +1799,11 @@ impl CodexMessageProcessor {
         self.outgoing.send_error(request_id, error).await;
     }
 
-    async fn archive_conversation(&self, request_id: RequestId, params: ArchiveConversationParams) {
+    async fn archive_conversation(
+        &mut self,
+        request_id: RequestId,
+        params: ArchiveConversationParams,
+    ) {
         let ArchiveConversationParams {
             conversation_id,
             rollout_path,
@@ -1916,34 +1955,64 @@ impl CodexMessageProcessor {
             conversation_id,
             experimental_raw_events,
         } = params;
-        let Ok(conversation) = self
+        match self
+            .attach_conversation_listener(conversation_id, experimental_raw_events)
+            .await
+        {
+            Ok(subscription_id) => {
+                let response = AddConversationSubscriptionResponse { subscription_id };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+            }
+        }
+    }
+
+    async fn attach_conversation_listener(
+        &mut self,
+        conversation_id: ConversationId,
+        experimental_raw_events: bool,
+    ) -> Result<Uuid, JSONRPCErrorError> {
+        let conversation = match self
             .conversation_manager
             .get_conversation(conversation_id)
             .await
-        else {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("conversation not found: {conversation_id}"),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
+        {
+            Ok(conv) => conv,
+            Err(_) => {
+                return Err(JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("conversation not found: {conversation_id}"),
+                    data: None,
+                });
+            }
         };
 
         let subscription_id = Uuid::new_v4();
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
         self.conversation_listeners
             .insert(subscription_id, cancel_tx);
+
+        // Track mappings so we can cleanly cancel listeners by conversation id.
+        self.subscription_to_conversation
+            .insert(subscription_id, conversation_id);
+        self.conversation_listener_index
+            .entry(conversation_id)
+            .or_default()
+            .push(subscription_id);
+
         let outgoing_for_task = self.outgoing.clone();
         let pending_interrupts = self.pending_interrupts.clone();
+        let conversation_for_task = conversation;
+        let conversation_id_for_task = conversation_id;
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     _ = &mut cancel_rx => {
-                        // User has unsubscribed, so exit this task.
                         break;
                     }
-                    event = conversation.next_event() => {
+                    event = conversation_for_task.next_event() => {
                         let event = match event {
                             Ok(event) => event,
                             Err(err) => {
@@ -1957,10 +2026,6 @@ impl CodexMessageProcessor {
                                 continue;
                             }
 
-                        // For now, we send a notification for every event,
-                        // JSON-serializing the `Event` as-is, but these should
-                        // be migrated to be variants of `ServerNotification`
-                        // instead.
                         let method = format!("codex/event/{}", event.msg);
                         let mut params = match serde_json::to_value(event.clone()) {
                             Ok(serde_json::Value::Object(map)) => map,
@@ -1973,21 +2038,39 @@ impl CodexMessageProcessor {
                                 continue;
                             }
                         };
-                        params.insert("conversationId".to_string(), conversation_id.to_string().into());
+                        params.insert("conversationId".to_string(), conversation_id_for_task.to_string().into());
 
-                        outgoing_for_task.send_notification(OutgoingNotification {
-                            method,
-                            params: Some(params.into()),
-                        })
-                        .await;
+                        outgoing_for_task
+                            .send_notification(OutgoingNotification {
+                                method,
+                                params: Some(params.into()),
+                            })
+                            .await;
 
-                        apply_bespoke_event_handling(event.clone(), conversation_id, conversation.clone(), outgoing_for_task.clone(), pending_interrupts.clone()).await;
+                        apply_bespoke_event_handling(
+                            event.clone(),
+                            conversation_id_for_task,
+                            conversation_for_task.clone(),
+                            outgoing_for_task.clone(),
+                            pending_interrupts.clone(),
+                        ).await;
                     }
                 }
             }
         });
-        let response = AddConversationSubscriptionResponse { subscription_id };
-        self.outgoing.send_response(request_id, response).await;
+
+        Ok(subscription_id)
+    }
+
+    fn cancel_conversation_listeners(&mut self, conversation_id: ConversationId) {
+        if let Some(ids) = self.conversation_listener_index.remove(&conversation_id) {
+            for id in ids {
+                if let Some(sender) = self.conversation_listeners.remove(&id) {
+                    let _ = sender.send(());
+                }
+                self.subscription_to_conversation.remove(&id);
+            }
+        }
     }
 
     async fn remove_conversation_listener(
@@ -2000,6 +2083,14 @@ impl CodexMessageProcessor {
             Some(sender) => {
                 // Signal the spawned task to exit and acknowledge.
                 let _ = sender.send(());
+                // Clean reverse mappings.
+                if let Some(conv_id) = self.subscription_to_conversation.remove(&subscription_id)
+                    && let Some(list) = self.conversation_listener_index.get_mut(&conv_id) {
+                        list.retain(|id| id != &subscription_id);
+                        if list.is_empty() {
+                            self.conversation_listener_index.remove(&conv_id);
+                        }
+                    }
                 let response = RemoveConversationSubscriptionResponse {};
                 self.outgoing.send_response(request_id, response).await;
             }
