@@ -82,6 +82,14 @@ macro_rules! client_request_definitions {
             )*
             Ok(())
         }
+        pub fn export_client_param_schemas(
+            out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<()> {
+            $(
+                crate::export::write_json_schema::<$params>(out_dir, stringify!($params))?;
+            )*
+            Ok(())
+        }
     };
 }
 
@@ -284,6 +292,92 @@ macro_rules! server_request_definitions {
             }
             Ok(())
         }
+
+        pub fn export_server_param_schemas(
+            out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<()> {
+            paste! {
+                $(crate::export::write_json_schema::<[<$variant Params>]>(out_dir, stringify!([<$variant Params>]))?;)*
+            }
+            Ok(())
+        }
+    };
+}
+
+/// Generates `ServerNotification` enum and helpers, including a JSON Schema
+/// exporter for each notification.
+macro_rules! server_notification_definitions {
+    (
+        $(
+            $(#[$variant_meta:meta])*
+            $variant:ident ( $payload:ty )
+        ),* $(,)?
+    ) => {
+        /// Notification sent from the server to the client.
+        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
+        #[serde(tag = "method", content = "params", rename_all = "camelCase")]
+        #[strum(serialize_all = "camelCase")]
+        pub enum ServerNotification {
+            $(
+                $(#[$variant_meta])*
+                $variant($payload),
+            )*
+        }
+
+        impl ServerNotification {
+            pub fn to_params(self) -> Result<serde_json::Value, serde_json::Error> {
+                match self {
+                    $(Self::$variant(params) => serde_json::to_value(params),)*
+                }
+            }
+        }
+
+        impl TryFrom<JSONRPCNotification> for ServerNotification {
+            type Error = serde_json::Error;
+
+            fn try_from(value: JSONRPCNotification) -> Result<Self, Self::Error> {
+                serde_json::from_value(serde_json::to_value(value)?)
+            }
+        }
+
+        pub fn export_server_notification_schemas(
+            _out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<()> {
+            $(
+                crate::export::write_json_schema::<$payload>(_out_dir, stringify!($payload))?;
+            )*
+            Ok(())
+        }
+    };
+}
+
+/// Notifications sent from the client to the server.
+/// Generates `ClientNotification` enum and a JSON Schema exporter.
+macro_rules! client_notification_definitions {
+    (
+        $(
+            $(#[$variant_meta:meta])*
+            $variant:ident $( ( $payload:ty ) )?
+        ),* $(,)?
+    ) => {
+        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
+        #[serde(tag = "method", content = "params", rename_all = "camelCase")]
+        #[strum(serialize_all = "camelCase")]
+        pub enum ClientNotification {
+            $(
+                $(#[$variant_meta])*
+                $variant $( ( $payload ) )? ,
+            )*
+        }
+
+        pub fn export_client_notification_schemas(
+            _out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<()> {
+            $(
+                $(crate::export::write_json_schema::<$payload>(_out_dir, stringify!($payload))?;)?
+            )*
+            Ok(())
+        }
     };
 }
 
@@ -366,11 +460,7 @@ pub struct FuzzyFileSearchResponse {
     pub files: Vec<FuzzyFileSearchResult>,
 }
 
-/// Notification sent from the server to the client.
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
-#[serde(tag = "method", content = "params", rename_all = "camelCase")]
-#[strum(serialize_all = "camelCase")]
-pub enum ServerNotification {
+server_notification_definitions! {
     /// NEW NOTIFICATIONS
     #[serde(rename = "account/rateLimits/updated")]
     #[ts(rename = "account/rateLimits/updated")]
@@ -388,30 +478,7 @@ pub enum ServerNotification {
     SessionConfigured(v1::SessionConfiguredNotification),
 }
 
-impl ServerNotification {
-    pub fn to_params(self) -> Result<serde_json::Value, serde_json::Error> {
-        match self {
-            ServerNotification::AccountRateLimitsUpdated(params) => serde_json::to_value(params),
-            ServerNotification::AuthStatusChange(params) => serde_json::to_value(params),
-            ServerNotification::LoginChatGptComplete(params) => serde_json::to_value(params),
-            ServerNotification::SessionConfigured(params) => serde_json::to_value(params),
-        }
-    }
-}
-
-impl TryFrom<JSONRPCNotification> for ServerNotification {
-    type Error = serde_json::Error;
-
-    fn try_from(value: JSONRPCNotification) -> Result<Self, Self::Error> {
-        serde_json::from_value(serde_json::to_value(value)?)
-    }
-}
-
-/// Notification sent from the client to the server.
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
-#[serde(tag = "method", content = "params", rename_all = "camelCase")]
-#[strum(serialize_all = "camelCase")]
-pub enum ClientNotification {
+client_notification_definitions! {
     Initialized,
 }
 
