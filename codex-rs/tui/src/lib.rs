@@ -558,10 +558,12 @@ mod tests {
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ConfigToml;
     use codex_core::config::ProjectConfig;
+    use serial_test::serial;
     use codex_core::set_windows_sandbox_enabled;
     use tempfile::TempDir;
 
     #[test]
+    #[serial]
     fn windows_skips_trust_prompt_without_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = Config::load_from_base_config_with_overrides(
@@ -588,6 +590,7 @@ mod tests {
         Ok(())
     }
     #[test]
+    #[serial]
     fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = Config::load_from_base_config_with_overrides(
