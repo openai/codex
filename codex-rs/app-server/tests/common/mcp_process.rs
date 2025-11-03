@@ -35,6 +35,7 @@ use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::TurnInterruptParams as V2TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams as V2TurnStartParams;
 
 use codex_app_server_protocol::JSONRPCError;
@@ -364,6 +365,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("turn/start", params).await
+    }
+
+    /// Send a `turn/interrupt` JSON-RPC request (v2).
+    pub async fn send_turn_interrupt_request(
+        &mut self,
+        params: V2TurnInterruptParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("turn/interrupt", params).await
     }
 
     /// Send a `cancelLoginChatGpt` JSON-RPC request.

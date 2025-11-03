@@ -161,9 +161,15 @@ pub(crate) struct CodexMessageProcessor {
     subscription_to_conversation: HashMap<Uuid, ConversationId>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
-    pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<RequestId>>>>,
+    pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<(RequestId, ApiVersion)>>>>,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     feedback: CodexFeedback,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ApiVersion {
+    V1,
+    V2,
 }
 
 impl CodexMessageProcessor {
@@ -219,12 +225,8 @@ impl CodexMessageProcessor {
             ClientRequest::TurnStart { request_id, params } => {
                 self.turn_start(request_id, params).await;
             }
-            ClientRequest::TurnInterrupt {
-                request_id,
-                params: _,
-            } => {
-                self.send_unimplemented_error(request_id, "turn/interrupt")
-                    .await;
+            ClientRequest::TurnInterrupt { request_id, params } => {
+                self.turn_interrupt(request_id, params).await;
             }
             ClientRequest::NewConversation { request_id, params } => {
                 // Do not tokio::spawn() to process new_conversation()
@@ -1939,7 +1941,56 @@ impl CodexMessageProcessor {
         // Record the pending interrupt so we can reply when TurnAborted arrives.
         {
             let mut map = self.pending_interrupts.lock().await;
-            map.entry(conversation_id).or_default().push(request_id);
+            map.entry(conversation_id)
+                .or_default()
+                .push((request_id, ApiVersion::V1));
+        }
+
+        // Submit the interrupt; we'll respond upon TurnAborted.
+        let _ = conversation.submit(Op::Interrupt).await;
+    }
+
+    async fn turn_interrupt(
+        &mut self,
+        request_id: RequestId,
+        params: codex_app_server_protocol::TurnInterruptParams,
+    ) {
+        let codex_app_server_protocol::TurnInterruptParams { thread_id, .. } = params;
+
+        // Resolve conversation id from v2 thread id string.
+        let conversation_id = match ConversationId::from_string(&thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("invalid thread id: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let Ok(conversation) = self
+            .conversation_manager
+            .get_conversation(conversation_id)
+            .await
+        else {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("conversation not found: {conversation_id}"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        };
+
+        // Record the pending interrupt so we can reply when TurnAborted arrives.
+        {
+            let mut map = self.pending_interrupts.lock().await;
+            map.entry(conversation_id)
+                .or_default()
+                .push((request_id, ApiVersion::V2));
         }
 
         // Submit the interrupt; we'll respond upon TurnAborted.
@@ -2085,12 +2136,13 @@ impl CodexMessageProcessor {
                 let _ = sender.send(());
                 // Clean reverse mappings.
                 if let Some(conv_id) = self.subscription_to_conversation.remove(&subscription_id)
-                    && let Some(list) = self.conversation_listener_index.get_mut(&conv_id) {
-                        list.retain(|id| id != &subscription_id);
-                        if list.is_empty() {
-                            self.conversation_listener_index.remove(&conv_id);
-                        }
+                    && let Some(list) = self.conversation_listener_index.get_mut(&conv_id)
+                {
+                    list.retain(|id| id != &subscription_id);
+                    if list.is_empty() {
+                        self.conversation_listener_index.remove(&conv_id);
                     }
+                }
                 let response = RemoveConversationSubscriptionResponse {};
                 self.outgoing.send_response(request_id, response).await;
             }
@@ -2243,7 +2295,7 @@ async fn apply_bespoke_event_handling(
     conversation_id: ConversationId,
     conversation: Arc<CodexConversation>,
     outgoing: Arc<OutgoingMessageSender>,
-    pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<RequestId>>>>,
+    pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<(RequestId, ApiVersion)>>>>,
 ) {
     let Event { id: event_id, msg } = event;
     match msg {
@@ -2313,11 +2365,19 @@ async fn apply_bespoke_event_handling(
                 map.remove(&conversation_id).unwrap_or_default()
             };
             if !pending.is_empty() {
-                let response = InterruptConversationResponse {
-                    abort_reason: turn_aborted_event.reason,
-                };
-                for rid in pending {
-                    outgoing.send_response(rid, response.clone()).await;
+                for (rid, ver) in pending {
+                    match ver {
+                        ApiVersion::V1 => {
+                            let response = InterruptConversationResponse {
+                                abort_reason: turn_aborted_event.reason.clone(),
+                            };
+                            outgoing.send_response(rid, response).await;
+                        }
+                        ApiVersion::V2 => {
+                            let response = codex_app_server_protocol::TurnInterruptResponse {};
+                            outgoing.send_response(rid, response).await;
+                        }
+                    }
                 }
             }
         }
