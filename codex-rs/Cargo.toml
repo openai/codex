@@ -276,6 +276,7 @@ opt-level = 0
 # Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
+crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
 
 # Uncomment to debug local changes.
 # rmcp = { path = "../../rust-sdk/crates/rmcp" }
