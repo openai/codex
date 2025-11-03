@@ -1,165 +1,446 @@
-use crate::app_event::AppEvent;
-use crate::app_event_sender::AppEventSender;
-use crate::history_cell;
-use crate::history_cell::PlainHistoryCell;
-use crate::render::renderable::Renderable;
+use std::cell::RefCell;
+use std::path::PathBuf;
+
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use std::path::PathBuf;
+use ratatui::text::Span;
+use ratatui::widgets::Clear;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::StatefulWidgetRef;
+use ratatui::widgets::Widget;
 
-use super::BottomPane;
-use super::SelectionAction;
-use super::SelectionItem;
-use super::SelectionViewParams;
+use crate::app_event::AppEvent;
+use crate::app_event::FeedbackCategory;
+use crate::app_event_sender::AppEventSender;
+use crate::history_cell;
+use crate::render::renderable::Renderable;
+
+use super::CancellationEvent;
+use super::bottom_pane_view::BottomPaneView;
+use super::popup_consts::standard_popup_hint_line;
+use super::textarea::TextArea;
+use super::textarea::TextAreaState;
 
 const BASE_ISSUE_URL: &str = "https://github.com/openai/codex/issues/new?template=2-bug-report.yml";
 
-pub(crate) struct FeedbackView;
+/// Minimal input overlay to collect an optional feedback note, then upload
+/// both logs and rollout with classification + metadata.
+pub(crate) struct FeedbackNoteView {
+    category: FeedbackCategory,
+    snapshot: codex_feedback::CodexLogSnapshot,
+    rollout_path: Option<PathBuf>,
+    app_event_tx: AppEventSender,
+    include_logs: bool,
 
-impl FeedbackView {
-    pub fn show(
-        bottom_pane: &mut BottomPane,
-        file_path: PathBuf,
+    // UI state
+    textarea: TextArea,
+    textarea_state: RefCell<TextAreaState>,
+    complete: bool,
+}
+
+impl FeedbackNoteView {
+    pub(crate) fn new(
+        category: FeedbackCategory,
         snapshot: codex_feedback::CodexLogSnapshot,
-    ) {
-        bottom_pane.show_selection_view(Self::selection_params(file_path, snapshot));
+        rollout_path: Option<PathBuf>,
+        app_event_tx: AppEventSender,
+        include_logs: bool,
+    ) -> Self {
+        Self {
+            category,
+            snapshot,
+            rollout_path,
+            app_event_tx,
+            include_logs,
+            textarea: TextArea::new(),
+            textarea_state: RefCell::new(TextAreaState::default()),
+            complete: false,
+        }
     }
 
-    fn selection_params(
-        file_path: PathBuf,
-        snapshot: codex_feedback::CodexLogSnapshot,
-    ) -> SelectionViewParams {
-        let header = FeedbackHeader::new(file_path);
+    fn submit(&mut self) {
+        let note = self.textarea.text().trim().to_string();
+        let reason_opt = if note.is_empty() {
+            None
+        } else {
+            Some(note.as_str())
+        };
+        let rollout_path_ref = self.rollout_path.as_deref();
+        let classification = feedback_classification(self.category);
 
-        let thread_id = snapshot.thread_id.clone();
+        let mut thread_id = self.snapshot.thread_id.clone();
 
-        let upload_action_tread_id = thread_id.clone();
-        let upload_action: SelectionAction = Box::new(move |tx: &AppEventSender| {
-            match snapshot.upload_to_sentry() {
-                Ok(()) => {
-                    let issue_url = format!(
-                        "{BASE_ISSUE_URL}&steps=Uploaded%20thread:%20{upload_action_tread_id}",
-                    );
-                    tx.send(AppEvent::InsertHistoryCell(Box::new(PlainHistoryCell::new(vec![
-                        Line::from(
-                            "• Codex logs uploaded. Please open an issue using the following URL:",
-                        ),
+        let result = self.snapshot.upload_feedback(
+            classification,
+            reason_opt,
+            self.include_logs,
+            if self.include_logs {
+                rollout_path_ref
+            } else {
+                None
+            },
+        );
+
+        match result {
+            Ok(()) => {
+                let issue_url = format!("{BASE_ISSUE_URL}&steps=Uploaded%20thread:%20{thread_id}");
+                let prefix = if self.include_logs {
+                    "• Feedback uploaded."
+                } else {
+                    "• Feedback recorded (no logs)."
+                };
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::PlainHistoryCell::new(vec![
+                        Line::from(format!(
+                            "{prefix} Please open an issue using the following URL:"
+                        )),
                         "".into(),
                         Line::from(vec!["  ".into(), issue_url.cyan().underlined()]),
                         "".into(),
-                        Line::from(vec!["  Or mention your thread ID ".into(), upload_action_tread_id.clone().bold(),  " in an existing issue.".into()])
-                    ]))));
-                }
-                Err(e) => {
-                    tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_error_event(format!("Failed to upload logs: {e}")),
-                    )));
-                }
-            }
-        });
-
-        let upload_item = SelectionItem {
-            name: "Yes".to_string(),
-            description: Some(
-                "Share the current Codex session logs with the team for troubleshooting."
-                    .to_string(),
-            ),
-            actions: vec![upload_action],
-            dismiss_on_select: true,
-            ..Default::default()
-        };
-
-        let no_action: SelectionAction = Box::new(move |tx: &AppEventSender| {
-            let issue_url = format!("{BASE_ISSUE_URL}&steps=Thread%20ID:%20{thread_id}",);
-
-            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                PlainHistoryCell::new(vec![
-                    Line::from("• Please open an issue using the following URL:"),
-                    "".into(),
-                    Line::from(vec!["  ".into(), issue_url.cyan().underlined()]),
-                    "".into(),
-                    Line::from(vec![
-                        "  Or mention your thread ID ".into(),
-                        thread_id.clone().bold(),
-                        " in an existing issue.".into(),
+                        Line::from(vec![
+                            "  Or mention your thread ID ".into(),
+                            std::mem::take(&mut thread_id).bold(),
+                            " in an existing issue.".into(),
+                        ]),
                     ]),
-                ]),
-            )));
-        });
+                )));
+            }
+            Err(e) => {
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_error_event(format!("Failed to upload feedback: {e}")),
+                )));
+            }
+        }
+        self.complete = true;
+    }
+}
 
-        let no_item = SelectionItem {
-            name: "No".to_string(),
-            actions: vec![no_action],
-            dismiss_on_select: true,
-            ..Default::default()
-        };
-
-        let cancel_item = SelectionItem {
-            name: "Cancel".to_string(),
-            dismiss_on_select: true,
-            ..Default::default()
-        };
-
-        SelectionViewParams {
-            header: Box::new(header),
-            items: vec![upload_item, no_item, cancel_item],
-            ..Default::default()
+impl BottomPaneView for FeedbackNoteView {
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                self.on_ctrl_c();
+            }
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.submit();
+            }
+            KeyEvent {
+                code: KeyCode::Enter,
+                ..
+            } => {
+                self.textarea.input(key_event);
+            }
+            other => {
+                self.textarea.input(other);
+            }
         }
     }
-}
 
-struct FeedbackHeader {
-    file_path: PathBuf,
-}
-
-impl FeedbackHeader {
-    fn new(file_path: PathBuf) -> Self {
-        Self { file_path }
+    fn on_ctrl_c(&mut self) -> CancellationEvent {
+        self.complete = true;
+        CancellationEvent::Handled
     }
 
-    fn lines(&self) -> Vec<Line<'static>> {
-        vec![
-            Line::from("Do you want to upload logs before reporting issue?".bold()),
-            "".into(),
-            Line::from(
-                "Logs may include the full conversation history of this Codex process, including prompts, tool calls, and their results.",
-            ),
-            Line::from(
-                "These logs are retained for 90 days and are used solely for troubleshooting and diagnostic purposes.",
-            ),
-            "".into(),
-            Line::from(vec![
-                "You can review the exact content of the logs before they’re uploaded at:".into(),
-            ]),
-            Line::from(self.file_path.display().to_string().dim()),
-            "".into(),
-        ]
+    fn is_complete(&self) -> bool {
+        self.complete
+    }
+
+    fn handle_paste(&mut self, pasted: String) -> bool {
+        if pasted.is_empty() {
+            return false;
+        }
+        self.textarea.insert_str(&pasted);
+        true
+    }
+
+    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        if area.height < 2 || area.width <= 2 {
+            return None;
+        }
+        let text_area_height = self.input_height(area.width).saturating_sub(1);
+        if text_area_height == 0 {
+            return None;
+        }
+        let top_line_count = 1u16; // title only
+        let textarea_rect = Rect {
+            x: area.x.saturating_add(2),
+            y: area.y.saturating_add(top_line_count).saturating_add(1),
+            width: area.width.saturating_sub(2),
+            height: text_area_height,
+        };
+        let state = *self.textarea_state.borrow();
+        self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
 }
 
-impl Renderable for FeedbackHeader {
+impl Renderable for FeedbackNoteView {
+    fn desired_height(&self, width: u16) -> u16 {
+        1u16 + self.input_height(width) + 3u16
+    }
+
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        if area.width == 0 || area.height == 0 {
+        if area.height == 0 || area.width == 0 {
             return;
         }
 
-        for (i, line) in self.lines().into_iter().enumerate() {
-            let y = area.y.saturating_add(i as u16);
-            if y >= area.y.saturating_add(area.height) {
-                break;
+        let (title, placeholder) = feedback_title_and_placeholder(self.category);
+        let input_height = self.input_height(area.width);
+
+        // Title line
+        let title_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        };
+        let title_spans: Vec<Span<'static>> = vec![gutter(), title.bold()];
+        Paragraph::new(Line::from(title_spans)).render(title_area, buf);
+
+        // Input line
+        let input_area = Rect {
+            x: area.x,
+            y: area.y.saturating_add(1),
+            width: area.width,
+            height: input_height,
+        };
+        if input_area.width >= 2 {
+            for row in 0..input_area.height {
+                Paragraph::new(Line::from(vec![gutter()])).render(
+                    Rect {
+                        x: input_area.x,
+                        y: input_area.y.saturating_add(row),
+                        width: 2,
+                        height: 1,
+                    },
+                    buf,
+                );
             }
-            let line_area = Rect::new(area.x, y, area.width, 1).intersection(area);
-            line.render(line_area, buf);
+
+            let text_area_height = input_area.height.saturating_sub(1);
+            if text_area_height > 0 {
+                if input_area.width > 2 {
+                    let blank_rect = Rect {
+                        x: input_area.x.saturating_add(2),
+                        y: input_area.y,
+                        width: input_area.width.saturating_sub(2),
+                        height: 1,
+                    };
+                    Clear.render(blank_rect, buf);
+                }
+                let textarea_rect = Rect {
+                    x: input_area.x.saturating_add(2),
+                    y: input_area.y.saturating_add(1),
+                    width: input_area.width.saturating_sub(2),
+                    height: text_area_height,
+                };
+                let mut state = self.textarea_state.borrow_mut();
+                StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
+                if self.textarea.text().is_empty() {
+                    Paragraph::new(Line::from(placeholder.dim())).render(textarea_rect, buf);
+                }
+            }
+        }
+
+        let hint_blank_y = input_area.y.saturating_add(input_height);
+        if hint_blank_y < area.y.saturating_add(area.height) {
+            let blank_area = Rect {
+                x: area.x,
+                y: hint_blank_y,
+                width: area.width,
+                height: 1,
+            };
+            Clear.render(blank_area, buf);
+        }
+
+        let hint_y = hint_blank_y.saturating_add(1);
+        if hint_y < area.y.saturating_add(area.height) {
+            Paragraph::new(standard_popup_hint_line()).render(
+                Rect {
+                    x: area.x,
+                    y: hint_y,
+                    width: area.width,
+                    height: 1,
+                },
+                buf,
+            );
         }
     }
+}
 
-    fn desired_height(&self, width: u16) -> u16 {
-        self.lines()
-            .iter()
-            .map(|line| line.desired_height(width))
-            .sum()
+impl FeedbackNoteView {
+    fn input_height(&self, width: u16) -> u16 {
+        let usable_width = width.saturating_sub(2);
+        let text_height = self.textarea.desired_height(usable_width).clamp(1, 8);
+        text_height.saturating_add(1).min(9)
+    }
+}
+
+fn gutter() -> Span<'static> {
+    "▌ ".cyan()
+}
+
+fn feedback_title_and_placeholder(category: FeedbackCategory) -> (String, String) {
+    match category {
+        FeedbackCategory::BadResult => (
+            "Tell us more (bad result)".to_string(),
+            "(optional) Write a short description to help us further".to_string(),
+        ),
+        FeedbackCategory::GoodResult => (
+            "Tell us more (good result)".to_string(),
+            "(optional) Write a short description to help us further".to_string(),
+        ),
+        FeedbackCategory::Bug => (
+            "Tell us more (bug)".to_string(),
+            "(optional) Write a short description to help us further".to_string(),
+        ),
+        FeedbackCategory::Other => (
+            "Tell us more (other)".to_string(),
+            "(optional) Write a short description to help us further".to_string(),
+        ),
+    }
+}
+
+fn feedback_classification(category: FeedbackCategory) -> &'static str {
+    match category {
+        FeedbackCategory::BadResult => "bad_result",
+        FeedbackCategory::GoodResult => "good_result",
+        FeedbackCategory::Bug => "bug",
+        FeedbackCategory::Other => "other",
+    }
+}
+
+// Build the selection popup params for feedback categories.
+pub(crate) fn feedback_selection_params(
+    app_event_tx: AppEventSender,
+) -> super::SelectionViewParams {
+    super::SelectionViewParams {
+        title: Some("How was this?".to_string()),
+        items: vec![
+            make_feedback_item(
+                app_event_tx.clone(),
+                "bug",
+                "Crash, error message, hang, or broken UI/behavior.",
+                FeedbackCategory::Bug,
+            ),
+            make_feedback_item(
+                app_event_tx.clone(),
+                "bad result",
+                "Output was off-target, incorrect, incomplete, or unhelpful.",
+                FeedbackCategory::BadResult,
+            ),
+            make_feedback_item(
+                app_event_tx.clone(),
+                "good result",
+                "Helpful, correct, high‑quality, or delightful result worth celebrating.",
+                FeedbackCategory::GoodResult,
+            ),
+            make_feedback_item(
+                app_event_tx,
+                "other",
+                "Slowness, feature suggestion, UX feedback, or anything else.",
+                FeedbackCategory::Other,
+            ),
+        ],
+        ..Default::default()
+    }
+}
+
+fn make_feedback_item(
+    app_event_tx: AppEventSender,
+    name: &str,
+    description: &str,
+    category: FeedbackCategory,
+) -> super::SelectionItem {
+    let action: super::SelectionAction = Box::new(move |_sender: &AppEventSender| {
+        app_event_tx.send(AppEvent::OpenFeedbackConsent { category });
+    });
+    super::SelectionItem {
+        name: name.to_string(),
+        description: Some(description.to_string()),
+        actions: vec![action],
+        dismiss_on_select: true,
+        ..Default::default()
+    }
+}
+
+/// Build the upload consent popup params for a given feedback category.
+pub(crate) fn feedback_upload_consent_params(
+    app_event_tx: AppEventSender,
+    category: FeedbackCategory,
+    rollout_path: Option<std::path::PathBuf>,
+) -> super::SelectionViewParams {
+    use super::popup_consts::standard_popup_hint_line;
+    let yes_action: super::SelectionAction = Box::new({
+        let tx = app_event_tx.clone();
+        move |sender: &AppEventSender| {
+            let _ = sender;
+            tx.send(AppEvent::OpenFeedbackNote {
+                category,
+                include_logs: true,
+            });
+        }
+    });
+
+    let no_action: super::SelectionAction = Box::new({
+        let tx = app_event_tx;
+        move |sender: &AppEventSender| {
+            let _ = sender;
+            tx.send(AppEvent::OpenFeedbackNote {
+                category,
+                include_logs: false,
+            });
+        }
+    });
+
+    // Build header listing files that would be sent if user consents.
+    let mut header_lines: Vec<Box<dyn crate::render::renderable::Renderable>> = vec![
+        Line::from("Upload logs?".bold()).into(),
+        Line::from("").into(),
+        Line::from("The following files will be sent:".dim()).into(),
+        Line::from(vec!["  • ".into(), "codex-logs.log".into()]).into(),
+    ];
+    if let Some(path) = rollout_path.as_deref()
+        && let Some(name) = path.file_name().map(|s| s.to_string_lossy().to_string())
+    {
+        header_lines.push(Line::from(vec!["  • ".into(), name.into()]).into());
+    }
+
+    super::SelectionViewParams {
+        footer_hint: Some(standard_popup_hint_line()),
+        items: vec![
+            super::SelectionItem {
+                name: "Yes".to_string(),
+                description: Some(
+                    "Share the current Codex session logs with the team for troubleshooting."
+                        .to_string(),
+                ),
+                actions: vec![yes_action],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            super::SelectionItem {
+                name: "No".to_string(),
+                description: Some("".to_string()),
+                actions: vec![no_action],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ],
+        header: Box::new(crate::render::renderable::ColumnRenderable::with(
+            header_lines,
+        )),
+        ..Default::default()
     }
 }
 
@@ -167,22 +448,19 @@ impl Renderable for FeedbackHeader {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use crate::bottom_pane::list_selection_view::ListSelectionView;
-    use crate::style::user_message_style;
-    use codex_feedback::CodexFeedback;
-    use codex_protocol::ConversationId;
-    use insta::assert_snapshot;
-    use ratatui::buffer::Buffer;
-    use ratatui::layout::Rect;
-    use ratatui::style::Color;
-    use tokio::sync::mpsc::unbounded_channel;
+    use crate::app_event_sender::AppEventSender;
 
-    fn buffer_to_string(buffer: &Buffer) -> String {
-        (0..buffer.area.height)
+    fn render(view: &FeedbackNoteView, width: u16) -> String {
+        let height = view.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let mut lines: Vec<String> = (0..area.height)
             .map(|row| {
                 let mut line = String::new();
-                for col in 0..buffer.area.width {
-                    let symbol = buffer[(buffer.area.x + col, buffer.area.y + row)].symbol();
+                for col in 0..area.width {
+                    let symbol = buf[(area.x + col, area.y + row)].symbol();
                     if symbol.is_empty() {
                         line.push(' ');
                     } else {
@@ -191,34 +469,49 @@ mod tests {
                 }
                 line.trim_end().to_string()
             })
-            .collect::<Vec<_>>()
-            .join("\n")
+            .collect();
+
+        while lines.first().is_some_and(|l| l.trim().is_empty()) {
+            lines.remove(0);
+        }
+        while lines.last().is_some_and(|l| l.trim().is_empty()) {
+            lines.pop();
+        }
+        lines.join("\n")
+    }
+
+    fn make_view(category: FeedbackCategory) -> FeedbackNoteView {
+        let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
+        FeedbackNoteView::new(category, snapshot, None, tx, true)
     }
 
     #[test]
-    fn renders_feedback_view_header() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let app_event_tx = AppEventSender::new(tx_raw);
-        let snapshot = CodexFeedback::new().snapshot(Some(
-            ConversationId::from_string("550e8400-e29b-41d4-a716-446655440000").unwrap(),
-        ));
-        let file_path = PathBuf::from("/tmp/codex-feedback.log");
+    fn feedback_view_bad_result() {
+        let view = make_view(FeedbackCategory::BadResult);
+        let rendered = render(&view, 60);
+        insta::assert_snapshot!("feedback_view_bad_result", rendered);
+    }
 
-        let params = FeedbackView::selection_params(file_path.clone(), snapshot);
-        let view = ListSelectionView::new(params, app_event_tx);
+    #[test]
+    fn feedback_view_good_result() {
+        let view = make_view(FeedbackCategory::GoodResult);
+        let rendered = render(&view, 60);
+        insta::assert_snapshot!("feedback_view_good_result", rendered);
+    }
 
-        let width = 72;
-        let height = view.desired_height(width).max(1);
-        let area = Rect::new(0, 0, width, height);
-        let mut buf = Buffer::empty(area);
-        view.render(area, &mut buf);
+    #[test]
+    fn feedback_view_bug() {
+        let view = make_view(FeedbackCategory::Bug);
+        let rendered = render(&view, 60);
+        insta::assert_snapshot!("feedback_view_bug", rendered);
+    }
 
-        let rendered =
-            buffer_to_string(&buf).replace(&file_path.display().to_string(), "<LOG_PATH>");
-        assert_snapshot!("feedback_view_render", rendered);
-
-        let cell_style = buf[(area.x, area.y)].style();
-        let expected_bg = user_message_style().bg.unwrap_or(Color::Reset);
-        assert_eq!(cell_style.bg.unwrap_or(Color::Reset), expected_bg);
+    #[test]
+    fn feedback_view_other() {
+        let view = make_view(FeedbackCategory::Other);
+        let rendered = render(&view, 60);
+        insta::assert_snapshot!("feedback_view_other", rendered);
     }
 }

@@ -1019,21 +1019,24 @@ mod tests {
         }
     }
 
-    fn assert_eq_tool_names(tools: &[ConfiguredToolSpec], expected_names: &[&str]) {
-        let tool_names = tools
-            .iter()
-            .map(|tool| tool_name(&tool.spec))
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            tool_names.len(),
-            expected_names.len(),
-            "tool_name mismatch, {tool_names:?}, {expected_names:?}",
+    // Avoid order-based assertions; compare via set containment instead.
+    fn assert_contains_tool_names(tools: &[ConfiguredToolSpec], expected_subset: &[&str]) {
+        use std::collections::HashSet;
+        let mut names = HashSet::new();
+        let mut duplicates = Vec::new();
+        for name in tools.iter().map(|t| tool_name(&t.spec)) {
+            if !names.insert(name) {
+                duplicates.push(name);
+            }
+        }
+        assert!(
+            duplicates.is_empty(),
+            "duplicate tool entries detected: {duplicates:?}"
         );
-        for (name, expected_name) in tool_names.iter().zip(expected_names.iter()) {
-            assert_eq!(
-                name, expected_name,
-                "tool_name mismatch, {name:?}, {expected_name:?}"
+        for expected in expected_subset {
+            assert!(
+                names.contains(expected),
+                "expected tool {expected} to be present; had: {names:?}"
             );
         }
     }
@@ -1056,8 +1059,105 @@ mod tests {
             .unwrap_or_else(|| panic!("expected tool {expected_name}"))
     }
 
+    fn strip_descriptions_schema(schema: &mut JsonSchema) {
+        match schema {
+            JsonSchema::Boolean { description }
+            | JsonSchema::String { description }
+            | JsonSchema::Number { description } => {
+                *description = None;
+            }
+            JsonSchema::Array { items, description } => {
+                strip_descriptions_schema(items);
+                *description = None;
+            }
+            JsonSchema::Object {
+                properties,
+                required: _,
+                additional_properties,
+            } => {
+                for v in properties.values_mut() {
+                    strip_descriptions_schema(v);
+                }
+                if let Some(AdditionalProperties::Schema(s)) = additional_properties {
+                    strip_descriptions_schema(s);
+                }
+            }
+        }
+    }
+
+    fn strip_descriptions_tool(spec: &mut ToolSpec) {
+        match spec {
+            ToolSpec::Function(ResponsesApiTool { parameters, .. }) => {
+                strip_descriptions_schema(parameters);
+            }
+            ToolSpec::Freeform(_) | ToolSpec::LocalShell {} | ToolSpec::WebSearch {} => {}
+        }
+    }
+
     #[test]
-    fn test_build_specs() {
+    fn test_full_toolset_specs_for_gpt5_codex() {
+        let model_family = find_family_for_model("gpt-5-codex")
+            .expect("gpt-5-codex should be a valid model family");
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        features.enable(Feature::WebSearchRequest);
+        features.enable(Feature::ViewImageTool);
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            features: &features,
+        });
+        let (tools, _) = build_specs(&config, None).build();
+
+        // Build actual map name -> spec
+        use std::collections::BTreeMap;
+        use std::collections::HashSet;
+        let mut actual: BTreeMap<String, ToolSpec> = BTreeMap::new();
+        let mut duplicate_names = Vec::new();
+        for t in &tools {
+            let name = tool_name(&t.spec).to_string();
+            if actual.insert(name.clone(), t.spec.clone()).is_some() {
+                duplicate_names.push(name);
+            }
+        }
+        assert!(
+            duplicate_names.is_empty(),
+            "duplicate tool entries detected: {duplicate_names:?}"
+        );
+
+        // Build expected from the same helpers used by the builder.
+        let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::new();
+        for spec in [
+            create_exec_command_tool(),
+            create_write_stdin_tool(),
+            create_shell_tool(),
+            create_list_mcp_resources_tool(),
+            create_list_mcp_resource_templates_tool(),
+            create_read_mcp_resource_tool(),
+            PLAN_TOOL.clone(),
+            create_apply_patch_freeform_tool(),
+            ToolSpec::WebSearch {},
+            create_view_image_tool(),
+        ] {
+            expected.insert(tool_name(&spec).to_string(), spec);
+        }
+
+        // Exact name set match — this is the only test allowed to fail when tools change.
+        let actual_names: HashSet<_> = actual.keys().cloned().collect();
+        let expected_names: HashSet<_> = expected.keys().cloned().collect();
+        assert_eq!(actual_names, expected_names, "tool name set mismatch");
+
+        // Compare specs ignoring human-readable descriptions.
+        for name in expected.keys() {
+            let mut a = actual.get(name).expect("present").clone();
+            let mut e = expected.get(name).expect("present").clone();
+            strip_descriptions_tool(&mut a);
+            strip_descriptions_tool(&mut e);
+            assert_eq!(a, e, "spec mismatch for {name}");
+        }
+    }
+
+    #[test]
+    fn test_build_specs_contains_expected_basics() {
         let model_family = find_family_for_model("codex-mini-latest")
             .expect("codex-mini-latest should be a valid model family");
         let mut features = Features::with_defaults();
@@ -1068,25 +1168,25 @@ mod tests {
             features: &features,
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
-
-        let mut expected = vec!["exec_command", "write_stdin"];
-        if let Some(shell_tool) = shell_tool_name(&config) {
-            expected.push(shell_tool);
-        }
-        expected.extend([
-            "list_mcp_resources",
-            "list_mcp_resource_templates",
-            "read_mcp_resource",
-            "update_plan",
-            "web_search",
-            "view_image",
-        ]);
-
-        assert_eq_tool_names(&tools, &expected);
+        let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
+        assert_eq!(
+            &tool_names,
+            &[
+                "exec_command",
+                "write_stdin",
+                "local_shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "web_search",
+                "view_image",
+            ]
+        );
     }
 
     #[test]
-    fn test_build_specs_default_shell() {
+    fn test_build_specs_default_shell_present() {
         let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
         let mut features = Features::with_defaults();
         features.enable(Feature::WebSearchRequest);
@@ -1097,20 +1197,12 @@ mod tests {
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
 
-        let mut expected = vec!["exec_command", "write_stdin"];
+        // Only check the shell variant and a couple of core tools.
+        let mut subset = vec!["exec_command", "write_stdin", "update_plan"];
         if let Some(shell_tool) = shell_tool_name(&config) {
-            expected.push(shell_tool);
+            subset.push(shell_tool);
         }
-        expected.extend([
-            "list_mcp_resources",
-            "list_mcp_resource_templates",
-            "read_mcp_resource",
-            "update_plan",
-            "web_search",
-            "view_image",
-        ]);
-
-        assert_eq_tool_names(&tools, &expected);
+        assert_contains_tool_names(&tools, &subset);
     }
 
     #[test]
@@ -1165,7 +1257,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_specs_mcp_tools() {
+    fn test_build_specs_mcp_tools_converted() {
         let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
@@ -1212,22 +1304,6 @@ mod tests {
             )])),
         )
         .build();
-
-        let mut expected = vec!["exec_command", "write_stdin"];
-        if let Some(shell_tool) = shell_tool_name(&config) {
-            expected.push(shell_tool);
-        }
-        expected.extend([
-            "list_mcp_resources",
-            "list_mcp_resource_templates",
-            "read_mcp_resource",
-            "update_plan",
-            "web_search",
-            "view_image",
-            "test_server/do_something_cool",
-        ]);
-
-        assert_eq_tool_names(&tools, &expected);
 
         let tool = find_tool(&tools, "test_server/do_something_cool");
         assert_eq!(
@@ -1334,23 +1410,19 @@ mod tests {
         ]);
 
         let (tools, _) = build_specs(&config, Some(tools_map)).build();
-        // Expect exec_command/write_stdin first, followed by MCP tools sorted by fully-qualified name.
-        let mut expected = vec!["exec_command", "write_stdin"];
-        if let Some(shell_tool) = shell_tool_name(&config) {
-            expected.push(shell_tool);
-        }
-        expected.extend([
-            "list_mcp_resources",
-            "list_mcp_resource_templates",
-            "read_mcp_resource",
-            "update_plan",
-            "view_image",
-            "test_server/cool",
-            "test_server/do",
-            "test_server/something",
-        ]);
 
-        assert_eq_tool_names(&tools, &expected);
+        // Only assert that the MCP tools themselves are sorted by fully-qualified name.
+        let mcp_names: Vec<_> = tools
+            .iter()
+            .map(|t| tool_name(&t.spec).to_string())
+            .filter(|n| n.starts_with("test_server/"))
+            .collect();
+        let expected = vec![
+            "test_server/cool".to_string(),
+            "test_server/do".to_string(),
+            "test_server/something".to_string(),
+        ];
+        assert_eq!(mcp_names, expected);
     }
 
     #[test]
@@ -1389,28 +1461,9 @@ mod tests {
         )
         .build();
 
-        let mut expected = vec!["exec_command", "write_stdin"];
-        let has_shell = if let Some(shell_tool) = shell_tool_name(&config) {
-            expected.push(shell_tool);
-            true
-        } else {
-            false
-        };
-        expected.extend([
-            "list_mcp_resources",
-            "list_mcp_resource_templates",
-            "read_mcp_resource",
-            "update_plan",
-            "apply_patch",
-            "web_search",
-            "view_image",
-            "dash/search",
-        ]);
-
-        assert_eq_tool_names(&tools, &expected);
-
+        let tool = find_tool(&tools, "dash/search");
         assert_eq!(
-            tools[if has_shell { 10 } else { 9 }].spec,
+            tool.spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/search".to_string(),
                 parameters: JsonSchema::Object {
@@ -1463,27 +1516,9 @@ mod tests {
         )
         .build();
 
-        let mut expected = vec!["exec_command", "write_stdin"];
-        let has_shell = if let Some(shell_tool) = shell_tool_name(&config) {
-            expected.push(shell_tool);
-            true
-        } else {
-            false
-        };
-        expected.extend([
-            "list_mcp_resources",
-            "list_mcp_resource_templates",
-            "read_mcp_resource",
-            "update_plan",
-            "apply_patch",
-            "web_search",
-            "view_image",
-            "dash/paginate",
-        ]);
-
-        assert_eq_tool_names(&tools, &expected);
+        let tool = find_tool(&tools, "dash/paginate");
         assert_eq!(
-            tools[if has_shell { 10 } else { 9 }].spec,
+            tool.spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/paginate".to_string(),
                 parameters: JsonSchema::Object {
@@ -1535,26 +1570,9 @@ mod tests {
         )
         .build();
 
-        let mut expected = vec!["exec_command", "write_stdin"];
-        let has_shell = if let Some(shell_tool) = shell_tool_name(&config) {
-            expected.push(shell_tool);
-            true
-        } else {
-            false
-        };
-        expected.extend([
-            "list_mcp_resources",
-            "list_mcp_resource_templates",
-            "read_mcp_resource",
-            "update_plan",
-            "apply_patch",
-            "web_search",
-            "view_image",
-            "dash/tags",
-        ]);
-        assert_eq_tool_names(&tools, &expected);
+        let tool = find_tool(&tools, "dash/tags");
         assert_eq!(
-            tools[if has_shell { 10 } else { 9 }].spec,
+            tool.spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/tags".to_string(),
                 parameters: JsonSchema::Object {
@@ -1608,26 +1626,9 @@ mod tests {
         )
         .build();
 
-        let mut expected = vec!["exec_command", "write_stdin"];
-        let has_shell = if let Some(shell_tool) = shell_tool_name(&config) {
-            expected.push(shell_tool);
-            true
-        } else {
-            false
-        };
-        expected.extend([
-            "list_mcp_resources",
-            "list_mcp_resource_templates",
-            "read_mcp_resource",
-            "update_plan",
-            "apply_patch",
-            "web_search",
-            "view_image",
-            "dash/value",
-        ]);
-        assert_eq_tool_names(&tools, &expected);
+        let tool = find_tool(&tools, "dash/value");
         assert_eq!(
-            tools[if has_shell { 10 } else { 9 }].spec,
+            tool.spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/value".to_string(),
                 parameters: JsonSchema::Object {
@@ -1718,28 +1719,9 @@ mod tests {
         )
         .build();
 
-        let mut expected = vec!["exec_command", "write_stdin"];
-        let has_shell = if let Some(shell_tool) = shell_tool_name(&config) {
-            expected.push(shell_tool);
-            true
-        } else {
-            false
-        };
-        expected.extend([
-            "list_mcp_resources",
-            "list_mcp_resource_templates",
-            "read_mcp_resource",
-            "update_plan",
-            "apply_patch",
-            "web_search",
-            "view_image",
-            "test_server/do_something_cool",
-        ]);
-
-        assert_eq_tool_names(&tools, &expected);
-
+        let tool = find_tool(&tools, "test_server/do_something_cool");
         assert_eq!(
-            tools[if has_shell { 10 } else { 9 }].spec,
+            tool.spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "test_server/do_something_cool".to_string(),
                 parameters: JsonSchema::Object {

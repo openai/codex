@@ -14,7 +14,7 @@ codex-core = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
-codex-git-apply = { path = "../git-apply" }
+codex-git = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

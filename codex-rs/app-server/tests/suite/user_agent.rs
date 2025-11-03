@@ -1,3 +1,4 @@
+use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::GetUserAgentResponse;
@@ -10,28 +11,18 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn get_user_agent_returns_current_codex_user_agent() {
-    let codex_home = TempDir::new().unwrap_or_else(|err| panic!("create tempdir: {err}"));
+async fn get_user_agent_returns_current_codex_user_agent() -> Result<()> {
+    let codex_home = TempDir::new()?;
 
-    let mut mcp = McpProcess::new(codex_home.path())
-        .await
-        .expect("spawn mcp process");
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
-        .await
-        .expect("initialize timeout")
-        .expect("initialize request");
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let request_id = mcp
-        .send_get_user_agent_request()
-        .await
-        .expect("send getUserAgent");
+    let request_id = mcp.send_get_user_agent_request().await?;
     let response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
-    .await
-    .expect("getUserAgent timeout")
-    .expect("getUserAgent response");
+    .await??;
 
     let os_info = os_info::get();
     let user_agent = format!(
@@ -42,9 +33,9 @@ async fn get_user_agent_returns_current_codex_user_agent() {
         codex_core::terminal::user_agent()
     );
 
-    let received: GetUserAgentResponse =
-        to_response(response).expect("deserialize getUserAgent response");
+    let received: GetUserAgentResponse = to_response(response)?;
     let expected = GetUserAgentResponse { user_agent };
 
     assert_eq!(received, expected);
+    Ok(())
 }
