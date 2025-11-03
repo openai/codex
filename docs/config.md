@@ -312,15 +312,25 @@ Though using this option may also be necessary if you try to use Codex in enviro
 
 ### tools.\*
 
-Use the optional `[tools]` table to toggle built-in tools that the agent may call. `web_search` stays off unless you opt in, while `view_image` is now enabled by default:
+Use the optional `[tools]` table to toggle built-in tools that the agent may call. `view_image` is now enabled by default:
 
 ```toml
 [tools]
-web_search = true   # allow Codex to issue first-party web searches without prompting you
 view_image = false  # disable image uploads (they're enabled by default)
 ```
 
-`web_search` is also recognized under the legacy name `web_search_request`. The `view_image` toggle is useful when you want to include screenshots or diagrams from your repo without pasting them manually. Codex still respects sandboxing: it can only attach files inside the workspace roots you allow.
+The `view_image toggle` is useful when you want to include screenshots or diagrams from your repo without pasting them manually. Codex still respects sandboxing: it can only attach files inside the workspace roots you allow.
+
+### features.\*
+
+Enable first-party web search via the `[features]` table:
+
+```toml
+[features]
+web_search_request = true  # allow Codex to issue first-party web searches without prompting you (they're disabled by default)
+```
+
+`web_search_request` replaces the legacy `tools.web_search` toggle. The legacy key may continue to be parsed in some versions but is deprecated.
 
 ### approval_presets
 
@@ -925,7 +935,7 @@ Valid values:
 | `experimental_instructions_file`                 | string (path)                                                     | Replace built‑in instructions (experimental).                                                                              |
 | `experimental_use_exec_command_tool`             | boolean                                                           | Use experimental exec command tool.                                                                                        |
 | `projects.<path>.trust_level`                    | string                                                            | Mark project/worktree as trusted (only `"trusted"` is recognized).                                                         |
-| `tools.web_search`                               | boolean                                                           | Enable web search tool (alias: `web_search_request`) (default: false).                                                     |
+| `features.web_search_request`                    | boolean                                                           | Enable first-party web search (replaces deprecated `tools.web_search`) (default: false).                                  |
 | `tools.view_image`                               | boolean                                                           | Enable or disable the `view_image` tool so Codex can attach local image files from the workspace (default: true).          |
 | `forced_login_method`                            | `chatgpt` \| `api`                                                | Only allow Codex to be used with ChatGPT or API keys.                                                                      |
 | `forced_chatgpt_workspace_id`                    | string (uuid)                                                     | Only allow Codex to be used with the specified ChatGPT workspace.                                                          |
