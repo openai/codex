@@ -31,6 +31,8 @@ use super::rate_limits::StatusRateLimitRow;
 use super::rate_limits::compose_rate_limit_data;
 use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_lines;
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
@@ -195,13 +197,7 @@ impl StatusHistoryCell {
                 lines
             }
             StatusRateLimitData::Missing => {
-                vec![formatter.line(
-                    "Limits",
-                    vec![
-                        Span::from("visit ").dim(),
-                        "chatgpt.com/codex/settings/usage".cyan().underlined(),
-                    ],
-                )]
+                vec![formatter.line("Limits", vec![Span::from("data not available yet").dim()])]
             }
         }
     }
@@ -314,6 +310,21 @@ impl HistoryCell for StatusHistoryCell {
 
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
         let value_width = formatter.value_width(available_inner_width);
+
+        let note_first_line = Line::from(vec![
+            Span::from("Visit ").cyan(),
+            "chatgpt.com/codex/settings/usage".cyan().underlined(),
+            Span::from(" for up-to-date").cyan(),
+        ]);
+        let note_second_line = Line::from(vec![
+            Span::from("information on rate limits and credits").cyan(),
+        ]);
+        let note_lines = word_wrap_lines(
+            [note_first_line, note_second_line],
+            RtOptions::new(available_inner_width),
+        );
+        lines.extend(note_lines);
+        lines.push(Line::from(Vec::<Span<'static>>::new()));
 
         let mut model_spans = vec![Span::from(self.model_name.clone())];
         if !self.model_details.is_empty() {

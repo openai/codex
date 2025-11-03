@@ -1,4 +1,4 @@
-use crate::config_types::ReasoningSummaryFormat;
+use crate::config::types::ReasoningSummaryFormat;
 use crate::tools::handlers::apply_patch::ApplyPatchToolType;
 
 /// The `instructions` field in the payload sent to a model should always start
@@ -54,6 +54,9 @@ pub struct ModelFamily {
     /// This is applied when computing the effective context window seen by
     /// consumers.
     pub effective_context_window_percent: i64,
+
+    /// If the model family supports setting the verbosity level when using Responses API.
+    pub support_verbosity: bool,
 }
 
 macro_rules! model_family {
@@ -73,6 +76,7 @@ macro_rules! model_family {
             base_instructions: BASE_INSTRUCTIONS.to_string(),
             experimental_supported_tools: Vec::new(),
             effective_context_window_percent: 95,
+            support_verbosity: false,
         };
         // apply overrides
         $(
@@ -128,10 +132,11 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
                 "test_sync_tool".to_string(),
             ],
             supports_parallel_tool_calls: true,
+            support_verbosity: true,
         )
 
     // Internal models.
-    } else if slug.starts_with("codex-") {
+    } else if slug.starts_with("codex-exp-") {
         model_family!(
             slug, slug,
             supports_reasoning_summaries: true,
@@ -144,22 +149,25 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
                 "read_file".to_string(),
             ],
             supports_parallel_tool_calls: true,
+            support_verbosity: true,
         )
 
     // Production models.
-    } else if slug.starts_with("gpt-5-codex") {
+    } else if slug.starts_with("gpt-5-codex") || slug.starts_with("codex-") {
         model_family!(
             slug, slug,
             supports_reasoning_summaries: true,
             reasoning_summary_format: ReasoningSummaryFormat::Experimental,
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            support_verbosity: false,
         )
     } else if slug.starts_with("gpt-5") {
         model_family!(
             slug, "gpt-5",
             supports_reasoning_summaries: true,
             needs_special_apply_patch_instructions: true,
+            support_verbosity: true,
         )
     } else {
         None
@@ -179,5 +187,6 @@ pub fn derive_default_model_family(model: &str) -> ModelFamily {
         base_instructions: BASE_INSTRUCTIONS.to_string(),
         experimental_supported_tools: Vec::new(),
         effective_context_window_percent: 95,
+        support_verbosity: false,
     }
 }

@@ -7,7 +7,6 @@ use codex_core::REVIEW_PROMPT;
 use codex_core::ResponseItem;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
-use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExitedReviewModeEvent;
@@ -120,13 +119,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
 
     // Also verify that a user message with the header and a formatted finding
     // was recorded back in the parent session's rollout.
-    codex.submit(Op::GetPath).await.unwrap();
-    let history_event =
-        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ConversationPath(_))).await;
-    let path = match history_event {
-        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path,
-        other => panic!("expected ConversationPath event, got {other:?}"),
-    };
+    let path = codex.rollout_path();
     let text = std::fs::read_to_string(&path).expect("read rollout file");
 
     let mut saw_header = false;
@@ -207,6 +200,85 @@ async fn review_op_with_plain_text_emits_review_fallback() {
     };
     assert_eq!(expected, review);
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    server.verify().await;
+}
+
+/// Ensure review flow suppresses assistant-specific streaming/completion events:
+/// - AgentMessageContentDelta
+/// - AgentMessageDelta (legacy)
+/// - ItemCompleted for TurnItem::AgentMessage
+// Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn review_filters_agent_message_related_events() {
+    skip_if_no_network!();
+
+    // Stream simulating a typing assistant message with deltas and finalization.
+    let sse_raw = r#"[
+        {"type":"response.output_item.added", "item":{
+            "type":"message", "role":"assistant", "id":"msg-1",
+            "content":[{"type":"output_text","text":""}]
+        }},
+        {"type":"response.output_text.delta", "delta":"Hi"},
+        {"type":"response.output_text.delta", "delta":" there"},
+        {"type":"response.output_item.done", "item":{
+            "type":"message", "role":"assistant", "id":"msg-1",
+            "content":[{"type":"output_text","text":"Hi there"}]
+        }},
+        {"type":"response.completed", "response": {"id": "__ID__"}}
+    ]"#;
+    let server = start_responses_server_with_sse(sse_raw, 1).await;
+    let codex_home = TempDir::new().unwrap();
+    let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                prompt: "Filter streaming events".to_string(),
+                user_facing_hint: "Filter streaming events".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+
+    let mut saw_entered = false;
+    let mut saw_exited = false;
+
+    // Drain until TaskComplete; assert filtered events never surface.
+    wait_for_event_with_timeout(
+        &codex,
+        |event| match event {
+            EventMsg::TaskComplete(_) => true,
+            EventMsg::EnteredReviewMode(_) => {
+                saw_entered = true;
+                false
+            }
+            EventMsg::ExitedReviewMode(_) => {
+                saw_exited = true;
+                false
+            }
+            // The following must be filtered by review flow
+            EventMsg::AgentMessageContentDelta(_) => {
+                panic!("unexpected AgentMessageContentDelta surfaced during review")
+            }
+            EventMsg::AgentMessageDelta(_) => {
+                panic!("unexpected AgentMessageDelta surfaced during review")
+            }
+            EventMsg::ItemCompleted(ev) => match &ev.item {
+                codex_protocol::items::TurnItem::AgentMessage(_) => {
+                    panic!(
+                        "unexpected ItemCompleted for TurnItem::AgentMessage surfaced during review"
+                    )
+                }
+                _ => false,
+            },
+            _ => false,
+        },
+        tokio::time::Duration::from_secs(5),
+    )
+    .await;
+    assert!(saw_entered && saw_exited, "missing review lifecycle events");
 
     server.verify().await;
 }
@@ -375,7 +447,8 @@ async fn review_input_isolated_from_parent_history() {
                 "instructions": null,
                 "cwd": ".",
                 "originator": "test_originator",
-                "cli_version": "test_version"
+                "cli_version": "test_version",
+                "model_provider": "test-provider"
             }
         });
         f.write_all(format!("{meta_line}\n").as_bytes())
@@ -482,13 +555,7 @@ async fn review_input_isolated_from_parent_history() {
     assert_eq!(instructions, REVIEW_PROMPT);
 
     // Also verify that a user interruption note was recorded in the rollout.
-    codex.submit(Op::GetPath).await.unwrap();
-    let history_event =
-        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ConversationPath(_))).await;
-    let path = match history_event {
-        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path,
-        other => panic!("expected ConversationPath event, got {other:?}"),
-    };
+    let path = codex.rollout_path();
     let text = std::fs::read_to_string(&path).expect("read rollout file");
     let mut saw_interruption_message = false;
     for line in text.lines() {
