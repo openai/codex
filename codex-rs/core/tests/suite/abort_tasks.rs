@@ -1,3 +1,4 @@
+use assert_matches::assert_matches;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -124,7 +125,7 @@ async fn interrupt_tool_records_history_entries() {
     )
     .await;
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    tokio::time::sleep(Duration::from_secs_f32(0.1)).await;
     codex.submit(Op::Interrupt).await.unwrap();
 
     wait_for_event_with_timeout(
@@ -164,13 +165,23 @@ async fn interrupt_tool_records_history_entries() {
     let output = response_mock
         .function_call_output_text(call_id)
         .expect("missing function_call_output text");
-    let re = Regex::new(r"^aborted by user after ([0-9]+(?:\.[0-9])?)s$").expect("compile regex");
-    let caps = re
-        .captures(&output)
-        .expect("aborted message with elapsed seconds");
-    let secs: f32 = caps.get(1).unwrap().as_str().parse().unwrap();
+    let re = Regex::new(r"^Wall time: ([0-9]+(?:\.[0-9])?) seconds\naborted by user$")
+        .expect("compile regex");
+    let captures = re.captures(&output);
+    assert_matches!(
+        captures.as_ref(),
+        Some(caps) if caps.get(1).is_some(),
+        "aborted message with elapsed seconds"
+    );
+    let secs: f32 = captures
+        .expect("aborted message with elapsed seconds")
+        .get(1)
+        .unwrap()
+        .as_str()
+        .parse()
+        .unwrap();
     assert!(
-        secs >= 1.0,
-        "expected at least one second of elapsed time, got {secs}"
+        secs >= 0.1,
+        "expected at least one tenth of a second of elapsed time, got {secs}"
     );
 }

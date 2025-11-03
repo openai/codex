@@ -61,7 +61,7 @@ impl ToolCallRuntime {
             AbortOnDropHandle::new(tokio::spawn(async move {
                 tokio::select! {
                     _ = cancellation_token.cancelled() => {
-                        let secs = started.elapsed().as_secs_f32().round();
+                        let secs = started.elapsed().as_secs_f32().max(0.1);
                         Ok(Self::aborted_response(&call, secs))
                     },
                     res = async {
@@ -99,19 +99,28 @@ impl ToolCallRuntime {
         match &call.payload {
             ToolPayload::Custom { .. } => ResponseInputItem::CustomToolCallOutput {
                 call_id: call.call_id.clone(),
-                output: format!("aborted by user after {secs}s"),
+                output: Self::abort_message(call, secs),
             },
             ToolPayload::Mcp { .. } => ResponseInputItem::McpToolCallOutput {
                 call_id: call.call_id.clone(),
-                result: Err(format!("aborted by user after {secs}s")),
+                result: Err(Self::abort_message(call, secs)),
             },
             _ => ResponseInputItem::FunctionCallOutput {
                 call_id: call.call_id.clone(),
                 output: FunctionCallOutputPayload {
-                    content: format!("aborted by user after {secs}s"),
+                    content: Self::abort_message(call, secs),
                     ..Default::default()
                 },
             },
+        }
+    }
+
+    fn abort_message(call: &ToolCall, secs: f32) -> String {
+        match call.tool_name.as_str() {
+            "shell" | "container.exec" | "local_shell" | "unified_exec" => {
+                format!("Wall time: {secs:.1} seconds\naborted by user")
+            }
+            _ => format!("aborted by user after {secs:.1}s"),
         }
     }
 }
