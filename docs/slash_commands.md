@@ -1,4 +1,6 @@
-## 1. What are slash commands?
+## Slash Commands
+
+### What are slash commands?
 
 Slash commands are special commands you can type that start with `/`.
 
