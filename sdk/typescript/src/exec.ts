@@ -1,10 +1,9 @@
 import { spawn } from "node:child_process";
-
+import path from "node:path";
 import readline from "node:readline";
+import { fileURLToPath } from "node:url";
 
 import { SandboxMode } from "./threadOptions";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 export type CodexExecArgs = {
   input: string;
@@ -12,6 +11,7 @@ export type CodexExecArgs = {
   baseUrl?: string;
   apiKey?: string;
   threadId?: string | null;
+  images?: string[];
   // --model
   model?: string;
   // --sandbox
@@ -20,7 +20,12 @@ export type CodexExecArgs = {
   workingDirectory?: string;
   // --skip-git-repo-check
   skipGitRepoCheck?: boolean;
+  // --output-schema
+  outputSchemaFile?: string;
 };
+
+const INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
+const TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
 
 export class CodexExec {
   private executablePath: string;
@@ -47,6 +52,16 @@ export class CodexExec {
       commandArgs.push("--skip-git-repo-check");
     }
 
+    if (args.outputSchemaFile) {
+      commandArgs.push("--output-schema", args.outputSchemaFile);
+    }
+
+    if (args.images?.length) {
+      for (const image of args.images) {
+        commandArgs.push("--image", image);
+      }
+    }
+
     if (args.threadId) {
       commandArgs.push("resume", args.threadId);
     }
@@ -54,6 +69,9 @@ export class CodexExec {
     const env = {
       ...process.env,
     };
+    if (!env[INTERNAL_ORIGINATOR_ENV]) {
+      env[INTERNAL_ORIGINATOR_ENV] = TYPESCRIPT_SDK_ORIGINATOR;
+    }
     if (args.baseUrl) {
       env.OPENAI_BASE_URL = args.baseUrl;
     }
