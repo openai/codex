@@ -94,7 +94,7 @@ use std::io::Write as _;
 // (tests access modules directly within the crate)
 
 pub async fn run_main(
-    cli: Cli,
+    mut cli: Cli,
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> std::io::Result<AppExitInfo> {
     let (sandbox_mode, approval_policy) = if cli.full_auto {
@@ -113,6 +113,13 @@ pub async fn run_main(
             cli.approval_policy.map(Into::into),
         )
     };
+
+    // Map the legacy --search flag to the new feature toggle.
+    if cli.web_search {
+        cli.config_overrides
+            .raw_overrides
+            .push("features.web_search_request=true".to_string());
+    }
 
     // When using `--oss`, let the bootstrapper pick the model (defaulting to
     // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
@@ -149,7 +156,7 @@ pub async fn run_main(
         compact_prompt: None,
         include_apply_patch_tool: None,
         show_raw_agent_reasoning: cli.oss.then_some(true),
-        tools_web_search_request: cli.web_search.then_some(true),
+        tools_web_search_request: None,
         experimental_sandbox_command_assessment: None,
         additional_writable_roots: additional_dirs,
     };
