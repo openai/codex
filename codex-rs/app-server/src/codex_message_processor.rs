@@ -134,6 +134,9 @@ use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
 
+type PendingInterruptQueue = Vec<(RequestId, ApiVersion)>;
+type PendingInterrupts = Arc<Mutex<HashMap<ConversationId, PendingInterruptQueue>>>;
+
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 struct ActiveLogin {
@@ -161,7 +164,7 @@ pub(crate) struct CodexMessageProcessor {
     subscription_to_conversation: HashMap<Uuid, ConversationId>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
-    pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<(RequestId, ApiVersion)>>>>,
+    pending_interrupts: PendingInterrupts,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     feedback: CodexFeedback,
 }
@@ -2295,7 +2298,7 @@ async fn apply_bespoke_event_handling(
     conversation_id: ConversationId,
     conversation: Arc<CodexConversation>,
     outgoing: Arc<OutgoingMessageSender>,
-    pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<(RequestId, ApiVersion)>>>>,
+    pending_interrupts: PendingInterrupts,
 ) {
     let Event { id: event_id, msg } = event;
     match msg {
