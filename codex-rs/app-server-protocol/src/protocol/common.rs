@@ -558,10 +558,10 @@ server_notification_definitions! {
     #[strum(serialize = "item/commandExecution/outputDelta")]
     CommandExecutionOutputDelta(v2::CommandExecutionOutputDeltaNotification),
 
-    #[serde(rename = "item/mcp/progress")]
-    #[ts(rename = "item/mcp/progress")]
-    #[strum(serialize = "item/mcp/progress")]
-    McpProgress(v2::McpProgressNotification),
+    #[serde(rename = "item/mcpToolCall/progress")]
+    #[ts(rename = "item/mcpToolCall/progress")]
+    #[strum(serialize = "item/mcpToolCall/progress")]
+    McpToolCallProgress(v2::McpToolCallProgressNotification),
 
     #[serde(rename = "account/rateLimits/updated")]
     #[ts(rename = "account/rateLimits/updated")]

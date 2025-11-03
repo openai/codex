@@ -841,19 +841,51 @@ impl CodexMessageProcessor {
     }
 
     async fn process_new_conversation(&self, request_id: RequestId, params: NewConversationParams) {
-        let config =
-            match derive_config_from_params(params, self.codex_linux_sandbox_exe.clone()).await {
-                Ok(config) => config,
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("error deriving config: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            };
+        let NewConversationParams {
+            model,
+            model_provider,
+            profile,
+            cwd,
+            approval_policy,
+            sandbox: sandbox_mode,
+            config: cli_overrides,
+            base_instructions,
+            developer_instructions,
+            compact_prompt,
+            include_apply_patch_tool,
+        } = params;
+
+        let overrides = ConfigOverrides {
+            model,
+            review_model: None,
+            config_profile: profile,
+            cwd: cwd.map(PathBuf::from),
+            approval_policy,
+            sandbox_mode,
+            model_provider,
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+            base_instructions,
+            developer_instructions,
+            compact_prompt,
+            include_apply_patch_tool,
+            show_raw_agent_reasoning: None,
+            tools_web_search_request: None,
+            experimental_sandbox_command_assessment: None,
+            additional_writable_roots: Vec::new(),
+        };
+
+        let config = match derive_config_from_params(overrides, cli_overrides).await {
+            Ok(config) => config,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("error deriving config: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(conversation_id) => {
@@ -882,32 +914,32 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_start(&mut self, request_id: RequestId, params: ThreadStartParams) {
-        // Map v2 ThreadStartParams onto the existing NewConversationParams so we
-        // can reuse the same config derivation and conversation manager flow.
-        let overrides = NewConversationParams {
+        // Build ConfigOverrides directly from ThreadStartParams for config derivation.
+        let cli_overrides = params.config;
+        let overrides = ConfigOverrides {
             model: params.model,
-            model_provider: params.model_provider,
-            profile: params.profile,
-            cwd: params.cwd,
+            review_model: None,
+            config_profile: None,
+            cwd: params.cwd.map(PathBuf::from),
             approval_policy: params
                 .approval_policy
                 .map(codex_app_server_protocol::AskForApproval::to_core),
-            sandbox: params
+            sandbox_mode: params
                 .sandbox
                 .map(codex_app_server_protocol::SandboxMode::to_core),
-            config: params.config,
+            model_provider: params.model_provider,
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             base_instructions: params.base_instructions,
             developer_instructions: params.developer_instructions,
-            compact_prompt: params.compact_prompt,
-            include_apply_patch_tool: params.include_apply_patch_tool,
+            compact_prompt: None,
+            include_apply_patch_tool: None,
+            show_raw_agent_reasoning: None,
+            tools_web_search_request: None,
+            experimental_sandbox_command_assessment: None,
+            additional_writable_roots: Vec::new(),
         };
 
-        let config = match derive_config_from_params(
-            overrides,
-            self.codex_linux_sandbox_exe.clone(),
-        )
-        .await
-        {
+        let config = match derive_config_from_params(overrides, cli_overrides).await {
             Ok(config) => config,
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -1672,8 +1704,41 @@ impl CodexMessageProcessor {
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let config = match overrides {
-            Some(overrides) => {
-                derive_config_from_params(overrides, self.codex_linux_sandbox_exe.clone()).await
+            Some(params) => {
+                let NewConversationParams {
+                    model,
+                    model_provider,
+                    profile,
+                    cwd,
+                    approval_policy,
+                    sandbox: sandbox_mode,
+                    config: cli_overrides,
+                    base_instructions,
+                    developer_instructions,
+                    compact_prompt,
+                    include_apply_patch_tool,
+                } = params;
+
+                let overrides = ConfigOverrides {
+                    model,
+                    review_model: None,
+                    config_profile: profile,
+                    cwd: cwd.map(PathBuf::from),
+                    approval_policy,
+                    sandbox_mode,
+                    model_provider,
+                    codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+                    base_instructions,
+                    developer_instructions,
+                    compact_prompt,
+                    include_apply_patch_tool,
+                    show_raw_agent_reasoning: None,
+                    tools_web_search_request: None,
+                    experimental_sandbox_command_assessment: None,
+                    additional_writable_roots: Vec::new(),
+                };
+
+                derive_config_from_params(overrides, cli_overrides).await
             }
             None => Ok(self.config.as_ref().clone()),
         };
@@ -2393,41 +2458,9 @@ async fn apply_bespoke_event_handling(
 }
 
 async fn derive_config_from_params(
-    params: NewConversationParams,
-    codex_linux_sandbox_exe: Option<PathBuf>,
+    overrides: ConfigOverrides,
+    cli_overrides: Option<std::collections::HashMap<String, serde_json::Value>>,
 ) -> std::io::Result<Config> {
-    let NewConversationParams {
-        model,
-        model_provider,
-        profile,
-        cwd,
-        approval_policy,
-        sandbox: sandbox_mode,
-        config: cli_overrides,
-        base_instructions,
-        developer_instructions,
-        compact_prompt,
-        include_apply_patch_tool,
-    } = params;
-    let overrides = ConfigOverrides {
-        model,
-        review_model: None,
-        config_profile: profile,
-        cwd: cwd.map(PathBuf::from),
-        approval_policy,
-        sandbox_mode,
-        model_provider,
-        codex_linux_sandbox_exe,
-        base_instructions,
-        developer_instructions,
-        compact_prompt,
-        include_apply_patch_tool,
-        show_raw_agent_reasoning: None,
-        tools_web_search_request: None,
-        experimental_sandbox_command_assessment: None,
-        additional_writable_roots: Vec::new(),
-    };
-
     let cli_overrides = cli_overrides
         .unwrap_or_default()
         .into_iter()

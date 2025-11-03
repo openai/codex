@@ -258,15 +258,12 @@ pub struct FeedbackUploadResponse {
 pub struct ThreadStartParams {
     pub model: Option<String>,
     pub model_provider: Option<String>,
-    pub profile: Option<String>,
     pub cwd: Option<String>,
     pub approval_policy: Option<AskForApproval>,
     pub sandbox: Option<SandboxMode>,
     pub config: Option<HashMap<String, serde_json::Value>>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
-    pub compact_prompt: Option<String>,
-    pub include_apply_patch_tool: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -642,7 +639,7 @@ pub struct CommandExecutionOutputDeltaNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct McpProgressNotification {
+pub struct McpToolCallProgressNotification {
     pub item_id: String,
     pub message: String,
 }
