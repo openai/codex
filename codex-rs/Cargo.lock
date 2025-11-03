@@ -1300,6 +1300,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-notifier"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "cc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "codex-ollama"
 version = "0.0.0"
 dependencies = [

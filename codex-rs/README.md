@@ -46,7 +46,7 @@ Use `codex mcp` to add/list/get/remove MCP server launchers defined in `config.t
 
 ### Notifications
 
-On macOS, the CLI now ships with a signed Notification Center integration, so you’ll get trusted desktop alerts (with the Codex icon) as soon as a turn completes—no extra tooling required. If you want to customize the behaviour or are on another platform, you can still point `notify` at your own script; see the [notify documentation](../docs/config.md#notify) for an example.
+On macOS, the CLI installs a signed helper app (`~/.codex/bin/CodexNotifier.app`) that delivers Notification Center alerts with the Codex icon, so you’ll get trusted banners as soon as a turn completes—no extra tooling required. Set `CODEX_NOTIFIER_APP` if you need to point at a custom build. If you want to customise the behaviour or are on another platform, you can still point `notify` at your own script; see the [notify documentation](../docs/config.md#notify) for an example.
 
 ### `codex exec` to run Codex programmatically/non-interactively
 

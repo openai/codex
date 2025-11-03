@@ -55,6 +55,18 @@
           "path": "codex-responses-api-proxy.exe"
         }
       }
+    },
+    "codex-notifier": {
+      "platforms": {
+        "macos-aarch64": {
+          "regex": "^codex-notifier-aarch64-apple-darwin\\.zst$",
+          "path": "codex-notifier"
+        },
+        "macos-x86_64": {
+          "regex": "^codex-notifier-x86_64-apple-darwin\\.zst$",
+          "path": "codex-notifier"
+        }
+      }
     }
   }
 }

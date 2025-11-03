@@ -101,6 +101,10 @@ jobs:
         run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
 
       - if: ${{ matrix.runner == 'macos-15-xlarge' }}
+        name: Build notifier helper
+        run: cargo build --target ${{ matrix.target }} --release -p codex-notifier
+
+      - if: ${{ matrix.runner == 'macos-15-xlarge' }}
         name: Configure Apple code signing
         shell: bash
         env:
@@ -201,7 +205,12 @@ jobs:
             keychain_args+=(--keychain "${APPLE_CODESIGN_KEYCHAIN}")
           fi
 
-          for binary in codex codex-responses-api-proxy; do
+          binaries=(codex codex-responses-api-proxy)
+          if [[ -f "target/${{ matrix.target }}/release/codex-notifier" ]]; then
+            binaries+=(codex-notifier)
+          fi
+
+          for binary in "${binaries[@]}"; do
             path="target/${{ matrix.target }}/release/${binary}"
             codesign --force --options runtime --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$path"
           done
@@ -268,6 +277,9 @@ jobs:
 
           notarize_binary "codex"
           notarize_binary "codex-responses-api-proxy"
+          if [[ -f "target/${{ matrix.target }}/release/codex-notifier" ]]; then
+            notarize_binary "codex-notifier"
+          fi
 
       - name: Stage artifacts
         shell: bash
@@ -281,6 +293,9 @@ jobs:
           else
             cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
             cp target/${{ matrix.target }}/release/codex-responses-api-proxy "$dest/codex-responses-api-proxy-${{ matrix.target }}"
+            if [[ -f target/${{ matrix.target }}/release/codex-notifier ]]; then
+              cp target/${{ matrix.target }}/release/codex-notifier "$dest/codex-notifier-${{ matrix.target }}"
+            fi
           fi
 
       - if: ${{ matrix.runner == 'windows-11-arm' }}

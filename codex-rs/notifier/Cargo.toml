@@ -1,0 +1,12 @@
+[package]
+name = "codex-notifier"
+version = { workspace = true }
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[build-dependencies]
+cc = "1.0"

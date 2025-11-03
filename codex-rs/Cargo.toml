@@ -12,6 +12,7 @@ members = [
     "cloud-tasks",
     "cloud-tasks-client",
     "cli",
+    "notifier",
     "common",
     "core",
     "exec",
