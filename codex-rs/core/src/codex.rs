@@ -124,9 +124,8 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::InitialHistory;
-use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+// use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
@@ -1777,26 +1776,11 @@ pub(crate) async fn run_task(
 
         let turn_input_messages = turn_input
             .iter()
-            .filter_map(|item| match item {
-                ResponseItem::Message { role, content, .. }
-                    if role == "user"
-                        && !UserInstructions::is_user_instructions(content)
-                        && !matches!(
-                            content.as_slice(),
-                            [ContentItem::InputText { text }]
-                                if text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG)
-                        ) =>
-                {
-                    Some(content)
-                }
+            .filter_map(|item| match parse_turn_item(item) {
+                Some(TurnItem::UserMessage(user_message)) => Some(user_message),
                 _ => None,
             })
-            .flat_map(|content| {
-                content.iter().filter_map(|item| match item {
-                    ContentItem::InputText { text } => extract_user_visible_text(text),
-                    _ => None,
-                })
-            })
+            .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
         match run_turn(
             Arc::clone(&sess),
@@ -2255,28 +2239,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
             None
         }
     })
-}
-
-fn extract_user_visible_text(text: &str) -> Option<String> {
-    if text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG) {
-        return None;
-    }
-
-    if let Some(idx) = text.find(USER_MESSAGE_BEGIN) {
-        let request = text[idx + USER_MESSAGE_BEGIN.len()..].trim();
-        if request.is_empty() {
-            None
-        } else {
-            Some(request.to_string())
-        }
-    } else {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    }
 }
 
 fn mcp_init_error_display(
