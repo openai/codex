@@ -181,9 +181,9 @@ mod tests {
             codex_app_server_protocol::AccountRateLimitsUpdatedNotification {
                 rate_limits: RateLimitSnapshot {
                     primary: Some(RateLimitWindow {
-                        used_percent: 25.0,
-                        window_minutes: Some(15),
-                        resets_at: Some(123),
+                        used_percent: 25,
+                        window_duration_mins: Some(15),
+                        resets_at_ms: Some(123),
                     }),
                     secondary: None,
                 },

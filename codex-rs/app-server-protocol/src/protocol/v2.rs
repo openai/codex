@@ -618,8 +618,6 @@ pub struct AccountRateLimitsUpdatedNotification {
     pub rate_limits: RateLimitSnapshot,
 }
 
-// CamelCased copy of codex_protocol::protocol::{RateLimitSnapshot, RateLimitWindow}
-// for the v2 API. This avoids leaking snake_case into the v2 wire format.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -642,21 +640,21 @@ impl From<codex_protocol::protocol::RateLimitSnapshot> for RateLimitSnapshot {
 #[ts(export_to = "v2/")]
 pub struct RateLimitWindow {
     /// Percentage (0-100) of the window that has been consumed.
-    pub used_percent: f64,
+    pub used_percent: i64,
     /// Rolling window duration, in minutes.
     #[ts(type = "number | null")]
-    pub window_minutes: Option<i64>,
-    /// Unix timestamp (seconds since epoch) when the window resets.
+    pub window_duration_mins: Option<i64>,
+    /// Unix timestamp (milliseconds since epoch) when the window resets.
     #[ts(type = "number | null")]
-    pub resets_at: Option<i64>,
+    pub resets_at_ms: Option<i64>,
 }
 
 impl From<codex_protocol::protocol::RateLimitWindow> for RateLimitWindow {
     fn from(value: codex_protocol::protocol::RateLimitWindow) -> Self {
         Self {
-            used_percent: value.used_percent,
-            window_minutes: value.window_minutes,
-            resets_at: value.resets_at,
+            used_percent: value.used_percent as i64,
+            window_duration_mins: value.window_minutes,
+            resets_at_ms: value.resets_at.map(|ms| ms * 1000),
         }
     }
 }
