@@ -156,10 +156,6 @@ pub(crate) struct CodexMessageProcessor {
     codex_linux_sandbox_exe: Option<PathBuf>,
     config: Arc<Config>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
-    // Map conversations to their active listener subscription ids (legacy + v2 auto-attached).
-    conversation_listener_index: HashMap<ConversationId, Vec<Uuid>>,
-    // Reverse lookup from subscription id to conversation id for clean removal.
-    subscription_to_conversation: HashMap<Uuid, ConversationId>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: PendingInterrupts,
@@ -189,8 +185,6 @@ impl CodexMessageProcessor {
             codex_linux_sandbox_exe,
             config,
             conversation_listeners: HashMap::new(),
-            conversation_listener_index: HashMap::new(),
-            subscription_to_conversation: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
@@ -2082,14 +2076,6 @@ impl CodexMessageProcessor {
         self.conversation_listeners
             .insert(subscription_id, cancel_tx);
 
-        // Track mappings so we can cleanly cancel listeners by conversation id.
-        self.subscription_to_conversation
-            .insert(subscription_id, conversation_id);
-        self.conversation_listener_index
-            .entry(conversation_id)
-            .or_default()
-            .push(subscription_id);
-
         let outgoing_for_task = self.outgoing.clone();
         let pending_interrupts = self.pending_interrupts.clone();
         let conversation_for_task = conversation;
@@ -2165,15 +2151,6 @@ impl CodexMessageProcessor {
             Some(sender) => {
                 // Signal the spawned task to exit and acknowledge.
                 let _ = sender.send(());
-                // Clean reverse mappings.
-                if let Some(conv_id) = self.subscription_to_conversation.remove(&subscription_id)
-                    && let Some(list) = self.conversation_listener_index.get_mut(&conv_id)
-                {
-                    list.retain(|id| id != &subscription_id);
-                    if list.is_empty() {
-                        self.conversation_listener_index.remove(&conv_id);
-                    }
-                }
                 let response = RemoveConversationSubscriptionResponse {};
                 self.outgoing.send_response(request_id, response).await;
             }
