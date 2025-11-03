@@ -1136,27 +1136,38 @@ impl CodexMessageProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         // Verify rollout_path is under sessions dir.
         let rollout_folder = self.config.codex_home.join(codex_core::SESSIONS_SUBDIR);
-        let canonical_rollout_path =
-            tokio::fs::canonicalize(rollout_path)
-                .await
-                .map_err(|_| JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
+
+        let canonical_sessions_dir = match tokio::fs::canonicalize(&rollout_folder).await {
+            Ok(path) => path,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
                     message: format!(
-                        "rollout path `{}` must be in sessions directory",
-                        rollout_path.display()
+                        "failed to archive conversation: unable to resolve sessions directory: {err}"
                     ),
                     data: None,
-                })?;
-        if !canonical_rollout_path.starts_with(&rollout_folder) {
-            return Err(JSONRPCErrorError {
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let canonical_rollout_path = tokio::fs::canonicalize(rollout_path).await;
+        let canonical_rollout_path = if let Ok(path) = canonical_rollout_path
+            && path.starts_with(&canonical_sessions_dir)
+        {
+            path
+        } else {
+            let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: format!(
                     "rollout path `{}` must be in sessions directory",
                     rollout_path.display()
                 ),
                 data: None,
-            });
-        }
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        };
 
         // Verify file name matches conversation id.
         let required_suffix = format!("{conversation_id}.jsonl");
@@ -1183,10 +1194,6 @@ impl CodexMessageProcessor {
                 data: None,
             });
         }
-
-        // Proactively cancel any listeners for this conversation so our
-        // shutdown wait does not race with listener tasks consuming events.
-        self.cancel_conversation_listeners(conversation_id);
 
         // If the conversation is active, request shutdown and wait briefly.
         if let Some(conversation) = self
@@ -1813,6 +1820,7 @@ impl CodexMessageProcessor {
             conversation_id,
             rollout_path,
         } = params;
+
         match self
             .archive_conversation_common(conversation_id, &rollout_path)
             .await
@@ -2114,17 +2122,6 @@ impl CodexMessageProcessor {
         });
 
         Ok(subscription_id)
-    }
-
-    fn cancel_conversation_listeners(&mut self, conversation_id: ConversationId) {
-        if let Some(ids) = self.conversation_listener_index.remove(&conversation_id) {
-            for id in ids {
-                if let Some(sender) = self.conversation_listeners.remove(&id) {
-                    let _ = sender.send(());
-                }
-                self.subscription_to_conversation.remove(&id);
-            }
-        }
     }
 
     async fn remove_conversation_listener(
