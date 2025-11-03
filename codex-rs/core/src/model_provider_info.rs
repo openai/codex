@@ -93,6 +93,16 @@ pub struct ModelProviderInfo {
     /// and API key (if needed) comes from the "env_key" environment variable.
     #[serde(default)]
     pub requires_openai_auth: bool,
+
+    /// JSON key used by this provider for transmitting reasoning content.
+    #[serde(default = "default_reasoning_key")]
+    pub reasoning_key: String,
+}
+
+pub const DEFAULT_REASONING_KEY: &str = "reasoning";
+
+fn default_reasoning_key() -> String {
+    DEFAULT_REASONING_KEY.to_string()
 }
 
 impl ModelProviderInfo {
@@ -309,6 +319,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: true,
+                reasoning_key: default_reasoning_key(),
             },
         ),
         (BUILT_IN_OSS_MODEL_PROVIDER_ID, create_oss_provider()),
@@ -354,6 +365,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         requires_openai_auth: false,
+        reasoning_key: default_reasoning_key(),
     }
 }
 
@@ -394,6 +406,7 @@ base_url = "http://localhost:11434/v1"
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            reasoning_key: default_reasoning_key(),
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -424,6 +437,7 @@ query_params = { api-version = "2025-04-01-preview" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            reasoning_key: default_reasoning_key(),
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -457,6 +471,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            reasoning_key: default_reasoning_key(),
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -480,6 +495,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
+                reasoning_key: default_reasoning_key(),
             }
         }
 
@@ -513,6 +529,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            reasoning_key: default_reasoning_key(),
         };
         assert!(named_provider.is_azure_responses_endpoint());
 

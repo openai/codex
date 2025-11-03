@@ -29,6 +29,10 @@ fn network_disabled() -> bool {
 }
 
 async fn run_request(input: Vec<ResponseItem>) -> Value {
+    run_request_with_reasoning_key(input, "reasoning").await
+}
+
+async fn run_request_with_reasoning_key(input: Vec<ResponseItem>, reasoning_key: &str) -> Value {
     let server = MockServer::start().await;
 
     let template = ResponseTemplate::new(200)
@@ -59,6 +63,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
         requires_openai_auth: false,
+        reasoning_key: reasoning_key.to_string(),
     };
 
     let codex_home = match TempDir::new() {
@@ -203,6 +208,35 @@ async fn omits_reasoning_when_none_present() {
     let assistant = first_assistant(&messages);
 
     assert_eq!(assistant["content"], Value::String("a1".into()));
+    assert!(assistant.get("reasoning").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn uses_custom_reasoning_key() {
+    if network_disabled() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    let body = run_request_with_reasoning_key(
+        vec![
+            user_message("u1"),
+            assistant_message("aCustom"),
+            reasoning_item("rCustom"),
+        ],
+        "reasoning_content",
+    )
+    .await;
+    let messages = messages_from(&body);
+    let assistant = first_assistant(&messages);
+
+    assert_eq!(assistant["content"], Value::String("aCustom".into()));
+    assert_eq!(
+        assistant["reasoning_content"],
+        Value::String("rCustom".into())
+    );
     assert!(assistant.get("reasoning").is_none());
 }
 

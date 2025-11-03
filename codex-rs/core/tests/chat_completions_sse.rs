@@ -28,10 +28,18 @@ fn network_disabled() -> bool {
 }
 
 async fn run_stream(sse_body: &str) -> Vec<ResponseEvent> {
-    run_stream_with_bytes(sse_body.as_bytes()).await
+    run_stream_with_reasoning_key(sse_body, "reasoning").await
 }
 
 async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
+    run_stream_with_bytes_and_key(sse_body, "reasoning").await
+}
+
+async fn run_stream_with_reasoning_key(sse_body: &str, reasoning_key: &str) -> Vec<ResponseEvent> {
+    run_stream_with_bytes_and_key(sse_body.as_bytes(), reasoning_key).await
+}
+
+async fn run_stream_with_bytes_and_key(sse_body: &[u8], reasoning_key: &str) -> Vec<ResponseEvent> {
     let server = MockServer::start().await;
 
     let template = ResponseTemplate::new(200)
@@ -59,6 +67,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
         requires_openai_auth: false,
+        reasoning_key: reasoning_key.to_string(),
     };
 
     let codex_home = match TempDir::new() {
@@ -236,6 +245,57 @@ async fn streams_reasoning_from_string_delta() {
 
     match &events[5] {
         ResponseEvent::OutputItemDone(item) => assert_message(item, "ok"),
+        other => panic!("expected terminal message, got {other:?}"),
+    }
+
+    assert_matches!(events[6], ResponseEvent::Completed { .. });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn streams_reasoning_with_custom_key() {
+    if network_disabled() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    let sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{} ,\"finish_reason\":\"stop\"}]}\n\n",
+    );
+
+    let events = run_stream_with_reasoning_key(sse, "reasoning_content").await;
+    assert_eq!(events.len(), 7, "unexpected events: {events:?}");
+
+    match &events[0] {
+        ResponseEvent::OutputItemAdded(ResponseItem::Reasoning { .. }) => {}
+        other => panic!("expected initial reasoning item, got {other:?}"),
+    }
+
+    match &events[1] {
+        ResponseEvent::ReasoningContentDelta(text) => assert_eq!(text, "think"),
+        other => panic!("expected reasoning delta, got {other:?}"),
+    }
+
+    match &events[2] {
+        ResponseEvent::OutputItemAdded(ResponseItem::Message { .. }) => {}
+        other => panic!("expected initial message item, got {other:?}"),
+    }
+
+    match &events[3] {
+        ResponseEvent::OutputTextDelta(text) => assert_eq!(text, "answer"),
+        other => panic!("expected text delta, got {other:?}"),
+    }
+
+    match &events[4] {
+        ResponseEvent::OutputItemDone(item) => assert_reasoning(item, "think"),
+        other => panic!("expected terminal reasoning, got {other:?}"),
+    }
+
+    match &events[5] {
+        ResponseEvent::OutputItemDone(item) => assert_message(item, "answer"),
         other => panic!("expected terminal message, got {other:?}"),
     }
 

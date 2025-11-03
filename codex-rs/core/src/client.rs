@@ -972,6 +972,7 @@ fn is_context_window_error(error: &Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model_provider_info::DEFAULT_REASONING_KEY;
     use assert_matches::assert_matches;
     use serde_json::json;
     use tokio::sync::mpsc;
@@ -1110,6 +1111,7 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
             requires_openai_auth: false,
+            reasoning_key: DEFAULT_REASONING_KEY.to_string(),
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1174,6 +1176,7 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
             requires_openai_auth: false,
+            reasoning_key: DEFAULT_REASONING_KEY.to_string(),
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1211,6 +1214,7 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
             requires_openai_auth: false,
+            reasoning_key: DEFAULT_REASONING_KEY.to_string(),
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1250,6 +1254,7 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
             requires_openai_auth: false,
+            reasoning_key: DEFAULT_REASONING_KEY.to_string(),
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1285,6 +1290,7 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
             requires_openai_auth: false,
+            reasoning_key: DEFAULT_REASONING_KEY.to_string(),
         };
 
         let otel_event_manager = otel_event_manager();
@@ -1389,6 +1395,7 @@ mod tests {
                 stream_max_retries: Some(0),
                 stream_idle_timeout_ms: Some(1000),
                 requires_openai_auth: false,
+                reasoning_key: DEFAULT_REASONING_KEY.to_string(),
             };
 
             let otel_event_manager = otel_event_manager();

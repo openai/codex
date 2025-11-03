@@ -1290,6 +1290,7 @@ mod tests {
     use crate::features::Feature;
 
     use super::*;
+    use crate::model_provider_info::DEFAULT_REASONING_KEY;
     use pretty_assertions::assert_eq;
 
     use std::time::Duration;
@@ -1325,6 +1326,36 @@ persistence = "none"
             }),
             history_no_persistence_cfg.history
         );
+    }
+
+    #[test]
+    fn model_provider_reasoning_key_config() {
+        let without_override = r#"
+[model_providers.default]
+name = "Default"
+base_url = "https://example.com"
+"#;
+        let cfg = toml::from_str::<ConfigToml>(without_override)
+            .expect("TOML deserialization should succeed");
+        let provider = cfg
+            .model_providers
+            .get("default")
+            .expect("provider to be present");
+        assert_eq!(provider.reasoning_key, DEFAULT_REASONING_KEY);
+
+        let with_override = r#"
+[model_providers.custom]
+name = "Custom"
+base_url = "https://example.com"
+reasoning_key = "reasoning_content"
+"#;
+        let cfg = toml::from_str::<ConfigToml>(with_override)
+            .expect("TOML deserialization should succeed");
+        let provider = cfg
+            .model_providers
+            .get("custom")
+            .expect("provider to be present");
+        assert_eq!(provider.reasoning_key, "reasoning_content");
     }
 
     #[test]
@@ -2809,6 +2840,7 @@ model_verbosity = "high"
             stream_max_retries: Some(10),
             stream_idle_timeout_ms: Some(300_000),
             requires_openai_auth: false,
+            reasoning_key: DEFAULT_REASONING_KEY.to_string(),
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();

@@ -53,6 +53,7 @@ pub(crate) async fn stream_chat_completions(
 
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
+    let reasoning_key = provider.reasoning_key.clone();
 
     let full_instructions = prompt.get_full_instructions(model_family);
     messages.push(json!({"role": "system", "content": full_instructions}));
@@ -208,7 +209,7 @@ pub(crate) async fn stream_chat_completions(
                     && let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
                     && let Some(obj) = msg.as_object_mut()
                 {
-                    obj.insert("reasoning".to_string(), json!(reasoning));
+                    obj.insert(reasoning_key.clone(), json!(reasoning));
                 }
                 messages.push(msg);
             }
@@ -233,7 +234,7 @@ pub(crate) async fn stream_chat_completions(
                 if let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
                     && let Some(obj) = msg.as_object_mut()
                 {
-                    obj.insert("reasoning".to_string(), json!(reasoning));
+                    obj.insert(reasoning_key.clone(), json!(reasoning));
                 }
                 messages.push(msg);
             }
@@ -257,7 +258,7 @@ pub(crate) async fn stream_chat_completions(
                 if let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
                     && let Some(obj) = msg.as_object_mut()
                 {
-                    obj.insert("reasoning".to_string(), json!(reasoning));
+                    obj.insert(reasoning_key.clone(), json!(reasoning));
                 }
                 messages.push(msg);
             }
@@ -382,6 +383,7 @@ pub(crate) async fn stream_chat_completions(
                 tokio::spawn(process_chat_sse(
                     stream,
                     tx_event,
+                    reasoning_key.clone(),
                     provider.stream_idle_timeout(),
                     otel_event_manager.clone(),
                 ));
@@ -490,12 +492,14 @@ async fn append_reasoning_text(
 async fn process_chat_sse<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
+    reasoning_key: String,
     idle_timeout: Duration,
     otel_event_manager: OtelEventManager,
 ) where
     S: Stream<Item = Result<Bytes>> + Unpin,
 {
     let mut stream = stream.eventsource();
+    let reasoning_key_ref = reasoning_key.as_str();
 
     // State to accumulate a function call across streaming chunks.
     // OpenAI may split the `arguments` string over multiple `delta` events
@@ -593,7 +597,8 @@ async fn process_chat_sse<S>(
             // Forward any reasoning/thinking deltas if present.
             // Some providers stream `reasoning` as a plain string while others
             // nest the text under an object (e.g. `{ "reasoning": { "text": "…" } }`).
-            if let Some(reasoning_val) = choice.get("delta").and_then(|d| d.get("reasoning")) {
+            if let Some(reasoning_val) = choice.get("delta").and_then(|d| d.get(reasoning_key_ref))
+            {
                 let mut maybe_text = reasoning_val
                     .as_str()
                     .map(str::to_string)
@@ -622,7 +627,8 @@ async fn process_chat_sse<S>(
             }
 
             // Some providers only include reasoning on the final message object.
-            if let Some(message_reasoning) = choice.get("message").and_then(|m| m.get("reasoning"))
+            if let Some(message_reasoning) =
+                choice.get("message").and_then(|m| m.get(reasoning_key_ref))
             {
                 // Accept either a plain string or an object with { text | content }
                 if let Some(s) = message_reasoning.as_str() {

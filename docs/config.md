@@ -100,6 +100,15 @@ http_headers = { "X-Example-Header" = "example-value" }
 env_http_headers = { "X-Example-Features" = "EXAMPLE_FEATURES" }
 ```
 
+If a provider exposes its reasoning output under a different JSON key, set `reasoning_key` to match the API. Codex defaults to the OpenAI-compatible `"reasoning"` field, but implementations such as llama.cpp expect `"reasoning_content"`.
+
+```toml
+[model_providers.llama_cpp]
+name = "llama.cpp"
+base_url = "http://localhost:8080/v1"
+reasoning_key = "reasoning_content"
+```
+
 #### Azure model provider example
 
 Note that Azure requires `api-version` to be passed as a query parameter, so be sure to specify it as part of `query_params` when defining the Azure provider:
