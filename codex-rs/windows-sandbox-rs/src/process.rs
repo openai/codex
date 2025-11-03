@@ -101,6 +101,7 @@ pub unsafe fn create_process_as_user(
     argv: &[String],
     cwd: &Path,
     env_map: &HashMap<String, String>,
+    logs_base_dir: Option<&Path>,
 ) -> Result<(PROCESS_INFORMATION, STARTUPINFOW)> {
     let cmdline_str = argv
         .iter()
@@ -142,7 +143,7 @@ pub unsafe fn create_process_as_user(
             env_block.len(),
             si.dwFlags,
         );
-        logging::debug_log(&msg);
+        logging::debug_log(&msg, logs_base_dir);
         return Err(anyhow!("CreateProcessAsUserW failed: {}", err));
     }
     Ok((pi, si))
