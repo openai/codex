@@ -195,8 +195,9 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
                         definitions
                             .entry(ns.to_string())
                             .or_insert_with(|| Value::Object(Map::new()));
-                        if let Value::Object(defs_ns) =
-                            definitions.get_mut(ns).expect("just inserted v2 namespace")
+                        if let Value::Object(defs_ns) = definitions
+                            .get_mut(ns)
+                            .ok_or_else(|| anyhow!("just inserted v2 namespace"))?
                         {
                             defs_ns.insert(def_name, def_schema);
                         }
@@ -212,8 +213,9 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
             definitions
                 .entry(ns.to_string())
                 .or_insert_with(|| Value::Object(Map::new()));
-            if let Value::Object(defs_ns) =
-                definitions.get_mut(ns).expect("just inserted v2 namespace")
+            if let Value::Object(defs_ns) = definitions
+                .get_mut(ns)
+                .ok_or_else(|| anyhow!("just inserted v2 namespace"))?
             {
                 defs_ns.insert(logical_name.to_string(), schema_value);
             }
