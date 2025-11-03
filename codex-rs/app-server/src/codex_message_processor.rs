@@ -948,7 +948,6 @@ impl CodexMessageProcessor {
             Ok(new_conv) => {
                 let thread = Thread {
                     id: new_conv.conversation_id.to_string(),
-                    turn: Vec::<Turn>::new(),
                 };
 
                 // Send response first to complete the RPC.
@@ -1306,7 +1305,6 @@ impl CodexMessageProcessor {
             .into_iter()
             .map(|s| Thread {
                 id: s.conversation_id.to_string(),
-                turn: Vec::<Turn>::new(),
             })
             .collect();
 
@@ -1402,7 +1400,6 @@ impl CodexMessageProcessor {
                 let response = ThreadResumeResponse {
                     thread: Thread {
                         id: conversation_id.to_string(),
-                        turn: Vec::<Turn>::new(),
                     },
                 };
                 self.outgoing.send_response(request_id, response).await;

@@ -329,7 +329,6 @@ pub struct ThreadCompactResponse {}
 #[ts(export_to = "v2/")]
 pub struct Thread {
     pub id: String,
-    pub turn: Vec<Turn>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
