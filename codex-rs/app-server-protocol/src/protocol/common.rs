@@ -828,8 +828,7 @@ mod tests {
                 "id": 6,
                 "params": {
                     "limit": null,
-                    "cursor": null,
-                    "order": null,
+                    "cursor": null
                 }
             }),
             serde_json::to_value(&request)?,

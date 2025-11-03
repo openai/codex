@@ -114,14 +114,6 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum SortOrder {
-    Asc,
-    Desc,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
@@ -195,8 +187,6 @@ pub struct ModelListParams {
     pub cursor: Option<String>,
     /// Optional page size; defaults to a reasonable server-side value.
     pub limit: Option<i32>,
-    /// Optional sort order; defaults to descending.
-    pub order: Option<SortOrder>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

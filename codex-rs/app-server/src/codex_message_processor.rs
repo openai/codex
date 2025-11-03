@@ -58,7 +58,6 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
-use codex_app_server_protocol::SortOrder;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
@@ -1587,19 +1586,12 @@ impl CodexMessageProcessor {
     }
 
     async fn list_models(&self, request_id: RequestId, params: ModelListParams) {
-        let ModelListParams {
-            cursor,
-            limit,
-            order,
-        } = params;
+        let ModelListParams { cursor, limit } = params;
 
         let mut models = supported_models();
 
-        // Sort models according to requested order; default to descending.
-        match order.unwrap_or(SortOrder::Desc) {
-            SortOrder::Asc => models.sort_by(|a, b| a.id.cmp(&b.id)),
-            SortOrder::Desc => models.sort_by(|a, b| b.id.cmp(&a.id)),
-        }
+        // Sort models in descending order by id (default behavior).
+        models.sort_by(|a, b| b.id.cmp(&a.id));
 
         let total = models.len();
 
@@ -2106,6 +2098,7 @@ impl CodexMessageProcessor {
             loop {
                 tokio::select! {
                     _ = &mut cancel_rx => {
+                        // User has unsubscribed, so exit this task.
                         break;
                     }
                     event = conversation_for_task.next_event() => {
@@ -2122,6 +2115,10 @@ impl CodexMessageProcessor {
                                 continue;
                             }
 
+                        // For now, we send a notification for every event,
+                        // JSON-serializing the `Event` as-is, but these should
+                        // be migrated to be variants of `ServerNotification`
+                        // instead.
                         let method = format!("codex/event/{}", event.msg);
                         let mut params = match serde_json::to_value(event.clone()) {
                             Ok(serde_json::Value::Object(map)) => map,
