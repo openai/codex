@@ -63,14 +63,7 @@ impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
         // Ensure tests run with the default Codex originator (codex_cli_rs)
         // regardless of any environment overrides that may be present.
-        Self::new_with_env(
-            codex_home,
-            &[(
-                codex_core::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR,
-                None,
-            )],
-        )
-        .await
+        Self::new_with_env(codex_home, &[]).await
     }
 
     /// Creates a new MCP process, allowing tests to override or remove
