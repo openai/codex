@@ -124,7 +124,9 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
@@ -1773,19 +1775,7 @@ pub(crate) async fn run_task(
             sess.clone_history().await.get_history_for_prompt()
         };
 
-        let turn_input_messages: Vec<String> = turn_input
-            .iter()
-            .filter_map(|item| match item {
-                ResponseItem::Message { content, .. } => Some(content),
-                _ => None,
-            })
-            .flat_map(|content| {
-                content.iter().filter_map(|item| match item {
-                    ContentItem::OutputText { text } => Some(text.clone()),
-                    _ => None,
-                })
-            })
-            .collect();
+        let turn_input_messages = collect_user_input_messages(&turn_input);
         match run_turn(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
@@ -2245,6 +2235,57 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
     })
 }
 
+fn collect_user_input_messages(turn_input: &[ResponseItem]) -> Vec<String> {
+    turn_input
+        .iter()
+        .filter_map(|item| match item {
+            ResponseItem::Message { role, content, .. }
+                if role == "user"
+                    && !UserInstructions::is_user_instructions(content)
+                    && !is_environment_context(content) =>
+            {
+                Some(content)
+            }
+            _ => None,
+        })
+        .flat_map(|content| {
+            content.iter().filter_map(|item| match item {
+                ContentItem::InputText { text } => extract_user_visible_text(text),
+                _ => None,
+            })
+        })
+        .collect()
+}
+
+fn is_environment_context(content: &[ContentItem]) -> bool {
+    matches!(
+        content,
+        [ContentItem::InputText { text }] if text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG)
+    )
+}
+
+fn extract_user_visible_text(text: &str) -> Option<String> {
+    if text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG) {
+        return None;
+    }
+
+    if let Some(idx) = text.find(USER_MESSAGE_BEGIN) {
+        let request = text[idx + USER_MESSAGE_BEGIN.len()..].trim();
+        if request.is_empty() {
+            None
+        } else {
+            Some(request.to_string())
+        }
+    } else {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
+}
+
 fn mcp_init_error_display(
     server_name: &str,
     entry: Option<&McpAuthStatusEntry>,
@@ -2326,6 +2367,7 @@ mod tests {
     use crate::tools::handlers::ShellHandler;
     use crate::tools::registry::ToolHandler;
     use crate::turn_diff_tracker::TurnDiffTracker;
+    use crate::user_instructions::USER_INSTRUCTIONS_PREFIX;
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
@@ -2341,6 +2383,57 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
+
+    #[test]
+    fn collect_user_input_messages_filters_context() {
+        let environment_message = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!(
+                    "{ENVIRONMENT_CONTEXT_OPEN_TAG}\n  <cwd>/repo</cwd>\n</environment_context>"
+                ),
+            }],
+        };
+
+        let agents_message = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!(
+                    "{USER_INSTRUCTIONS_PREFIX}repo\n\n<INSTRUCTIONS>\nFollow the rules\n</INSTRUCTIONS>"
+                ),
+            }],
+        };
+
+        let contextual_message = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "# Context from my IDE setup:\n\n## Active file: docs/config.md\n\n## My request for Codex:\nDo something!\n".to_string(),
+            }],
+        };
+
+        let simple_message = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Follow-up action".to_string(),
+            }],
+        };
+
+        let collected = collect_user_input_messages(&[
+            environment_message,
+            agents_message,
+            contextual_message,
+            simple_message,
+        ]);
+
+        assert_eq!(
+            collected,
+            vec!["Do something!".to_string(), "Follow-up action".to_string()]
+        );
+    }
 
     #[test]
     fn reconstruct_history_matches_live_compactions() {
