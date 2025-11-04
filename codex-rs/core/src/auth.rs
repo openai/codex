@@ -1084,20 +1084,9 @@ impl AuthManager {
                 self.reload();
                 Ok(Some(token))
             }
-            Err(err) => {
-                match &err {
-                    RefreshTokenError::Permanent(failed) => {
-                        tracing::error!(
-                            reason = ?failed.reason,
-                            "Failed to refresh token: {}",
-                            failed
-                        );
-                    }
-                    RefreshTokenError::Transient(other) => {
-                        tracing::error!("Failed to refresh token: {}", other);
-                    }
-                }
-                Err(err)
+            Err(e) => {
+                tracing::error!("Failed to refresh token: {}", e);
+                Err(e)
             }
         }
     }
