@@ -81,9 +81,10 @@ fn try_decode_windows_1252(bytes: &[u8]) -> Option<String> {
     }
 
     // Validate that the result makes sense (contains reasonable characters)
+    // Allow ANSI escape codes (ESC \x1b) which are common in shell output
     if result
         .chars()
-        .any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t')
+        .any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t' && c != '\x1b')
     {
         return None;
     }
@@ -97,9 +98,10 @@ fn try_decode_latin1(bytes: &[u8]) -> Option<String> {
     let result: String = bytes.iter().map(|&b| b as char).collect();
 
     // Validate that the result doesn't contain too many control characters
+    // Allow ANSI escape codes (ESC \x1b) which are common in shell output
     let control_count = result
         .chars()
-        .filter(|c| c.is_control() && *c != '\n' && *c != '\r' && *c != '\t')
+        .filter(|c| c.is_control() && *c != '\n' && *c != '\r' && *c != '\t' && *c != '\x1b')
         .count();
     let total_chars = result.chars().count();
 
