@@ -12,7 +12,7 @@ If you want to add a new feature or change the behavior of an existing one, plea
 
 - Create a _topic branch_ from `main` - e.g. `feat/interactive-prompt`.
 - Keep your changes focused. Multiple unrelated fixes should be opened as separate PRs.
-- Following the [development setup](#development-workflow) instructions above, ensure your change is free of lint warnings and test failures.
+- Ensure your change is free of lint warnings and test failures.
 
 ### Writing high-impact code changes
 
@@ -87,7 +87,7 @@ This will push the commit using the tag `rust-v${VERSION}`, which in turn kicks 
 
 If everything looks good in the generated GitHub Release, uncheck the **pre-release** box so it is the latest release.
 
-Create a PR to update [`Formula/c/codex.rb`](https://github.com/Homebrew/homebrew-core/blob/main/Formula/c/codex.rb) on Homebrew.
+Create a PR to update [`Cask/c/codex.rb`](https://github.com/Homebrew/homebrew-cask/blob/main/Formula/c/codex.rb) on Homebrew.
 
 ### Security & responsible AI
 

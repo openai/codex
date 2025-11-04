@@ -21,32 +21,45 @@ bytes = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
+codex-async-utils = { workspace = true }
 codex-file-search = { workspace = true }
-codex-mcp-client = { workspace = true }
+codex-git = { workspace = true }
+codex-keyring-store = { workspace = true }
 codex-otel = { workspace = true, features = ["otel"] }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-utils-pty = { workspace = true }
+codex-utils-readiness = { workspace = true }
 codex-utils-string = { workspace = true }
+codex-utils-tokenizer = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
 env-flags = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
+http = { workspace = true }
 indexmap = { workspace = true }
+keyring = { workspace = true, features = [
+    "apple-native",
+    "crypto-rust",
+    "linux-native-async-persistent",
+    "windows-native",
+] }
 libc = { workspace = true }
 mcp-types = { workspace = true }
 os_info = { workspace = true }
-portable-pty = { workspace = true }
 rand = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha1 = { workspace = true }
+sha2 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
 strum_macros = { workspace = true }
 tempfile = { workspace = true }
+test-log = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = [
     "formatting",
@@ -67,9 +80,10 @@ toml_edit = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
-uuid = { workspace = true, features = ["serde", "v4"] }
+uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 wildmatch = { workspace = true }
+codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
 
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -92,6 +106,7 @@ assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 core_test_support = { workspace = true }
 escargot = { workspace = true }
+image = { workspace = true, features = ["jpeg", "png"] }
 maplit = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
