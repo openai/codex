@@ -70,6 +70,7 @@ use codex_core::NewConversation;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
 use codex_core::auth::CLIENT_ID;
+use codex_core::auth::RefreshTokenError;
 use codex_core::auth::login_with_api_key;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -569,8 +570,24 @@ impl CodexMessageProcessor {
         let include_token = params.include_token.unwrap_or(false);
         let do_refresh = params.refresh_token.unwrap_or(false);
 
+        // Attempt token refresh if requested. This may cause the auth state to change
+        // if token refresh fails in a permanent (non-transient) manner.
         if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
-            tracing::warn!("failed to refresh token while getting auth status: {err}");
+            match err {
+                RefreshTokenError::Permanent(failed) => {
+                    tracing::warn!(
+                        reason = ?failed.reason,
+                        "failed to refresh token while getting auth status: {}; logging out",
+                        failed
+                    );
+                }
+                RefreshTokenError::Transient(other) => {
+                    tracing::warn!(
+                        "failed to refresh token while getting auth status: {}",
+                        other
+                    );
+                }
+            }
         }
 
         // Determine whether auth is required based on the active model provider.
