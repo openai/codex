@@ -4,6 +4,7 @@ Codex configuration gives you fine-grained control over the model, execution env
 
 ## Quick navigation
 
+- [Feature flags](#feature-flags)
 - [Model selection](#model-selection)
 - [Execution environment](#execution-environment)
 - [MCP integration](#mcp-integration)
@@ -18,13 +19,42 @@ Codex supports several mechanisms for setting config values:
   - The key can contain dots to set a value deeper than the root, e.g. `--config model_providers.openai.wire_api="chat"`.
   - For consistency with `config.toml`, values are a string in TOML format rather than JSON format, so use `key='{a = 1, b = 2}'` rather than `key='{"a": 1, "b": 2}'`.
     - The quotes around the value are necessary, as without them your shell would split the config argument on spaces, resulting in `codex` receiving `-c key={a` with (invalid) additional arguments `=`, `1,`, `b`, `=`, `2}`.
-  - Values can contain any TOML object, such as `--config shell_environment_policy.include_only='["PATH", "HOME", "USER"]'`.
-  - If `value` cannot be parsed as a valid TOML value, it is treated as a string value. This means that `-c model='"o3"'` and `-c model=o3` are equivalent.
-    - In the first case, the value is the TOML string `"o3"`, while in the second the value is `o3`, which is not valid TOML and therefore treated as the TOML string `"o3"`.
-    - Because quotes are interpreted by one's shell, `-c key="true"` will be correctly interpreted in TOML as `key = true` (a boolean) and not `key = "true"` (a string). If for some reason you needed the string `"true"`, you would need to use `-c key='"true"'` (note the two sets of quotes).
+- Values can contain any TOML object, such as `--config shell_environment_policy.include_only='["PATH", "HOME", "USER"]'`.
+- If `value` cannot be parsed as a valid TOML value, it is treated as a string value. This means that `-c model='"o3"'` and `-c model=o3` are equivalent.
+  - In the first case, the value is the TOML string `"o3"`, while in the second the value is `o3`, which is not valid TOML and therefore treated as the TOML string `"o3"`.
+  - Because quotes are interpreted by one's shell, `-c key="true"` will be correctly interpreted in TOML as `key = true` (a boolean) and not `key = "true"` (a string). If for some reason you needed the string `"true"`, you would need to use `-c key='"true"'` (note the two sets of quotes).
 - The `$CODEX_HOME/config.toml` configuration file where the `CODEX_HOME` environment value defaults to `~/.codex`. (Note `CODEX_HOME` will also be where logs and other Codex-related information are stored.)
 
 Both the `--config` flag and the `config.toml` file support the following options:
+
+## Feature flags
+
+Optional and experimental capabilities are toggled via the `[features]` table in `$CODEX_HOME/config.toml`. If you see a deprecation notice mentioning a legacy key (for example ``experimental_use_exec_command_tool``), move the setting into `[features]` or pass `--enable <feature>`.
+
+```toml
+[features]
+streamable_shell = true          # enable the streamable exec tool
+web_search_request = true        # allow the model to request web searches
+# view_image_tool defaults to true; omit to keep defaults
+```
+
+Supported feature keys:
+
+| Key                                  | Default | Stage        | Description                                      |
+|--------------------------------------|:-------:|--------------|--------------------------------------------------|
+| `unified_exec`                       | false   | Experimental | Use the unified PTY-backed exec tool             |
+| `streamable_shell`                   | false   | Experimental | Use the streamable exec-command/write-stdin pair |
+| `rmcp_client`                        | false   | Experimental | Enable experimental RMCP (e.g., OAuth) support   |
+| `apply_patch_freeform`               | false   | Beta         | Include the freeform `apply_patch` tool          |
+| `view_image_tool`                    | true    | Stable       | Include the `view_image` tool                    |
+| `web_search_request`                 | false   | Stable       | Allow the model to issue web searches            |
+| `experimental_sandbox_command_assessment` | false   | Experimental | Enable model-based sandbox risk assessment       |
+| `ghost_commit`                       | false   | Experimental | Create a ghost commit each turn                  |
+| `enable_experimental_windows_sandbox`| false   | Experimental | Use the Windows restricted-token sandbox         |
+
+Notes:
+- Omit a key to accept its default.
+- Legacy booleans such as `experimental_use_exec_command_tool`, `experimental_use_unified_exec_tool`, `include_apply_patch_tool`, and similar `experimental_use_*` keys are deprecated; setting the corresponding `[features].<key>` avoids repeated warnings.
 
 ## Model selection
 

@@ -69,6 +69,10 @@ Codex can access MCP servers. To configure them, refer to the [config docs](./do
 
 Codex CLI supports a rich set of configuration options, with preferences stored in `~/.codex/config.toml`. For full configuration options, see [Configuration](./docs/config.md).
 
+### Feature flags
+
+If you see a deprecation warning about a legacy toggle (for example ``experimental_use_exec_command_tool``), enable the canonical feature under `[features]` in `~/.codex/config.toml` or pass `--enable <feature>`. The full list of feature flags lives in [docs/config.md#feature-flags](./docs/config.md#feature-flags).
+
 ---
 
 ### Docs & FAQ
