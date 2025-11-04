@@ -1281,6 +1281,16 @@ impl ChatWidget {
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
             }
+            SlashCommand::AutoContinueOn => {
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::SetAutoContinue { enabled: true }));
+                self.add_info_message("Auto-continue enabled.".to_string(), None);
+            }
+            SlashCommand::AutoContinueOff => {
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::SetAutoContinue { enabled: false }));
+                self.add_info_message("Auto-continue disabled.".to_string(), None);
+            }
             SlashCommand::Quit | SlashCommand::Exit => {
                 self.request_exit();
             }

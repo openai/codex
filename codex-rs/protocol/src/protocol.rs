@@ -195,6 +195,9 @@ pub enum Op {
         /// The raw command string after '!'
         command: String,
     },
+
+    /// Enable or disable auto-continue for the active session.
+    SetAutoContinue { enabled: bool },
 }
 
 /// Determines the conditions under which the user is consulted to approve

@@ -69,6 +69,8 @@ Codex can access MCP servers. To configure them, refer to the [config docs](./do
 
 Codex CLI supports a rich set of configuration options, with preferences stored in `~/.codex/config.toml`. For full configuration options, see [Configuration](./docs/config.md).
 
+Prefer a quieter terminal? Run `codex --no-progress "…"` to silence interim reasoning, or `codex --progress-interval 300 "…"` to show at most one update every five minutes. When you want Codex to keep iterating hands-free, add `--auto-continue` (with optional `--auto-continue-max-turns`, `--auto-continue-max-duration`, or `--auto-continue-prompt`). If auto-continue pauses because a turn finished or you interrupted the run, the next prompt you type automatically re-arms it for the new work. In the TUI, you can also toggle it explicitly with `/auto-continue-on` and `/auto-continue-off`.
+
 ---
 
 ### Docs & FAQ

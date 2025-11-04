@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
+use super::AutoContinueToml;
+use super::ProgressToml;
 use crate::protocol::AskForApproval;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
@@ -33,6 +35,10 @@ pub struct ConfigProfile {
     /// Optional feature toggles scoped to this profile.
     #[serde(default)]
     pub features: Option<crate::features::FeaturesToml>,
+    #[serde(default)]
+    pub progress: Option<ProgressToml>,
+    #[serde(default)]
+    pub auto_continue: Option<AutoContinueToml>,
 }
 
 impl From<ConfigProfile> for codex_app_server_protocol::Profile {
@@ -45,6 +51,25 @@ impl From<ConfigProfile> for codex_app_server_protocol::Profile {
             model_reasoning_summary: config_profile.model_reasoning_summary,
             model_verbosity: config_profile.model_verbosity,
             chatgpt_base_url: config_profile.chatgpt_base_url,
+        }
+    }
+}
+
+impl ConfigProfile {
+    pub fn deepwork() -> Self {
+        Self {
+            approval_policy: Some(AskForApproval::OnFailure),
+            progress: Some(ProgressToml {
+                no_progress: Some(true),
+                interval_seconds: None,
+            }),
+            auto_continue: Some(AutoContinueToml {
+                enabled: Some(true),
+                prompt: None,
+                max_turns: None,
+                max_duration_seconds: None,
+            }),
+            ..Self::default()
         }
     }
 }

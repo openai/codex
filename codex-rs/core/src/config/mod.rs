@@ -48,8 +48,10 @@ use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::io::ErrorKind;
+use std::num::NonZeroU64;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::config::profile::ConfigProfile;
 use toml::Value as TomlValue;
@@ -65,6 +67,7 @@ pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
 pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5-codex";
 const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5-codex";
 pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5-codex";
+pub const MIN_PROGRESS_INTERVAL_SECONDS: u64 = 5;
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -200,6 +203,12 @@ pub struct Config {
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
 
+    /// Controls how model progress updates should be surfaced to front-ends.
+    pub progress: ProgressConfig,
+
+    /// Controls whether Codex should autonomously continue turns after completions.
+    pub auto_continue: AutoContinueConfig,
+
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
     pub file_opener: UriBasedFileOpener,
@@ -272,6 +281,34 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config::types::OtelConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ProgressConfig {
+    pub no_progress: bool,
+    pub interval_seconds: Option<NonZeroU64>,
+}
+
+pub const DEFAULT_AUTO_CONTINUE_PROMPT: &str = "continue";
+pub const MAX_AUTO_CONTINUE_PROMPT_LEN: usize = 400;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoContinueConfig {
+    pub enabled: bool,
+    pub prompt: String,
+    pub max_turns: Option<NonZeroU64>,
+    pub max_duration: Option<Duration>,
+}
+
+impl Default for AutoContinueConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            prompt: DEFAULT_AUTO_CONTINUE_PROMPT.to_string(),
+            max_turns: None,
+            max_duration: None,
+        }
+    }
 }
 
 impl Config {
@@ -510,7 +547,27 @@ fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
-#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct ProgressToml {
+    #[serde(default)]
+    pub no_progress: Option<bool>,
+    #[serde(default)]
+    pub interval_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct AutoContinueToml {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub max_turns: Option<u64>,
+    #[serde(default)]
+    pub max_duration_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
@@ -602,6 +659,14 @@ pub struct ConfigToml {
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     #[serde(default)]
     pub history: Option<History>,
+
+    /// Controls how model progress updates should be surfaced to front-ends.
+    #[serde(default)]
+    pub progress: Option<ProgressToml>,
+
+    /// Controls whether Codex should automatically continue turns.
+    #[serde(default)]
+    pub auto_continue: Option<AutoContinueToml>,
 
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
@@ -847,6 +912,12 @@ pub struct ConfigOverrides {
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub experimental_sandbox_command_assessment: Option<bool>,
+    pub progress_no_progress: Option<bool>,
+    pub progress_interval_seconds: Option<u64>,
+    pub auto_continue_enabled: Option<bool>,
+    pub auto_continue_prompt: Option<String>,
+    pub auto_continue_max_turns: Option<u64>,
+    pub auto_continue_max_duration_seconds: Option<u64>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -878,6 +949,12 @@ impl Config {
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             experimental_sandbox_command_assessment: sandbox_command_assessment_override,
+            progress_no_progress,
+            progress_interval_seconds,
+            auto_continue_enabled,
+            auto_continue_prompt,
+            auto_continue_max_turns,
+            auto_continue_max_duration_seconds,
             additional_writable_roots,
         } = overrides;
 
@@ -886,16 +963,24 @@ impl Config {
             .or(cfg.profile.as_ref())
             .cloned();
         let config_profile = match active_profile_name.as_ref() {
-            Some(key) => cfg
-                .profiles
-                .get(key)
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        format!("config profile `{key}` not found"),
-                    )
-                })?
-                .clone(),
+            Some(key) => {
+                if key == "deepwork" {
+                    cfg.profiles
+                        .get(key)
+                        .cloned()
+                        .unwrap_or_else(ConfigProfile::deepwork)
+                } else {
+                    cfg.profiles
+                        .get(key)
+                        .ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::NotFound,
+                                format!("config profile `{key}` not found"),
+                            )
+                        })?
+                        .clone()
+                }
+            }
             None => ConfigProfile::default(),
         };
 
@@ -1003,6 +1088,24 @@ impl Config {
         let shell_environment_policy = cfg.shell_environment_policy.into();
 
         let history = cfg.history.unwrap_or_default();
+
+        let progress = resolve_progress_config(
+            cfg.progress.as_ref(),
+            config_profile.progress.as_ref(),
+            progress_no_progress,
+            progress_interval_seconds,
+            active_profile_name.as_deref(),
+        )?;
+        let auto_continue = resolve_auto_continue_config(
+            cfg.auto_continue.as_ref(),
+            config_profile.auto_continue.as_ref(),
+            auto_continue_enabled,
+            auto_continue_prompt,
+            auto_continue_max_turns,
+            auto_continue_max_duration_seconds,
+        )?;
+        let hide_agent_reasoning =
+            cfg.hide_agent_reasoning.unwrap_or(false) || progress.no_progress;
 
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
@@ -1137,10 +1240,12 @@ impl Config {
                 .collect(),
             codex_home,
             history,
+            progress,
+            auto_continue,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
 
-            hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
+            hide_agent_reasoning,
             show_raw_agent_reasoning: cfg
                 .show_raw_agent_reasoning
                 .or(show_raw_agent_reasoning)
@@ -1239,6 +1344,193 @@ impl Config {
             Ok(Some(s))
         }
     }
+}
+
+fn resolve_progress_config(
+    base: Option<&ProgressToml>,
+    profile: Option<&ProgressToml>,
+    override_no_progress: Option<bool>,
+    override_interval_seconds: Option<u64>,
+    active_profile_name: Option<&str>,
+) -> std::io::Result<ProgressConfig> {
+    let mut resolved = ProgressConfig::default();
+
+    if let Some(progress) = base {
+        if let Some(value) = progress.no_progress {
+            resolved.no_progress = value;
+        }
+        if progress.interval_seconds.is_some() {
+            resolved.interval_seconds =
+                sanitize_progress_interval(progress.interval_seconds, "progress.interval_seconds")?;
+        }
+    }
+
+    if let Some(progress) = profile {
+        if let Some(value) = progress.no_progress {
+            resolved.no_progress = value;
+        }
+        if progress.interval_seconds.is_some() {
+            let label = active_profile_name
+                .map(|name| format!("profile `{name}` progress.interval_seconds"))
+                .unwrap_or_else(|| "profile progress.interval_seconds".to_string());
+            resolved.interval_seconds =
+                sanitize_progress_interval(progress.interval_seconds, &label)?;
+        }
+    }
+
+    if let Some(value) = override_no_progress {
+        resolved.no_progress = value;
+    }
+
+    if let Some(value) = override_interval_seconds {
+        resolved.interval_seconds =
+            sanitize_progress_interval(Some(value), "CLI flag --progress-interval")?;
+    }
+
+    Ok(resolved)
+}
+
+fn sanitize_progress_interval(
+    raw: Option<u64>,
+    source: &str,
+) -> std::io::Result<Option<NonZeroU64>> {
+    let Some(value) = raw else {
+        return Ok(None);
+    };
+
+    if value == 0 {
+        return Ok(None);
+    }
+
+    if value < MIN_PROGRESS_INTERVAL_SECONDS {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "{source} must be at least {MIN_PROGRESS_INTERVAL_SECONDS} seconds when set (got {value})"
+            ),
+        ));
+    }
+
+    Ok(NonZeroU64::new(value))
+}
+
+fn resolve_auto_continue_config(
+    base: Option<&AutoContinueToml>,
+    profile: Option<&AutoContinueToml>,
+    override_enabled: Option<bool>,
+    override_prompt: Option<String>,
+    override_max_turns: Option<u64>,
+    override_max_duration_seconds: Option<u64>,
+) -> std::io::Result<AutoContinueConfig> {
+    let mut resolved = AutoContinueConfig::default();
+
+    apply_auto_continue_table(&mut resolved, base, "auto_continue")?;
+    apply_auto_continue_table(&mut resolved, profile, "profile auto_continue")?;
+
+    if let Some(enabled) = override_enabled {
+        resolved.enabled = enabled;
+    }
+
+    if let Some(prompt) = override_prompt {
+        resolved.prompt =
+            sanitize_auto_continue_prompt(&prompt, "CLI flag --auto-continue-prompt")?;
+    }
+
+    if let Some(max_turns) = override_max_turns {
+        resolved.max_turns =
+            sanitize_auto_continue_turns(Some(max_turns), "CLI flag --auto-continue-max-turns")?;
+    }
+
+    if let Some(seconds) = override_max_duration_seconds {
+        resolved.max_duration = sanitize_auto_continue_duration(
+            Some(seconds),
+            "CLI flag --auto-continue-max-duration",
+        )?;
+    }
+
+    Ok(resolved)
+}
+
+fn apply_auto_continue_table(
+    resolved: &mut AutoContinueConfig,
+    table: Option<&AutoContinueToml>,
+    source: &str,
+) -> std::io::Result<()> {
+    let Some(table) = table else {
+        return Ok(());
+    };
+
+    if let Some(enabled) = table.enabled {
+        resolved.enabled = enabled;
+    }
+    if let Some(ref prompt) = table.prompt {
+        resolved.prompt = sanitize_auto_continue_prompt(prompt, source)?;
+    }
+    if table.max_turns.is_some() {
+        resolved.max_turns = sanitize_auto_continue_turns(table.max_turns, source)?;
+    }
+    if table.max_duration_seconds.is_some() {
+        resolved.max_duration =
+            sanitize_auto_continue_duration(table.max_duration_seconds, source)?;
+    }
+    Ok(())
+}
+
+fn sanitize_auto_continue_prompt(prompt: &str, source: &str) -> std::io::Result<String> {
+    let trimmed = prompt.trim();
+    if trimmed.is_empty() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("{source} prompt must be non-empty when set"),
+        ));
+    }
+    if trimmed.len() > MAX_AUTO_CONTINUE_PROMPT_LEN {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "{source} prompt must be at most {MAX_AUTO_CONTINUE_PROMPT_LEN} characters (got {})",
+                trimmed.len()
+            ),
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn sanitize_auto_continue_turns(
+    raw: Option<u64>,
+    source: &str,
+) -> std::io::Result<Option<NonZeroU64>> {
+    let Some(value) = raw else {
+        return Ok(None);
+    };
+
+    if value == 0 {
+        return Ok(None);
+    }
+
+    NonZeroU64::new(value)
+        .ok_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!("{source} max_turns must be greater than zero when set"),
+            )
+        })
+        .map(Some)
+}
+
+fn sanitize_auto_continue_duration(
+    raw: Option<u64>,
+    _source: &str,
+) -> std::io::Result<Option<Duration>> {
+    let Some(seconds) = raw else {
+        return Ok(None);
+    };
+
+    if seconds == 0 {
+        return Ok(None);
+    }
+
+    Ok(Some(Duration::from_secs(seconds)))
 }
 
 fn default_model() -> String {
@@ -1690,6 +1982,109 @@ trust_level = "trusted"
             ));
             assert!(!config.forced_auto_mode_downgraded_on_windows);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn progress_defaults_disabled() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(!config.progress.no_progress);
+        assert!(config.progress.interval_seconds.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn progress_merges_sources_with_cli_override() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "focus".to_string(),
+            ConfigProfile {
+                progress: Some(ProgressToml {
+                    no_progress: Some(true),
+                    interval_seconds: Some(MIN_PROGRESS_INTERVAL_SECONDS + 5),
+                }),
+                ..Default::default()
+            },
+        );
+
+        let cfg = ConfigToml {
+            progress: Some(ProgressToml {
+                no_progress: Some(false),
+                interval_seconds: Some(MIN_PROGRESS_INTERVAL_SECONDS + 10),
+            }),
+            profiles,
+            profile: Some("focus".to_string()),
+            ..Default::default()
+        };
+
+        let overrides = ConfigOverrides {
+            progress_no_progress: Some(false),
+            progress_interval_seconds: Some(MIN_PROGRESS_INTERVAL_SECONDS + 15),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            overrides,
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(!config.progress.no_progress);
+        assert_eq!(
+            config.progress.interval_seconds,
+            NonZeroU64::new(MIN_PROGRESS_INTERVAL_SECONDS + 15)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn progress_interval_validation_rejects_small_values() {
+        let codex_home = TempDir::new().expect("create temp dir");
+        let cfg = ConfigToml {
+            progress: Some(ProgressToml {
+                interval_seconds: Some(MIN_PROGRESS_INTERVAL_SECONDS - 1),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let err = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn deepwork_profile_defaults_to_no_progress() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml {
+            profile: Some("deepwork".to_string()),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(matches!(config.approval_policy, AskForApproval::OnFailure));
+        assert!(config.progress.no_progress);
+        assert!(config.progress.interval_seconds.is_none());
 
         Ok(())
     }
@@ -2889,6 +3284,8 @@ model_verbosity = "high"
                 project_doc_fallback_filenames: Vec::new(),
                 codex_home: fixture.codex_home(),
                 history: History::default(),
+                progress: ProgressConfig::default(),
+                auto_continue: AutoContinueConfig::default(),
                 file_opener: UriBasedFileOpener::VsCode,
                 codex_linux_sandbox_exe: None,
                 hide_agent_reasoning: false,
@@ -2960,6 +3357,8 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             codex_home: fixture.codex_home(),
             history: History::default(),
+            progress: ProgressConfig::default(),
+            auto_continue: AutoContinueConfig::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
@@ -3046,6 +3445,8 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             codex_home: fixture.codex_home(),
             history: History::default(),
+            progress: ProgressConfig::default(),
+            auto_continue: AutoContinueConfig::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
@@ -3118,6 +3519,8 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             codex_home: fixture.codex_home(),
             history: History::default(),
+            progress: ProgressConfig::default(),
+            auto_continue: AutoContinueConfig::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
