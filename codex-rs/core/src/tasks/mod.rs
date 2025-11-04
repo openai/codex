@@ -3,6 +3,7 @@ mod ghost_snapshot;
 mod regular;
 mod review;
 mod undo;
+mod user_shell;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +16,7 @@ use tokio_util::task::AbortOnDropHandle;
 use tracing::trace;
 use tracing::warn;
 
+use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::protocol::EventMsg;
@@ -31,6 +33,7 @@ pub(crate) use ghost_snapshot::GhostSnapshotTask;
 pub(crate) use regular::RegularTask;
 pub(crate) use review::ReviewTask;
 pub(crate) use undo::UndoTask;
+pub(crate) use user_shell::UserShellCommandTask;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 
@@ -47,6 +50,10 @@ impl SessionTaskContext {
 
     pub(crate) fn clone_session(&self) -> Arc<Session> {
         Arc::clone(&self.session)
+    }
+
+    pub(crate) fn auth_manager(&self) -> Arc<AuthManager> {
+        Arc::clone(&self.session.services.auth_manager)
     }
 }
 
@@ -121,7 +128,7 @@ impl Session {
                         task_cancellation_token.child_token(),
                     )
                     .await;
-
+                session_ctx.clone_session().flush_rollout().await;
                 if !task_cancellation_token.is_cancelled() {
                     // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
                     let sess = session_ctx.clone_session();
