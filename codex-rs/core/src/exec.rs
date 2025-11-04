@@ -543,32 +543,45 @@ async fn consume_truncated_output(
     let mut stdout_buf = Vec::with_capacity(AGGREGATE_BUFFER_INITIAL_CAPACITY / 2);
     let mut stderr_buf = Vec::with_capacity(AGGREGATE_BUFFER_INITIAL_CAPACITY / 2);
 
+    let mut agg_closed = false;
+    let mut stdout_closed = false;
+    let mut stderr_closed = false;
+
     loop {
         let now = Instant::now();
         if now >= drain_deadline {
             break;
         }
         let remaining = drain_deadline - now;
+        if agg_closed && stdout_closed && stderr_closed {
+            break;
+        }
         tokio::select! {
-            maybe_chunk = agg_rx.recv() => {
-                if let Ok(chunk) = maybe_chunk {
-                    append_all(&mut combined_buf, &chunk);
-                } else {
-                    // aggregate channel closed; keep draining others until deadline
+            maybe_chunk = agg_rx.recv(), if !agg_closed => {
+                match maybe_chunk {
+                    Ok(chunk) => append_all(&mut combined_buf, &chunk),
+                    Err(_) => {
+                        // aggregate channel closed; keep draining others until deadline
+                        agg_closed = true;
+                    }
                 }
             }
-            maybe_chunk = stdout_rx.recv() => {
-                if let Ok(chunk) = maybe_chunk {
-                    append_all(&mut stdout_buf, &chunk);
-                } else {
-                    // stdout channel closed
+            maybe_chunk = stdout_rx.recv(), if !stdout_closed => {
+                match maybe_chunk {
+                    Ok(chunk) => append_all(&mut stdout_buf, &chunk),
+                    Err(_) => {
+                        // stdout channel closed
+                        stdout_closed = true;
+                    }
                 }
             }
-            maybe_chunk = stderr_rx.recv() => {
-                if let Ok(chunk) = maybe_chunk {
-                    append_all(&mut stderr_buf, &chunk);
-                } else {
-                    // stderr channel closed
+            maybe_chunk = stderr_rx.recv(), if !stderr_closed => {
+                match maybe_chunk {
+                    Ok(chunk) => append_all(&mut stderr_buf, &chunk),
+                    Err(_) => {
+                        // stderr channel closed
+                        stderr_closed = true;
+                    }
                 }
             }
             _ = tokio::time::sleep(remaining) => {
