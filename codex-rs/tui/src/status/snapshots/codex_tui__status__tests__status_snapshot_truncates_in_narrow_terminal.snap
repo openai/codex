@@ -1,5 +1,6 @@
 ---
 source: tui/src/status/tests.rs
+assertion_line: 257
 expression: sanitized
 ---
 /status
@@ -7,8 +8,8 @@ expression: sanitized
 ╭────────────────────────────────────────────╮
 │  >_ OpenAI Codex (v0.0.0)                  │
 │                                            │
-│ Visit chatgpt.com/codex/settings/usage for │
-│ up-to-date                                 │
+│ Visit https://chatgpt.com/codex/settings/  │
+│ usage for up-to-date                       │
 │ information on rate limits and credits     │
 │                                            │
 │  Model:            gpt-5-codex (reasoning  │
@@ -18,7 +19,7 @@ expression: sanitized
 │  Agents.md:        <none>                  │
 │                                            │
 │  Token usage:      1.9K total  (1K input + │
-│  Context window:   100% left (2.1K used /  │
+│  Context window:   100% left (2.25K used / │
 │  5h limit:         [███████████████░░░░░]  │
 │                    (resets 03:14)          │
 ╰────────────────────────────────────────────╯
