@@ -38,7 +38,7 @@ web_search_request = true        # allow the model to request web searches
 # view_image_tool defaults to true; omit to keep defaults
 ```
 
-Supported feature keys:
+Supported features:
 
 | Key                                       | Default | Stage        | Description                                      |
 | ----------------------------------------- | :-----: | ------------ | ------------------------------------------------ |
