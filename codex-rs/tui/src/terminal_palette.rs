@@ -25,7 +25,6 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
     }
 }
 
-
 #[cfg(not(windows))]
 fn stdout_has_truecolor(level: &supports_color::ColorLevel) -> bool {
     level.has_16m
@@ -54,11 +53,11 @@ fn stdout_has_truecolor(level: &supports_color::ColorLevel) -> bool {
 #[cfg(windows)]
 fn enable_vt_stdout() -> std::io::Result<()> {
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
     use windows_sys::Win32::System::Console::GetConsoleMode;
     use windows_sys::Win32::System::Console::GetStdHandle;
-    use windows_sys::Win32::System::Console::SetConsoleMode;
-    use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
     use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
+    use windows_sys::Win32::System::Console::SetConsoleMode;
 
     unsafe {
         let handle = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -235,7 +234,10 @@ mod imp {
             Ok(p) => {
                 let (fr, fg, fb) = p.foreground.scale_to_8bit();
                 let (br, bg, bb) = p.background.scale_to_8bit();
-                Ok(Some(DefaultColors { fg: (fr, fg, fb), bg: (br, bg, bb) }))
+                Ok(Some(DefaultColors {
+                    fg: (fr, fg, fb),
+                    bg: (br, bg, bb),
+                }))
             }
             Err(_) => Ok(None),
         }
@@ -245,7 +247,9 @@ mod imp {
 #[cfg(not(any(all(unix, not(test)), all(windows, not(test)))))]
 mod imp {
     use super::DefaultColors;
-    pub(super) fn default_colors() -> Option<DefaultColors> { None }
+    pub(super) fn default_colors() -> Option<DefaultColors> {
+        None
+    }
 
     pub(super) fn requery_default_colors() {}
 }
