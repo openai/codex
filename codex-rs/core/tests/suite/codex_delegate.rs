@@ -206,22 +206,25 @@ async fn codex_delegate_ignores_legacy_deltas() {
         .await
         .expect("submit review");
 
-    let mut saw_reasoning_delta = false;
-    let mut saw_legacy_reasoning_delta = false;
+    let mut reasoning_delta_count = 0;
+    let mut legacy_reasoning_delta_count = 0;
 
     loop {
         let ev = wait_for_event(&test.codex, |_| true).await;
         match ev {
-            EventMsg::ReasoningContentDelta(_) => saw_reasoning_delta = true,
-            EventMsg::AgentReasoningDelta(_) => saw_legacy_reasoning_delta = true,
+            EventMsg::ReasoningContentDelta(_) => reasoning_delta_count += 1,
+            EventMsg::AgentReasoningDelta(_) => legacy_reasoning_delta_count += 1,
             EventMsg::TaskComplete(_) => break,
             _ => {}
         }
     }
 
-    assert_eq!(saw_reasoning_delta, true, "expected new reasoning delta");
     assert_eq!(
-        saw_legacy_reasoning_delta, false,
-        "legacy reasoning deltas should be filtered by delegator"
+        reasoning_delta_count, 1,
+        "expected exactly one new reasoning delta"
+    );
+    assert_eq!(
+        legacy_reasoning_delta_count, 1,
+        "delegator should forward at most one legacy reasoning delta (no duplicates)"
     );
 }
