@@ -1,4 +1,3 @@
-mod account;
 mod archive_conversation;
 mod auth;
 mod codex_message_processor_flow;
@@ -14,3 +13,4 @@ mod send_message;
 mod set_default_model;
 mod user_agent;
 mod user_info;
+mod v2;
