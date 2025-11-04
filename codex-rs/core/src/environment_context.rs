@@ -256,9 +256,14 @@ fn operating_system_info_impl() -> Option<OperatingSystemInfo> {
 
 #[cfg(not(target_os = "macos"))]
 fn has_wsl_env_markers() -> bool {
-    std::env::var_os("WSL_INTEROP").is_some()
-        || std::env::var_os("WSLENV").is_some()
-        || std::env::var_os("WSL_DISTRO_NAME").is_some()
+    // Cache detection result since env vars are stable across process lifetime
+    // and this function may be called multiple times.
+    static CACHE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CACHE.get_or_init(|| {
+        std::env::var_os("WSL_INTEROP").is_some()
+            || std::env::var_os("WSLENV").is_some()
+            || std::env::var_os("WSL_DISTRO_NAME").is_some()
+    })
 }
 
 #[cfg(test)]

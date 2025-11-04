@@ -77,12 +77,11 @@ fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
     let os_block = operating_system_context_block();
     format!(
         r#"<environment_context>
-  <cwd>{}</cwd>
+  <cwd>{cwd}</cwd>
   <approval_policy>on-request</approval_policy>
   <sandbox_mode>read-only</sandbox_mode>
   <network_access>restricted</network_access>
-{}{}</environment_context>"#,
-        cwd, shell_line, os_block
+{shell_line}{os_block}</environment_context>"#
     )
 }
 
