@@ -342,10 +342,6 @@ impl CodexMessageProcessor {
                     .send_server_notification(ServerNotification::AuthStatusChange(payload))
                     .await;
 
-                // Also emit the v2 account/updated notification mirroring the same payload.
-                let payload_v2 = AccountUpdatedNotification {
-                    auth_method: self.auth_manager.auth().map(|auth| auth.mode),
-                };
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
                     .await;
@@ -451,16 +447,6 @@ impl CodexMessageProcessor {
                         };
                         outgoing_clone
                             .send_server_notification(ServerNotification::AuthStatusChange(payload))
-                            .await;
-
-                        // Also send the v2 account/updated notification.
-                        let payload_v2 = AccountUpdatedNotification {
-                            auth_method: current_auth_method,
-                        };
-                        outgoing_clone
-                            .send_server_notification(ServerNotification::AccountUpdated(
-                                payload_v2,
-                            ))
                             .await;
                     }
 
