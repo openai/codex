@@ -43,8 +43,6 @@ TUI equivalents using slash commands:
 /resume <ID>     # resume by UUID
 ```
 
-See more in docs/slash-commands.md.
-
 ### Running with a prompt as input
 
 You can also run Codex CLI with a prompt as input:

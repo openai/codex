@@ -139,8 +139,7 @@ pub async fn run_resume_picker(
         }
     }
 
-    // Fallback – treat as cancel/new
-    Ok(ResumeSelection::StartFresh)
+    Ok(ResumeSelection::Exit)
 }
 
 /// RAII guard that ensures we leave the alt-screen on scope exit.
@@ -273,7 +272,7 @@ impl PickerState {
 
     async fn handle_key(&mut self, key: KeyEvent) -> Result<Option<ResumeSelection>> {
         match key.code {
-            KeyCode::Esc => return Ok(Some(ResumeSelection::StartFresh)),
+            KeyCode::Esc => return Ok(Some(ResumeSelection::Exit)),
             KeyCode::Char('c')
                 if key
                     .modifiers
@@ -682,7 +681,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             " to resume ".dim(),
             "    ".dim(),
             key_hint::plain(KeyCode::Esc).into(),
-            " to start new ".dim(),
+            " to cancel ".dim(),
             "    ".dim(),
             key_hint::ctrl(KeyCode::Char('c')).into(),
             " to quit ".dim(),

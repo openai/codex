@@ -571,17 +571,24 @@ pub async fn find_conversation_path_by_id_str(
     let exclude: Vec<String> = Vec::new();
     let compute_indices = false;
 
-    let results = file_search::run(
-        id_str,
-        limit,
-        &root,
-        exclude,
-        threads,
-        cancel,
-        compute_indices,
-        false,
-    )
-    .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+    // Offload the filesystem walk to a blocking thread so UI/event loops stay responsive.
+    let query = id_str.to_string();
+    let search_root = root.clone();
+    let results = tokio::task::spawn_blocking(move || {
+        file_search::run(
+            &query,
+            limit,
+            &search_root,
+            exclude,
+            threads,
+            cancel,
+            compute_indices,
+            false,
+        )
+        .map_err(|e| io::Error::other(format!("file search failed: {e}")))
+    })
+    .await
+    .map_err(|e| io::Error::other(format!("file search join failed: {e}")))??;
 
     Ok(results
         .matches

@@ -265,8 +265,7 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenResumePicker => {
-                // Reuse the same picker used at startup, but in-app.
-                // Esc -> StartFresh (start a new chat), Ctrl-C -> Exit (cancel).
+                // Open resume picker in-app.
                 match resume_picker::run_resume_picker(
                     tui,
                     &self.config.codex_home,
