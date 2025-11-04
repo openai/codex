@@ -972,6 +972,19 @@ impl CodexMessageProcessor {
                 // self.outgoing
                 //     .send_server_notification(ServerNotification::ThreadStarted(notif))
                 //     .await;
+
+                // Auto-attach a conversation listener when starting a thread.
+                // Use the same behavior as the v1 API with experimental_raw_events=false.
+                if let Err(err) = self
+                    .attach_conversation_listener(new_conv.conversation_id, false)
+                    .await
+                {
+                    tracing::warn!(
+                        "failed to attach listener for conversation {}: {}",
+                        new_conv.conversation_id,
+                        err.message
+                    );
+                }
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -1157,6 +1170,18 @@ impl CodexMessageProcessor {
                     },
                 };
                 self.outgoing.send_response(request_id, response).await;
+
+                // Auto-attach a conversation listener when resuming a thread.
+                if let Err(err) = self
+                    .attach_conversation_listener(conversation_id, false)
+                    .await
+                {
+                    tracing::warn!(
+                        "failed to attach listener for conversation {}: {}",
+                        conversation_id,
+                        err.message
+                    );
+                }
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
