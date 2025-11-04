@@ -9,7 +9,6 @@ use crate::protocol::v2;
 use codex_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxCommandAssessment;
 use paste::paste;
@@ -82,6 +81,15 @@ macro_rules! client_request_definitions {
             )*
             Ok(())
         }
+
+        pub fn export_client_param_schemas(
+            out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<()> {
+            $(
+                crate::export::write_json_schema::<$params>(out_dir, stringify!($params))?;
+            )*
+            Ok(())
+        }
     };
 }
 
@@ -89,9 +97,9 @@ client_request_definitions! {
     /// NEW APIs
     #[serde(rename = "model/list")]
     #[ts(rename = "model/list")]
-    ListModels {
-        params: v2::ListModelsParams,
-        response: v2::ListModelsResponse,
+    ModelList {
+        params: v2::ModelListParams,
+        response: v2::ModelListResponse,
     },
 
     #[serde(rename = "account/login")]
@@ -117,9 +125,9 @@ client_request_definitions! {
 
     #[serde(rename = "feedback/upload")]
     #[ts(rename = "feedback/upload")]
-    UploadFeedback {
-        params: v2::UploadFeedbackParams,
-        response: v2::UploadFeedbackResponse,
+    FeedbackUpload {
+        params: v2::FeedbackUploadParams,
+        response: v2::FeedbackUploadResponse,
     },
 
     #[serde(rename = "account/read")]
@@ -284,6 +292,15 @@ macro_rules! server_request_definitions {
             }
             Ok(())
         }
+
+        pub fn export_server_param_schemas(
+            out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<()> {
+            paste! {
+                $(crate::export::write_json_schema::<[<$variant Params>]>(out_dir, stringify!([<$variant Params>]))?;)*
+            }
+            Ok(())
+        }
     };
 }
 
@@ -366,12 +383,123 @@ pub struct FuzzyFileSearchResponse {
     pub files: Vec<FuzzyFileSearchResult>,
 }
 
-/// Notification sent from the server to the client.
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
-#[serde(tag = "method", content = "params", rename_all = "camelCase")]
-#[strum(serialize_all = "camelCase")]
-pub enum ServerNotification {
+/// Generates an enum of server notifications plus helpers.
+macro_rules! server_notification_definitions {
+    (
+        $(
+            $(#[$variant_meta:meta])*
+            $variant:ident ( $payload:ty )
+        ),* $(,)?
+    ) => {
+        /// Notification sent from the server to the client.
+        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
+        #[serde(tag = "method", content = "params", rename_all = "camelCase")]
+        #[strum(serialize_all = "camelCase")]
+        pub enum ServerNotification {
+            $(
+                $(#[$variant_meta])*
+                $variant($payload),
+            )*
+        }
+
+        impl ServerNotification {
+            pub fn to_params(self) -> Result<serde_json::Value, serde_json::Error> {
+                match self {
+                    $(Self::$variant(params) => serde_json::to_value(params),)*
+                }
+            }
+        }
+
+        impl TryFrom<JSONRPCNotification> for ServerNotification {
+            type Error = serde_json::Error;
+
+            fn try_from(value: JSONRPCNotification) -> Result<Self, Self::Error> {
+                serde_json::from_value(serde_json::to_value(value)?)
+            }
+        }
+
+        pub fn export_server_notification_schemas(
+            _out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<()> {
+            $(
+                crate::export::write_json_schema::<$payload>(_out_dir, stringify!($payload))?;
+            )*
+            Ok(())
+        }
+    };
+}
+
+/// Generates the enum of client notifications plus helpers.
+macro_rules! client_notification_definitions {
+    (
+        $(
+            $(#[$variant_meta:meta])*
+            $variant:ident $( ( $payload:ty ) )?
+        ),* $(,)?
+    ) => {
+        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
+        #[serde(tag = "method", content = "params", rename_all = "camelCase")]
+        #[strum(serialize_all = "camelCase")]
+        pub enum ClientNotification {
+            $(
+                $(#[$variant_meta])*
+                $variant $( ( $payload ) )?,
+            )*
+        }
+
+        pub fn export_client_notification_schemas(
+            _out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<()> {
+            $(
+                $(crate::export::write_json_schema::<$payload>(_out_dir, stringify!($payload))?;)?
+            )*
+            Ok(())
+        }
+    };
+}
+
+server_notification_definitions! {
     /// NEW NOTIFICATIONS
+    #[serde(rename = "thread/started")]
+    #[ts(rename = "thread/started")]
+    #[strum(serialize = "thread/started")]
+    ThreadStarted(v2::ThreadStartedNotification),
+
+    #[serde(rename = "turn/started")]
+    #[ts(rename = "turn/started")]
+    #[strum(serialize = "turn/started")]
+    TurnStarted(v2::TurnStartedNotification),
+
+    #[serde(rename = "turn/completed")]
+    #[ts(rename = "turn/completed")]
+    #[strum(serialize = "turn/completed")]
+    TurnCompleted(v2::TurnCompletedNotification),
+
+    #[serde(rename = "item/started")]
+    #[ts(rename = "item/started")]
+    #[strum(serialize = "item/started")]
+    ItemStarted(v2::ItemStartedNotification),
+
+    #[serde(rename = "item/completed")]
+    #[ts(rename = "item/completed")]
+    #[strum(serialize = "item/completed")]
+    ItemCompleted(v2::ItemCompletedNotification),
+
+    #[serde(rename = "item/agentMessage/delta")]
+    #[ts(rename = "item/agentMessage/delta")]
+    #[strum(serialize = "item/agentMessage/delta")]
+    AgentMessageDelta(v2::AgentMessageDeltaNotification),
+
+    #[serde(rename = "item/commandExecution/outputDelta")]
+    #[ts(rename = "item/commandExecution/outputDelta")]
+    #[strum(serialize = "item/commandExecution/outputDelta")]
+    CommandExecutionOutputDelta(v2::CommandExecutionOutputDeltaNotification),
+
+    #[serde(rename = "item/mcpToolCall/progress")]
+    #[ts(rename = "item/mcpToolCall/progress")]
+    #[strum(serialize = "item/mcpToolCall/progress")]
+    McpToolCallProgress(v2::McpToolCallProgressNotification),
+
     #[serde(rename = "account/updated")]
     #[ts(rename = "account/updated")]
     #[strum(serialize = "account/updated")]
@@ -380,45 +508,16 @@ pub enum ServerNotification {
     #[serde(rename = "account/rateLimits/updated")]
     #[ts(rename = "account/rateLimits/updated")]
     #[strum(serialize = "account/rateLimits/updated")]
-    AccountRateLimitsUpdated(RateLimitSnapshot),
+    AccountRateLimitsUpdated(v2::AccountRateLimitsUpdatedNotification),
 
     /// DEPRECATED NOTIFICATIONS below
-    /// Authentication status changed
     AuthStatusChange(v1::AuthStatusChangeNotification),
-
-    /// ChatGPT login flow completed
     LoginChatGptComplete(v1::LoginChatGptCompleteNotification),
-
-    /// The special session configured event for a new or resumed conversation.
     SessionConfigured(v1::SessionConfiguredNotification),
 }
 
-impl ServerNotification {
-    pub fn to_params(self) -> Result<serde_json::Value, serde_json::Error> {
-        match self {
-            ServerNotification::AccountUpdated(params) => serde_json::to_value(params),
-            ServerNotification::AccountRateLimitsUpdated(params) => serde_json::to_value(params),
-            ServerNotification::AuthStatusChange(params) => serde_json::to_value(params),
-            ServerNotification::LoginChatGptComplete(params) => serde_json::to_value(params),
-            ServerNotification::SessionConfigured(params) => serde_json::to_value(params),
-        }
-    }
-}
-
-impl TryFrom<JSONRPCNotification> for ServerNotification {
-    type Error = serde_json::Error;
-
-    fn try_from(value: JSONRPCNotification) -> Result<Self, Self::Error> {
-        serde_json::from_value(serde_json::to_value(value)?)
-    }
-}
-
-/// Notification sent from the client to the server.
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
-#[serde(tag = "method", content = "params", rename_all = "camelCase")]
-#[strum(serialize_all = "camelCase")]
-pub enum ClientNotification {
-    Initialized,
+client_notification_definitions! {
+    Initialized
 }
 
 #[cfg(test)]
@@ -671,16 +770,16 @@ mod tests {
 
     #[test]
     fn serialize_list_models() -> Result<()> {
-        let request = ClientRequest::ListModels {
+        let request = ClientRequest::ModelList {
             request_id: RequestId::Integer(6),
-            params: v2::ListModelsParams::default(),
+            params: v2::ModelListParams::default(),
         };
         assert_eq!(
             json!({
                 "method": "model/list",
                 "id": 6,
                 "params": {
-                    "pageSize": null,
+                    "limit": null,
                     "cursor": null
                 }
             }),

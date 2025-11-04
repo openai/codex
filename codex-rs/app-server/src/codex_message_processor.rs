@@ -4,6 +4,7 @@ use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
@@ -19,6 +20,8 @@ use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::ExecOneOffCommandParams;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
+use codex_app_server_protocol::FeedbackUploadParams;
+use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::FuzzyFileSearchParams;
 use codex_app_server_protocol::FuzzyFileSearchResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
@@ -33,14 +36,15 @@ use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::ListConversationsResponse;
-use codex_app_server_protocol::ListModelsParams;
-use codex_app_server_protocol::ListModelsResponse;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::LoginApiKeyResponse;
 use codex_app_server_protocol::LoginChatGptCompleteNotification;
 use codex_app_server_protocol::LoginChatGptResponse;
+use codex_app_server_protocol::ModelListParams;
+use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
+use codex_app_server_protocol::RateLimitSnapshot as V2RateLimitSnapshot;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::RequestId;
@@ -55,8 +59,6 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
-use codex_app_server_protocol::UploadFeedbackParams;
-use codex_app_server_protocol::UploadFeedbackResponse;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_backend_client::Client as BackendClient;
@@ -97,7 +99,7 @@ use codex_protocol::ConversationId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
@@ -187,7 +189,7 @@ impl CodexMessageProcessor {
             ClientRequest::ListConversations { request_id, params } => {
                 self.handle_list_conversations(request_id, params).await;
             }
-            ClientRequest::ListModels { request_id, params } => {
+            ClientRequest::ModelList { request_id, params } => {
                 self.list_models(request_id, params).await;
             }
             ClientRequest::LoginAccount {
@@ -288,7 +290,7 @@ impl CodexMessageProcessor {
             } => {
                 self.get_account_rate_limits(request_id).await;
             }
-            ClientRequest::UploadFeedback { request_id, params } => {
+            ClientRequest::FeedbackUpload { request_id, params } => {
                 self.upload_feedback(request_id, params).await;
             }
         }
@@ -634,7 +636,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn fetch_account_rate_limits(&self) -> Result<RateLimitSnapshot, JSONRPCErrorError> {
+    async fn fetch_account_rate_limits(&self) -> Result<V2RateLimitSnapshot, JSONRPCErrorError> {
         let Some(auth) = self.auth_manager.auth() else {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -662,6 +664,7 @@ impl CodexMessageProcessor {
         client
             .get_rate_limits()
             .await
+            .map(|rl: CoreRateLimitSnapshot| rl.into())
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to fetch codex rate limits: {err}"),
@@ -982,21 +985,28 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn list_models(&self, request_id: RequestId, params: ListModelsParams) {
-        let ListModelsParams { page_size, cursor } = params;
-        let models = supported_models();
+    async fn list_models(&self, request_id: RequestId, params: ModelListParams) {
+        let ModelListParams { cursor, limit } = params;
+
+        let mut models = supported_models();
+
+        // Sort models in descending order by id (default behavior).
+        models.sort_by(|a, b| b.id.cmp(&a.id));
+
         let total = models.len();
 
         if total == 0 {
-            let response = ListModelsResponse {
-                items: Vec::new(),
+            let response = ModelListResponse {
+                data: Vec::new(),
                 next_cursor: None,
             };
             self.outgoing.send_response(request_id, response).await;
             return;
         }
 
-        let effective_page_size = page_size.unwrap_or(total).max(1).min(total);
+        // Determine pagination window
+        let default_limit = total as i32;
+        let effective_limit = limit.unwrap_or(default_limit).max(1).min(default_limit) as usize;
         let start = match cursor {
             Some(cursor) => match cursor.parse::<usize>() {
                 Ok(idx) => idx,
@@ -1023,14 +1033,15 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let end = start.saturating_add(effective_page_size).min(total);
-        let items = models[start..end].to_vec();
+        let end = start.saturating_add(effective_limit).min(total);
+        let data = models[start..end].to_vec();
         let next_cursor = if end < total {
             Some(end.to_string())
         } else {
             None
         };
-        let response = ListModelsResponse { items, next_cursor };
+
+        let response = ModelListResponse { data, next_cursor };
         self.outgoing.send_response(request_id, response).await;
     }
 
@@ -1634,8 +1645,8 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn upload_feedback(&self, request_id: RequestId, params: UploadFeedbackParams) {
-        let UploadFeedbackParams {
+    async fn upload_feedback(&self, request_id: RequestId, params: FeedbackUploadParams) {
+        let FeedbackUploadParams {
             classification,
             reason,
             conversation_id,
@@ -1680,7 +1691,7 @@ impl CodexMessageProcessor {
 
         match upload_result {
             Ok(()) => {
-                let response = UploadFeedbackResponse { thread_id };
+                let response = FeedbackUploadResponse { thread_id };
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
@@ -1764,9 +1775,12 @@ async fn apply_bespoke_event_handling(
         }
         EventMsg::TokenCount(token_count_event) => {
             if let Some(rate_limits) = token_count_event.rate_limits {
+                let snapshot: V2RateLimitSnapshot = rate_limits.into();
                 outgoing
                     .send_server_notification(ServerNotification::AccountRateLimitsUpdated(
-                        rate_limits,
+                        AccountRateLimitsUpdatedNotification {
+                            rate_limits: snapshot,
+                        },
                     ))
                     .await;
             }
