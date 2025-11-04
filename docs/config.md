@@ -29,7 +29,7 @@ Both the `--config` flag and the `config.toml` file support the following option
 
 ## Feature flags
 
-Optional and experimental capabilities are toggled via the `[features]` table in `$CODEX_HOME/config.toml`. If you see a deprecation notice mentioning a legacy key (for example ``experimental_use_exec_command_tool``), move the setting into `[features]` or pass `--enable <feature>`.
+Optional and experimental capabilities are toggled via the `[features]` table in `$CODEX_HOME/config.toml`. If you see a deprecation notice mentioning a legacy key (for example `experimental_use_exec_command_tool`), move the setting into `[features]` or pass `--enable <feature>`.
 
 ```toml
 [features]
@@ -40,19 +40,20 @@ web_search_request = true        # allow the model to request web searches
 
 Supported feature keys:
 
-| Key                                  | Default | Stage        | Description                                      |
-|--------------------------------------|:-------:|--------------|--------------------------------------------------|
-| `unified_exec`                       | false   | Experimental | Use the unified PTY-backed exec tool             |
-| `streamable_shell`                   | false   | Experimental | Use the streamable exec-command/write-stdin pair |
-| `rmcp_client`                        | false   | Experimental | Enable experimental RMCP (e.g., OAuth) support   |
-| `apply_patch_freeform`               | false   | Beta         | Include the freeform `apply_patch` tool          |
-| `view_image_tool`                    | true    | Stable       | Include the `view_image` tool                    |
-| `web_search_request`                 | false   | Stable       | Allow the model to issue web searches            |
-| `experimental_sandbox_command_assessment` | false   | Experimental | Enable model-based sandbox risk assessment       |
-| `ghost_commit`                       | false   | Experimental | Create a ghost commit each turn                  |
-| `enable_experimental_windows_sandbox`| false   | Experimental | Use the Windows restricted-token sandbox         |
+| Key                                       | Default | Stage        | Description                                      |
+| ----------------------------------------- | :-----: | ------------ | ------------------------------------------------ |
+| `unified_exec`                            |  false  | Experimental | Use the unified PTY-backed exec tool             |
+| `streamable_shell`                        |  false  | Experimental | Use the streamable exec-command/write-stdin pair |
+| `rmcp_client`                             |  false  | Experimental | Enable experimental RMCP (e.g., OAuth) support   |
+| `apply_patch_freeform`                    |  false  | Beta         | Include the freeform `apply_patch` tool          |
+| `view_image_tool`                         |  true   | Stable       | Include the `view_image` tool                    |
+| `web_search_request`                      |  false  | Stable       | Allow the model to issue web searches            |
+| `experimental_sandbox_command_assessment` |  false  | Experimental | Enable model-based sandbox risk assessment       |
+| `ghost_commit`                            |  false  | Experimental | Create a ghost commit each turn                  |
+| `enable_experimental_windows_sandbox`     |  false  | Experimental | Use the Windows restricted-token sandbox         |
 
 Notes:
+
 - Omit a key to accept its default.
 - Legacy booleans such as `experimental_use_exec_command_tool`, `experimental_use_unified_exec_tool`, `include_apply_patch_tool`, and similar `experimental_use_*` keys are deprecated; setting the corresponding `[features].<key>` avoids repeated warnings.
 
