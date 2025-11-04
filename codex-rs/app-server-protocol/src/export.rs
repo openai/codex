@@ -14,12 +14,10 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use schemars::JsonSchema;
-use schemars::schema::RootSchema;
 use schemars::schema_for;
 use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -33,7 +31,29 @@ use ts_rs::TS;
 
 const HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
 
-type JsonSchemaEmitter = fn(&Path) -> Result<RootSchema>;
+#[derive(Clone)]
+pub struct GeneratedSchema {
+    namespace: Option<String>,
+    logical_name: String,
+    value: Value,
+    in_v1_dir: bool,
+}
+
+impl GeneratedSchema {
+    fn namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
+    }
+
+    fn logical_name(&self) -> &str {
+        &self.logical_name
+    }
+
+    fn value(&self) -> &Value {
+        &self.value
+    }
+}
+
+type JsonSchemaEmitter = fn(&Path) -> Result<GeneratedSchema>;
 pub fn generate_types(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     generate_ts(out_dir, prettier)?;
     generate_json(out_dir)?;
@@ -81,60 +101,42 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
 
 pub fn generate_json(out_dir: &Path) -> Result<()> {
     ensure_dir(out_dir)?;
-    // Emit schemas for core envelope/wire types that may not be referenced
-    // by params/responses but are useful as standalone:
-    let mut bundle: BTreeMap<String, RootSchema> = BTreeMap::new();
-
-    let envelope_emitters: &[(&str, JsonSchemaEmitter)] = &[
-        ("RequestId", |d| {
-            write_json_schema_with_return::<crate::RequestId>(d, "RequestId")
-        }),
-        ("JSONRPCMessage", |d| {
-            write_json_schema_with_return::<crate::JSONRPCMessage>(d, "JSONRPCMessage")
-        }),
-        ("JSONRPCRequest", |d| {
-            write_json_schema_with_return::<crate::JSONRPCRequest>(d, "JSONRPCRequest")
-        }),
-        ("JSONRPCNotification", |d| {
-            write_json_schema_with_return::<crate::JSONRPCNotification>(d, "JSONRPCNotification")
-        }),
-        ("JSONRPCResponse", |d| {
-            write_json_schema_with_return::<crate::JSONRPCResponse>(d, "JSONRPCResponse")
-        }),
-        ("JSONRPCError", |d| {
-            write_json_schema_with_return::<crate::JSONRPCError>(d, "JSONRPCError")
-        }),
-        ("JSONRPCErrorError", |d| {
-            write_json_schema_with_return::<crate::JSONRPCErrorError>(d, "JSONRPCErrorError")
-        }),
-        ("ClientRequest", |d| {
-            write_json_schema_with_return::<crate::ClientRequest>(d, "ClientRequest")
-        }),
-        ("ServerRequest", |d| {
-            write_json_schema_with_return::<crate::ServerRequest>(d, "ServerRequest")
-        }),
-        ("ClientNotification", |d| {
-            write_json_schema_with_return::<crate::ClientNotification>(d, "ClientNotification")
-        }),
-        ("ServerNotification", |d| {
-            write_json_schema_with_return::<crate::ServerNotification>(d, "ServerNotification")
-        }),
+    let envelope_emitters: &[JsonSchemaEmitter] = &[
+        |d| write_json_schema_with_return::<crate::RequestId>(d, "RequestId"),
+        |d| write_json_schema_with_return::<crate::JSONRPCMessage>(d, "JSONRPCMessage"),
+        |d| write_json_schema_with_return::<crate::JSONRPCRequest>(d, "JSONRPCRequest"),
+        |d| write_json_schema_with_return::<crate::JSONRPCNotification>(d, "JSONRPCNotification"),
+        |d| write_json_schema_with_return::<crate::JSONRPCResponse>(d, "JSONRPCResponse"),
+        |d| write_json_schema_with_return::<crate::JSONRPCError>(d, "JSONRPCError"),
+        |d| write_json_schema_with_return::<crate::JSONRPCErrorError>(d, "JSONRPCErrorError"),
+        |d| write_json_schema_with_return::<crate::ClientRequest>(d, "ClientRequest"),
+        |d| write_json_schema_with_return::<crate::ServerRequest>(d, "ServerRequest"),
+        |d| write_json_schema_with_return::<crate::ClientNotification>(d, "ClientNotification"),
+        |d| write_json_schema_with_return::<crate::ServerNotification>(d, "ServerNotification"),
     ];
-    for (name, emit) in envelope_emitters {
-        let schema = emit(out_dir)?;
-        bundle.insert((*name).to_string(), schema);
+
+    let mut schemas: Vec<GeneratedSchema> = Vec::new();
+    for emit in envelope_emitters {
+        schemas.push(emit(out_dir)?);
     }
 
-    // Have the macros generate per-type JSON for params, responses, and notifications.
-    export_client_param_schemas(out_dir)?;
-    export_client_response_schemas(out_dir)?;
-    export_server_param_schemas(out_dir)?;
-    export_server_response_schemas(out_dir)?;
-    export_client_notification_schemas(out_dir)?;
-    export_server_notification_schemas(out_dir)?;
+    schemas.extend(export_client_param_schemas(out_dir)?);
+    schemas.extend(export_client_response_schemas(out_dir)?);
+    schemas.extend(export_server_param_schemas(out_dir)?);
+    schemas.extend(export_server_response_schemas(out_dir)?);
+    schemas.extend(export_client_notification_schemas(out_dir)?);
+    schemas.extend(export_server_notification_schemas(out_dir)?);
 
-    let mut definitions = Map::new();
+    let bundle = build_schema_bundle(schemas)?;
+    write_pretty_json(
+        out_dir.join("codex_app_server_protocol.schemas.json"),
+        &bundle,
+    )?;
 
+    Ok(())
+}
+
+fn build_schema_bundle(schemas: Vec<GeneratedSchema>) -> Result<Value> {
     const SPECIAL_DEFINITIONS: &[&str] = &[
         "ClientNotification",
         "ClientRequest",
@@ -147,112 +149,61 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
         "ServerRequest",
     ];
 
-    // Merge all generated per-type JSON files (including the envelopes above)
-    // into a single definitions bundle. Also recognize a v2 namespace so that
-    // types like RateLimitSnapshot can co-exist between legacy and v2.
-    let json_files = json_files_in_recursive(out_dir)?;
-    let namespaced_types = collect_namespaced_types(&json_files)?;
-    for path in json_files {
-        // Skip the bundle we’re about to (re)generate.
-        if path.file_name().and_then(OsStr::to_str)
-            == Some("codex_app_server_protocol.schemas.json")
-        {
-            continue;
+    let namespaced_types = collect_namespaced_types(&schemas);
+    let mut definitions = Map::new();
+
+    for schema in schemas {
+        let GeneratedSchema {
+            namespace,
+            logical_name,
+            mut value,
+            in_v1_dir,
+        } = schema;
+
+        if let Some(ref ns) = namespace {
+            rewrite_refs_to_namespace(&mut value, ns);
         }
 
-        let file_stem = path
-            .file_stem()
-            .and_then(OsStr::to_str)
-            .ok_or_else(|| anyhow!(format!("Invalid schema file name {}", path.display())))?;
-
-        // Determine namespace and logical type name from either the stem
-        // (e.g., "v2::Type") or the directory layout (e.g., ".../v2/Type.json").
-        let (ns_opt, logical_name) = detect_namespace(&path, file_stem);
-        let in_v1_dir = path
-            .parent()
-            .and_then(Path::file_name)
-            .and_then(OsStr::to_str)
-            == Some("v1");
-
-        let mut schema_value: Value = serde_json::from_str(
-            &fs::read_to_string(&path)
-                .with_context(|| format!("Failed to read {}", path.display()))?,
-        )
-        .with_context(|| format!("Failed to parse JSON from {}", path.display()))?;
-
-        // Normalize; use the original stem as the base so existing naming rules apply.
-        annotate_schema(&mut schema_value, Some(file_stem));
-
-        if let Some(ref ns) = ns_opt {
-            // Rewrite internal $ref targets to point to the namespaced location
-            // under the bundle's definitions.
-            rewrite_refs_to_namespace(&mut schema_value, ns);
-        }
-
-        // Pull embedded definitions out and insert into our bundle map at the
-        // appropriate namespace.
         let mut forced_namespace_refs: Vec<(String, String)> = Vec::new();
-        if let Value::Object(ref mut obj) = schema_value
+        if let Value::Object(ref mut obj) = value
             && let Some(defs) = obj.remove("definitions")
             && let Value::Object(defs_obj) = defs
         {
             for (def_name, mut def_schema) in defs_obj {
-                if !SPECIAL_DEFINITIONS.contains(&def_name.as_str()) {
-                    annotate_schema(&mut def_schema, Some(def_name.as_str()));
-                    let target_ns = match ns_opt.clone() {
-                        Some(ns) => Some(ns),
-                        None => {
-                            namespace_for_definition(&def_name, &namespaced_types).and_then(|ns| {
-                                if in_v1_dir {
-                                    None
-                                } else {
-                                    Some(ns.to_string())
-                                }
-                            })
-                        }
-                    };
-                    if let Some(ref ns) = target_ns {
-                        if ns_opt.as_deref() == Some(ns.as_str()) {
-                            rewrite_refs_to_namespace(&mut def_schema, ns);
-                            definitions
-                                .entry(ns.clone())
-                                .or_insert_with(|| Value::Object(Map::new()));
-                            if let Value::Object(defs_ns) = definitions
-                                .get_mut(ns)
-                                .ok_or_else(|| anyhow!("just inserted {ns} namespace"))?
-                            {
-                                defs_ns.insert(def_name, def_schema);
-                            }
-                        } else if !forced_namespace_refs
-                            .iter()
-                            .any(|(name, existing_ns)| name == &def_name && existing_ns == ns)
-                        {
-                            forced_namespace_refs.push((def_name.clone(), ns.clone()));
-                        }
-                    } else {
-                        definitions.insert(def_name, def_schema);
+                if SPECIAL_DEFINITIONS.contains(&def_name.as_str()) {
+                    continue;
+                }
+                annotate_schema(&mut def_schema, Some(def_name.as_str()));
+                let target_namespace = match namespace {
+                    Some(ref ns) => Some(ns.clone()),
+                    None => namespace_for_definition(&def_name, &namespaced_types)
+                        .cloned()
+                        .filter(|_| !in_v1_dir),
+                };
+                if let Some(ref ns) = target_namespace {
+                    if namespace.as_deref() == Some(ns.as_str()) {
+                        rewrite_refs_to_namespace(&mut def_schema, ns);
+                        insert_into_namespace(&mut definitions, ns, def_name.clone(), def_schema)?;
+                    } else if !forced_namespace_refs
+                        .iter()
+                        .any(|(name, existing_ns)| name == &def_name && existing_ns == ns)
+                    {
+                        forced_namespace_refs.push((def_name.clone(), ns.clone()));
                     }
+                } else {
+                    definitions.insert(def_name, def_schema);
                 }
             }
         }
 
         for (name, ns) in forced_namespace_refs {
-            rewrite_named_ref_to_namespace(&mut schema_value, &ns, &name);
+            rewrite_named_ref_to_namespace(&mut value, &ns, &name);
         }
 
-        // Insert the schema root itself into the bundle under the namespace.
-        if let Some(ref ns) = ns_opt {
-            definitions
-                .entry(ns.to_string())
-                .or_insert_with(|| Value::Object(Map::new()));
-            if let Value::Object(defs_ns) = definitions
-                .get_mut(ns)
-                .ok_or_else(|| anyhow!("just inserted v2 namespace"))?
-            {
-                defs_ns.insert(logical_name.to_string(), schema_value);
-            }
+        if let Some(ref ns) = namespace {
+            insert_into_namespace(&mut definitions, ns, logical_name.clone(), value)?;
         } else {
-            definitions.insert(logical_name.to_string(), schema_value);
+            definitions.insert(logical_name, value);
         }
     }
 
@@ -268,15 +219,28 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
     root.insert("type".to_string(), Value::String("object".into()));
     root.insert("definitions".to_string(), Value::Object(definitions));
 
-    write_pretty_json(
-        out_dir.join("codex_app_server_protocol.schemas.json"),
-        &Value::Object(root),
-    )?;
-
-    Ok(())
+    Ok(Value::Object(root))
 }
 
-fn write_json_schema_with_return<T>(out_dir: &Path, name: &str) -> Result<RootSchema>
+fn insert_into_namespace(
+    definitions: &mut Map<String, Value>,
+    namespace: &str,
+    name: String,
+    schema: Value,
+) -> Result<()> {
+    let entry = definitions
+        .entry(namespace.to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    match entry {
+        Value::Object(map) => {
+            map.insert(name, schema);
+            Ok(())
+        }
+        _ => Err(anyhow!("expected namespace {namespace} to be an object")),
+    }
+}
+
+fn write_json_schema_with_return<T>(out_dir: &Path, name: &str) -> Result<GeneratedSchema>
 where
     T: JsonSchema,
 {
@@ -287,8 +251,8 @@ where
     // If the name looks like a namespaced path (e.g., "v2::Type"), mirror
     // the TypeScript layout and write to out_dir/v2/Type.json. Otherwise
     // write alongside the legacy files.
-    let (ns_opt, logical_name) = split_namespace(file_stem);
-    let out_path = if let Some(ns) = ns_opt {
+    let (raw_namespace, logical_name) = split_namespace(file_stem);
+    let out_path = if let Some(ns) = raw_namespace {
         let dir = out_dir.join(ns);
         ensure_dir(&dir)?;
         dir.join(format!("{logical_name}.json"))
@@ -298,15 +262,23 @@ where
 
     write_pretty_json(out_path, &schema_value)
         .with_context(|| format!("Failed to write JSON schema for {file_stem}"))?;
-    let annotated_schema = serde_json::from_value(schema_value)?;
-    Ok(annotated_schema)
+    let namespace = match raw_namespace {
+        Some("v1") | None => None,
+        Some(ns) => Some(ns.to_string()),
+    };
+    Ok(GeneratedSchema {
+        in_v1_dir: raw_namespace == Some("v1"),
+        namespace,
+        logical_name: logical_name.to_string(),
+        value: schema_value,
+    })
 }
 
-pub(crate) fn write_json_schema<T>(out_dir: &Path, name: &str) -> Result<()>
+pub(crate) fn write_json_schema<T>(out_dir: &Path, name: &str) -> Result<GeneratedSchema>
 where
     T: JsonSchema,
 {
-    write_json_schema_with_return::<T>(out_dir, name).map(|_| ())
+    write_json_schema_with_return::<T>(out_dir, name)
 }
 
 fn write_pretty_json(path: PathBuf, value: &impl Serialize) -> Result<()> {
@@ -316,28 +288,10 @@ fn write_pretty_json(path: PathBuf, value: &impl Serialize) -> Result<()> {
     Ok(())
 }
 
-/// Detect a namespace from a schema file path and stem.
-/// Supports both legacy on-disk names like "v2::Type.json" and the new
-/// directory layout ".../v2/Type.json".
-fn detect_namespace(path: &Path, stem: &str) -> (Option<String>, String) {
-    // Prefer directory-based detection.
-    if let Some(parent) = path.parent()
-        && parent.file_name().and_then(OsStr::to_str) == Some("v2")
-    {
-        return (Some("v2".to_string()), stem.to_string());
-    }
-    split_namespace(stem)
-}
-
-/// Split a "ns::Type" name into (Some(ns), Type). Returns (None, name) if no ns.
-fn split_namespace(name: &str) -> (Option<String>, String) {
-    if let Some(idx) = name.find("::") {
-        let (ns, rest) = name.split_at(idx);
-        // rest starts with "::"
-        let typ = &rest[2..];
-        return (Some(ns.to_string()), typ.to_string());
-    }
-    (None, name.to_string())
+/// Split a fully-qualified type name like "v2::Type" into its namespace and logical name.
+fn split_namespace(name: &str) -> (Option<&str>, &str) {
+    name.split_once("::")
+        .map_or((None, name), |(ns, rest)| (Some(ns), rest))
 }
 
 /// Recursively rewrite $ref values that point at "#/definitions/..." so that
@@ -366,59 +320,26 @@ fn rewrite_refs_to_namespace(value: &mut Value, ns: &str) {
     }
 }
 
-fn json_files_in_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        for entry in
-            fs::read_dir(&d).with_context(|| format!("Failed to read dir {}", d.display()))?
-        {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                // Skip known non-protocol directories.
-                if path.file_name().and_then(OsStr::to_str) == Some("serde_json") {
-                    continue;
-                }
-                stack.push(path);
-            } else if path.is_file() && path.extension() == Some(OsStr::new("json")) {
-                files.push(path);
-            }
-        }
-    }
-    files.sort();
-    Ok(files)
-}
-
-fn collect_namespaced_types(paths: &[PathBuf]) -> Result<HashMap<String, String>> {
+fn collect_namespaced_types(schemas: &[GeneratedSchema]) -> HashMap<String, String> {
     let mut types = HashMap::new();
-    for path in paths {
-        let file_stem = path
-            .file_stem()
-            .and_then(OsStr::to_str)
-            .ok_or_else(|| anyhow!(format!("Invalid schema file name {}", path.display())))?;
-        let (ns_opt, logical_name) = detect_namespace(path, file_stem);
-        if let Some(ns) = ns_opt {
+    for schema in schemas {
+        if let Some(ns) = schema.namespace() {
             types
-                .entry(logical_name.to_string())
-                .or_insert_with(|| ns.clone());
-            let raw = fs::read_to_string(path)
-                .with_context(|| format!("Failed to read {}", path.display()))?;
-            let parsed: Value = serde_json::from_str(&raw)
-                .with_context(|| format!("Failed to parse JSON from {}", path.display()))?;
-            if let Some(Value::Object(defs)) = parsed.get("definitions") {
+                .entry(schema.logical_name().to_string())
+                .or_insert_with(|| ns.to_string());
+            if let Some(Value::Object(defs)) = schema.value().get("definitions") {
                 for key in defs.keys() {
-                    types.entry(key.clone()).or_insert_with(|| ns.clone());
+                    types.entry(key.clone()).or_insert_with(|| ns.to_string());
                 }
             }
-            if let Some(Value::Object(defs)) = parsed.get("$defs") {
+            if let Some(Value::Object(defs)) = schema.value().get("$defs") {
                 for key in defs.keys() {
-                    types.entry(key.clone()).or_insert_with(|| ns.clone());
+                    types.entry(key.clone()).or_insert_with(|| ns.to_string());
                 }
             }
         }
     }
-    Ok(types)
+    types
 }
 
 fn namespace_for_definition<'a>(

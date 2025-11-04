@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use crate::JSONRPCNotification;
 use crate::JSONRPCRequest;
 use crate::RequestId;
+use crate::export::GeneratedSchema;
+use crate::export::write_json_schema;
 use crate::protocol::v1;
 use crate::protocol::v2;
 use codex_protocol::ConversationId;
@@ -73,22 +75,26 @@ macro_rules! client_request_definitions {
             Ok(())
         }
 
+        #[allow(clippy::vec_init_then_push)]
         pub fn export_client_response_schemas(
             out_dir: &::std::path::Path,
-        ) -> ::anyhow::Result<()> {
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let mut schemas = Vec::new();
             $(
-                crate::export::write_json_schema::<$response>(out_dir, stringify!($response))?;
+                schemas.push(write_json_schema::<$response>(out_dir, stringify!($response))?);
             )*
-            Ok(())
+            Ok(schemas)
         }
 
+        #[allow(clippy::vec_init_then_push)]
         pub fn export_client_param_schemas(
             out_dir: &::std::path::Path,
-        ) -> ::anyhow::Result<()> {
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let mut schemas = Vec::new();
             $(
-                crate::export::write_json_schema::<$params>(out_dir, stringify!($params))?;
+                schemas.push(write_json_schema::<$params>(out_dir, stringify!($params))?);
             )*
-            Ok(())
+            Ok(schemas)
         }
     };
 }
@@ -284,22 +290,26 @@ macro_rules! server_request_definitions {
             Ok(())
         }
 
+        #[allow(clippy::vec_init_then_push)]
         pub fn export_server_response_schemas(
             out_dir: &::std::path::Path,
-        ) -> ::anyhow::Result<()> {
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let mut schemas = Vec::new();
             paste! {
-                $(crate::export::write_json_schema::<[<$variant Response>]>(out_dir, stringify!([<$variant Response>]))?;)*
+                $(schemas.push(crate::export::write_json_schema::<[<$variant Response>]>(out_dir, stringify!([<$variant Response>]))?);)*
             }
-            Ok(())
+            Ok(schemas)
         }
 
+        #[allow(clippy::vec_init_then_push)]
         pub fn export_server_param_schemas(
             out_dir: &::std::path::Path,
-        ) -> ::anyhow::Result<()> {
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let mut schemas = Vec::new();
             paste! {
-                $(crate::export::write_json_schema::<[<$variant Params>]>(out_dir, stringify!([<$variant Params>]))?;)*
+                $(schemas.push(crate::export::write_json_schema::<[<$variant Params>]>(out_dir, stringify!([<$variant Params>]))?);)*
             }
-            Ok(())
+            Ok(schemas)
         }
     };
 }
@@ -340,11 +350,13 @@ macro_rules! server_notification_definitions {
             }
         }
 
+        #[allow(clippy::vec_init_then_push)]
         pub fn export_server_notification_schemas(
             out_dir: &::std::path::Path,
-        ) -> ::anyhow::Result<()> {
-            $(crate::export::write_json_schema::<$payload>(out_dir, stringify!($payload))?;)*
-            Ok(())
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let mut schemas = Vec::new();
+            $(schemas.push(crate::export::write_json_schema::<$payload>(out_dir, stringify!($payload))?);)*
+            Ok(schemas)
         }
     };
 }
@@ -369,9 +381,10 @@ macro_rules! client_notification_definitions {
 
         pub fn export_client_notification_schemas(
             _out_dir: &::std::path::Path,
-        ) -> ::anyhow::Result<()> {
-            $( $(crate::export::write_json_schema::<$payload>(_out_dir, stringify!($payload))?;)? )*
-            Ok(())
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let schemas = Vec::new();
+            $( $(schemas.push(crate::export::write_json_schema::<$payload>(_out_dir, stringify!($payload))?);)? )*
+            Ok(schemas)
         }
     };
 }
