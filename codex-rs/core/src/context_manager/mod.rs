@@ -1,4 +1,5 @@
 mod history;
+mod normalize;
 mod truncate;
 
 pub(crate) use history::ContextManager;

@@ -4,8 +4,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use std::ops::Deref;
 
-use crate::util::error_or_panic;
-
+use crate::context_manager::normalize;
 use crate::context_manager::truncate::format_output_for_model_body;
 use crate::context_manager::truncate::globally_truncate_function_output_items;
 
@@ -77,7 +76,7 @@ impl ContextManager {
             // If the removed item participates in a call/output pair, also remove
             // its corresponding counterpart to keep the invariants intact without
             // running a full normalization pass.
-            self.remove_corresponding_for(&removed);
+            normalize::remove_corresponding_for(&mut self.items, &removed);
         }
     }
 
@@ -102,10 +101,10 @@ impl ContextManager {
     /// 2. every output has a corresponding call entry
     fn normalize_history(&mut self) {
         // all function/tool calls must have a corresponding output
-        self.ensure_call_outputs_present();
+        normalize::ensure_call_outputs_present(&mut self.items);
 
         // all outputs must have a corresponding function/tool call
-        self.remove_orphan_outputs();
+        normalize::remove_orphan_outputs(&mut self.items);
     }
 
     /// Returns a clone of the contents in the transcript.
@@ -115,185 +114,6 @@ impl ContextManager {
 
     fn remove_ghost_snapshots(items: &mut Vec<ResponseItem>) {
         items.retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
-    }
-
-    fn ensure_call_outputs_present(&mut self) {
-        // Collect synthetic outputs to insert immediately after their calls.
-        // Store the insertion position (index of call) alongside the item so
-        // we can insert in reverse order and avoid index shifting.
-        let mut missing_outputs_to_insert: Vec<(usize, ResponseItem)> = Vec::new();
-
-        for (idx, item) in self.items.iter().enumerate() {
-            match item {
-                ResponseItem::FunctionCall { call_id, .. } => {
-                    let has_output = self.items.iter().any(|i| match i {
-                        ResponseItem::FunctionCallOutput {
-                            call_id: existing, ..
-                        } => existing == call_id,
-                        _ => false,
-                    });
-
-                    if !has_output {
-                        error_or_panic(format!(
-                            "Function call output is missing for call id: {call_id}"
-                        ));
-                        missing_outputs_to_insert.push((
-                            idx,
-                            ResponseItem::FunctionCallOutput {
-                                call_id: call_id.clone(),
-                                output: FunctionCallOutputPayload {
-                                    content: "aborted".to_string(),
-                                    ..Default::default()
-                                },
-                            },
-                        ));
-                    }
-                }
-                ResponseItem::CustomToolCall { call_id, .. } => {
-                    let has_output = self.items.iter().any(|i| match i {
-                        ResponseItem::CustomToolCallOutput {
-                            call_id: existing, ..
-                        } => existing == call_id,
-                        _ => false,
-                    });
-
-                    if !has_output {
-                        error_or_panic(format!(
-                            "Custom tool call output is missing for call id: {call_id}"
-                        ));
-                        missing_outputs_to_insert.push((
-                            idx,
-                            ResponseItem::CustomToolCallOutput {
-                                call_id: call_id.clone(),
-                                output: "aborted".to_string(),
-                            },
-                        ));
-                    }
-                }
-                // LocalShellCall is represented in upstream streams by a FunctionCallOutput
-                ResponseItem::LocalShellCall { call_id, .. } => {
-                    if let Some(call_id) = call_id.as_ref() {
-                        let has_output = self.items.iter().any(|i| match i {
-                            ResponseItem::FunctionCallOutput {
-                                call_id: existing, ..
-                            } => existing == call_id,
-                            _ => false,
-                        });
-
-                        if !has_output {
-                            error_or_panic(format!(
-                                "Local shell call output is missing for call id: {call_id}"
-                            ));
-                            missing_outputs_to_insert.push((
-                                idx,
-                                ResponseItem::FunctionCallOutput {
-                                    call_id: call_id.clone(),
-                                    output: FunctionCallOutputPayload {
-                                        content: "aborted".to_string(),
-                                        ..Default::default()
-                                    },
-                                },
-                            ));
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // Insert synthetic outputs in reverse index order to avoid re-indexing.
-        for (idx, output_item) in missing_outputs_to_insert.into_iter().rev() {
-            self.items.insert(idx + 1, output_item);
-        }
-    }
-
-    fn remove_orphan_outputs(&mut self) {
-        use std::collections::HashSet;
-
-        let function_call_ids: HashSet<String> = self
-            .items
-            .iter()
-            .filter_map(|i| match i {
-                ResponseItem::FunctionCall { call_id, .. } => Some(call_id.clone()),
-                _ => None,
-            })
-            .collect();
-
-        let custom_tool_call_ids: HashSet<String> = self
-            .items
-            .iter()
-            .filter_map(|i| match i {
-                ResponseItem::CustomToolCall { call_id, .. } => Some(call_id.clone()),
-                _ => None,
-            })
-            .collect();
-
-        self.items.retain(|item| match item {
-            ResponseItem::FunctionCallOutput { call_id, .. } => function_call_ids.contains(call_id),
-            ResponseItem::CustomToolCallOutput { call_id, .. } => {
-                custom_tool_call_ids.contains(call_id)
-            }
-            _ => true,
-        });
-    }
-
-    fn remove_corresponding_for(&mut self, item: &ResponseItem) {
-        match item {
-            ResponseItem::FunctionCall { call_id, .. } => {
-                Self::remove_first_matching(&mut self.items, |i| {
-                    matches!(
-                        i,
-                        ResponseItem::FunctionCallOutput {
-                            call_id: existing, ..
-                        } if existing == call_id
-                    )
-                });
-            }
-            ResponseItem::FunctionCallOutput { call_id, .. } => {
-                Self::remove_first_matching(
-                    &mut self.items,
-                    |i| matches!(i, ResponseItem::FunctionCall { call_id: existing, .. } if existing == call_id),
-                );
-            }
-            ResponseItem::CustomToolCall { call_id, .. } => {
-                Self::remove_first_matching(&mut self.items, |i| {
-                    matches!(
-                        i,
-                        ResponseItem::CustomToolCallOutput {
-                            call_id: existing, ..
-                        } if existing == call_id
-                    )
-                });
-            }
-            ResponseItem::CustomToolCallOutput { call_id, .. } => {
-                Self::remove_first_matching(
-                    &mut self.items,
-                    |i| matches!(i, ResponseItem::CustomToolCall { call_id: existing, .. } if existing == call_id),
-                );
-            }
-            ResponseItem::LocalShellCall { call_id, .. } => {
-                if let Some(call_id) = call_id {
-                    Self::remove_first_matching(&mut self.items, |i| {
-                        matches!(
-                            i,
-                            ResponseItem::FunctionCallOutput {
-                                call_id: existing, ..
-                            } if existing == call_id
-                        )
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn remove_first_matching<F>(items: &mut Vec<ResponseItem>, predicate: F)
-    where
-        F: Fn(&ResponseItem) -> bool,
-    {
-        if let Some(pos) = items.iter().position(predicate) {
-            items.remove(pos);
-        }
     }
 
     fn process_item(item: &ResponseItem) -> ResponseItem {
