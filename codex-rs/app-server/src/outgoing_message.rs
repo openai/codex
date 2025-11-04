@@ -145,8 +145,8 @@ mod tests {
     use codex_app_server_protocol::AccountUpdatedNotification;
     use codex_app_server_protocol::AuthMode;
     use codex_app_server_protocol::LoginChatGptCompleteNotification;
-    use codex_app_server_protocol::RateLimitSnapshot;
-    use codex_app_server_protocol::RateLimitWindow;
+    use codex_app_server_protocol::v2::RateLimitSnapshot;
+    use codex_app_server_protocol::v2::RateLimitWindow;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use uuid::Uuid;
