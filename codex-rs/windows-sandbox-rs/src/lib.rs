@@ -51,8 +51,8 @@ mod windows_impl {
     use std::ptr;
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::Foundation::GetLastError;
-    use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::Foundation::SetHandleInformation;
+    use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
     use windows_sys::Win32::System::Pipes::CreatePipe;
     use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
