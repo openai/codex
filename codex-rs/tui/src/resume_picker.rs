@@ -71,11 +71,17 @@ pub async fn run_resume_picker(
     tui: &mut Tui,
     codex_home: &Path,
     default_provider: &str,
+    show_all: bool,
 ) -> Result<ResumeSelection> {
     let alt = AltScreenGuard::enter(tui);
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
     let default_provider = default_provider.to_string();
+    let filter_cwd = if show_all {
+        None
+    } else {
+        std::env::current_dir().ok()
+    };
 
     let loader_tx = bg_tx.clone();
     let page_loader: PageLoader = Arc::new(move |request: PageLoadRequest| {
@@ -104,6 +110,8 @@ pub async fn run_resume_picker(
         alt.tui.frame_requester(),
         page_loader,
         default_provider.clone(),
+        show_all,
+        filter_cwd,
     );
     state.load_initial_page().await?;
     state.request_frame();
@@ -179,6 +187,8 @@ struct PickerState {
     page_loader: PageLoader,
     view_rows: Option<usize>,
     default_provider: String,
+    show_all: bool,
+    filter_cwd: Option<PathBuf>,
 }
 
 struct PaginationState {
@@ -246,6 +256,8 @@ impl PickerState {
         requester: FrameRequester,
         page_loader: PageLoader,
         default_provider: String,
+        show_all: bool,
+        filter_cwd: Option<PathBuf>,
     ) -> Self {
         Self {
             codex_home,
@@ -268,6 +280,8 @@ impl PickerState {
             page_loader,
             view_rows: None,
             default_provider,
+            show_all,
+            filter_cwd,
         }
     }
 
@@ -422,13 +436,15 @@ impl PickerState {
     }
 
     fn apply_filter(&mut self) {
+        let base_iter = self
+            .all_rows
+            .iter()
+            .filter(|row| self.row_matches_filter(row));
         if self.query.is_empty() {
-            self.filtered_rows = self.all_rows.clone();
+            self.filtered_rows = base_iter.cloned().collect();
         } else {
             let q = self.query.to_lowercase();
-            self.filtered_rows = self
-                .all_rows
-                .iter()
+            self.filtered_rows = base_iter
                 .filter(|r| r.preview.to_lowercase().contains(&q))
                 .cloned()
                 .collect();
@@ -441,6 +457,19 @@ impl PickerState {
         }
         self.ensure_selected_visible();
         self.request_frame();
+    }
+
+    fn row_matches_filter(&self, row: &Row) -> bool {
+        if self.show_all {
+            return true;
+        }
+        let Some(filter_cwd) = self.filter_cwd.as_ref() else {
+            return true;
+        };
+        let Some(row_cwd) = row.cwd.as_ref() else {
+            return false;
+        };
+        paths_match(row_cwd, filter_cwd)
     }
 
     fn set_query(&mut self, new_query: String) {
@@ -637,6 +666,13 @@ fn extract_session_meta_from_head(head: &[serde_json::Value]) -> (Option<PathBuf
     (None, None)
 }
 
+fn paths_match(a: &Path, b: &Path) -> bool {
+    if let (Ok(ca), Ok(cb)) = (a.canonicalize(), b.canonicalize()) {
+        return ca == cb;
+    }
+    a == b
+}
+
 fn parse_timestamp_str(ts: &str) -> Option<DateTime<Utc>> {
     chrono::DateTime::parse_from_rfc3339(ts)
         .map(|dt| dt.with_timezone(&Utc))
@@ -688,7 +724,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         };
         frame.render_widget_ref(Line::from(q), search);
 
-        let metrics = calculate_column_metrics(&state.filtered_rows);
+        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
 
         // Column headers and list
         render_column_headers(frame, columns, &metrics);
@@ -956,7 +992,7 @@ struct ColumnMetrics {
     labels: Vec<(String, String, String)>,
 }
 
-fn calculate_column_metrics(rows: &[Row]) -> ColumnMetrics {
+fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
     fn right_elide(s: &str, max: usize) -> String {
         if s.chars().count() <= max {
             return s.to_string();
@@ -979,18 +1015,26 @@ fn calculate_column_metrics(rows: &[Row]) -> ColumnMetrics {
     let mut labels: Vec<(String, String, String)> = Vec::with_capacity(rows.len());
     let mut max_updated_width = UnicodeWidthStr::width("Updated");
     let mut max_branch_width = UnicodeWidthStr::width("Branch");
-    let mut max_cwd_width = UnicodeWidthStr::width("CWD");
+    let mut max_cwd_width = if include_cwd {
+        UnicodeWidthStr::width("CWD")
+    } else {
+        0
+    };
 
     for row in rows {
         let updated = format_updated_label(row);
         let branch_raw = row.git_branch.clone().unwrap_or_default();
         let branch = right_elide(&branch_raw, 24);
-        let cwd_raw = row
-            .cwd
-            .as_ref()
-            .map(|p| display_path_for(p, std::path::Path::new("/")))
-            .unwrap_or_default();
-        let cwd = right_elide(&cwd_raw, 24);
+        let cwd = if include_cwd {
+            let cwd_raw = row
+                .cwd
+                .as_ref()
+                .map(|p| display_path_for(p, std::path::Path::new("/")))
+                .unwrap_or_default();
+            right_elide(&cwd_raw, 24)
+        } else {
+            String::new()
+        };
         max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
         max_branch_width = max_branch_width.max(UnicodeWidthStr::width(branch.as_str()));
         max_cwd_width = max_cwd_width.max(UnicodeWidthStr::width(cwd.as_str()));
@@ -1177,6 +1221,8 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            true,
+            None,
         );
 
         let now = Utc::now();
@@ -1213,7 +1259,7 @@ mod tests {
         state.scroll_top = 0;
         state.update_view_rows(3);
 
-        let metrics = calculate_column_metrics(&state.filtered_rows);
+        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
 
         let width: u16 = 80;
         let height: u16 = 6;
@@ -1243,6 +1289,8 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            true,
+            None,
         );
 
         state.reset_pagination();
@@ -1309,6 +1357,8 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            true,
+            None,
         );
         state.reset_pagination();
         state.ingest_page(page(
@@ -1338,6 +1388,8 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            true,
+            None,
         );
 
         let mut items = Vec::new();
@@ -1386,6 +1438,8 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            true,
+            None,
         );
 
         let mut items = Vec::new();
@@ -1430,6 +1484,8 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            true,
+            None,
         );
         state.reset_pagination();
         state.ingest_page(page(
