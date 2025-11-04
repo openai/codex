@@ -10,37 +10,47 @@ In non-interactive mode, Codex does not ask for command or edit approvals. By de
 
 Use `codex exec --full-auto` to allow file edits. Use `codex exec --sandbox danger-full-access` to allow edits and networked commands.
 
+### Default output mode
+
+By default, Codex streams its activity to stderr and only writes the final message from the agent to stdout. This makes it easier to pipe `codex exec` into another tool without extra filtering.
+
+To write the output of `codex exec` to a file, in addition to using a shell redirect like `>`, there is also a dedicated flag to specify an output file: `-o`/`--output-last-message`.
 
 ### JSON output mode
 
 `codex exec` supports a `--json` mode that streams events to stdout as JSON Lines (JSONL) while the agent runs.
 
 Supported event types:
+
 - `thread.started` - when a thread is started or resumed.
 - `turn.started` - when a turn starts. A turn encompasses all events between the user message and the assistant response.
 - `turn.completed` - when a turn completes; includes token usage.
 - `turn.failed` - when a turn fails; includes error details.
 - `item.started`/`item.updated`/`item.completed` - when a thread item is added/updated/completed.
+- `error` - when the stream reports an unrecoverable error; includes the error message.
 
 Supported item types:
-- `assistant_message` - assistant message.
+
+- `agent_message` - assistant message.
 - `reasoning` - a summary of the assistant's thinking.
 - `command_execution` - assistant executing a command.
 - `file_change` - assistant making file changes.
 - `mcp_tool_call` - assistant calling an MCP tool.
 - `web_search` - assistant performing a web search.
+- `todo_list` - the agent's running plan when the plan tool is active, updating as steps change.
 
-Typically, an `assistant_message` is added at the end of the turn.
+Typically, an `agent_message` is added at the end of the turn.
 
 Sample output:
+
 ```jsonl
 {"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}
 {"type":"turn.started"}
-{"type":"item.completed","item":{"id":"item_0","item_type":"reasoning","text":"**Searching for README files**"}}
-{"type":"item.started","item":{"id":"item_1","item_type":"command_execution","command":"bash -lc ls","aggregated_output":"","status":"in_progress"}}
-{"type":"item.completed","item":{"id":"item_1","item_type":"command_execution","command":"bash -lc ls","aggregated_output":"2025-09-11\nAGENTS.md\nCHANGELOG.md\ncliff.toml\ncodex-cli\ncodex-rs\ndocs\nexamples\nflake.lock\nflake.nix\nLICENSE\nnode_modules\nNOTICE\npackage.json\npnpm-lock.yaml\npnpm-workspace.yaml\nPNPM.md\nREADME.md\nscripts\nsdk\ntmp\n","exit_code":0,"status":"completed"}}
-{"type":"item.completed","item":{"id":"item_2","item_type":"reasoning","text":"**Checking repository root for README**"}}
-{"type":"item.completed","item":{"id":"item_3","item_type":"assistant_message","text":"Yep — there’s a `README.md` in the repository root."}}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"**Searching for README files**"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"bash -lc ls","aggregated_output":"","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"bash -lc ls","aggregated_output":"2025-09-11\nAGENTS.md\nCHANGELOG.md\ncliff.toml\ncodex-cli\ncodex-rs\ndocs\nexamples\nflake.lock\nflake.nix\nLICENSE\nnode_modules\nNOTICE\npackage.json\npnpm-lock.yaml\npnpm-workspace.yaml\nPNPM.md\nREADME.md\nscripts\nsdk\ntmp\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"reasoning","text":"**Checking repository root for README**"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Yep — there’s a `README.md` in the repository root."}}
 {"type":"turn.completed","usage":{"input_tokens":24763,"cached_input_tokens":24448,"output_tokens":122}}
 ```
 
@@ -54,13 +64,13 @@ Sample schema:
 
 ```json
 {
-    "type": "object",
-    "properties": {
-        "project_name": { "type": "string" },
-        "programming_languages": { "type": "array", "items": { "type": "string" } }
-    },
-    "required": ["project_name", "programming_languages"],
-    "additionalProperties": false
+  "type": "object",
+  "properties": {
+    "project_name": { "type": "string" },
+    "programming_languages": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["project_name", "programming_languages"],
+  "additionalProperties": false
 }
 ```
 
@@ -77,17 +87,16 @@ Combine `--output-schema` with `-o` to only print the final JSON output. You can
 
 Codex requires a Git repository to avoid destructive changes. To disable this check, use `codex exec --skip-git-repo-check`.
 
-
 ### Resuming non-interactive sessions
 
-Resume a previous non-interactive session with `codex exec resume <SESSION_ID>` or `codex exec resume --last`. This preserves conversation context so you can ask follow-up questions or give new tasks to the agent. 
+Resume a previous non-interactive session with `codex exec resume <SESSION_ID>` or `codex exec resume --last`. This preserves conversation context so you can ask follow-up questions or give new tasks to the agent.
 
 ```shell
 codex exec "Review the change, look for use-after-free issues"
 codex exec resume --last "Fix use-after-free issues"
 ```
 
-Only the conversation context is preserved; you must still provide flags to customize Codex behavior. 
+Only the conversation context is preserved; you must still provide flags to customize Codex behavior.
 
 ```shell
 codex exec --model gpt-5-codex --json "Review the change, look for use-after-free issues"

@@ -53,7 +53,11 @@ impl MessageProcessor {
         config: Arc<Config>,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
-        let auth_manager = AuthManager::shared(config.codex_home.clone(), false);
+        let auth_manager = AuthManager::shared(
+            config.codex_home.clone(),
+            false,
+            config.cli_auth_credentials_store_mode,
+        );
         let conversation_manager =
             Arc::new(ConversationManager::new(auth_manager, SessionSource::Mcp));
         Self {
@@ -342,7 +346,10 @@ impl MessageProcessor {
     async fn handle_tool_call_codex(&self, id: RequestId, arguments: Option<serde_json::Value>) {
         let (initial_prompt, config): (String, Config) = match arguments {
             Some(json_val) => match serde_json::from_value::<CodexToolCallParam>(json_val) {
-                Ok(tool_cfg) => match tool_cfg.into_config(self.codex_linux_sandbox_exe.clone()) {
+                Ok(tool_cfg) => match tool_cfg
+                    .into_config(self.codex_linux_sandbox_exe.clone())
+                    .await
+                {
                     Ok(cfg) => cfg,
                     Err(e) => {
                         let result = CallToolResult {

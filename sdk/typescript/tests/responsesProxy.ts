@@ -3,6 +3,22 @@ import http from "node:http";
 const DEFAULT_RESPONSE_ID = "resp_mock";
 const DEFAULT_MESSAGE_ID = "msg_mock";
 
+type ResponseCompletedUsage = {
+  input_tokens: number;
+  input_tokens_details: { cached_tokens: number } | null;
+  output_tokens: number;
+  output_tokens_details: { reasoning_tokens: number } | null;
+  total_tokens: number;
+};
+
+const DEFAULT_COMPLETED_USAGE: ResponseCompletedUsage = {
+  input_tokens: 42,
+  input_tokens_details: { cached_tokens: 12 },
+  output_tokens: 5,
+  output_tokens_details: null,
+  total_tokens: 47,
+};
+
 type SseEvent = {
   type: string;
   [key: string]: unknown;
@@ -30,11 +46,15 @@ export type ResponsesApiRequest = {
     role: string;
     content?: Array<{ type: string; text: string }>;
   }>;
+  text?: {
+    format?: Record<string, unknown>;
+  };
 };
 
 export type RecordedRequest = {
   body: string;
   json: ResponsesApiRequest;
+  headers: http.IncomingHttpHeaders;
 };
 
 function formatSseEvent(event: SseEvent): string {
@@ -71,7 +91,7 @@ export async function startResponsesTestProxy(
       if (req.method === "POST" && req.url === "/responses") {
         const body = await readRequestBody(req);
         const json = JSON.parse(body);
-        requests.push({ body, json });
+        requests.push({ body, json, headers: { ...req.headers } });
 
         const status = options.statusCode ?? 200;
         res.statusCode = status;
@@ -157,17 +177,29 @@ export function assistantMessage(text: string, itemId: string = DEFAULT_MESSAGE_
   };
 }
 
-export function responseCompleted(responseId: string = DEFAULT_RESPONSE_ID): SseEvent {
+export function responseFailed(errorMessage: string): SseEvent {
+  return {
+    type: "error",
+    error: { code: "rate_limit_exceeded", message: errorMessage },
+  };
+}
+
+export function responseCompleted(
+  responseId: string = DEFAULT_RESPONSE_ID,
+  usage: ResponseCompletedUsage = DEFAULT_COMPLETED_USAGE,
+): SseEvent {
+  const inputDetails = usage.input_tokens_details ? { ...usage.input_tokens_details } : null;
+  const outputDetails = usage.output_tokens_details ? { ...usage.output_tokens_details } : null;
   return {
     type: "response.completed",
     response: {
       id: responseId,
       usage: {
-        input_tokens: 0,
-        input_tokens_details: null,
-        output_tokens: 0,
-        output_tokens_details: null,
-        total_tokens: 0,
+        input_tokens: usage.input_tokens,
+        input_tokens_details: inputDetails,
+        output_tokens: usage.output_tokens,
+        output_tokens_details: outputDetails,
+        total_tokens: usage.total_tokens,
       },
     },
   };
