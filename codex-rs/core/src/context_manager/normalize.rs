@@ -155,17 +155,18 @@ pub(crate) fn remove_corresponding_for(items: &mut Vec<ResponseItem>, item: &Res
                 |i| matches!(i, ResponseItem::CustomToolCall { call_id: existing, .. } if existing == call_id),
             );
         }
-        ResponseItem::LocalShellCall { call_id, .. } => {
-            if let Some(call_id) = call_id {
-                remove_first_matching(items, |i| {
-                    matches!(
-                        i,
-                        ResponseItem::FunctionCallOutput {
-                            call_id: existing, ..
-                        } if existing == call_id
-                    )
-                });
-            }
+        ResponseItem::LocalShellCall {
+            call_id: Some(call_id),
+            ..
+        } => {
+            remove_first_matching(items, |i| {
+                matches!(
+                    i,
+                    ResponseItem::FunctionCallOutput {
+                        call_id: existing, ..
+                    } if existing == call_id
+                )
+            });
         }
         _ => {}
     }
