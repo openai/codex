@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::Result;
 use anyhow::anyhow;
 use futures::FutureExt;
+use oauth2::TokenResponse;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::InitializeRequestParams;
@@ -31,6 +32,7 @@ use rmcp::service::RunningService;
 use rmcp::service::{self};
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::auth::AuthClient;
+use rmcp::transport::auth::OAuthTokenResponse;
 use rmcp::transport::auth::OAuthState;
 use rmcp::transport::child_process::TokioChildProcess;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -54,6 +56,8 @@ use crate::utils::convert_to_mcp;
 use crate::utils::convert_to_rmcp;
 use crate::utils::create_env_for_mcp_server;
 use crate::utils::run_with_timeout;
+
+const REFRESH_SKEW_SECS: u64 = 60;
 
 enum PendingTransport {
     ChildProcess(TokioChildProcess),
@@ -397,6 +401,13 @@ async fn create_oauth_transport_and_runtime(
     let auth_client = AuthClient::new(http_client, manager);
     let auth_manager = auth_client.auth_manager.clone();
 
+    // If the stored token is expired or about to expire, refresh before the handshake.
+    if should_refresh_initial_token(&initial_tokens.token_response.0) {
+        if let Err(err) = auth_manager.lock().await.refresh_token().await {
+            warn!("failed to refresh OAuth token before handshake: {err}");
+        }
+    }
+
     let transport = StreamableHttpClientTransport::with_client(
         auth_client,
         StreamableHttpClientTransportConfig::with_uri(url.to_string()),
@@ -411,4 +422,11 @@ async fn create_oauth_transport_and_runtime(
     );
 
     Ok((transport, runtime))
+}
+
+fn should_refresh_initial_token(token: &OAuthTokenResponse) -> bool {
+    match token.expires_in() {
+        Some(duration) => duration.as_secs() <= REFRESH_SKEW_SECS,
+        None => token.refresh_token().is_some(),
+    }
 }
