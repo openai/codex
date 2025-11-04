@@ -518,7 +518,6 @@ impl CodexMessageProcessor {
     async fn logout_v1(&mut self, request_id: RequestId) {
         match self.logout_common().await {
             Ok(current_auth_method) => {
-                // v1 response shape
                 self.outgoing
                     .send_response(
                         request_id,
@@ -526,7 +525,6 @@ impl CodexMessageProcessor {
                     )
                     .await;
 
-                // v1 notification: AuthStatusChange only
                 let payload = AuthStatusChangeNotification {
                     auth_method: current_auth_method,
                 };
@@ -543,7 +541,6 @@ impl CodexMessageProcessor {
     async fn logout_v2(&mut self, request_id: RequestId) {
         match self.logout_common().await {
             Ok(current_auth_method) => {
-                // v2 response shape
                 self.outgoing
                     .send_response(
                         request_id,
@@ -551,7 +548,6 @@ impl CodexMessageProcessor {
                     )
                     .await;
 
-                // v2 notification: AccountUpdated only
                 let payload_v2 = AccountUpdatedNotification {
                     auth_method: current_auth_method,
                 };

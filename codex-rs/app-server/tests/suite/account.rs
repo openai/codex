@@ -11,13 +11,14 @@ use codex_app_server_protocol::ServerNotification;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_login::login_with_api_key;
 use pretty_assertions::assert_eq;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 // Helper to create a minimal config.toml for the app server
-fn create_config_toml(codex_home: &std::path::Path) -> std::io::Result<()> {
+fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,
@@ -25,6 +26,15 @@ fn create_config_toml(codex_home: &std::path::Path) -> std::io::Result<()> {
 model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "http://127.0.0.1:0/v1"
+wire_api = "chat"
+request_max_retries = 0
+stream_max_retries = 0
 "#,
     )
 }
@@ -59,7 +69,7 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
     .await??;
     let parsed: ServerNotification = note.try_into()?;
     let ServerNotification::AccountUpdated(payload) = parsed else {
-        bail!("unexpected notification: {:?}", parsed);
+        bail!("unexpected notification: {parsed:?}");
     };
     assert!(
         payload.auth_method.is_none(),
