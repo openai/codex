@@ -510,15 +510,21 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
                 // Respect root-level `-c` overrides plus top-level flags like `--profile`.
-                let cli_kv_overrides = root_config_overrides
+                let mut cli_kv_overrides = root_config_overrides
                     .parse_overrides()
                     .map_err(anyhow::Error::msg)?;
 
+                // Honor `--search` via the new feature toggle.
+                if interactive.web_search {
+                    cli_kv_overrides.push((
+                        "features.web_search_request".to_string(),
+                        toml::Value::Boolean(true),
+                    ));
+                }
+
                 // Thread through relevant top-level flags (at minimum, `--profile`).
-                // Also honor `--search` since it maps to a feature toggle.
                 let overrides = ConfigOverrides {
                     config_profile: interactive.config_profile.clone(),
-                    tools_web_search_request: interactive.web_search.then_some(true),
                     ..Default::default()
                 };
 
