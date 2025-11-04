@@ -16,6 +16,7 @@ use uuid::Uuid;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
+#[ts(export_to = "v2/")]
 pub enum Account {
     #[serde(rename = "apiKey", rename_all = "camelCase")]
     #[ts(rename = "apiKey", rename_all = "camelCase")]
@@ -32,6 +33,7 @@ pub enum Account {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type")]
 #[ts(tag = "type")]
+#[ts(export_to = "v2/")]
 pub enum LoginAccountParams {
     #[serde(rename = "apiKey")]
     #[ts(rename = "apiKey")]
@@ -47,6 +49,7 @@ pub enum LoginAccountParams {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct LoginAccountResponse {
     /// Only set if the login method is ChatGPT.
     #[schemars(with = "String")]
@@ -59,22 +62,26 @@ pub struct LoginAccountResponse {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct LogoutAccountResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct GetAccountRateLimitsResponse {
     pub rate_limits: RateLimitSnapshot,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct GetAccountResponse {
     pub account: Account,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ListModelsParams {
     /// Optional page size; defaults to a reasonable server-side value.
     pub page_size: Option<usize>,
@@ -84,6 +91,7 @@ pub struct ListModelsParams {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct Model {
     pub id: String,
     pub model: String,
@@ -97,6 +105,7 @@ pub struct Model {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ReasoningEffortOption {
     pub reasoning_effort: ReasoningEffort,
     pub description: String,
@@ -104,6 +113,7 @@ pub struct ReasoningEffortOption {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ListModelsResponse {
     pub items: Vec<Model>,
     /// Opaque cursor to pass to the next call to continue after the last item.
@@ -113,6 +123,7 @@ pub struct ListModelsResponse {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct UploadFeedbackParams {
     pub classification: String,
     pub reason: Option<String>,
@@ -122,24 +133,28 @@ pub struct UploadFeedbackParams {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct UploadFeedbackResponse {
     pub thread_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct AccountUpdatedNotification {
     pub auth_method: Option<AuthMode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct Thread {
     pub id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct Turn {
     pub id: String,
     pub items: Vec<ThreadItem>,
@@ -149,6 +164,7 @@ pub struct Turn {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub enum TurnStatus {
     Completed,
     Interrupted,
@@ -158,12 +174,14 @@ pub enum TurnStatus {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct TurnError {
     pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub enum UserInput {
     Text { text: String },
     Image { url: String },
@@ -172,6 +190,7 @@ pub enum UserInput {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub enum ThreadItem {
     UserMessage {
         id: String,
@@ -227,6 +246,7 @@ pub enum ThreadItem {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub enum CommandExecutionStatus {
     InProgress,
     Completed,
@@ -235,6 +255,7 @@ pub enum CommandExecutionStatus {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct FileUpdateChange {
     pub path: String,
     pub kind: PatchChangeKind,
@@ -243,6 +264,7 @@ pub struct FileUpdateChange {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub enum PatchChangeKind {
     Add,
     Delete,
@@ -251,6 +273,7 @@ pub enum PatchChangeKind {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub enum PatchApplyStatus {
     Completed,
     Failed,
@@ -258,6 +281,7 @@ pub enum PatchApplyStatus {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub enum McpToolCallStatus {
     InProgress,
     Completed,
@@ -266,6 +290,7 @@ pub enum McpToolCallStatus {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct McpToolCallResult {
     pub content: Vec<McpContentBlock>,
     pub structured_content: JsonValue,
@@ -273,12 +298,14 @@ pub struct McpToolCallResult {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct McpToolCallError {
     pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct TodoItem {
     pub id: String,
     pub text: String,
@@ -289,18 +316,21 @@ pub struct TodoItem {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadStartedNotification {
     pub thread: Thread,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct TurnStartedNotification {
     pub turn: Turn,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct Usage {
     pub input_tokens: i32,
     pub cached_input_tokens: i32,
@@ -309,6 +339,7 @@ pub struct Usage {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct TurnCompletedNotification {
     pub turn: Turn,
     pub usage: Usage,
@@ -316,18 +347,21 @@ pub struct TurnCompletedNotification {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ItemStartedNotification {
     pub item: ThreadItem,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ItemCompletedNotification {
     pub item: ThreadItem,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct AgentMessageDeltaNotification {
     pub item_id: String,
     pub delta: String,
@@ -335,6 +369,7 @@ pub struct AgentMessageDeltaNotification {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct CommandExecutionOutputDeltaNotification {
     pub item_id: String,
     pub delta: String,
@@ -342,6 +377,7 @@ pub struct CommandExecutionOutputDeltaNotification {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct McpToolCallProgressNotification {
     pub item_id: String,
     pub message: String,
@@ -349,12 +385,14 @@ pub struct McpToolCallProgressNotification {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct AccountRateLimitsUpdatedNotification {
     pub rate_limits: RateLimitSnapshot,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
@@ -371,6 +409,7 @@ impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct RateLimitWindow {
     pub used_percent: i32,
     pub window_duration_mins: Option<i64>,
