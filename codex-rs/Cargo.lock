@@ -1480,6 +1480,7 @@ dependencies = [
  "strum_macros 0.27.2",
  "supports-color",
  "tempfile",
+ "terminal-colorsaurus",
  "textwrap 0.16.2",
  "tokio",
  "tokio-stream",
@@ -1493,6 +1494,7 @@ dependencies = [
  "unicode-width 0.2.1",
  "url",
  "vt100",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3748,14 +3750,14 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "1.0.4"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78bed444cc8a2160f01cbcf811ef18cac863ad68ae8ca62092e8db51d51c761c"
+checksum = "69d83b0086dc8ecf3ce9ae2874b2d1290252e2a30720bea58a5c6639b0092873"
 dependencies = [
  "libc",
  "log",
  "wasi 0.11.1+wasi-snapshot-preview1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -5750,9 +5752,9 @@ dependencies = [
 
 [[package]]
 name = "signal-hook-mio"
-version = "0.2.4"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34db1a06d485c9142248b7a054f034b349b212551f3dfd19c94d45a754a217cd"
+checksum = "b75a19a7a740b25bc7944bdee6172368f988763b744e3d4dfe753f6b4ece40cc"
 dependencies = [
  "libc",
  "mio",
@@ -6133,6 +6135,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "terminal-colorsaurus"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8909f33134da34b43f69145e748790de650a6abd84faf1f82e773444dd293ec8"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "memchr",
+ "mio",
+ "terminal-trx",
+ "windows-sys 0.61.1",
+ "xterm-color",
+]
+
+[[package]]
+name = "terminal-trx"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "662a3cd5ca570df622e848ef18b50c151e65c9835257465417242243b0bce783"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -7656,6 +7684,12 @@ dependencies = [
  "libc",
  "windows-sys 0.59.0",
 ]
+
+[[package]]
+name = "xterm-color"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4de5f056fb9dc8b7908754867544e26145767187aaac5a98495e88ad7cb8a80f"
 
 [[package]]
 name = "yansi"

@@ -6,7 +6,7 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
     let Some(color_level) = supports_color::on_cached(supports_color::Stream::Stdout) else {
         return Color::default();
     };
-    if color_level.has_16m {
+    if stdout_has_truecolor(&color_level) {
         let (r, g, b) = target;
         #[allow(clippy::disallowed_methods)]
         Color::Rgb(r, g, b)
@@ -23,6 +23,58 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
         #[allow(clippy::disallowed_methods)]
         Color::default()
     }
+}
+
+
+#[cfg(not(windows))]
+fn stdout_has_truecolor(level: &supports_color::ColorLevel) -> bool {
+    level.has_16m
+}
+
+#[cfg(windows)]
+fn stdout_has_truecolor(level: &supports_color::ColorLevel) -> bool {
+    if level.has_16m {
+        return true;
+    }
+    // Upgrade to truecolor on Windows Terminal when VT processing is available.
+    std::env::var_os("WT_SESSION").is_some() && enable_vt_stdout().is_ok()
+}
+
+/// Enables Virtual Terminal Processing (ANSI escape sequence handling) on Windows for stdout.
+///
+/// This ensures that ANSI SGR sequences (including 24‑bit truecolor) are interpreted by the
+/// Windows console pipeline. We use this as a lightweight capability gate before upgrading to
+/// truecolor on Windows Terminal:
+///
+/// - If enabling VT processing succeeds, we can safely emit 24‑bit color.
+/// - If it fails (e.g., legacy consoles or non‑TTY), we do not upgrade and fall back to the
+///   base `supports_color` decision to avoid printing raw escape sequences.
+///
+/// Calling this repeatedly is idempotent (it simply sets the corresponding console mode flag).
+#[cfg(windows)]
+fn enable_vt_stdout() -> std::io::Result<()> {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::GetConsoleMode;
+    use windows_sys::Win32::System::Console::GetStdHandle;
+    use windows_sys::Win32::System::Console::SetConsoleMode;
+    use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+    use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
+
+    unsafe {
+        let handle = GetStdHandle(STD_OUTPUT_HANDLE);
+        if handle == INVALID_HANDLE_VALUE || handle == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut mode: u32 = 0;
+        if GetConsoleMode(handle, &mut mode) == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // Idempotent if already enabled.
+        if SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
 }
 
 pub fn requery_default_colors() {
@@ -121,13 +173,79 @@ mod imp {
     }
 }
 
-#[cfg(not(all(unix, not(test))))]
+#[cfg(all(windows, not(test)))]
 mod imp {
     use super::DefaultColors;
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
+
+    struct Cache<T> {
+        attempted: bool,
+        value: Option<T>,
+    }
+
+    impl<T> Default for Cache<T> {
+        fn default() -> Self {
+            Self {
+                attempted: false,
+                value: None,
+            }
+        }
+    }
+
+    impl<T: Copy> Cache<T> {
+        fn get_or_init_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
+            if !self.attempted {
+                self.value = init();
+                self.attempted = true;
+            }
+            self.value
+        }
+
+        fn refresh_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
+            self.value = init();
+            self.attempted = true;
+            self.value
+        }
+    }
+
+    fn default_colors_cache() -> &'static Mutex<Cache<DefaultColors>> {
+        static CACHE: OnceLock<Mutex<Cache<DefaultColors>>> = OnceLock::new();
+        CACHE.get_or_init(|| Mutex::new(Cache::default()))
+    }
 
     pub(super) fn default_colors() -> Option<DefaultColors> {
-        None
+        let cache = default_colors_cache();
+        let mut cache = cache.lock().ok()?;
+        cache.get_or_init_with(|| query_default_colors().unwrap_or_default())
     }
+
+    pub(super) fn requery_default_colors() {
+        if let Ok(mut cache) = default_colors_cache().lock() {
+            // Don't try to refresh if the cache is already attempted and failed.
+            if cache.attempted && cache.value.is_none() {
+                return;
+            }
+            cache.refresh_with(|| query_default_colors().unwrap_or_default());
+        }
+    }
+
+    fn query_default_colors() -> std::io::Result<Option<DefaultColors>> {
+        match terminal_colorsaurus::color_palette(terminal_colorsaurus::QueryOptions::default()) {
+            Ok(p) => {
+                let (fr, fg, fb) = p.foreground.scale_to_8bit();
+                let (br, bg, bb) = p.background.scale_to_8bit();
+                Ok(Some(DefaultColors { fg: (fr, fg, fb), bg: (br, bg, bb) }))
+            }
+            Err(_) => Ok(None),
+        }
+    }
+}
+
+#[cfg(not(any(all(unix, not(test)), all(windows, not(test)))))]
+mod imp {
+    use super::DefaultColors;
+    pub(super) fn default_colors() -> Option<DefaultColors> { None }
 
     pub(super) fn requery_default_colors() {}
 }
