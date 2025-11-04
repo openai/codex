@@ -1,14 +1,17 @@
 #![cfg(not(target_os = "windows"))]
 
+use std::fs;
+
 use assert_matches::assert_matches;
+use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::ev_apply_patch_function_call;
@@ -71,7 +74,7 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "please run the shell command".into(),
             }],
             final_output_json_schema: None,
@@ -103,9 +106,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_config(|config| {
-        config.include_plan_tool = true;
-    });
+    let mut builder = test_codex();
     let TestCodex {
         codex,
         cwd,
@@ -140,7 +141,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "please update the plan".into(),
             }],
             final_output_json_schema: None,
@@ -190,9 +191,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_config(|config| {
-        config.include_plan_tool = true;
-    });
+    let mut builder = test_codex();
     let TestCodex {
         codex,
         cwd,
@@ -223,7 +222,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "please update the plan".into(),
             }],
             final_output_json_schema: None,
@@ -285,7 +284,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.include_apply_patch_tool = true;
+        config.features.enable(Feature::ApplyPatchFreeform);
     });
     let TestCodex {
         codex,
@@ -294,15 +293,19 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
         ..
     } = builder.build(&server).await?;
 
+    let file_name = "notes.txt";
+    let file_path = cwd.path().join(file_name);
     let call_id = "apply-patch-call";
-    let patch_content = r#"*** Begin Patch
-*** Add File: notes.txt
+    let patch_content = format!(
+        r#"*** Begin Patch
+*** Add File: {file_name}
 +Tool harness apply patch
-*** End Patch"#;
+*** End Patch"#
+    );
 
     let first_response = sse(vec![
         ev_response_created("resp-1"),
-        ev_apply_patch_function_call(call_id, patch_content),
+        ev_apply_patch_function_call(call_id, &patch_content),
         ev_completed("resp-1"),
     ]);
     responses::mount_sse_once_match(&server, any(), first_response).await;
@@ -317,7 +320,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "please apply a patch".into(),
             }],
             final_output_json_schema: None,
@@ -351,6 +354,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
     assert!(saw_patch_begin, "expected PatchApplyBegin event");
     let patch_end_success =
         patch_end_success.expect("expected PatchApplyEnd event to capture success flag");
+    assert!(patch_end_success);
 
     let req = second_mock.single_request();
     let output_item = req.function_call_output(call_id);
@@ -360,38 +364,21 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
     );
     let output_text = extract_output_text(&output_item).expect("output text present");
 
-    if let Ok(exec_output) = serde_json::from_str::<Value>(output_text) {
-        let exit_code = exec_output["metadata"]["exit_code"]
-            .as_i64()
-            .expect("exit_code present");
-        let summary = exec_output["output"].as_str().expect("output field");
-        assert_eq!(
-            exit_code, 0,
-            "expected apply_patch exit_code=0, got {exit_code}, summary: {summary:?}"
-        );
-        assert!(
-            patch_end_success,
-            "expected PatchApplyEnd success flag, summary: {summary:?}"
-        );
-        assert!(
-            summary.contains("Success."),
-            "expected apply_patch summary to note success, got {summary:?}"
-        );
+    let expected_pattern = format!(
+        r"(?s)^Exit code: 0
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Output:
+Success. Updated the following files:
+A {file_name}
+?$"
+    );
+    assert_regex_match(&expected_pattern, output_text);
 
-        let patched_path = cwd.path().join("notes.txt");
-        let contents = std::fs::read_to_string(&patched_path)
-            .unwrap_or_else(|e| panic!("failed reading {}: {e}", patched_path.display()));
-        assert_eq!(contents, "Tool harness apply patch\n");
-    } else {
-        assert!(
-            output_text.contains("codex-run-as-apply-patch"),
-            "expected apply_patch failure message to mention codex-run-as-apply-patch, got {output_text:?}"
-        );
-        assert!(
-            !patch_end_success,
-            "expected PatchApplyEnd to report success=false when apply_patch invocation fails"
-        );
-    }
+    let updated_contents = fs::read_to_string(file_path)?;
+    assert_eq!(
+        updated_contents, "Tool harness apply patch\n",
+        "expected updated file content"
+    );
 
     Ok(())
 }
@@ -403,7 +390,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.include_apply_patch_tool = true;
+        config.features.enable(Feature::ApplyPatchFreeform);
     });
     let TestCodex {
         codex,
@@ -434,7 +421,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "please apply a patch".into(),
             }],
             final_output_json_schema: None,

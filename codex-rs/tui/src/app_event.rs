@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use codex_common::approval_presets::ApprovalPreset;
 use codex_common::model_presets::ModelPreset;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
@@ -63,15 +64,31 @@ pub(crate) enum AppEvent {
 
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
-        model: String,
-        presets: Vec<ModelPreset>,
+        model: ModelPreset,
     },
+
+    /// Open the confirmation prompt before enabling full access mode.
+    OpenFullAccessConfirmation {
+        preset: ApprovalPreset,
+    },
+
+    /// Show Windows Subsystem for Linux setup instructions for auto mode.
+    ShowWindowsAutoModeInstructions,
 
     /// Update the current approval policy in the running app and widget.
     UpdateAskForApprovalPolicy(AskForApproval),
 
     /// Update the current sandbox policy in the running app and widget.
     UpdateSandboxPolicy(SandboxPolicy),
+
+    /// Update whether the full access warning prompt has been acknowledged.
+    UpdateFullAccessWarningAcknowledged(bool),
+
+    /// Persist the acknowledgement flag for the full access warning prompt.
+    PersistFullAccessWarningAcknowledged,
+
+    /// Re-open the approval presets popup.
+    OpenApprovalsPopup,
 
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationPathResponseEvent),
@@ -87,4 +104,23 @@ pub(crate) enum AppEvent {
 
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
+
+    /// Open the feedback note entry overlay after the user selects a category.
+    OpenFeedbackNote {
+        category: FeedbackCategory,
+        include_logs: bool,
+    },
+
+    /// Open the upload consent popup for feedback after selecting a category.
+    OpenFeedbackConsent {
+        category: FeedbackCategory,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FeedbackCategory {
+    BadResult,
+    GoodResult,
+    Bug,
+    Other,
 }

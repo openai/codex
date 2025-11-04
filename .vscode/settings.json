@@ -3,6 +3,7 @@
     "rust-analyzer.check.command": "clippy",
     "rust-analyzer.check.extraArgs": ["--all-features", "--tests"],
     "rust-analyzer.rustfmt.extraArgs": ["--config", "imports_granularity=Item"],
+    "rust-analyzer.cargo.targetDir": "${workspaceFolder}/codex-rs/target/rust-analyzer",
     "[rust]": {
         "editor.defaultFormatter": "rust-lang.rust-analyzer",
         "editor.formatOnSave": true,
