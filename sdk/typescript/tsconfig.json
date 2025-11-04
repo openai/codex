@@ -16,8 +16,9 @@
     "declaration": true,
     "declarationMap": true,
     "noImplicitAny": true,
-    "outDir": "dist"
+    "outDir": "dist",
+    "stripInternal": true
   },
-  "include": ["src", "tests", "tsup.config.ts"],
+  "include": ["src", "tests", "tsup.config.ts", "samples"],
   "exclude": ["dist", "node_modules"]
 }

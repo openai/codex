@@ -1,7 +1,9 @@
-import { spawn } from "child_process";
+import { spawn } from "node:child_process";
+import path from "node:path";
 import readline from "node:readline";
+import { fileURLToPath } from "node:url";
 
-import { SandboxMode } from "./turnOptions";
+import { SandboxMode } from "./threadOptions";
 
 export type CodexExecArgs = {
   input: string;
@@ -9,14 +11,26 @@ export type CodexExecArgs = {
   baseUrl?: string;
   apiKey?: string;
   threadId?: string | null;
+  images?: string[];
+  // --model
   model?: string;
+  // --sandbox
   sandboxMode?: SandboxMode;
+  // --cd
+  workingDirectory?: string;
+  // --skip-git-repo-check
+  skipGitRepoCheck?: boolean;
+  // --output-schema
+  outputSchemaFile?: string;
 };
+
+const INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
+const TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
 
 export class CodexExec {
   private executablePath: string;
-  constructor(executablePath: string) {
-    this.executablePath = executablePath;
+  constructor(executablePath: string | null = null) {
+    this.executablePath = executablePath || findCodexPath();
   }
 
   async *run(args: CodexExecArgs): AsyncGenerator<string> {
@@ -30,20 +44,39 @@ export class CodexExec {
       commandArgs.push("--sandbox", args.sandboxMode);
     }
 
+    if (args.workingDirectory) {
+      commandArgs.push("--cd", args.workingDirectory);
+    }
+
+    if (args.skipGitRepoCheck) {
+      commandArgs.push("--skip-git-repo-check");
+    }
+
+    if (args.outputSchemaFile) {
+      commandArgs.push("--output-schema", args.outputSchemaFile);
+    }
+
+    if (args.images?.length) {
+      for (const image of args.images) {
+        commandArgs.push("--image", image);
+      }
+    }
+
     if (args.threadId) {
-      commandArgs.push("resume", args.threadId, args.input);
-    } else {
-      commandArgs.push(args.input);
+      commandArgs.push("resume", args.threadId);
     }
 
     const env = {
       ...process.env,
     };
+    if (!env[INTERNAL_ORIGINATOR_ENV]) {
+      env[INTERNAL_ORIGINATOR_ENV] = TYPESCRIPT_SDK_ORIGINATOR;
+    }
     if (args.baseUrl) {
       env.OPENAI_BASE_URL = args.baseUrl;
     }
     if (args.apiKey) {
-      env.OPENAI_API_KEY = args.apiKey;
+      env.CODEX_API_KEY = args.apiKey;
     }
 
     const child = spawn(this.executablePath, commandArgs, {
@@ -53,9 +86,23 @@ export class CodexExec {
     let spawnError: unknown | null = null;
     child.once("error", (err) => (spawnError = err));
 
+    if (!child.stdin) {
+      child.kill();
+      throw new Error("Child process has no stdin");
+    }
+    child.stdin.write(args.input);
+    child.stdin.end();
+
     if (!child.stdout) {
       child.kill();
       throw new Error("Child process has no stdout");
+    }
+    const stderrChunks: Buffer[] = [];
+
+    if (child.stderr) {
+      child.stderr.on("data", (data) => {
+        stderrChunks.push(data);
+      });
     }
 
     const rl = readline.createInterface({
@@ -69,12 +116,15 @@ export class CodexExec {
         yield line as string;
       }
 
-      const exitCode = new Promise((resolve) => {
-        child.once("exit", (code) => { 
+      const exitCode = new Promise((resolve, reject) => {
+        child.once("exit", (code) => {
           if (code === 0) {
             resolve(code);
           } else {
-            throw new Error(`Codex Exec exited with code ${code}`);
+            const stderrBuffer = Buffer.concat(stderrChunks);
+            reject(
+              new Error(`Codex Exec exited with code ${code}: ${stderrBuffer.toString("utf8")}`),
+            );
           }
         });
       });
@@ -91,4 +141,65 @@ export class CodexExec {
       }
     }
   }
+}
+
+const scriptFileName = fileURLToPath(import.meta.url);
+const scriptDirName = path.dirname(scriptFileName);
+
+function findCodexPath() {
+  const { platform, arch } = process;
+
+  let targetTriple = null;
+  switch (platform) {
+    case "linux":
+    case "android":
+      switch (arch) {
+        case "x64":
+          targetTriple = "x86_64-unknown-linux-musl";
+          break;
+        case "arm64":
+          targetTriple = "aarch64-unknown-linux-musl";
+          break;
+        default:
+          break;
+      }
+      break;
+    case "darwin":
+      switch (arch) {
+        case "x64":
+          targetTriple = "x86_64-apple-darwin";
+          break;
+        case "arm64":
+          targetTriple = "aarch64-apple-darwin";
+          break;
+        default:
+          break;
+      }
+      break;
+    case "win32":
+      switch (arch) {
+        case "x64":
+          targetTriple = "x86_64-pc-windows-msvc";
+          break;
+        case "arm64":
+          targetTriple = "aarch64-pc-windows-msvc";
+          break;
+        default:
+          break;
+      }
+      break;
+    default:
+      break;
+  }
+
+  if (!targetTriple) {
+    throw new Error(`Unsupported platform: ${platform} (${arch})`);
+  }
+
+  const vendorRoot = path.join(scriptDirName, "..", "vendor");
+  const archRoot = path.join(vendorRoot, targetTriple);
+  const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
+  const binaryPath = path.join(archRoot, "codex", codexBinaryName);
+
+  return binaryPath;
 }

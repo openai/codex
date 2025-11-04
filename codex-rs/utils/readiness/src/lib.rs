@@ -1,6 +1,7 @@
 //! Readiness flag with token-based authorization and async waiting (Tokio).
 
 use std::collections::HashSet;
+use std::fmt;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
@@ -71,6 +72,10 @@ impl ReadinessFlag {
             .map_err(|_| errors::ReadinessError::TokenLockFailed)?;
         Ok(f(&mut guard))
     }
+
+    fn load_ready(&self) -> bool {
+        self.ready.load(Ordering::Acquire)
+    }
 }
 
 impl Default for ReadinessFlag {
@@ -79,14 +84,37 @@ impl Default for ReadinessFlag {
     }
 }
 
+impl fmt::Debug for ReadinessFlag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReadinessFlag")
+            .field("ready", &self.load_ready())
+            .finish()
+    }
+}
+
 #[async_trait::async_trait]
 impl Readiness for ReadinessFlag {
     fn is_ready(&self) -> bool {
-        self.ready.load(Ordering::Acquire)
+        if self.load_ready() {
+            return true;
+        }
+
+        if let Ok(tokens) = self.tokens.try_lock()
+            && tokens.is_empty()
+        {
+            let was_ready = self.ready.swap(true, Ordering::AcqRel);
+            drop(tokens);
+            if !was_ready {
+                let _ = self.tx.send(true);
+            }
+            return true;
+        }
+
+        self.load_ready()
     }
 
     async fn subscribe(&self) -> Result<Token, errors::ReadinessError> {
-        if self.is_ready() {
+        if self.load_ready() {
             return Err(errors::ReadinessError::FlagAlreadyReady);
         }
 
@@ -97,7 +125,7 @@ impl Readiness for ReadinessFlag {
         // check above and inserting the token.
         let inserted = self
             .with_tokens(|tokens| {
-                if self.is_ready() {
+                if self.load_ready() {
                     return false;
                 }
                 tokens.insert(token);
@@ -113,7 +141,7 @@ impl Readiness for ReadinessFlag {
     }
 
     async fn mark_ready(&self, token: Token) -> Result<bool, errors::ReadinessError> {
-        if self.is_ready() {
+        if self.load_ready() {
             return Ok(false);
         }
         if token.0 == 0 {
@@ -176,6 +204,7 @@ mod tests {
     use super::ReadinessFlag;
     use super::Token;
     use super::errors::ReadinessError;
+    use assert_matches::assert_matches;
 
     #[tokio::test]
     async fn subscribe_and_mark_ready_roundtrip() -> Result<(), ReadinessError> {
@@ -201,7 +230,8 @@ mod tests {
     async fn mark_ready_rejects_unknown_token() -> Result<(), ReadinessError> {
         let flag = ReadinessFlag::new();
         assert!(!flag.mark_ready(Token(42)).await?);
-        assert!(!flag.is_ready());
+        assert!(!flag.load_ready());
+        assert!(flag.is_ready());
         Ok(())
     }
 
@@ -233,6 +263,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn is_ready_without_subscribers_marks_flag_ready() -> Result<(), ReadinessError> {
+        let flag = ReadinessFlag::new();
+
+        assert!(flag.is_ready());
+        assert!(flag.is_ready());
+        assert_matches!(
+            flag.subscribe().await,
+            Err(ReadinessError::FlagAlreadyReady)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn subscribe_returns_error_when_lock_is_held() {
         let flag = ReadinessFlag::new();
         let _guard = flag
@@ -244,6 +287,6 @@ mod tests {
             .subscribe()
             .await
             .expect_err("contended subscribe should report a lock failure");
-        assert!(matches!(err, ReadinessError::TokenLockFailed));
+        assert_matches!(err, ReadinessError::TokenLockFailed);
     }
 }

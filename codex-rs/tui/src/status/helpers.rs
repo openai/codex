@@ -2,14 +2,17 @@ use crate::exec_command::relativize_to_home;
 use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
-use codex_core::auth::get_auth_file;
-use codex_core::auth::try_read_auth_json;
+use codex_core::auth::load_auth_dot_json;
 use codex_core::config::Config;
 use codex_core::project_doc::discover_project_doc_paths;
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
 use super::account::StatusAccountDisplay;
+
+fn normalize_agents_display_path(path: &Path) -> String {
+    dunce::simplified(path).display().to_string()
+}
 
 pub(crate) fn compose_model_display(
     config: &Config,
@@ -36,9 +39,13 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
         Ok(paths) => {
             let mut rels: Vec<String> = Vec::new();
             for p in paths {
+                let file_name = p
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
                 let display = if let Some(parent) = p.parent() {
                     if parent == config.cwd {
-                        "AGENTS.md".to_string()
+                        file_name.clone()
                     } else {
                         let mut cur = config.cwd.as_path();
                         let mut ups = 0usize;
@@ -53,15 +60,15 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
                         }
                         if reached {
                             let up = format!("..{}", std::path::MAIN_SEPARATOR);
-                            format!("{}AGENTS.md", up.repeat(ups))
+                            format!("{}{}", up.repeat(ups), file_name)
                         } else if let Ok(stripped) = p.strip_prefix(&config.cwd) {
-                            stripped.display().to_string()
+                            normalize_agents_display_path(stripped)
                         } else {
-                            p.display().to_string()
+                            normalize_agents_display_path(&p)
                         }
                     }
                 } else {
-                    p.display().to_string()
+                    normalize_agents_display_path(&p)
                 };
                 rels.push(display);
             }
@@ -76,13 +83,13 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
 }
 
 pub(crate) fn compose_account_display(config: &Config) -> Option<StatusAccountDisplay> {
-    let auth_file = get_auth_file(&config.codex_home);
-    let auth = try_read_auth_json(&auth_file).ok()?;
+    let auth =
+        load_auth_dot_json(&config.codex_home, config.cli_auth_credentials_store_mode).ok()??;
 
     if let Some(tokens) = auth.tokens.as_ref() {
         let info = &tokens.id_token;
         let email = info.email.clone();
-        let plan = info.get_chatgpt_plan_type().map(|plan| title_case(&plan));
+        let plan = info.get_chatgpt_plan_type().as_deref().map(title_case);
         return Some(StatusAccountDisplay::ChatGpt { email, plan });
     }
 
@@ -95,7 +102,8 @@ pub(crate) fn compose_account_display(config: &Config) -> Option<StatusAccountDi
     None
 }
 
-pub(crate) fn format_tokens_compact(value: u64) -> String {
+pub(crate) fn format_tokens_compact(value: i64) -> String {
+    let value = value.max(0);
     if value == 0 {
         return "0".to_string();
     }
@@ -103,14 +111,15 @@ pub(crate) fn format_tokens_compact(value: u64) -> String {
         return value.to_string();
     }
 
+    let value_f64 = value as f64;
     let (scaled, suffix) = if value >= 1_000_000_000_000 {
-        (value as f64 / 1_000_000_000_000.0, "T")
+        (value_f64 / 1_000_000_000_000.0, "T")
     } else if value >= 1_000_000_000 {
-        (value as f64 / 1_000_000_000.0, "B")
+        (value_f64 / 1_000_000_000.0, "B")
     } else if value >= 1_000_000 {
-        (value as f64 / 1_000_000.0, "M")
+        (value_f64 / 1_000_000.0, "M")
     } else {
-        (value as f64 / 1_000.0, "K")
+        (value_f64 / 1_000.0, "K")
     };
 
     let decimals = if scaled < 10.0 {

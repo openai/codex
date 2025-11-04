@@ -3,17 +3,17 @@
 
 use std::path::Path;
 
+use codex_app_server_protocol::AddConversationListenerParams;
+use codex_app_server_protocol::InterruptConversationParams;
+use codex_app_server_protocol::InterruptConversationResponse;
+use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::NewConversationParams;
+use codex_app_server_protocol::NewConversationResponse;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SendUserMessageParams;
+use codex_app_server_protocol::SendUserMessageResponse;
 use codex_core::protocol::TurnAbortReason;
-use codex_protocol::mcp_protocol::AddConversationListenerParams;
-use codex_protocol::mcp_protocol::InterruptConversationParams;
-use codex_protocol::mcp_protocol::InterruptConversationResponse;
-use codex_protocol::mcp_protocol::NewConversationParams;
-use codex_protocol::mcp_protocol::NewConversationResponse;
-use codex_protocol::mcp_protocol::SendUserMessageParams;
-use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use core_test_support::skip_if_no_network;
-use mcp_types::JSONRPCResponse;
-use mcp_types::RequestId;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -88,7 +88,10 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
 
     // 2) addConversationListener
     let add_listener_id = mcp
-        .send_add_conversation_listener_request(AddConversationListenerParams { conversation_id })
+        .send_add_conversation_listener_request(AddConversationListenerParams {
+            conversation_id,
+            experimental_raw_events: false,
+        })
         .await?;
     let _add_listener_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -100,7 +103,7 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
     let send_user_id = mcp
         .send_send_user_message_request(SendUserMessageParams {
             conversation_id,
-            items: vec![codex_protocol::mcp_protocol::InputItem::Text {
+            items: vec![codex_app_server_protocol::InputItem::Text {
                 text: "run first sleep command".to_string(),
             }],
         })

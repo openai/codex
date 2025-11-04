@@ -6,6 +6,8 @@ use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::render_rows;
+use crate::render::Insets;
+use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use codex_common::fuzzy_match::fuzzy_match;
@@ -162,15 +164,23 @@ impl CommandPopup {
                     CommandItem::Builtin(cmd) => {
                         (format!("/{}", cmd.command()), cmd.description().to_string())
                     }
-                    CommandItem::UserPrompt(i) => (
-                        format!("/{PROMPTS_CMD_PREFIX}:{}", self.prompts[i].name),
-                        "send saved prompt".to_string(),
-                    ),
+                    CommandItem::UserPrompt(i) => {
+                        let prompt = &self.prompts[i];
+                        let description = prompt
+                            .description
+                            .clone()
+                            .unwrap_or_else(|| "send saved prompt".to_string());
+                        (
+                            format!("/{PROMPTS_CMD_PREFIX}:{}", prompt.name),
+                            description,
+                        )
+                    }
                 };
                 GenericDisplayRow {
                     name,
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                     is_current: false,
+                    display_shortcut: None,
                     description: Some(description),
                 }
             })
@@ -205,13 +215,12 @@ impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let rows = self.rows_from_matches(self.filtered());
         render_rows(
-            area,
+            area.inset(Insets::tlbr(0, 2, 0, 0)),
             buf,
             &rows,
             &self.state,
             MAX_POPUP_ROWS,
             "no matches",
-            false,
         );
     }
 }
@@ -219,6 +228,7 @@ impl WidgetRef for CommandPopup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn filter_includes_init_when_typing_prefix() {
@@ -319,5 +329,36 @@ mod tests {
             !has_collision_prompt,
             "prompt with builtin name should be ignored"
         );
+    }
+
+    #[test]
+    fn prompt_description_uses_frontmatter_metadata() {
+        let popup = CommandPopup::new(vec![CustomPrompt {
+            name: "draftpr".to_string(),
+            path: "/tmp/draftpr.md".to_string().into(),
+            content: "body".to_string(),
+            description: Some("Create feature branch, commit and open draft PR.".to_string()),
+            argument_hint: None,
+        }]);
+        let rows = popup.rows_from_matches(vec![(CommandItem::UserPrompt(0), None, 0)]);
+        let description = rows.first().and_then(|row| row.description.as_deref());
+        assert_eq!(
+            description,
+            Some("Create feature branch, commit and open draft PR.")
+        );
+    }
+
+    #[test]
+    fn prompt_description_falls_back_when_missing() {
+        let popup = CommandPopup::new(vec![CustomPrompt {
+            name: "foo".to_string(),
+            path: "/tmp/foo.md".to_string().into(),
+            content: "body".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+        let rows = popup.rows_from_matches(vec![(CommandItem::UserPrompt(0), None, 0)]);
+        let description = rows.first().and_then(|row| row.description.as_deref());
+        assert_eq!(description, Some("send saved prompt"));
     }
 }

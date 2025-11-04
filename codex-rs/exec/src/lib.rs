@@ -1,34 +1,40 @@
+// - In the default output mode, it is paramount that the only thing written to
+//   stdout is the final message (if any).
+// - In --json mode, stdout must be valid JSONL, one event per line.
+// For both modes, any other output must be written to stderr.
+#![deny(clippy::print_stdout)]
+
 mod cli;
 mod event_processor;
 mod event_processor_with_human_output;
-pub mod event_processor_with_json_output;
+pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
-pub mod experimental_event_processor_with_json_output;
 
 pub use cli::Cli;
 use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
+use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::protocol::TaskCompleteEvent;
+use codex_core::protocol::SessionSource;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::user_input::UserInput;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
-use event_processor_with_json_output::EventProcessorWithJsonOutput;
-use experimental_event_processor_with_json_output::ExperimentalEventProcessorWithJsonOutput;
+use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use serde_json::Value;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
+use supports_color::Stream;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -42,7 +48,7 @@ use codex_core::default_client::set_default_originator;
 use codex_core::find_conversation_path_by_id_str;
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
-    if let Err(err) = set_default_originator("codex_exec") {
+    if let Err(err) = set_default_originator("codex_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
     }
 
@@ -59,11 +65,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         color,
         last_message_file,
         json: json_mode,
-        experimental_json,
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         output_schema: output_schema_path,
-        include_plan_tool,
         config_overrides,
     } = cli;
 
@@ -115,8 +119,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         cli::Color::Always => (true, true),
         cli::Color::Never => (false, false),
         cli::Color::Auto => (
-            std::io::stdout().is_terminal(),
-            std::io::stderr().is_terminal(),
+            supports_color::on_cached(Stream::Stdout).is_some(),
+            supports_color::on_cached(Stream::Stderr).is_some(),
         ),
     };
 
@@ -163,19 +167,20 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         model,
         review_model: None,
         config_profile,
-        // This CLI is intended to be headless and has no affordances for asking
-        // the user for approval.
+        // Default to never ask for approvals in headless mode. Feature flags can override.
         approval_policy: Some(AskForApproval::Never),
         sandbox_mode,
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
         model_provider,
         codex_linux_sandbox_exe,
         base_instructions: None,
-        include_plan_tool: Some(include_plan_tool),
+        developer_instructions: None,
+        compact_prompt: None,
         include_apply_patch_tool: None,
-        include_view_image_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
+        experimental_sandbox_command_assessment: None,
+        additional_writable_roots: Vec::new(),
     };
     // Parse `-c` overrides.
     let cli_kv_overrides = match config_overrides.parse_overrides() {
@@ -186,7 +191,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     };
 
-    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
+    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
+
+    if let Err(err) = enforce_login_restrictions(&config).await {
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
 
     let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
 
@@ -212,17 +222,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         let _ = tracing_subscriber::registry().with(fmt_layer).try_init();
     }
 
-    let mut event_processor: Box<dyn EventProcessor> = match (json_mode, experimental_json) {
-        (_, true) => Box::new(ExperimentalEventProcessorWithJsonOutput::new(
-            last_message_file.clone(),
-        )),
-        (true, _) => {
-            eprintln!(
-                "The existing `--json` output format is being deprecated. Please try the new format using `--experimental-json`."
-            );
-
-            Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone()))
-        }
+    let mut event_processor: Box<dyn EventProcessor> = match json_mode {
+        true => Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone())),
         _ => Box::new(EventProcessorWithHumanOutput::create_with_ansi(
             stdout_with_ansi,
             &config,
@@ -248,8 +249,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         std::process::exit(1);
     }
 
-    let conversation_manager =
-        ConversationManager::new(AuthManager::shared(config.codex_home.clone()));
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        true,
+        config.cli_auth_credentials_store_mode,
+    );
+    let conversation_manager = ConversationManager::new(auth_manager.clone(), SessionSource::Exec);
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.
     let NewConversation {
@@ -261,11 +266,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
         if let Some(path) = resume_path {
             conversation_manager
-                .resume_conversation_from_rollout(
-                    config.clone(),
-                    path,
-                    AuthManager::shared(config.codex_home.clone()),
-                )
+                .resume_conversation_from_rollout(config.clone(), path, auth_manager.clone())
                 .await?
         } else {
             conversation_manager
@@ -322,30 +323,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         });
     }
 
-    // Send images first, if any.
-    if !images.is_empty() {
-        let items: Vec<InputItem> = images
-            .into_iter()
-            .map(|path| InputItem::LocalImage { path })
-            .collect();
-        let initial_images_event_id = conversation.submit(Op::UserInput { items }).await?;
-        info!("Sent images with event ID: {initial_images_event_id}");
-        while let Ok(event) = conversation.next_event().await {
-            if event.id == initial_images_event_id
-                && matches!(
-                    event.msg,
-                    EventMsg::TaskComplete(TaskCompleteEvent {
-                        last_agent_message: _,
-                    })
-                )
-            {
-                break;
-            }
-        }
-    }
-
-    // Send the prompt.
-    let items: Vec<InputItem> = vec![InputItem::Text { text: prompt }];
+    // Package images and prompt into a single user input turn.
+    let mut items: Vec<UserInput> = images
+        .into_iter()
+        .map(|path| UserInput::LocalImage { path })
+        .collect();
+    items.push(UserInput::Text { text: prompt });
     let initial_prompt_task_id = conversation
         .submit(Op::UserTurn {
             items,
@@ -379,6 +362,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             }
         }
     }
+    event_processor.print_final_output();
     if error_seen {
         std::process::exit(1);
     }
@@ -391,7 +375,17 @@ async fn resolve_resume_path(
     args: &crate::cli::ResumeArgs,
 ) -> anyhow::Result<Option<PathBuf>> {
     if args.last {
-        match codex_core::RolloutRecorder::list_conversations(&config.codex_home, 1, None).await {
+        let default_provider_filter = vec![config.model_provider_id.clone()];
+        match codex_core::RolloutRecorder::list_conversations(
+            &config.codex_home,
+            1,
+            None,
+            &[],
+            Some(default_provider_filter.as_slice()),
+            &config.model_provider_id,
+        )
+        .await
+        {
             Ok(page) => Ok(page.items.first().map(|it| it.path.clone())),
             Err(e) => {
                 error!("Error listing conversations: {e}");

@@ -1,7 +1,9 @@
 use ratatui::text::Line;
 use ratatui::text::Span;
+use std::borrow::Cow;
 use std::ops::Range;
 use textwrap::Options;
+use textwrap::wrap_algorithms::Penalties;
 
 use crate::render::line_utils::push_owned_lines;
 
@@ -90,7 +92,11 @@ impl<'a> RtOptions<'a> {
             subsequent_indent: Line::default(),
             break_words: true,
             word_separator: textwrap::WordSeparator::new(),
-            wrap_algorithm: textwrap::WrapAlgorithm::new(),
+            wrap_algorithm: textwrap::WrapAlgorithm::OptimalFit(Penalties {
+                // ~infinite overflow penalty, we never want to overflow a line.
+                overflow_penalty: usize::MAX / 4,
+                ..Default::default()
+            }),
             word_splitter: textwrap::WordSplitter::HyphenSplitter,
         }
     }
@@ -149,6 +155,7 @@ impl<'a> RtOptions<'a> {
     }
 }
 
+#[must_use]
 pub(crate) fn word_wrap_line<'a, O>(line: &'a Line<'a>, width_or_options: O) -> Vec<Line<'a>>
 where
     O: Into<RtOptions<'a>>,
@@ -232,18 +239,89 @@ where
     out
 }
 
+/// Utilities to allow wrapping either borrowed or owned lines.
+#[derive(Debug)]
+enum LineInput<'a> {
+    Borrowed(&'a Line<'a>),
+    Owned(Line<'a>),
+}
+
+impl<'a> LineInput<'a> {
+    fn as_ref(&self) -> &Line<'a> {
+        match self {
+            LineInput::Borrowed(line) => line,
+            LineInput::Owned(line) => line,
+        }
+    }
+}
+
+/// This trait makes it easier to pass whatever we need into word_wrap_lines.
+trait IntoLineInput<'a> {
+    fn into_line_input(self) -> LineInput<'a>;
+}
+
+impl<'a> IntoLineInput<'a> for &'a Line<'a> {
+    fn into_line_input(self) -> LineInput<'a> {
+        LineInput::Borrowed(self)
+    }
+}
+
+impl<'a> IntoLineInput<'a> for &'a mut Line<'a> {
+    fn into_line_input(self) -> LineInput<'a> {
+        LineInput::Borrowed(self)
+    }
+}
+
+impl<'a> IntoLineInput<'a> for Line<'a> {
+    fn into_line_input(self) -> LineInput<'a> {
+        LineInput::Owned(self)
+    }
+}
+
+impl<'a> IntoLineInput<'a> for String {
+    fn into_line_input(self) -> LineInput<'a> {
+        LineInput::Owned(Line::from(self))
+    }
+}
+
+impl<'a> IntoLineInput<'a> for &'a str {
+    fn into_line_input(self) -> LineInput<'a> {
+        LineInput::Owned(Line::from(self))
+    }
+}
+
+impl<'a> IntoLineInput<'a> for Cow<'a, str> {
+    fn into_line_input(self) -> LineInput<'a> {
+        LineInput::Owned(Line::from(self))
+    }
+}
+
+impl<'a> IntoLineInput<'a> for Span<'a> {
+    fn into_line_input(self) -> LineInput<'a> {
+        LineInput::Owned(Line::from(self))
+    }
+}
+
+impl<'a> IntoLineInput<'a> for Vec<Span<'a>> {
+    fn into_line_input(self) -> LineInput<'a> {
+        LineInput::Owned(Line::from(self))
+    }
+}
+
 /// Wrap a sequence of lines, applying the initial indent only to the very first
 /// output line, and using the subsequent indent for all later wrapped pieces.
-#[allow(dead_code)]
-pub(crate) fn word_wrap_lines<'a, I, O>(lines: I, width_or_options: O) -> Vec<Line<'static>>
+#[allow(private_bounds)] // IntoLineInput isn't public, but it doesn't really need to be.
+pub(crate) fn word_wrap_lines<'a, I, O, L>(lines: I, width_or_options: O) -> Vec<Line<'static>>
 where
-    I: IntoIterator<Item = &'a Line<'a>>,
+    I: IntoIterator<Item = L>,
+    L: IntoLineInput<'a>,
     O: Into<RtOptions<'a>>,
 {
     let base_opts: RtOptions<'a> = width_or_options.into();
     let mut out: Vec<Line<'static>> = Vec::new();
 
     for (idx, line) in lines.into_iter().enumerate() {
+        let line_input = line.into_line_input();
         let opts = if idx == 0 {
             base_opts.clone()
         } else {
@@ -252,7 +330,7 @@ where
             o = o.initial_indent(sub);
             o
         };
-        let wrapped = word_wrap_line(line, opts);
+        let wrapped = word_wrap_line(line_input.as_ref(), opts);
         push_owned_lines(&wrapped, &mut out);
     }
 
@@ -486,7 +564,7 @@ mod tests {
             .subsequent_indent(Line::from("  "));
 
         let lines = vec![Line::from("hello world"), Line::from("foo bar baz")];
-        let out = word_wrap_lines(&lines, opts);
+        let out = word_wrap_lines(lines, opts);
 
         // Expect: first line prefixed with "- ", subsequent wrapped pieces with "  "
         // and for the second input line, there should be no "- " prefix on its first piece
@@ -500,7 +578,7 @@ mod tests {
     #[test]
     fn wrap_lines_without_indents_is_concat_of_single_wraps() {
         let lines = vec![Line::from("hello"), Line::from("world!")];
-        let out = word_wrap_lines(&lines, 10);
+        let out = word_wrap_lines(lines, 10);
         let rendered: Vec<String> = out.iter().map(concat_line).collect();
         assert_eq!(rendered, vec!["hello", "world!"]);
     }
@@ -527,6 +605,22 @@ mod tests {
         let out = word_wrap_lines_borrowed(lines.iter(), 10);
         let rendered: Vec<String> = out.iter().map(concat_line).collect();
         assert_eq!(rendered, vec!["hello", "world!"]);
+    }
+
+    #[test]
+    fn wrap_lines_accepts_borrowed_iterators() {
+        let lines = [Line::from("hello world"), Line::from("foo bar baz")];
+        let out = word_wrap_lines(lines, 10);
+        let rendered: Vec<String> = out.iter().map(concat_line).collect();
+        assert_eq!(rendered, vec!["hello", "world", "foo bar", "baz"]);
+    }
+
+    #[test]
+    fn wrap_lines_accepts_str_slices() {
+        let lines = ["hello world", "goodnight moon"];
+        let out = word_wrap_lines(lines, 12);
+        let rendered: Vec<String> = out.iter().map(concat_line).collect();
+        assert_eq!(rendered, vec!["hello world", "goodnight", "moon"]);
     }
 
     #[test]

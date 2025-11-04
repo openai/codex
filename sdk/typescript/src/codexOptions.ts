@@ -1,7 +1,5 @@
 export type CodexOptions = {
-  // TODO: remove
-  executablePath: string;
-  // TODO: remove
+  codexPathOverride?: string;
   baseUrl?: string;
   apiKey?: string;
 };
