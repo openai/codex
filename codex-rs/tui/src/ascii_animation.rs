@@ -8,6 +8,8 @@ use crate::frames::ALL_VARIANTS;
 use crate::frames::FRAME_TICK_DEFAULT;
 use crate::tui::FrameRequester;
 
+static EMPTY_FRAMES: [&str; 0] = [];
+
 /// Drives ASCII art animations shared across popups and onboarding widgets.
 pub(crate) struct AsciiAnimation {
     request_frame: FrameRequester,
@@ -15,12 +17,21 @@ pub(crate) struct AsciiAnimation {
     variant_idx: usize,
     frame_tick: Duration,
     start: Instant,
-    enabled: bool,
 }
 
 impl AsciiAnimation {
     pub(crate) fn new(request_frame: FrameRequester) -> Self {
         Self::with_variants(request_frame, ALL_VARIANTS, 0)
+    }
+
+    pub(crate) fn disabled(request_frame: FrameRequester) -> Self {
+        Self {
+            request_frame,
+            variants: &[],
+            variant_idx: 0,
+            frame_tick: FRAME_TICK_DEFAULT,
+            start: Instant::now(),
+        }
     }
 
     pub(crate) fn with_variants(
@@ -39,12 +50,11 @@ impl AsciiAnimation {
             variant_idx: clamped_idx,
             frame_tick: FRAME_TICK_DEFAULT,
             start: Instant::now(),
-            enabled: true,
         }
     }
 
     pub(crate) fn schedule_next_frame(&self) {
-        if !self.enabled {
+        if self.frames().is_empty() {
             return;
         }
         let tick_ms = self.frame_tick.as_millis();
@@ -68,9 +78,6 @@ impl AsciiAnimation {
     }
 
     pub(crate) fn current_frame(&self) -> &'static str {
-        if !self.enabled {
-            return "";
-        }
         let frames = self.frames();
         if frames.is_empty() {
             return "";
@@ -85,9 +92,6 @@ impl AsciiAnimation {
     }
 
     pub(crate) fn pick_random_variant(&mut self) -> bool {
-        if !self.enabled {
-            return false;
-        }
         if self.variants.len() <= 1 {
             return false;
         }
@@ -103,26 +107,23 @@ impl AsciiAnimation {
 
     #[allow(dead_code)]
     pub(crate) fn request_frame(&self) {
-        if !self.enabled {
+        if self.frames().is_empty() {
             return;
         }
         self.request_frame.schedule_frame();
     }
 
-    pub(crate) fn force_frame(&self) {
-        self.request_frame.schedule_frame();
-    }
-
-    pub(crate) fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled;
-    }
-
-    pub(crate) fn is_enabled(&self) -> bool {
-        self.enabled
+    #[cfg(test)]
+    pub(crate) fn has_frames(&self) -> bool {
+        !self.frames().is_empty()
     }
 
     fn frames(&self) -> &'static [&'static str] {
-        self.variants[self.variant_idx]
+        if self.variants.is_empty() {
+            &EMPTY_FRAMES
+        } else {
+            self.variants[self.variant_idx]
+        }
     }
 }
 

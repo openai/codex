@@ -42,10 +42,12 @@ impl KeyboardHandler for WelcomeWidget {
 
 impl WelcomeWidget {
     pub(crate) fn new(is_logged_in: bool, request_frame: FrameRequester) -> Self {
-        let mut animation = AsciiAnimation::new(request_frame);
-        if !animations_enabled() {
-            animation.set_enabled(false);
-        }
+        let animation_ctor = if animations_enabled() {
+            AsciiAnimation::new
+        } else {
+            AsciiAnimation::disabled
+        };
+        let animation = animation_ctor(request_frame);
 
         Self {
             is_logged_in,
@@ -61,12 +63,12 @@ impl WidgetRef for &WelcomeWidget {
         let show_animation =
             area.height >= MIN_ANIMATION_HEIGHT && area.width >= MIN_ANIMATION_WIDTH;
 
-        if show_animation && self.animation.is_enabled() {
+        if show_animation {
             self.animation.schedule_next_frame();
         }
 
         let mut lines: Vec<Line> = Vec::new();
-        if show_animation && self.animation.is_enabled() {
+        if show_animation {
             let frame = self.animation.current_frame();
             if !frame.is_empty() {
                 lines.extend(frame.lines().map(Into::into));
@@ -125,7 +127,7 @@ mod tests {
     fn disables_animation_when_cli_flag_set() {
         with_cli_animations_disabled_for_tests(true, || {
             let widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
-            assert_eq!(widget.animation.is_enabled(), false);
+            assert_eq!(widget.animation.has_frames(), false);
         });
     }
 
@@ -133,7 +135,7 @@ mod tests {
     fn keeps_animation_enabled_by_default() {
         with_cli_animations_disabled_for_tests(false, || {
             let widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
-            assert_eq!(widget.animation.is_enabled(), true);
+            assert_eq!(widget.animation.has_frames(), true);
             assert!(
                 !widget.animation.current_frame().is_empty(),
                 "expected animation frame when animations are enabled"
@@ -144,21 +146,20 @@ mod tests {
     #[test]
     fn render_omits_animation_when_disabled() {
         with_cli_animations_disabled_for_tests(true, || {
-            let mut widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
-            let was_enabled = widget.animation.is_enabled();
-            assert_eq!(was_enabled, false);
-
-            widget.animation =
-                AsciiAnimation::with_variants(FrameRequester::test_dummy(), &VARIANTS, 0);
-            widget.animation.set_enabled(was_enabled);
+            let widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
+            assert_eq!(widget.animation.has_frames(), false);
 
             let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
             let mut buf = Buffer::empty(area);
             (&widget).render(area, &mut buf);
 
+            let mut first_row = String::new();
+            for x in 0..area.width {
+                first_row.push_str(buf[(x, 0)].symbol());
+            }
             assert!(
-                !buffer_contains(&buf, area, "frame-a"),
-                "expected animation content to be hidden when animations are disabled"
+                first_row.contains("Welcome to"),
+                "expected welcome text to appear on the first row when animations are disabled"
             );
             assert!(
                 buffer_contains(&buf, area, "Codex"),
@@ -172,7 +173,7 @@ mod tests {
         with_cli_animations_disabled_for_tests(true, || {
             let (requester, mut counter) = FrameRequester::test_with_counter();
             let widget = WelcomeWidget::new(false, requester);
-            assert_eq!(widget.animation.is_enabled(), false);
+            assert_eq!(widget.animation.has_frames(), false);
 
             let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
             let mut buf = Buffer::empty(area);
@@ -190,12 +191,10 @@ mod tests {
     fn render_includes_animation_when_enabled() {
         with_cli_animations_disabled_for_tests(false, || {
             let mut widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
-            let was_enabled = widget.animation.is_enabled();
-            assert_eq!(was_enabled, true);
+            assert_eq!(widget.animation.has_frames(), true);
 
             widget.animation =
                 AsciiAnimation::with_variants(FrameRequester::test_dummy(), &VARIANTS, 0);
-            widget.animation.set_enabled(was_enabled);
 
             let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
             let mut buf = Buffer::empty(area);
