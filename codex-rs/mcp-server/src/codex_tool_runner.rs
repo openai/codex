@@ -18,11 +18,11 @@ use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::Submission;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_protocol::ConversationId;
+use codex_protocol::user_input::UserInput;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use mcp_types::RequestId;
@@ -91,7 +91,7 @@ pub async fn run_codex_tool_session(
     let submission = Submission {
         id: sub_id.clone(),
         op: Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: initial_prompt.clone(),
             }],
         },
@@ -127,7 +127,7 @@ pub async fn run_codex_tool_session_reply(
         .insert(request_id.clone(), conversation_id);
     if let Err(e) = conversation
         .submit(Op::UserInput {
-            items: vec![InputItem::Text { text: prompt }],
+            items: vec![UserInput::Text { text: prompt }],
         })
         .await
     {
@@ -178,6 +178,8 @@ async fn run_codex_tool_session_inner(
                         cwd,
                         call_id,
                         reason: _,
+                        risk,
+                        parsed_cmd,
                     }) => {
                         handle_exec_approval_request(
                             command,
@@ -188,6 +190,8 @@ async fn run_codex_tool_session_inner(
                             request_id_str.clone(),
                             event.id.clone(),
                             call_id,
+                            parsed_cmd,
+                            risk,
                         )
                         .await;
                         continue;
@@ -199,6 +203,9 @@ async fn run_codex_tool_session_inner(
                         });
                         outgoing.send_response(request_id.clone(), result).await;
                         break;
+                    }
+                    EventMsg::Warning(_) => {
+                        continue;
                     }
                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                         call_id,
@@ -277,12 +284,20 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::GetHistoryEntryResponse(_)
                     | EventMsg::PlanUpdate(_)
                     | EventMsg::TurnAborted(_)
-                    | EventMsg::ConversationPath(_)
                     | EventMsg::UserMessage(_)
                     | EventMsg::ShutdownComplete
                     | EventMsg::ViewImageToolCall(_)
+                    | EventMsg::RawResponseItem(_)
                     | EventMsg::EnteredReviewMode(_)
-                    | EventMsg::ExitedReviewMode(_) => {
+                    | EventMsg::ItemStarted(_)
+                    | EventMsg::ItemCompleted(_)
+                    | EventMsg::AgentMessageContentDelta(_)
+                    | EventMsg::ReasoningContentDelta(_)
+                    | EventMsg::ReasoningRawContentDelta(_)
+                    | EventMsg::UndoStarted(_)
+                    | EventMsg::UndoCompleted(_)
+                    | EventMsg::ExitedReviewMode(_)
+                    | EventMsg::DeprecationNotice(_) => {
                         // For now, we do not do anything extra for these
                         // events. Note that
                         // send(codex_event_to_notification(&event)) above has
