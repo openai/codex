@@ -4,6 +4,7 @@ use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
@@ -200,8 +201,7 @@ impl CodexMessageProcessor {
                 request_id,
                 params: _,
             } => {
-                self.send_unimplemented_error(request_id, "account/logout")
-                    .await;
+                self.logout_v2(request_id).await;
             }
             ClientRequest::GetAccount {
                 request_id,
@@ -250,7 +250,7 @@ impl CodexMessageProcessor {
                 request_id,
                 params: _,
             } => {
-                self.logout_chatgpt(request_id).await;
+                self.logout_v1(request_id).await;
             }
             ClientRequest::GetAuthStatus { request_id, params } => {
                 self.get_auth_status(request_id, params).await;
@@ -494,9 +494,9 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn logout_chatgpt(&mut self, request_id: RequestId) {
+    async fn logout_common(&mut self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
+        // Cancel any active login attempt.
         {
-            // Cancel any active login attempt.
             let mut guard = self.active_login.lock().await;
             if let Some(active) = guard.take() {
                 active.drop();
@@ -504,31 +504,61 @@ impl CodexMessageProcessor {
         }
 
         if let Err(err) = self.auth_manager.logout() {
-            let error = JSONRPCErrorError {
+            return Err(JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("logout failed: {err}"),
                 data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
+            });
         }
 
-        self.outgoing
-            .send_response(
-                request_id,
-                codex_app_server_protocol::LogoutChatGptResponse {},
-            )
-            .await;
+        // Reflect the current auth method after logout (likely None).
+        Ok(self.auth_manager.auth().map(|auth| auth.mode))
+    }
 
-        // Send auth status change notification reflecting the current auth mode
-        // after logout.
-        let current_auth_method = self.auth_manager.auth().map(|auth| auth.mode);
-        let payload = AuthStatusChangeNotification {
-            auth_method: current_auth_method,
-        };
-        self.outgoing
-            .send_server_notification(ServerNotification::AuthStatusChange(payload))
-            .await;
+    async fn logout_v1(&mut self, request_id: RequestId) {
+        match self.logout_common().await {
+            Ok(current_auth_method) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        codex_app_server_protocol::LogoutChatGptResponse {},
+                    )
+                    .await;
+
+                let payload = AuthStatusChangeNotification {
+                    auth_method: current_auth_method,
+                };
+                self.outgoing
+                    .send_server_notification(ServerNotification::AuthStatusChange(payload))
+                    .await;
+            }
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn logout_v2(&mut self, request_id: RequestId) {
+        match self.logout_common().await {
+            Ok(current_auth_method) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        codex_app_server_protocol::LogoutAccountResponse {},
+                    )
+                    .await;
+
+                let payload_v2 = AccountUpdatedNotification {
+                    auth_method: current_auth_method,
+                };
+                self.outgoing
+                    .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
+                    .await;
+            }
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
     }
 
     async fn get_auth_status(
