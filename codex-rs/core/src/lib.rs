@@ -37,6 +37,7 @@ pub mod parse_command;
 mod response_processing;
 pub mod sandboxing;
 pub mod token_data;
+mod text_encoding;
 mod truncate;
 mod unified_exec;
 mod user_instructions;
