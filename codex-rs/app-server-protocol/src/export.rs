@@ -44,6 +44,7 @@ macro_rules! for_each_schema_type {
         $macro!(crate::ArchiveConversationParams);
         $macro!(crate::ArchiveConversationResponse);
         $macro!(crate::AuthMode);
+        $macro!(crate::AccountUpdatedNotification);
         $macro!(crate::AuthStatusChangeNotification);
         $macro!(crate::CancelLoginChatGptParams);
         $macro!(crate::CancelLoginChatGptResponse);

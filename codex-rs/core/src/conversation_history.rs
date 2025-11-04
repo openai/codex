@@ -516,8 +516,8 @@ fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
     result
 }
 
-/// Anything that is not a system message or "reasoning" message is considered
-/// an API message.
+/// API messages include every non-system item (user/assistant messages, reasoning,
+/// tool calls, tool outputs, shell calls, and web-search calls).
 fn is_api_message(message: &ResponseItem) -> bool {
     match message {
         ResponseItem::Message { role, .. } => role.as_str() != "system",
@@ -542,6 +542,8 @@ mod tests {
     use codex_protocol::models::LocalShellAction;
     use codex_protocol::models::LocalShellExecAction;
     use codex_protocol::models::LocalShellStatus;
+    use codex_protocol::models::ReasoningItemContent;
+    use codex_protocol::models::ReasoningItemReasoningSummary;
     use pretty_assertions::assert_eq;
 
     fn assistant_msg(text: &str) -> ResponseItem {
@@ -570,10 +572,23 @@ mod tests {
         }
     }
 
+    fn reasoning_msg(text: &str) -> ResponseItem {
+        ResponseItem::Reasoning {
+            id: String::new(),
+            summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                text: "summary".to_string(),
+            }],
+            content: Some(vec![ReasoningItemContent::ReasoningText {
+                text: text.to_string(),
+            }]),
+            encrypted_content: None,
+        }
+    }
+
     #[test]
     fn filters_non_api_messages() {
         let mut h = ConversationHistory::default();
-        // System message is not an API message; Other is ignored.
+        // System message is not API messages; Other is ignored.
         let system = ResponseItem::Message {
             id: None,
             role: "system".to_string(),
@@ -581,7 +596,8 @@ mod tests {
                 text: "ignored".to_string(),
             }],
         };
-        h.record_items([&system, &ResponseItem::Other]);
+        let reasoning = reasoning_msg("thinking...");
+        h.record_items([&system, &reasoning, &ResponseItem::Other]);
 
         // User and assistant should be retained.
         let u = user_msg("hi");
@@ -592,6 +608,16 @@ mod tests {
         assert_eq!(
             items,
             vec![
+                ResponseItem::Reasoning {
+                    id: String::new(),
+                    summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                        text: "summary".to_string(),
+                    }],
+                    content: Some(vec![ReasoningItemContent::ReasoningText {
+                        text: "thinking...".to_string(),
+                    }]),
+                    encrypted_content: None,
+                },
                 ResponseItem::Message {
                     id: None,
                     role: "user".to_string(),
