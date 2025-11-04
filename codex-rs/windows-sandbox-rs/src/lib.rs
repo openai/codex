@@ -326,7 +326,7 @@ mod windows_impl {
                 0,
                 PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
                 inherit_list.as_mut_ptr() as *mut _ as *mut _,
-                (std::mem::size_of::<HANDLE>() * inherit_list.len()),
+                std::mem::size_of::<HANDLE>() * inherit_list.len(),
                 ptr::null_mut(),
                 ptr::null_mut(),
             )
