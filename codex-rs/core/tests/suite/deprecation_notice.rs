@@ -43,7 +43,7 @@ async fn emits_deprecation_notice_for_legacy_feature_flag() -> anyhow::Result<()
     assert_eq!(
         details.as_deref(),
         Some(
-            "Enable it with `--enable streamable_shell` or `[features].streamable_shell` in config.toml. See https://github.com/openai/codex#feature-flags for details."
+            "Enable it with `--enable streamable_shell` or `[features].streamable_shell` in config.toml. See https://github.com/openai/codex/blob/main/docs/config.md#feature-flags for details."
         ),
     );
 
