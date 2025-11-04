@@ -10,8 +10,6 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
-use codex_protocol::protocol::ReasoningContentDeltaEvent;
-use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
 use tokio_util::sync::CancellationToken;
 
@@ -124,9 +122,7 @@ async fn process_review_events(
                 ..
             })
             | EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { .. })
-            | EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent { .. })
-            | EventMsg::ReasoningContentDelta(ReasoningContentDeltaEvent { .. })
-            | EventMsg::ReasoningRawContentDelta(ReasoningRawContentDeltaEvent { .. }) => {}
+            | EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent { .. }) => {}
             EventMsg::TaskComplete(task_complete) => {
                 // Parse review output from the last agent message (if present).
                 let out = task_complete
