@@ -36,19 +36,53 @@ fn text_user_input(text: String) -> serde_json::Value {
     })
 }
 
+#[allow(dead_code)]
+fn has_wsl_env_markers() -> bool {
+    std::env::var_os("WSL_INTEROP").is_some()
+        || std::env::var_os("WSLENV").is_some()
+        || std::env::var_os("WSL_DISTRO_NAME").is_some()
+}
+
+fn operating_system_context_block() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        let info = os_info::get();
+        let name = info.os_type().to_string();
+        let version = info.version().to_string();
+        let is_wsl = has_wsl_env_markers();
+        return format!(
+            "  <operating_system>\n    <name>{name}</name>\n    <version>{version}</version>\n    <is_likely_windows_subsystem_for_linux>{is_wsl}</is_likely_windows_subsystem_for_linux>\n  </operating_system>\n"
+        );
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if has_wsl_env_markers() {
+            return "  <operating_system>\n    <name>Windows Subsystem for Linux</name>\n    <version></version>\n    <is_likely_windows_subsystem_for_linux>true</is_likely_windows_subsystem_for_linux>\n  </operating_system>\n".to_string();
+        }
+        return String::new();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        String::new()
+    }
+}
+
 fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
+    let shell_line = match shell.name() {
+        Some(name) => format!("  <shell>{name}</shell>\n"),
+        None => String::new(),
+    };
+    let os_block = operating_system_context_block();
     format!(
         r#"<environment_context>
   <cwd>{}</cwd>
   <approval_policy>on-request</approval_policy>
   <sandbox_mode>read-only</sandbox_mode>
   <network_access>restricted</network_access>
-{}</environment_context>"#,
-        cwd,
-        match shell.name() {
-            Some(name) => format!("  <shell>{name}</shell>\n"),
-            None => String::new(),
-        }
+{}{}</environment_context>"#,
+        cwd, shell_line, os_block
     )
 }
 

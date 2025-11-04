@@ -122,7 +122,12 @@ impl EnvironmentContext {
         } else {
             None
         };
-        EnvironmentContext::new(cwd, approval_policy, sandbox_policy, None)
+        // Diff messages should only include fields that changed between turns.
+        // Operating system is a static property of the host and should not be
+        // emitted as part of a per-turn diff.
+        let mut ec = EnvironmentContext::new(cwd, approval_policy, sandbox_policy, None);
+        ec.operating_system = None;
+        ec
     }
 }
 
