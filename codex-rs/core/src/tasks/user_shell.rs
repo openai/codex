@@ -152,10 +152,8 @@ impl SessionTask for UserShellCommandTask {
         match exec_result {
             None => {
                 let aborted_message = "command aborted by user".to_string();
-                let aborted_text = format!(
-                    "<user_shell_output>\n{}\n</user_shell_output>",
-                    aborted_message
-                );
+                let aborted_text =
+                    format!("<user_shell_output>\n{aborted_message}\n</user_shell_output>");
                 let output_items = [build_user_message(aborted_text)];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
@@ -192,10 +190,9 @@ impl SessionTask for UserShellCommandTask {
                     )
                     .await;
 
-                let output_text = format!(
-                    "<user_shell_output>\n{}\n</user_shell_output>",
-                    format_exec_output_for_model(&output)
-                );
+                let output_payload = format_exec_output_for_model(&output);
+                let output_text =
+                    format!("<user_shell_output>\n{output_payload}\n</user_shell_output>");
                 let output_items = [build_user_message(output_text)];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
@@ -218,7 +215,7 @@ impl SessionTask for UserShellCommandTask {
                         }),
                     )
                     .await;
-                let output_text = format!("<user_shell_output>\n{}\n</user_shell_output>", message);
+                let output_text = format!("<user_shell_output>\n{message}\n</user_shell_output>");
                 let output_items = [build_user_message(output_text)];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
