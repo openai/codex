@@ -158,10 +158,11 @@ impl EnvironmentContext {
     ///   <shell>...</shell>
     /// </environment_context>
     /// ```
-    pub fn serialize_to_xml(self) -> String {
+    pub fn serialize_to_xml(&self) -> String {
         let mut lines = vec![ENVIRONMENT_CONTEXT_OPEN_TAG.to_string()];
-        if let Some(cwd) = self.cwd {
-            lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
+        if let Some(cwd) = self.cwd.as_ref() {
+            let cwd = cwd.to_string_lossy();
+            lines.push(format!("  <cwd>{cwd}</cwd>"));
         }
         if let Some(approval_policy) = self.approval_policy {
             lines.push(format!(
@@ -171,33 +172,30 @@ impl EnvironmentContext {
         if let Some(sandbox_mode) = self.sandbox_mode {
             lines.push(format!("  <sandbox_mode>{sandbox_mode}</sandbox_mode>"));
         }
-        if let Some(network_access) = self.network_access {
+        if let Some(network_access) = self.network_access.as_ref() {
             lines.push(format!(
                 "  <network_access>{network_access}</network_access>"
             ));
         }
-        if let Some(writable_roots) = self.writable_roots {
+        if let Some(writable_roots) = self.writable_roots.as_ref() {
             lines.push("  <writable_roots>".to_string());
             for writable_root in writable_roots {
-                lines.push(format!(
-                    "    <root>{}</root>",
-                    writable_root.to_string_lossy()
-                ));
+                let writable_root = writable_root.to_string_lossy();
+                lines.push(format!("    <root>{writable_root}</root>"));
             }
             lines.push("  </writable_roots>".to_string());
         }
-        if let Some(shell) = self.shell
+        if let Some(shell) = self.shell.as_ref()
             && let Some(shell_name) = shell.name()
         {
             lines.push(format!("  <shell>{shell_name}</shell>"));
         }
-        if let Some(operating_system) = self.operating_system {
+        if let Some(operating_system) = self.operating_system.as_ref() {
             lines.push("  <operating_system>".to_string());
-            lines.push(format!("    <name>{}</name>", operating_system.name));
-            lines.push(format!(
-                "    <version>{}</version>",
-                operating_system.version
-            ));
+            let name = operating_system.name.as_str();
+            lines.push(format!("    <name>{name}</name>"));
+            let version = operating_system.version.as_str();
+            lines.push(format!("    <version>{version}</version>"));
             if let Some(is_wsl) = operating_system.is_likely_windows_subsystem_for_linux {
                 lines.push(format!(
                     "    <is_likely_windows_subsystem_for_linux>{is_wsl}</is_likely_windows_subsystem_for_linux>"
