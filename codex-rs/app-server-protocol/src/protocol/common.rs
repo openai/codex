@@ -548,6 +548,11 @@ server_notification_definitions! {
     #[strum(serialize = "item/mcpToolCall/progress")]
     McpToolCallProgress(v2::McpToolCallProgressNotification),
 
+    #[serde(rename = "account/updated")]
+    #[ts(rename = "account/updated")]
+    #[strum(serialize = "account/updated")]
+    AccountUpdated(v2::AccountUpdatedNotification),
+
     #[serde(rename = "account/rateLimits/updated")]
     #[ts(rename = "account/rateLimits/updated")]
     #[strum(serialize = "account/rateLimits/updated")]

@@ -31,8 +31,8 @@ use std::process::Command;
 use ts_rs::TS;
 
 const HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
-type JsonSchemaEmitter = fn(&Path) -> Result<RootSchema>;
 
+type JsonSchemaEmitter = fn(&Path) -> Result<RootSchema>;
 pub fn generate_types(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     generate_ts(out_dir, prettier)?;
     generate_json(out_dir)?;

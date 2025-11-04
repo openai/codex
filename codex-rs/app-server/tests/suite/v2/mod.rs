@@ -1,3 +1,4 @@
+mod account;
 mod model_list;
 mod rate_limits;
 mod thread_archive;

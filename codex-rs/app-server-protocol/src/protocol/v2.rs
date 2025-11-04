@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::protocol::common::AuthMode;
 use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningEffort;
@@ -239,9 +240,7 @@ pub struct FeedbackUploadResponse {
 }
 
 // === Threads, Turns, and Items ===
-
 // Thread APIs
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -657,4 +656,8 @@ impl From<codex_protocol::protocol::RateLimitWindow> for RateLimitWindow {
             resets_at: value.resets_at,
         }
     }
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUpdatedNotification {
+    pub auth_method: Option<AuthMode>,
 }
