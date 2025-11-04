@@ -52,13 +52,11 @@ impl PartialEq for CodexAuth {
 // TODO(pakrym): use token exp field to check for expiration instead
 const TOKEN_REFRESH_INTERVAL: i64 = 8;
 
-const REFRESH_TOKEN_EXPIRED_MESSAGE: &str =
-    "Could not refresh token has expired. Please sign in again.";
-const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Your refresh token has already been used to generate a new access token. Please sign in again.";
-const REFRESH_TOKEN_INVALIDATED_MESSAGE: &str =
-    "Your refresh token has been invalidated. Please sign in again.";
+const REFRESH_TOKEN_EXPIRED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.";
+const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.";
+const REFRESH_TOKEN_INVALIDATED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.";
 const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
-    "We couldn't refresh your session. Please sign in again.";
+    "Your access token could not be refreshed. Please log out and sign in again.";
 
 #[derive(Debug, Error)]
 pub enum RefreshTokenError {
@@ -1094,12 +1092,6 @@ impl AuthManager {
                             "Failed to refresh token: {}",
                             failed
                         );
-                        if let Err(logout_err) = self.logout() {
-                            tracing::error!(
-                                "failed to clear auth after fatal refresh error: {}",
-                                logout_err
-                            );
-                        }
                     }
                     RefreshTokenError::Transient(other) => {
                         tracing::error!("Failed to refresh token: {}", other);
