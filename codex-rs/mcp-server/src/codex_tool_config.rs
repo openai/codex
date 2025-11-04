@@ -170,6 +170,12 @@ impl CodexToolCallParam {
             show_raw_agent_reasoning: None,
             tools_web_search_request: None,
             experimental_sandbox_command_assessment: None,
+            progress_no_progress: None,
+            progress_interval_seconds: None,
+            auto_continue_enabled: None,
+            auto_continue_prompt: None,
+            auto_continue_max_turns: None,
+            auto_continue_max_duration_seconds: None,
             additional_writable_roots: Vec::new(),
         };
 

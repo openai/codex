@@ -1,8 +1,11 @@
 //! Session-wide mutable state.
 
+use std::time::Instant;
+
 use codex_protocol::models::ResponseItem;
 
 use crate::codex::SessionConfiguration;
+use crate::config::AutoContinueConfig;
 use crate::conversation_history::ConversationHistory;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
@@ -13,15 +16,19 @@ pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ConversationHistory,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
+    pub(crate) auto_continue: AutoContinueRuntimeState,
 }
 
 impl SessionState {
     /// Create a new session state mirroring previous `State::default()` semantics.
     pub(crate) fn new(session_configuration: SessionConfiguration) -> Self {
+        let auto_continue =
+            AutoContinueRuntimeState::new(session_configuration.auto_continue.clone());
         Self {
             session_configuration,
             history: ConversationHistory::new(),
             latest_rate_limits: None,
+            auto_continue,
         }
     }
 
@@ -67,5 +74,332 @@ impl SessionState {
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
         self.history.set_token_usage_full(context_window);
+    }
+
+    pub(crate) fn auto_continue(&self) -> &AutoContinueRuntimeState {
+        &self.auto_continue
+    }
+
+    pub(crate) fn auto_continue_mut(&mut self) -> &mut AutoContinueRuntimeState {
+        &mut self.auto_continue
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AutoContinueRuntimeState {
+    config: AutoContinueConfig,
+    started_at: Instant,
+    turns_spawned: u64,
+    last_normalized_message: Option<String>,
+    repeated_message_streak: u8,
+    last_stop_reason: Option<AutoContinueStopReason>,
+}
+
+impl AutoContinueRuntimeState {
+    pub(crate) fn new(config: AutoContinueConfig) -> Self {
+        Self {
+            config,
+            started_at: Instant::now(),
+            turns_spawned: 0,
+            last_normalized_message: None,
+            repeated_message_streak: 0,
+            last_stop_reason: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_start(config: AutoContinueConfig, started_at: Instant) -> Self {
+        let mut state = Self::new(config);
+        state.started_at = started_at;
+        state
+    }
+
+    pub(crate) fn config(&self) -> &AutoContinueConfig {
+        &self.config
+    }
+
+    pub(crate) fn disable(&mut self, reason: AutoContinueStopReason) {
+        self.config.enabled = false;
+        self.last_stop_reason = Some(reason);
+    }
+
+    pub(crate) fn force_enable(&mut self) {
+        self.config.enabled = true;
+        self.started_at = Instant::now();
+        self.turns_spawned = 0;
+        self.last_normalized_message = None;
+        self.repeated_message_streak = 0;
+        self.last_stop_reason = None;
+    }
+
+    pub(crate) fn turns_spawned(&self) -> u64 {
+        self.turns_spawned
+    }
+
+    pub(crate) fn elapsed(&self) -> std::time::Duration {
+        self.started_at.elapsed()
+    }
+
+    pub(crate) fn decide(&mut self, last_agent_message: Option<&str>) -> AutoContinueDecision {
+        if !self.config.enabled {
+            return AutoContinueDecision::Stop(AutoContinueStopReason::Disabled);
+        }
+
+        if let Some(limit) = self.config.max_turns
+            && self.turns_spawned >= limit.get()
+        {
+            self.disable(AutoContinueStopReason::MaxTurns);
+            return AutoContinueDecision::Stop(AutoContinueStopReason::MaxTurns);
+        }
+
+        if let Some(max_duration) = self.config.max_duration
+            && self.started_at.elapsed() >= max_duration
+        {
+            self.disable(AutoContinueStopReason::MaxDuration);
+            return AutoContinueDecision::Stop(AutoContinueStopReason::MaxDuration);
+        }
+
+        let Some(message) = last_agent_message.map(str::trim).filter(|m| !m.is_empty()) else {
+            self.disable(AutoContinueStopReason::EmptyMessage);
+            return AutoContinueDecision::Stop(AutoContinueStopReason::EmptyMessage);
+        };
+
+        if should_stop_after_message(message) {
+            self.disable(AutoContinueStopReason::StopPhrase);
+            return AutoContinueDecision::Stop(AutoContinueStopReason::StopPhrase);
+        }
+
+        let normalized = normalize_for_repetition(message);
+        if self.update_repetition(normalized) {
+            self.disable(AutoContinueStopReason::RepeatedOutput);
+            return AutoContinueDecision::Stop(AutoContinueStopReason::RepeatedOutput);
+        }
+
+        self.last_stop_reason = None;
+        self.turns_spawned = self.turns_spawned.saturating_add(1);
+        AutoContinueDecision::Continue {
+            prompt: self.config.prompt.clone(),
+        }
+    }
+
+    fn update_repetition(&mut self, normalized: String) -> bool {
+        if let Some(prev) = &self.last_normalized_message {
+            if prev == &normalized {
+                self.repeated_message_streak = self.repeated_message_streak.saturating_add(1);
+            } else {
+                self.last_normalized_message = Some(normalized);
+                self.repeated_message_streak = 0;
+            }
+        } else {
+            self.last_normalized_message = Some(normalized);
+            self.repeated_message_streak = 0;
+        }
+        self.repeated_message_streak > 0
+    }
+
+    pub(crate) fn rearm_if_allowed(&mut self) -> bool {
+        if self.config.enabled {
+            return false;
+        }
+
+        match self.last_stop_reason {
+            Some(AutoContinueStopReason::Disabled) | None => false,
+            Some(_) => {
+                self.force_enable();
+                true
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum AutoContinueDecision {
+    Continue { prompt: String },
+    Stop(AutoContinueStopReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AutoContinueStopReason {
+    Disabled,
+    MaxTurns,
+    MaxDuration,
+    EmptyMessage,
+    StopPhrase,
+    RepeatedOutput,
+    Interrupted,
+}
+
+fn normalize_for_repetition(message: &str) -> String {
+    message
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn should_stop_after_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+
+    if message_has_next_step_signal(&lower) {
+        return false;
+    }
+
+    AUTO_CONTINUE_NEGATIVE_PATTERNS
+        .iter()
+        .any(|pattern| lower.contains(pattern))
+}
+
+fn message_has_next_step_signal(lower: &str) -> bool {
+    AUTO_CONTINUE_NEXT_PATTERNS
+        .iter()
+        .any(|pattern| lower.contains(pattern))
+}
+
+const AUTO_CONTINUE_NEGATIVE_PATTERNS: &[&str] = &[
+    "no further action",
+    "no further actions",
+    "no further steps",
+    "nothing else to do",
+    "nothing more to do",
+    "nothing else remains",
+    "let me know if you need anything else",
+    "let me know if you need more help",
+    "all done",
+    "we're done",
+    "were done",
+    "that concludes",
+    "that should conclude",
+    "we are finished",
+    "i am finished",
+    "this completes",
+    "this should complete",
+    "no remaining tasks",
+    "nothing outstanding",
+];
+
+const AUTO_CONTINUE_NEXT_PATTERNS: &[&str] = &[
+    "next step",
+    "next steps",
+    "plan:",
+    "plan for next",
+    "pending work",
+    "action items",
+    "follow-up",
+    "follow up",
+    "todo",
+    "to-do",
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use std::num::NonZeroU64;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    fn make_config() -> AutoContinueConfig {
+        AutoContinueConfig {
+            enabled: true,
+            prompt: "continue".to_string(),
+            max_turns: None,
+            max_duration: None,
+        }
+    }
+
+    #[test]
+    fn auto_continue_continues_with_next_steps() {
+        let mut runtime = AutoContinueRuntimeState::new(make_config());
+        let decision = runtime.decide(Some("Next steps:\n- Do a thing"));
+        match decision {
+            AutoContinueDecision::Continue { prompt } => assert_eq!(prompt, "continue"),
+            other => panic!("unexpected decision: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auto_continue_stops_on_stop_phrase() {
+        let mut runtime = AutoContinueRuntimeState::new(make_config());
+        match runtime.decide(Some("No further actions remain.")) {
+            AutoContinueDecision::Stop(AutoContinueStopReason::StopPhrase) => {}
+            other => panic!("unexpected decision: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auto_continue_stops_on_repeated_message() {
+        let mut runtime = AutoContinueRuntimeState::new(make_config());
+        assert!(matches!(
+            runtime.decide(Some("Next steps:\n- Do a thing")),
+            AutoContinueDecision::Continue { .. }
+        ));
+        assert!(matches!(
+            runtime.decide(Some("Next steps:\n- Do a thing")),
+            AutoContinueDecision::Stop(AutoContinueStopReason::RepeatedOutput)
+        ));
+    }
+
+    #[test]
+    fn auto_continue_respects_max_turns() {
+        let mut config = make_config();
+        config.max_turns = NonZeroU64::new(1);
+        let mut runtime = AutoContinueRuntimeState::new(config);
+        assert!(matches!(
+            runtime.decide(Some("Next steps:\n- Do a thing")),
+            AutoContinueDecision::Continue { .. }
+        ));
+        assert!(matches!(
+            runtime.decide(Some("Next steps:\n- Do a thing")),
+            AutoContinueDecision::Stop(AutoContinueStopReason::MaxTurns)
+        ));
+    }
+
+    #[test]
+    fn auto_continue_respects_max_duration() {
+        let mut config = make_config();
+        config.max_duration = Some(Duration::from_secs(1));
+        let started_at = Instant::now() - Duration::from_secs(2);
+        let mut runtime = AutoContinueRuntimeState::new_with_start(config, started_at);
+        match runtime.decide(Some("Next steps:\n- Do a thing")) {
+            AutoContinueDecision::Stop(AutoContinueStopReason::MaxDuration) => {}
+            other => panic!("unexpected decision: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auto_continue_rearms_after_stop_phrase() {
+        let mut runtime = AutoContinueRuntimeState::new(make_config());
+        assert!(matches!(
+            runtime.decide(Some("No further actions remain.")),
+            AutoContinueDecision::Stop(AutoContinueStopReason::StopPhrase)
+        ));
+        assert!(runtime.rearm_if_allowed());
+        assert!(runtime.config().enabled);
+        assert_eq!(0, runtime.turns_spawned());
+    }
+
+    #[test]
+    fn auto_continue_does_not_rearm_after_manual_disable() {
+        let mut runtime = AutoContinueRuntimeState::new(make_config());
+        runtime.disable(AutoContinueStopReason::Disabled);
+        assert!(!runtime.rearm_if_allowed());
+        assert!(!runtime.config().enabled);
+    }
+
+    #[test]
+    fn auto_continue_force_enable_overrides_manual_disable() {
+        let mut runtime = AutoContinueRuntimeState::new(make_config());
+        runtime.disable(AutoContinueStopReason::Disabled);
+        runtime.force_enable();
+        assert!(runtime.config().enabled);
+        assert_eq!(0, runtime.turns_spawned());
+    }
+
+    #[test]
+    fn auto_continue_rearms_after_interrupt() {
+        let mut runtime = AutoContinueRuntimeState::new(make_config());
+        runtime.disable(AutoContinueStopReason::Interrupted);
+        assert!(runtime.rearm_if_allowed());
+        assert!(runtime.config().enabled);
     }
 }

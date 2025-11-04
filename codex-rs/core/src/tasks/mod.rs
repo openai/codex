@@ -168,8 +168,12 @@ impl Session {
             *active = None;
         }
         drop(active);
-        let event = EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message });
+        let event = EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: last_agent_message.clone(),
+        });
         self.send_event(turn_context.as_ref(), event).await;
+        self.maybe_auto_continue(Arc::clone(&turn_context), last_agent_message.as_deref())
+            .await;
     }
 
     async fn register_new_active_task(&self, task: RunningTask) {
@@ -216,8 +220,12 @@ impl Session {
             .abort(session_ctx, Arc::clone(&task.turn_context))
             .await;
 
+        let should_disable_auto = matches!(reason, TurnAbortReason::Interrupted);
         let event = EventMsg::TurnAborted(TurnAbortedEvent { reason });
         self.send_event(task.turn_context.as_ref(), event).await;
+        if should_disable_auto {
+            self.pause_auto_continue_after_interrupt().await;
+        }
     }
 }
 

@@ -18,6 +18,7 @@ use codex_core::NewConversation;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::MIN_PROGRESS_INTERVAL_SECONDS;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
@@ -68,6 +69,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         output_schema: output_schema_path,
+        no_progress,
+        progress_interval,
+        auto_continue,
+        auto_continue_max_turns,
+        auto_continue_max_duration,
+        auto_continue_prompt,
         config_overrides,
     } = cli;
 
@@ -114,6 +121,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let output_schema = load_output_schema(output_schema_path);
+
+    if let Some(interval) = progress_interval
+        && interval != 0
+        && interval < MIN_PROGRESS_INTERVAL_SECONDS
+    {
+        eprintln!(
+            "--progress-interval must be 0 or at least {MIN_PROGRESS_INTERVAL_SECONDS} seconds (got {interval})."
+        );
+        std::process::exit(1);
+    }
 
     let (stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -180,6 +197,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
         experimental_sandbox_command_assessment: None,
+        progress_no_progress: no_progress,
+        progress_interval_seconds: progress_interval,
+        auto_continue_enabled: auto_continue,
+        auto_continue_prompt,
+        auto_continue_max_turns,
+        auto_continue_max_duration_seconds: auto_continue_max_duration,
         additional_writable_roots: Vec::new(),
     };
     // Parse `-c` overrides.

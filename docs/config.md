@@ -500,6 +500,50 @@ Some of the most common MCPs we've seen are:
 - [Sentry](https://docs.sentry.io/product/sentry-mcp/#codex) — access to your Sentry logs
 - [GitHub](https://github.com/github/github-mcp-server) — Control over your GitHub account beyond what git allows (like controlling PRs, issues, etc.)
 
+## Progress updates
+
+Codex streams short reasoning updates while the model works so you can follow along. When you prefer a quieter terminal, opt out or throttle those updates.
+
+- `--no-progress` (alias `--silent-progress`) disables model progress messages for the current run.
+- `--progress-interval <seconds>` ensures progress is emitted at most once per interval. Use `0` (the default) to disable throttling. Any non-zero value must be at least 5 seconds.
+
+To persist the same behaviour, add a `[progress]` table to `config.toml`:
+
+```toml
+[progress]
+# Skip progress updates unless tools produce their own output.
+no_progress = true
+
+# Emit at most one update every two minutes.
+interval_seconds = 120
+```
+
+CLI arguments override profiles, which in turn override the base configuration. The built-in `deepwork` profile combines `no_progress = true` with `ask_for_approval = "on-failure"` for a distraction-free workflow: `codex -p deepwork "…"`.
+
+### Auto-continue
+
+Pair quiet progress with unattended execution by enabling auto-continue. Codex will automatically send a follow-up prompt (defaulting to `"continue"`) whenever a turn finishes, stopping when limits are reached or the run concludes.
+
+- `--auto-continue` (alias `--autoc`) switches the behaviour on for the current run.
+- `--auto-continue-max-turns <n>` caps the number of auto-submitted turns. Use `0` (default) to disable the limit.
+- `--auto-continue-max-duration <seconds>` stops once that many seconds have elapsed. `0` disables the limit.
+- `--auto-continue-prompt <text>` customises the follow-up message Codex sends each cycle.
+
+If auto-continue pauses because a turn ended without new next steps—or you interrupted a turn—your next manual prompt automatically re-enables it for the remainder of the session. In the TUI, you can explicitly toggle it with `/auto-continue-on` and `/auto-continue-off`.
+
+Persist the same defaults in `config.toml`:
+
+```toml
+[auto_continue]
+enabled = true
+prompt = "continue"
+# Turn off after 6 hours (21600 seconds) or 40 turns, whichever comes first.
+max_duration_seconds = 21600
+max_turns = 40
+```
+
+Like other settings, CLI flags override profiles which override the base configuration. The default `deepwork` profile enables auto-continue so `codex -p deepwork` runs hands-free unless you interrupt it.
+
 ## Observability and telemetry
 
 ### otel

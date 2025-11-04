@@ -16,6 +16,8 @@ By default, Codex streams its activity to stderr and only writes the final messa
 
 To write the output of `codex exec` to a file, in addition to using a shell redirect like `>`, there is also a dedicated flag to specify an output file: `-o`/`--output-last-message`.
 
+Prefer less chatter? Add `--no-progress` to silence interim reasoning entirely, or `--progress-interval 300` to emit at most one update every five minutes. To keep Codex moving without further input, pair those flags with `--auto-continue` (optionally tuning `--auto-continue-max-turns`, `--auto-continue-max-duration`, or `--auto-continue-prompt`). Once a run temporarily pauses itself, typing the next prompt re-arms auto-continue for the new work.
+
 ### JSON output mode
 
 `codex exec` supports a `--json` mode that streams events to stdout as JSON Lines (JSONL) while the agent runs.

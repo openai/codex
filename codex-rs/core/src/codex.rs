@@ -1,8 +1,11 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::Duration;
+use std::time::Instant;
 
 use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
@@ -55,6 +58,7 @@ use crate::ModelProviderInfo;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
+use crate::config::AutoContinueConfig;
 use crate::config::Config;
 use crate::config::types::McpServerTransportConfig;
 use crate::config::types::ShellEnvironmentPolicy;
@@ -98,6 +102,8 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::shell;
 use crate::state::ActiveTurn;
+use crate::state::AutoContinueDecision;
+use crate::state::AutoContinueStopReason;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::tasks::GhostSnapshotTask;
@@ -179,6 +185,7 @@ impl Codex {
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
+            auto_continue: config.auto_continue.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: config.features.clone(),
             session_source,
@@ -191,6 +198,7 @@ impl Codex {
             config.clone(),
             auth_manager.clone(),
             tx_event.clone(),
+            tx_sub.clone(),
             conversation_history,
             session_source_clone,
         )
@@ -252,10 +260,18 @@ impl Codex {
 pub(crate) struct Session {
     conversation_id: ConversationId,
     tx_event: Sender<Event>,
+    tx_submission: Sender<Submission>,
     state: Mutex<SessionState>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
+    progress_state: Mutex<ProgressRuntimeState>,
     next_internal_sub_id: AtomicU64,
+    auto_continue_internal_submissions: Mutex<HashSet<String>>,
+}
+
+#[derive(Default)]
+struct ProgressRuntimeState {
+    last_emitted: Option<Instant>,
 }
 
 /// The context needed for a single turn of the conversation.
@@ -332,6 +348,9 @@ pub(crate) struct SessionConfiguration {
     /// operate deterministically.
     cwd: PathBuf,
 
+    /// Auto-continue behaviour for unattended sessions.
+    pub(crate) auto_continue: AutoContinueConfig,
+
     /// Set of feature flags for this session
     features: Features,
 
@@ -363,6 +382,23 @@ impl SessionConfiguration {
             next_configuration.cwd = cwd;
         }
         next_configuration
+    }
+}
+
+fn format_duration_short(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    if secs >= 3600 {
+        let hours = secs / 3600;
+        let minutes = (secs % 3600) / 60;
+        format!("{hours}h {minutes:02}m")
+    } else if secs >= 60 {
+        let minutes = secs / 60;
+        let seconds = secs % 60;
+        format!("{minutes}m {seconds:02}s")
+    } else if duration.as_millis() >= 100 {
+        format!("{:.2}s", duration.as_secs_f32())
+    } else {
+        format!("{}ms", duration.as_millis())
     }
 }
 
@@ -442,6 +478,7 @@ impl Session {
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
         tx_event: Sender<Event>,
+        tx_submission: Sender<Submission>,
         initial_history: InitialHistory,
         session_source: SessionSource,
     ) -> anyhow::Result<Arc<Self>> {
@@ -596,6 +633,7 @@ impl Session {
             rollout: Mutex::new(Some(rollout_recorder)),
             user_shell: default_shell,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            progress: config.progress.clone(),
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager,
             tool_approvals: Mutex::new(ApprovalStore::default()),
@@ -604,10 +642,13 @@ impl Session {
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
+            tx_submission,
             state: Mutex::new(state),
             active_turn: Mutex::new(None),
             services,
+            progress_state: Mutex::new(ProgressRuntimeState::default()),
             next_internal_sub_id: AtomicU64::new(0),
+            auto_continue_internal_submissions: Mutex::new(HashSet::new()),
         });
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
@@ -659,6 +700,26 @@ impl Session {
             .next_internal_sub_id
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         format!("auto-compact-{id}")
+    }
+
+    async fn mark_auto_continue_submission(&self, sub_id: String) {
+        let mut guard = self.auto_continue_internal_submissions.lock().await;
+        guard.insert(sub_id);
+    }
+
+    async fn is_auto_continue_submission(&self, sub_id: &str) -> bool {
+        let mut guard = self.auto_continue_internal_submissions.lock().await;
+        guard.remove(sub_id)
+    }
+
+    pub(crate) async fn rearm_auto_continue_if_allowed(&self) -> bool {
+        let mut state = self.state.lock().await;
+        if state.auto_continue_mut().rearm_if_allowed() {
+            state.session_configuration.auto_continue.enabled = true;
+            true
+        } else {
+            false
+        }
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
@@ -749,30 +810,81 @@ impl Session {
 
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
+        self.maybe_reset_progress_state(&msg).await;
+
         let legacy_source = msg.clone();
+        let should_deliver = self.should_forward_event(&msg).await;
         let event = Event {
             id: turn_context.sub_id.clone(),
             msg,
         };
-        self.send_event_raw(event).await;
+        self.dispatch_event(event, should_deliver).await;
 
         let show_raw_agent_reasoning = self.show_raw_agent_reasoning();
         for legacy in legacy_source.as_legacy_events(show_raw_agent_reasoning) {
+            let deliver_legacy = self.should_forward_event(&legacy).await;
             let legacy_event = Event {
                 id: turn_context.sub_id.clone(),
                 msg: legacy,
             };
-            self.send_event_raw(legacy_event).await;
+            self.dispatch_event(legacy_event, deliver_legacy).await;
         }
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
-        // Persist the event into rollout (recorder filters as needed)
+        self.dispatch_event(event, true).await;
+    }
+
+    async fn dispatch_event(&self, event: Event, deliver: bool) {
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
-        if let Err(e) = self.tx_event.send(event).await {
+        if deliver && let Err(e) = self.tx_event.send(event).await {
             error!("failed to send tool call event: {e}");
         }
+    }
+
+    async fn maybe_reset_progress_state(&self, msg: &EventMsg) {
+        if matches!(
+            msg,
+            EventMsg::TaskStarted(_) | EventMsg::TaskComplete(_) | EventMsg::TurnAborted(_)
+        ) {
+            let mut state = self.progress_state.lock().await;
+            state.last_emitted = None;
+        }
+    }
+
+    async fn should_forward_event(&self, msg: &EventMsg) -> bool {
+        if !Self::is_progress_event(msg) {
+            return true;
+        }
+
+        if self.services.progress.no_progress {
+            return false;
+        }
+
+        if let Some(interval) = self.services.progress.interval_seconds {
+            let mut state = self.progress_state.lock().await;
+            let now = Instant::now();
+            if let Some(last) = state.last_emitted
+                && now.duration_since(last) < std::time::Duration::from_secs(interval.get())
+            {
+                return false;
+            }
+            state.last_emitted = Some(now);
+        }
+
+        true
+    }
+
+    fn is_progress_event(msg: &EventMsg) -> bool {
+        matches!(
+            msg,
+            EventMsg::AgentReasoning(_)
+                | EventMsg::AgentReasoningDelta(_)
+                | EventMsg::AgentReasoningRawContent(_)
+                | EventMsg::AgentReasoningRawContentDelta(_)
+                | EventMsg::AgentReasoningSectionBreak(_)
+        )
     }
 
     async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
@@ -1017,6 +1129,14 @@ impl Session {
             Some(turn_context.sandbox_policy.clone()),
             Some(self.user_shell().clone()),
         )));
+        if self.services.progress.no_progress {
+            items.push(
+                DeveloperInstructions::new(
+                    "Do not send progress updates, preambles, or intermediate commentary. Work silently and provide only final results or explicitly requested outputs.",
+                )
+                .into(),
+            );
+        }
         items
     }
 
@@ -1118,11 +1238,136 @@ impl Session {
         self.send_event(turn_context, event).await;
     }
 
+    pub(crate) async fn maybe_auto_continue(
+        self: &Arc<Self>,
+        completed_turn_context: Arc<TurnContext>,
+        last_agent_message: Option<&str>,
+    ) {
+        let (decision, was_enabled, config_snapshot, turns_spawned, elapsed) = {
+            let mut state = self.state.lock().await;
+            let was_enabled = state.auto_continue().config().enabled;
+            let decision = state.auto_continue_mut().decide(last_agent_message);
+            let runtime_enabled = state.auto_continue().config().enabled;
+            state.session_configuration.auto_continue.enabled = runtime_enabled;
+            let config_snapshot = state.auto_continue().config().clone();
+            let turns_spawned = state.auto_continue().turns_spawned();
+            let elapsed = state.auto_continue().elapsed();
+            (
+                decision,
+                was_enabled,
+                config_snapshot,
+                turns_spawned,
+                elapsed,
+            )
+        };
+
+        match decision {
+            AutoContinueDecision::Continue { prompt } => {
+                let sub_id = self.next_internal_sub_id();
+                let submission = Submission {
+                    id: sub_id.clone(),
+                    op: Op::UserInput {
+                        items: vec![UserInput::Text { text: prompt }],
+                    },
+                };
+                self.mark_auto_continue_submission(sub_id).await;
+                if let Err(err) = self.tx_submission.send(submission).await {
+                    warn!(?err, "failed to enqueue auto-continue turn");
+                }
+            }
+            AutoContinueDecision::Stop(reason) => {
+                if was_enabled
+                    && reason != AutoContinueStopReason::Disabled
+                    && let Some(message) = Self::auto_continue_stop_message(
+                        reason,
+                        &config_snapshot,
+                        turns_spawned,
+                        elapsed,
+                    )
+                {
+                    self.notify_background_event(completed_turn_context.as_ref(), message)
+                        .await;
+                }
+            }
+        }
+    }
+
+    fn auto_continue_stop_message(
+        reason: AutoContinueStopReason,
+        config: &AutoContinueConfig,
+        turns_spawned: u64,
+        elapsed: Duration,
+    ) -> Option<String> {
+        match reason {
+            AutoContinueStopReason::Disabled => None,
+            AutoContinueStopReason::MaxTurns => {
+                let limit = config
+                    .max_turns
+                    .map(std::num::NonZeroU64::get)
+                    .unwrap_or(turns_spawned);
+                Some(format!(
+                    "Auto-continue paused after {turns_spawned} turn(s) (limit {limit})."
+                ))
+            }
+            AutoContinueStopReason::MaxDuration => {
+                if let Some(limit) = config.max_duration {
+                    Some(format!(
+                        "Auto-continue paused after {} (limit {}).",
+                        format_duration_short(elapsed),
+                        format_duration_short(limit)
+                    ))
+                } else {
+                    Some(format!(
+                        "Auto-continue paused after {}.",
+                        format_duration_short(elapsed)
+                    ))
+                }
+            }
+            AutoContinueStopReason::EmptyMessage => Some(
+                "Auto-continue paused because the assistant finished without suggesting next steps."
+                    .to_string(),
+            ),
+            AutoContinueStopReason::StopPhrase => Some(
+                "Auto-continue paused because the assistant indicated there is no further work."
+                    .to_string(),
+            ),
+            AutoContinueStopReason::RepeatedOutput => Some(
+                "Auto-continue paused after the assistant repeated the same response. Review the output or adjust the plan."
+                    .to_string(),
+            ),
+            AutoContinueStopReason::Interrupted => Some(
+                "Auto-continue paused after an interrupt. It will resume automatically with your next instruction."
+                    .to_string(),
+            ),
+        }
+    }
+
     async fn notify_stream_error(&self, turn_context: &TurnContext, message: impl Into<String>) {
         let event = EventMsg::StreamError(StreamErrorEvent {
             message: message.into(),
         });
         self.send_event(turn_context, event).await;
+    }
+
+    pub(crate) async fn set_auto_continue_enabled(&self, enabled: bool) {
+        let mut state = self.state.lock().await;
+        if enabled {
+            state.auto_continue_mut().force_enable();
+            state.session_configuration.auto_continue.enabled = true;
+        } else {
+            state
+                .auto_continue_mut()
+                .disable(AutoContinueStopReason::Disabled);
+            state.session_configuration.auto_continue.enabled = false;
+        }
+    }
+
+    pub(crate) async fn pause_auto_continue_after_interrupt(&self) {
+        let mut state = self.state.lock().await;
+        state
+            .auto_continue_mut()
+            .disable(AutoContinueStopReason::Interrupted);
+        state.session_configuration.auto_continue.enabled = false;
     }
 
     async fn maybe_start_ghost_snapshot(
@@ -1322,6 +1567,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 )
                 .await;
             }
+            Op::SetAutoContinue { enabled } => {
+                handlers::set_auto_continue(&sess, enabled).await;
+            }
             Op::Shutdown => {
                 if handlers::shutdown(&sess, sub.id.clone()).await {
                     break;
@@ -1377,6 +1625,12 @@ mod handlers {
         op: Op,
         previous_context: &mut Option<Arc<TurnContext>>,
     ) {
+        let is_auto_submission = sess.is_auto_continue_submission(&sub_id).await;
+        let mut auto_continue_rearmed = false;
+        if !is_auto_submission {
+            auto_continue_rearmed = sess.rearm_auto_continue_if_allowed().await;
+        }
+
         let (items, updates) = match op {
             Op::UserTurn {
                 cwd,
@@ -1404,6 +1658,13 @@ mod handlers {
         };
 
         let current_context = sess.new_turn_with_sub_id(sub_id, updates).await;
+        if auto_continue_rearmed {
+            sess.notify_background_event(
+                current_context.as_ref(),
+                "Auto-continue re-enabled for this session.",
+            )
+            .await;
+        }
         current_context
             .client
             .get_otel_event_manager()
@@ -1440,6 +1701,10 @@ mod handlers {
         )
         .await;
         *previous_context = Some(turn_context);
+    }
+
+    pub async fn set_auto_continue(sess: &Arc<Session>, enabled: bool) {
+        sess.set_auto_continue_enabled(enabled).await;
     }
 
     pub async fn exec_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
@@ -2307,15 +2572,20 @@ mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
+    use crate::config::MIN_PROGRESS_INTERVAL_SECONDS;
+    use crate::config::ProgressToml;
     use crate::config::types::McpServerConfig;
     use crate::config::types::McpServerTransportConfig;
     use crate::exec::ExecToolCallOutput;
     use crate::mcp::auth::McpAuthStatusEntry;
     use crate::tools::format_exec_output_str;
 
+    use crate::protocol::AgentReasoningEvent;
     use crate::protocol::CompactedItem;
     use crate::protocol::InitialHistory;
+    use crate::protocol::Op;
     use crate::protocol::ResumedHistory;
+    use crate::protocol::TaskStartedEvent;
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
@@ -2332,6 +2602,7 @@ mod tests {
     use codex_protocol::protocol::McpAuthStatus;
     use std::time::Duration;
     use tokio::time::sleep;
+    use tokio::time::timeout;
 
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
@@ -2344,7 +2615,7 @@ mod tests {
 
     #[test]
     fn reconstruct_history_matches_live_compactions() {
-        let (session, turn_context) = make_session_and_context();
+        let (session, turn_context, _rx_submission) = make_session_and_context();
         let (rollout_items, expected) = sample_rollout(&session, &turn_context);
 
         let reconstructed = session.reconstruct_history_from_rollout(&turn_context, &rollout_items);
@@ -2354,7 +2625,7 @@ mod tests {
 
     #[test]
     fn record_initial_history_reconstructs_resumed_transcript() {
-        let (session, turn_context) = make_session_and_context();
+        let (session, turn_context, _rx_submission) = make_session_and_context();
         let (rollout_items, expected) = sample_rollout(&session, &turn_context);
 
         tokio_test::block_on(session.record_initial_history(InitialHistory::Resumed(
@@ -2373,7 +2644,7 @@ mod tests {
 
     #[test]
     fn record_initial_history_reconstructs_forked_transcript() {
-        let (session, turn_context) = make_session_and_context();
+        let (session, turn_context, _rx_submission) = make_session_and_context();
         let (rollout_items, expected) = sample_rollout(&session, &turn_context);
 
         tokio_test::block_on(session.record_initial_history(InitialHistory::Forked(rollout_items)));
@@ -2505,8 +2776,10 @@ mod tests {
         )
     }
 
-    pub(crate) fn make_session_and_context() -> (Session, TurnContext) {
+    pub(crate) fn make_session_and_context()
+    -> (Session, TurnContext, async_channel::Receiver<Submission>) {
         let (tx_event, _rx_event) = async_channel::unbounded();
+        let (tx_submission, rx_submission) = async_channel::unbounded::<Submission>();
         let codex_home = tempfile::tempdir().expect("create temp dir");
         let config = Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
@@ -2535,6 +2808,7 @@ mod tests {
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
+            auto_continue: config.auto_continue.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
             session_source: SessionSource::Exec,
@@ -2549,6 +2823,7 @@ mod tests {
             rollout: Mutex::new(None),
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            progress: config.progress.clone(),
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
@@ -2566,30 +2841,47 @@ mod tests {
         let session = Session {
             conversation_id,
             tx_event,
+            tx_submission,
             state: Mutex::new(state),
             active_turn: Mutex::new(None),
             services,
+            progress_state: Mutex::new(ProgressRuntimeState::default()),
             next_internal_sub_id: AtomicU64::new(0),
+            auto_continue_internal_submissions: Mutex::new(HashSet::new()),
         };
 
-        (session, turn_context)
+        (session, turn_context, rx_submission)
     }
 
-    // Like make_session_and_context, but returns Arc<Session> and the event receiver
-    // so tests can assert on emitted events.
+    // Like make_session_and_context, but returns Arc<Session> plus receivers for
+    // events and submissions so tests can assert on emitted messages.
     fn make_session_and_context_with_rx() -> (
         Arc<Session>,
         Arc<TurnContext>,
         async_channel::Receiver<Event>,
+        async_channel::Receiver<Submission>,
+    ) {
+        make_session_and_context_with_rx_cfg(ConfigToml::default(), ConfigOverrides::default())
+    }
+
+    fn make_session_and_context_with_rx_cfg(
+        cfg: ConfigToml,
+        overrides: ConfigOverrides,
+    ) -> (
+        Arc<Session>,
+        Arc<TurnContext>,
+        async_channel::Receiver<Event>,
+        async_channel::Receiver<Submission>,
     ) {
         let (tx_event, rx_event) = async_channel::unbounded();
+        let (tx_submission, rx_submission) = async_channel::unbounded::<Submission>();
         let codex_home = tempfile::tempdir().expect("create temp dir");
         let config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
+            cfg,
+            overrides,
             codex_home.path().to_path_buf(),
         )
-        .expect("load default test config");
+        .expect("load test config");
         let config = Arc::new(config);
         let conversation_id = ConversationId::default();
         let otel_event_manager = otel_event_manager(conversation_id, config.as_ref());
@@ -2611,6 +2903,7 @@ mod tests {
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
+            auto_continue: config.auto_continue.clone(),
             original_config_do_not_use: Arc::clone(&config),
             features: Features::default(),
             session_source: SessionSource::Exec,
@@ -2625,6 +2918,7 @@ mod tests {
             rollout: Mutex::new(None),
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            progress: config.progress.clone(),
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
@@ -2642,13 +2936,16 @@ mod tests {
         let session = Arc::new(Session {
             conversation_id,
             tx_event,
+            tx_submission,
             state: Mutex::new(state),
             active_turn: Mutex::new(None),
             services,
+            progress_state: Mutex::new(ProgressRuntimeState::default()),
             next_internal_sub_id: AtomicU64::new(0),
+            auto_continue_internal_submissions: Mutex::new(HashSet::new()),
         });
 
-        (session, turn_context, rx_event)
+        (session, turn_context, rx_event, rx_submission)
     }
 
     #[derive(Clone, Copy)]
@@ -2683,7 +2980,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[test_log::test]
     async fn abort_regular_task_emits_turn_aborted_only() {
-        let (sess, tc, rx) = make_session_and_context_with_rx();
+        let (sess, tc, rx, _rx_submission) = make_session_and_context_with_rx();
         let input = vec![UserInput::Text {
             text: "hello".to_string(),
         }];
@@ -2712,7 +3009,7 @@ mod tests {
 
     #[tokio::test]
     async fn abort_gracefuly_emits_turn_aborted_only() {
-        let (sess, tc, rx) = make_session_and_context_with_rx();
+        let (sess, tc, rx, _rx_submission) = make_session_and_context_with_rx();
         let input = vec![UserInput::Text {
             text: "hello".to_string(),
         }];
@@ -2736,9 +3033,98 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
+    #[tokio::test]
+    async fn auto_continue_enqueues_follow_up_turn() {
+        let overrides = ConfigOverrides {
+            auto_continue_enabled: Some(true),
+            auto_continue_prompt: Some("carry on".to_string()),
+            ..Default::default()
+        };
+
+        let (session, turn_context, _rx_event, rx_submission) =
+            make_session_and_context_with_rx_cfg(ConfigToml::default(), overrides);
+
+        session
+            .maybe_auto_continue(
+                Arc::clone(&turn_context),
+                Some("Next steps:\n- Continue implementation"),
+            )
+            .await;
+
+        let submission = timeout(Duration::from_secs(1), rx_submission.recv())
+            .await
+            .expect("auto-continue submission not emitted")
+            .expect("submission");
+
+        match submission.op {
+            Op::UserInput { items } => {
+                assert_eq!(1, items.len(), "expected single follow-up item");
+                match &items[0] {
+                    UserInput::Text { text } => assert_eq!("carry on", text),
+                    other => panic!("unexpected auto-continue payload: {other:?}"),
+                }
+            }
+            other => panic!("unexpected auto-continue submission: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn auto_continue_respects_turn_limit_and_notifies() {
+        let overrides = ConfigOverrides {
+            auto_continue_enabled: Some(true),
+            auto_continue_max_turns: Some(1),
+            ..Default::default()
+        };
+
+        let (session, turn_context, rx_event, rx_submission) =
+            make_session_and_context_with_rx_cfg(ConfigToml::default(), overrides);
+
+        session
+            .maybe_auto_continue(
+                Arc::clone(&turn_context),
+                Some("Next steps:\n- Continue implementation"),
+            )
+            .await;
+
+        let first_submission = timeout(Duration::from_secs(1), rx_submission.recv())
+            .await
+            .expect("first auto-continue submission not emitted")
+            .expect("submission");
+        assert!(matches!(first_submission.op, Op::UserInput { .. }));
+
+        session
+            .maybe_auto_continue(
+                Arc::clone(&turn_context),
+                Some("Next steps:\n- Continue implementation"),
+            )
+            .await;
+
+        assert!(
+            timeout(Duration::from_millis(100), rx_submission.recv())
+                .await
+                .is_err(),
+            "unexpected extra auto-continue submission"
+        );
+
+        let event = timeout(Duration::from_secs(1), rx_event.recv())
+            .await
+            .expect("auto-continue stop event not emitted")
+            .expect("event");
+
+        match event.msg {
+            EventMsg::BackgroundEvent(evt) => {
+                assert_eq!(
+                    "Auto-continue paused after 1 turn(s) (limit 1).",
+                    evt.message
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
-        let (sess, tc, rx) = make_session_and_context_with_rx();
+        let (sess, tc, rx, _rx_submission) = make_session_and_context_with_rx();
         let input = vec![UserInput::Text {
             text: "start review".to_string(),
         }];
@@ -2799,7 +3185,7 @@ mod tests {
 
     #[tokio::test]
     async fn fatal_tool_error_stops_turn_and_reports_error() {
-        let (session, turn_context, _rx) = make_session_and_context_with_rx();
+        let (session, turn_context, _rx, _rx_submission) = make_session_and_context_with_rx();
         let router = ToolRouter::from_config(
             &turn_context.tools_config,
             Some(session.services.mcp_connection_manager.list_all_tools()),
@@ -2944,7 +3330,7 @@ mod tests {
         use crate::turn_diff_tracker::TurnDiffTracker;
         use std::collections::HashMap;
 
-        let (session, mut turn_context_raw) = make_session_and_context();
+        let (session, mut turn_context_raw, _rx_submission) = make_session_and_context();
         // Ensure policy is NOT OnRequest so the early rejection path triggers
         turn_context_raw.approval_policy = AskForApproval::OnFailure;
         let session = Arc::new(session);
@@ -3146,5 +3532,88 @@ mod tests {
             "MCP client for `slow` timed out after 10 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",
             display
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn progress_no_progress_suppresses_reasoning_events() {
+        let cfg = ConfigToml {
+            progress: Some(ProgressToml {
+                no_progress: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let (session, turn_context, rx, _rx_submission) =
+            make_session_and_context_with_rx_cfg(cfg, ConfigOverrides::default());
+        let rx = rx;
+        while rx.try_recv().is_ok() {}
+
+        session
+            .send_event(
+                turn_context.as_ref(),
+                EventMsg::AgentReasoning(AgentReasoningEvent {
+                    text: "thinking".to_string(),
+                }),
+            )
+            .await;
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn progress_interval_throttles_reasoning_events() {
+        let cfg = ConfigToml {
+            progress: Some(ProgressToml {
+                interval_seconds: Some(MIN_PROGRESS_INTERVAL_SECONDS + 30),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let (session, turn_context, rx, _rx_submission) =
+            make_session_and_context_with_rx_cfg(cfg, ConfigOverrides::default());
+        let rx = rx;
+        while rx.try_recv().is_ok() {}
+
+        session
+            .send_event(
+                turn_context.as_ref(),
+                EventMsg::AgentReasoning(AgentReasoningEvent {
+                    text: "first".to_string(),
+                }),
+            )
+            .await;
+        assert!(rx.try_recv().is_ok());
+
+        session
+            .send_event(
+                turn_context.as_ref(),
+                EventMsg::AgentReasoning(AgentReasoningEvent {
+                    text: "second".to_string(),
+                }),
+            )
+            .await;
+        assert!(rx.try_recv().is_err());
+
+        session
+            .send_event(
+                turn_context.as_ref(),
+                EventMsg::TaskStarted(TaskStartedEvent {
+                    model_context_window: None,
+                }),
+            )
+            .await;
+        assert!(rx.try_recv().is_ok());
+
+        session
+            .send_event(
+                turn_context.as_ref(),
+                EventMsg::AgentReasoning(AgentReasoningEvent {
+                    text: "third".to_string(),
+                }),
+            )
+            .await;
+        assert!(rx.try_recv().is_ok());
     }
 }

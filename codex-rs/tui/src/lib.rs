@@ -15,6 +15,7 @@ use codex_core::RolloutRecorder;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::MIN_PROGRESS_INTERVAL_SECONDS;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::protocol::AskForApproval;
 use codex_ollama::DEFAULT_OSS_MODEL;
@@ -124,6 +125,19 @@ pub async fn run_main(
         None // No model specified, will use the default.
     };
 
+    if let Some(interval) = cli.progress_interval
+        && interval != 0
+        && interval < MIN_PROGRESS_INTERVAL_SECONDS
+    {
+        #[allow(clippy::print_stderr)]
+        {
+            eprintln!(
+                "--progress-interval must be 0 or at least {MIN_PROGRESS_INTERVAL_SECONDS} seconds (got {interval})."
+            );
+        }
+        std::process::exit(1);
+    }
+
     let model_provider_override = if cli.oss {
         Some(BUILT_IN_OSS_MODEL_PROVIDER_ID.to_owned())
     } else {
@@ -150,6 +164,12 @@ pub async fn run_main(
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: cli.web_search.then_some(true),
         experimental_sandbox_command_assessment: None,
+        progress_no_progress: cli.no_progress,
+        progress_interval_seconds: cli.progress_interval,
+        auto_continue_enabled: cli.auto_continue,
+        auto_continue_prompt: cli.auto_continue_prompt.clone(),
+        auto_continue_max_turns: cli.auto_continue_max_turns,
+        auto_continue_max_duration_seconds: cli.auto_continue_max_duration,
         additional_writable_roots: additional_dirs,
     };
     let raw_overrides = cli.config_overrides.raw_overrides.clone();

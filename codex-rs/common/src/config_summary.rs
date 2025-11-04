@@ -1,6 +1,7 @@
 use codex_core::WireApi;
 use codex_core::config::Config;
 
+use crate::elapsed::format_duration;
 use crate::sandbox_summary::summarize_sandbox_policy;
 
 /// Build a list of key/value pairs summarizing the effective configuration.
@@ -26,6 +27,28 @@ pub fn create_config_summary_entries(config: &Config) -> Vec<(&'static str, Stri
             "reasoning summaries",
             config.model_reasoning_summary.to_string(),
         ));
+    }
+
+    if config.progress.no_progress {
+        entries.push(("progress", "disabled".to_string()));
+    } else if let Some(interval) = config.progress.interval_seconds {
+        entries.push(("progress", format!("every {}s", interval.get())));
+    }
+
+    if config.auto_continue.enabled {
+        let mut details = Vec::new();
+        if let Some(limit) = config.auto_continue.max_turns {
+            details.push(format!("max {} turn(s)", limit.get()));
+        }
+        if let Some(duration) = config.auto_continue.max_duration {
+            details.push(format!("max {}", format_duration(duration)));
+        }
+        let summary = if details.is_empty() {
+            "enabled".to_string()
+        } else {
+            format!("enabled ({})", details.join(", "))
+        };
+        entries.push(("auto-continue", summary));
     }
 
     entries
