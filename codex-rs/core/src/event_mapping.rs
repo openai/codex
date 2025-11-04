@@ -11,14 +11,21 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::user_input::UserInput;
 use tracing::warn;
+use uuid::Uuid;
+
+use crate::user_instructions::UserInstructions;
 
 fn is_session_prefix(text: &str) -> bool {
     let trimmed = text.trim_start();
     let lowered = trimmed.to_ascii_lowercase();
-    lowered.starts_with("<environment_context>") || lowered.starts_with("<user_instructions>")
+    lowered.starts_with("<environment_context>")
 }
 
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
+    if UserInstructions::is_user_instructions(message) {
+        return None;
+    }
+
     let mut content: Vec<UserInput> = Vec::new();
 
     for content_item in message.iter() {
@@ -46,7 +53,7 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
     Some(UserMessageItem::new(&content))
 }
 
-fn parse_agent_message(message: &[ContentItem]) -> AgentMessageItem {
+fn parse_agent_message(id: Option<&String>, message: &[ContentItem]) -> AgentMessageItem {
     let mut content: Vec<AgentMessageContent> = Vec::new();
     for content_item in message.iter() {
         match content_item {
@@ -61,14 +68,18 @@ fn parse_agent_message(message: &[ContentItem]) -> AgentMessageItem {
             }
         }
     }
-    AgentMessageItem::new(&content)
+    let id = id.cloned().unwrap_or_else(|| Uuid::new_v4().to_string());
+    AgentMessageItem { id, content }
 }
 
 pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
     match item {
-        ResponseItem::Message { role, content, .. } => match role.as_str() {
+        ResponseItem::Message { role, content, id } => match role.as_str() {
             "user" => parse_user_message(content).map(TurnItem::UserMessage),
-            "assistant" => Some(TurnItem::AgentMessage(parse_agent_message(content))),
+            "assistant" => Some(TurnItem::AgentMessage(parse_agent_message(
+                id.as_ref(),
+                content,
+            ))),
             "system" => None,
             _ => None,
         },
@@ -159,6 +170,38 @@ mod tests {
                 assert_eq!(user.content, expected_content);
             }
             other => panic!("expected TurnItem::UserMessage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skips_user_instructions_and_env() {
+        let items = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<user_instructions>test_text</user_instructions>".to_string(),
+                }],
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<environment_context>test_text</environment_context>".to_string(),
+                }],
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>".to_string(),
+                }],
+            },
+        ];
+
+        for item in items {
+            let turn_item = parse_turn_item(&item);
+            assert!(turn_item.is_none(), "expected none, got {turn_item:?}");
         }
     }
 

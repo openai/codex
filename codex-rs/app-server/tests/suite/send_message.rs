@@ -16,6 +16,7 @@ use codex_app_server_protocol::SendUserMessageResponse;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::RawResponseItemEvent;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -43,7 +44,9 @@ async fn test_send_message_success() -> Result<()> {
 
     // Start a conversation using the new wire API.
     let new_conv_id = mcp
-        .send_new_conversation_request(NewConversationParams::default())
+        .send_new_conversation_request(NewConversationParams {
+            ..Default::default()
+        })
         .await?;
     let new_conv_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -142,7 +145,10 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let new_conv_id = mcp
-        .send_new_conversation_request(NewConversationParams::default())
+        .send_new_conversation_request(NewConversationParams {
+            developer_instructions: Some("Use the test harness tools.".to_string()),
+            ..Default::default()
+        })
         .await?;
     let new_conv_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -175,6 +181,9 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
             }],
         })
         .await?;
+
+    let developer = read_raw_response_item(&mut mcp, conversation_id).await;
+    assert_developer_message(&developer, "Use the test harness tools.");
 
     let instructions = read_raw_response_item(&mut mcp, conversation_id).await;
     assert_instructions_message(&instructions);
@@ -294,7 +303,9 @@ async fn read_raw_response_item(
         .cloned()
         .expect("raw response item should include msg payload");
 
-    serde_json::from_value(msg_value).expect("deserialize raw response item")
+    let event: RawResponseItemEvent =
+        serde_json::from_value(msg_value).expect("deserialize raw response item");
+    event.item
 }
 
 fn assert_instructions_message(item: &ResponseItem) {
@@ -302,14 +313,30 @@ fn assert_instructions_message(item: &ResponseItem) {
         ResponseItem::Message { role, content, .. } => {
             assert_eq!(role, "user");
             let texts = content_texts(content);
+            let is_instructions = texts
+                .iter()
+                .any(|text| text.starts_with("# AGENTS.md instructions for "));
             assert!(
-                texts
-                    .iter()
-                    .any(|text| text.contains("<user_instructions>")),
+                is_instructions,
                 "expected instructions message, got {texts:?}"
             );
         }
         other => panic!("expected instructions message, got {other:?}"),
+    }
+}
+
+fn assert_developer_message(item: &ResponseItem, expected_text: &str) {
+    match item {
+        ResponseItem::Message { role, content, .. } => {
+            assert_eq!(role, "developer");
+            let texts = content_texts(content);
+            assert_eq!(
+                texts,
+                vec![expected_text],
+                "expected developer instructions message, got {texts:?}"
+            );
+        }
+        other => panic!("expected developer instructions message, got {other:?}"),
     }
 }
 
