@@ -18,7 +18,8 @@ use crate::user_instructions::UserInstructions;
 fn is_user_shell_command_prefix(text: &str) -> bool {
     let trimmed = text.trim_start();
     let lowered = trimmed.to_ascii_lowercase();
-    lowered.starts_with("<user_shell_command>") || lowered.starts_with("<user_shell_command_output>")
+    lowered.starts_with("<user_shell_command>")
+        || lowered.starts_with("<user_shell_command_output>")
 }
 
 fn is_session_prefix(text: &str) -> bool {
