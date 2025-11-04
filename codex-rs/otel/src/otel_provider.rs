@@ -15,6 +15,8 @@ use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use std::error::Error;
 use tonic::metadata::MetadataMap;
+use tonic::transport::ClientTlsConfig;
+use tonic::transport::Endpoint;
 use tracing::debug;
 
 const ENV_ATTRIBUTE: &str = "env";
@@ -59,12 +61,27 @@ impl OtelProvider {
                     }
                 }
 
-                let exporter = LogExporter::builder()
+                let mut exporter_builder = LogExporter::builder()
                     .with_tonic()
                     .with_endpoint(endpoint)
-                    .with_metadata(MetadataMap::from_headers(header_map))
-                    .build()?;
+                    .with_metadata(MetadataMap::from_headers(header_map));
 
+                // 🔒 SECURITY FIX: Enable TLS for HTTPS endpoints
+                if endpoint.starts_with("https://") {
+                    let mut tls_config = ClientTlsConfig::new().with_native_roots();
+
+                    // Robust domain extraction using tonic's Endpoint parser
+                    if let Ok(parsed_endpoint) = Endpoint::from_shared(endpoint.clone()) {
+                        if let Some(uri) = parsed_endpoint.uri().host() {
+                            tls_config = tls_config.domain_name(uri);
+                        }
+                    }
+
+                    exporter_builder = exporter_builder.with_tls_config(tls_config);
+                    debug!("TLS enabled for HTTPS endpoint: {}", endpoint);
+                }
+
+                let exporter = exporter_builder.build()?;
                 builder = builder.with_batch_exporter(exporter);
             }
             OtelExporter::OtlpHttp {
