@@ -66,12 +66,12 @@ impl WidgetRef for &WelcomeWidget {
         }
 
         let mut lines: Vec<Line> = Vec::new();
-        if show_animation {
+        if show_animation && self.animation.is_enabled() {
             let frame = self.animation.current_frame();
-            // let frame_line_count = frame.lines().count();
-            // lines.reserve(frame_line_count + 2);
-            lines.extend(frame.lines().map(Into::into));
-            lines.push("".into());
+            if !frame.is_empty() {
+                lines.extend(frame.lines().map(Into::into));
+                lines.push("".into());
+            }
         }
         lines.push(Line::from(vec![
             "  ".into(),
