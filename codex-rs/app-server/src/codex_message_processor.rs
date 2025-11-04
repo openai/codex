@@ -67,7 +67,6 @@ use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_backend_client::Client as BackendClient;
@@ -968,11 +967,11 @@ impl CodexMessageProcessor {
                 };
                 self.outgoing.send_response(request_id, response).await;
 
-                let notif = ThreadStartedNotification { thread };
-                self.outgoing
-                    .send_server_notification(ServerNotification::ThreadStarted(notif))
-                    .await;
-
+                // TODO(owen): Uncomment this when we have a v2 thread/started notification.
+                // let notif = ThreadStartedNotification { thread };
+                // self.outgoing
+                //     .send_server_notification(ServerNotification::ThreadStarted(notif))
+                //     .await;
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -1158,7 +1157,6 @@ impl CodexMessageProcessor {
                     },
                 };
                 self.outgoing.send_response(request_id, response).await;
-
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -1629,7 +1627,10 @@ impl CodexMessageProcessor {
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
-                tracing::warn!("thread/archive failed for {conversation_id}: {}", err.message);
+                tracing::warn!(
+                    "thread/archive failed for {conversation_id}: {}",
+                    err.message
+                );
                 self.outgoing.send_error(request_id, err).await;
             }
         }
@@ -1696,7 +1697,10 @@ impl CodexMessageProcessor {
             });
         }
 
-        tracing::debug!("thread/archive canonical path {}", canonical_rollout_path.display());
+        tracing::debug!(
+            "thread/archive canonical path {}",
+            canonical_rollout_path.display()
+        );
 
         let removed_conversation = self
             .conversation_manager

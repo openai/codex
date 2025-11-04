@@ -7,7 +7,6 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::ThreadStartedNotification;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -50,9 +49,10 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         mcp.read_stream_until_notification_message("thread/started"),
     )
     .await??;
-    let started: ThreadStartedNotification =
-        serde_json::from_value(notif.params.expect("params must be present"))?;
-    assert_eq!(started.thread.id, thread.id);
+    // TODO(owen): Uncomment this when we have a v2 thread/started notification.
+    // let started: ThreadStartedNotification =
+    //     serde_json::from_value(notif.params.expect("params must be present"))?;
+    // assert_eq!(started.thread.id, thread.id);
 
     Ok(())
 }
