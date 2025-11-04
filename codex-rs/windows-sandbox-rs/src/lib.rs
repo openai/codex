@@ -51,18 +51,23 @@ mod windows_impl {
     use std::ptr;
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::Foundation::GetLastError;
-    use windows_sys::Win32::Foundation::SetHandleInformation;
     use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Foundation::SetHandleInformation;
     use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
     use windows_sys::Win32::System::Pipes::CreatePipe;
     use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
+    use windows_sys::Win32::System::Threading::DeleteProcThreadAttributeList;
     use windows_sys::Win32::System::Threading::GetExitCodeProcess;
+    use windows_sys::Win32::System::Threading::InitializeProcThreadAttributeList;
+    use windows_sys::Win32::System::Threading::UpdateProcThreadAttribute;
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
     use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
+    use windows_sys::Win32::System::Threading::EXTENDED_STARTUPINFO_PRESENT;
     use windows_sys::Win32::System::Threading::INFINITE;
+    use windows_sys::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST;
     use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
     use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
-    use windows_sys::Win32::System::Threading::STARTUPINFOW;
+    use windows_sys::Win32::System::Threading::STARTUPINFOEXW;
 
     type PipeHandles = ((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE));
 
@@ -133,6 +138,21 @@ mod windows_impl {
         quoted
     }
 
+    // Create three anonymous pipes for the child process' stdio.
+    //
+    // Design:
+    // - Create separate pipes for stdin, stdout, and stderr.
+    // - Mark ONLY the child-facing ends as inheritable (stdin read, stdout write,
+    //   stderr write). The parent-facing ends remain non-inheritable.
+    // - Use STARTUPINFOEX + PROC_THREAD_ATTRIBUTE_HANDLE_LIST to restrict
+    //   inheritance to exactly these handles.
+    //
+    // Why:
+    // - With a restricted token, allowing extra inheritable handles to leak into
+    //   the sandboxed process can cause CreateProcess to fail when PowerShell
+    //   later spawns piped native children (Access is denied / invalid parameter).
+    // - Combining a minimal HANDLE_LIST with inheritable stdio ends satisfies the
+    //   kernel’s requirements without weakening the sandbox.
     unsafe fn setup_stdio_pipes() -> io::Result<PipeHandles> {
         let mut in_r: HANDLE = 0;
         let mut in_w: HANDLE = 0;
@@ -149,6 +169,9 @@ mod windows_impl {
         if CreatePipe(&mut err_r, &mut err_w, ptr::null_mut(), 0) == 0 {
             return Err(io::Error::from_raw_os_error(GetLastError() as i32));
         }
+        // Mark only the child-facing stdio ends as inheritable. Combined
+        // with PROC_THREAD_ATTRIBUTE_HANDLE_LIST, only these handles will
+        // be inherited by the child process.
         if SetHandleInformation(in_r, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
             return Err(io::Error::from_raw_os_error(GetLastError() as i32));
         }
@@ -158,6 +181,8 @@ mod windows_impl {
         if SetHandleInformation(err_w, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
             return Err(io::Error::from_raw_os_error(GetLastError() as i32));
         }
+        // Do not mark the opposite ends inheritable; we keep parent-only ends
+        // non-inheritable so they don't leak into the sandboxed process.
         Ok(((in_r, in_w), (out_r, out_w), (err_r, err_w)))
     }
 
@@ -253,12 +278,80 @@ mod windows_impl {
 
         let (stdin_pair, stdout_pair, stderr_pair) = unsafe { setup_stdio_pipes()? };
         let ((in_r, in_w), (out_r, out_w), (err_r, err_w)) = (stdin_pair, stdout_pair, stderr_pair);
-        let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
-        si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
-        si.dwFlags |= STARTF_USESTDHANDLES;
-        si.hStdInput = in_r;
-        si.hStdOutput = out_w;
-        si.hStdError = err_w;
+        // Build STARTUPINFOEX with handle inheritance limited to stdio handles only.
+        // This avoids leaking unrelated inheritable handles into the sandboxed
+        // process, which previously broke piped child launches under a restricted
+        // token.
+        let mut si_ex: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
+        si_ex.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+        si_ex.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+        si_ex.StartupInfo.hStdInput = in_r;
+        si_ex.StartupInfo.hStdOutput = out_w;
+        si_ex.StartupInfo.hStdError = err_w;
+
+        // Initialize an attribute list with one attribute: the handle list that
+        // defines exactly which handles the child will inherit.
+        let mut attr_list_size: usize = 0;
+        unsafe {
+            InitializeProcThreadAttributeList(ptr::null_mut(), 1, 0, &mut attr_list_size);
+        }
+        let mut attr_buf: Vec<u8> = vec![0u8; attr_list_size];
+        let attr_list = attr_buf.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
+        let ok_init =
+            unsafe { InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_list_size) };
+        if ok_init == 0 {
+            let err = unsafe { GetLastError() } as i32;
+            unsafe {
+                CloseHandle(in_r);
+                CloseHandle(in_w);
+                CloseHandle(out_r);
+                CloseHandle(out_w);
+                CloseHandle(err_r);
+                CloseHandle(err_w);
+                CloseHandle(h_token);
+            }
+            return Err(anyhow::anyhow!(
+                "InitializeProcThreadAttributeList failed: {}",
+                err
+            ));
+        }
+
+        // Only pass the exact stdio handles we want the child to inherit.
+        let mut inherit_list: [HANDLE; 3] = [in_r, out_w, err_w];
+        // PROC_THREAD_ATTRIBUTE_HANDLE_LIST constant value.
+        const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x0002_0002;
+        let ok_upd = unsafe {
+            UpdateProcThreadAttribute(
+                attr_list,
+                0,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                inherit_list.as_mut_ptr() as *mut _ as *mut _,
+                (std::mem::size_of::<HANDLE>() * inherit_list.len()) as usize,
+                ptr::null_mut(),
+                ptr::null_mut(),
+            )
+        };
+        si_ex.lpAttributeList = attr_list;
+
+        if ok_upd == 0 {
+            let err = unsafe { GetLastError() } as i32;
+            unsafe {
+                DeleteProcThreadAttributeList(attr_list);
+                CloseHandle(in_r);
+                CloseHandle(in_w);
+                CloseHandle(out_r);
+                CloseHandle(out_w);
+                CloseHandle(err_r);
+                CloseHandle(err_w);
+                CloseHandle(h_token);
+            }
+            return Err(anyhow::anyhow!("UpdateProcThreadAttribute failed: {}", err));
+        }
+
+        // Set desktop for restricted token launches. Without this, Windows can
+        // fail process initialization for restricted tokens (STATUS_DLL_INIT_FAILED).
+        let desktop = to_wide("Winsta0\\Default");
+        si_ex.StartupInfo.lpDesktop = desktop.as_ptr() as *mut u16;
 
         let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
         let cmdline_str = command
@@ -268,8 +361,12 @@ mod windows_impl {
             .join(" ");
         let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
         let env_block = make_env_block(&env_map);
-        let desktop = to_wide("Winsta0\\Default");
-        si.lpDesktop = desktop.as_ptr() as *mut u16;
+        // Pass a pointer to the full STARTUPINFOEXW memory (typed as STARTUPINFOW)
+        // so CreateProcessAsUserW can see lpAttributeList when using
+        // EXTENDED_STARTUPINFO_PRESENT.
+        let lp_startup_info: *mut windows_sys::Win32::System::Threading::STARTUPINFOW =
+            (&mut si_ex as *mut STARTUPINFOEXW).cast();
+
         let spawn_res = unsafe {
             CreateProcessAsUserW(
                 h_token,
@@ -277,11 +374,11 @@ mod windows_impl {
                 cmdline.as_mut_ptr(),
                 ptr::null_mut(),
                 ptr::null_mut(),
-                1,
-                CREATE_UNICODE_ENVIRONMENT,
+                1, // bInheritHandles = TRUE
+                CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
                 env_block.as_ptr() as *mut c_void,
                 to_wide(cwd).as_ptr(),
-                &si,
+                lp_startup_info,
                 &mut pi,
             )
         };
@@ -294,10 +391,11 @@ mod windows_impl {
                 cwd.display(),
                 cmdline_str,
                 env_block.len(),
-                si.dwFlags,
+                si_ex.StartupInfo.dwFlags,
             );
             debug_log(&dbg, logs_base_dir);
             unsafe {
+                DeleteProcThreadAttributeList(attr_list);
                 CloseHandle(in_r);
                 CloseHandle(in_w);
                 CloseHandle(out_r);
@@ -315,6 +413,7 @@ mod windows_impl {
             CloseHandle(in_w);
             CloseHandle(out_w);
             CloseHandle(err_w);
+            DeleteProcThreadAttributeList(attr_list);
         }
 
         let (tx_out, rx_out) = std::sync::mpsc::channel::<Vec<u8>>();
