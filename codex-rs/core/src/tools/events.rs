@@ -56,7 +56,12 @@ pub(crate) enum ToolEventFailure {
     Message(String),
 }
 
-pub(crate) async fn emit_exec_command_begin(ctx: ToolEventCtx<'_>, command: &[String], cwd: &Path) {
+pub(crate) async fn emit_exec_command_begin(
+    ctx: ToolEventCtx<'_>,
+    command: &[String],
+    cwd: &Path,
+    is_user_shell_command: bool,
+) {
     ctx.session
         .send_event(
             ctx.turn,
@@ -65,6 +70,7 @@ pub(crate) async fn emit_exec_command_begin(ctx: ToolEventCtx<'_>, command: &[St
                 command: command.to_vec(),
                 cwd: cwd.to_path_buf(),
                 parsed_cmd: parse_command(command),
+                is_user_shell_command,
             }),
         )
         .await;
@@ -74,6 +80,7 @@ pub(crate) enum ToolEmitter {
     Shell {
         command: Vec<String>,
         cwd: PathBuf,
+        is_user_shell_command: bool,
     },
     ApplyPatch {
         changes: HashMap<PathBuf, FileChange>,
@@ -89,8 +96,12 @@ pub(crate) enum ToolEmitter {
 }
 
 impl ToolEmitter {
-    pub fn shell(command: Vec<String>, cwd: PathBuf) -> Self {
-        Self::Shell { command, cwd }
+    pub fn shell(command: Vec<String>, cwd: PathBuf, is_user_shell_command: bool) -> Self {
+        Self::Shell {
+            command,
+            cwd,
+            is_user_shell_command,
+        }
     }
 
     pub fn apply_patch(changes: HashMap<PathBuf, FileChange>, auto_approved: bool) -> Self {
@@ -110,8 +121,15 @@ impl ToolEmitter {
 
     pub async fn emit(&self, ctx: ToolEventCtx<'_>, stage: ToolEventStage) {
         match (self, stage) {
-            (Self::Shell { command, cwd }, ToolEventStage::Begin) => {
-                emit_exec_command_begin(ctx, command, cwd.as_path()).await;
+            (
+                Self::Shell {
+                    command,
+                    cwd,
+                    is_user_shell_command,
+                },
+                ToolEventStage::Begin,
+            ) => {
+                emit_exec_command_begin(ctx, command, cwd.as_path(), *is_user_shell_command).await;
             }
             (Self::Shell { .. }, ToolEventStage::Success(output)) => {
                 emit_exec_end(
@@ -200,7 +218,7 @@ impl ToolEmitter {
                 emit_patch_end(ctx, String::new(), (*message).to_string(), false).await;
             }
             (Self::UnifiedExec { command, cwd, .. }, ToolEventStage::Begin) => {
-                emit_exec_command_begin(ctx, &[command.to_string()], cwd.as_path()).await;
+                emit_exec_command_begin(ctx, &[command.to_string()], cwd.as_path(), false).await;
             }
             (Self::UnifiedExec { .. }, ToolEventStage::Success(output)) => {
                 emit_exec_end(
@@ -256,31 +274,32 @@ impl ToolEmitter {
         ctx: ToolEventCtx<'_>,
         out: Result<ExecToolCallOutput, ToolError>,
     ) -> Result<String, FunctionCallError> {
-        let event;
-        let result = match out {
+        let (event, result) = match out {
             Ok(output) => {
                 let content = super::format_exec_output_for_model(&output);
                 let exit_code = output.exit_code;
-                event = ToolEventStage::Success(output);
-                if exit_code == 0 {
+                let event = ToolEventStage::Success(output);
+                let result = if exit_code == 0 {
                     Ok(content)
                 } else {
                     Err(FunctionCallError::RespondToModel(content))
-                }
+                };
+                (event, result)
             }
             Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output })))
             | Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
                 let response = super::format_exec_output_for_model(&output);
-                event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
-                Err(FunctionCallError::RespondToModel(response))
+                let event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
+                let result = Err(FunctionCallError::RespondToModel(response));
+                (event, result)
             }
             Err(ToolError::Codex(err)) => {
                 let message = format!("execution error: {err:?}");
-                let response = message.clone();
-                event = ToolEventStage::Failure(ToolEventFailure::Message(message));
-                Err(FunctionCallError::RespondToModel(response))
+                let event = ToolEventStage::Failure(ToolEventFailure::Message(message.clone()));
+                let result = Err(FunctionCallError::RespondToModel(message));
+                (event, result)
             }
-            Err(ToolError::Rejected(msg)) | Err(ToolError::SandboxDenied(msg)) => {
+            Err(ToolError::Rejected(msg)) => {
                 // Normalize common rejection messages for exec tools so tests and
                 // users see a clear, consistent phrase.
                 let normalized = if msg == "rejected by user" {
@@ -288,9 +307,9 @@ impl ToolEmitter {
                 } else {
                     msg
                 };
-                let response = &normalized;
-                event = ToolEventStage::Failure(ToolEventFailure::Message(normalized.clone()));
-                Err(FunctionCallError::RespondToModel(response.clone()))
+                let event = ToolEventStage::Failure(ToolEventFailure::Message(normalized.clone()));
+                let result = Err(FunctionCallError::RespondToModel(normalized));
+                (event, result)
             }
         };
         self.emit(ctx, event).await;

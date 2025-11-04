@@ -14,12 +14,10 @@ mod client_common;
 pub mod codex;
 mod codex_conversation;
 pub use codex_conversation::CodexConversation;
+mod codex_delegate;
 mod command_safety;
 pub mod config;
-pub mod config_edit;
 pub mod config_loader;
-pub mod config_profile;
-pub mod config_types;
 mod conversation_history;
 pub mod custom_prompts;
 mod environment_context;
@@ -87,6 +85,7 @@ pub mod util;
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use command_safety::is_safe_command;
 pub use safety::get_platform_sandbox;
+pub use safety::set_windows_sandbox_enabled;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing
 // `codex_core::protocol::...` references continue to work across the workspace.
 pub use codex_protocol::protocol;

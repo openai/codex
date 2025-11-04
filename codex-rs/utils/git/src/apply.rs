@@ -1,3 +1,11 @@
+//! Helpers for applying unified diffs using the system `git` binary.
+//!
+//! The entry point is [`apply_git_patch`], which writes a diff to a temporary
+//! file, shells out to `git apply` with the right flags, and then parses the
+//! command’s output into structured details. Callers can opt into dry-run
+//! mode via [`ApplyGitRequest::preflight`] and inspect the resulting paths to
+//! learn what would change before applying for real.
+
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::ffi::OsStr;
@@ -5,6 +13,7 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
+/// Parameters for invoking [`apply_git_patch`].
 #[derive(Debug, Clone)]
 pub struct ApplyGitRequest {
     pub cwd: PathBuf,
@@ -13,6 +22,7 @@ pub struct ApplyGitRequest {
     pub preflight: bool,
 }
 
+/// Result of running [`apply_git_patch`], including paths gleaned from stdout/stderr.
 #[derive(Debug, Clone)]
 pub struct ApplyGitResult {
     pub exit_code: i32,
@@ -24,6 +34,10 @@ pub struct ApplyGitResult {
     pub cmd_for_log: String,
 }
 
+/// Apply a unified diff to the target repository by shelling out to `git apply`.
+///
+/// When [`ApplyGitRequest::preflight`] is `true`, this behaves like `git apply --check` and
+/// leaves the working tree untouched while still parsing the command output for diagnostics.
 pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     let git_root = resolve_git_root(&req.cwd)?;
 
@@ -176,6 +190,7 @@ fn render_command_for_log(cwd: &Path, git_cfg: &[String], args: &[String]) -> St
     )
 }
 
+/// Collect every path referenced by the diff headers inside `diff --git` sections.
 pub fn extract_paths_from_patch(diff_text: &str) -> Vec<String> {
     static RE: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"(?m)^diff --git a/(.*?) b/(.*)$")
@@ -199,6 +214,7 @@ pub fn extract_paths_from_patch(diff_text: &str) -> Vec<String> {
     set.into_iter().collect()
 }
 
+/// Stage only the files that actually exist on disk for the given diff.
 pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
     let paths = extract_paths_from_patch(diff);
     let mut existing: Vec<String> = Vec::new();
@@ -225,6 +241,7 @@ pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
 
 // ============ Parser ported from VS Code (TS) ============
 
+/// Parse `git apply` output into applied/skipped/conflicted path groupings.
 pub fn parse_git_apply_output(
     stdout: &str,
     stderr: &str,

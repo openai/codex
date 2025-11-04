@@ -10,6 +10,7 @@ use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -428,7 +429,9 @@ impl AuthModeWidget {
                         should_request_frame = true;
                     }
                     KeyCode::Char(c)
-                        if !key_event.modifiers.contains(KeyModifiers::CONTROL)
+                        if key_event.kind == KeyEventKind::Press
+                            && !key_event.modifiers.contains(KeyModifiers::SUPER)
+                            && !key_event.modifiers.contains(KeyModifiers::CONTROL)
                             && !key_event.modifiers.contains(KeyModifiers::ALT) =>
                     {
                         if state.prepopulated_from_env {
