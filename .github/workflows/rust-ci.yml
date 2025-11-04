@@ -217,14 +217,10 @@ jobs:
           key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
-        name: Install musl build tools
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get -y update -o Acquire::Retries=3
-          sudo apt-get -y install --no-install-recommends musl-tools pkg-config
+        name: Setup musl 1.2.5 toolchain
+        uses: ./.github/actions/setup-musl-1_2_5
+        with:
+          target: ${{ matrix.target }}
 
       - name: Install cargo-chef
         if: ${{ matrix.profile == 'release' }}
