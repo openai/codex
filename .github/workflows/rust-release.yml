@@ -92,10 +92,10 @@ jobs:
           key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
-        name: Setup musl 1.2.5 toolchain
-        uses: ./.github/actions/setup-musl-1_2_5
-        with:
-          target: ${{ matrix.target }}
+        name: Install musl build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools pkg-config
 
       - name: Cargo build
         run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy

@@ -17,12 +17,13 @@ use codex_app_server_protocol::ArchiveConversationParams;
 use codex_app_server_protocol::CancelLoginChatGptParams;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
+use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::ListConversationsParams;
-use codex_app_server_protocol::ListModelsParams;
 use codex_app_server_protocol::LoginApiKeyParams;
+use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::ResumeConversationParams;
@@ -30,7 +31,12 @@ use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SetDefaultModelParams;
-use codex_app_server_protocol::UploadFeedbackParams;
+use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadListParams;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::TurnInterruptParams as V2TurnInterruptParams;
+use codex_app_server_protocol::TurnStartParams as V2TurnStartParams;
 
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -246,7 +252,7 @@ impl McpProcess {
     /// Send a `feedback/upload` JSON-RPC request.
     pub async fn send_upload_feedback_request(
         &mut self,
-        params: UploadFeedbackParams,
+        params: FeedbackUploadParams,
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("feedback/upload", params).await
@@ -278,10 +284,19 @@ impl McpProcess {
     /// Send a `model/list` JSON-RPC request.
     pub async fn send_list_models_request(
         &mut self,
-        params: ListModelsParams,
+        params: ModelListParams,
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("model/list", params).await
+    }
+
+    /// Send a `thread/start` JSON-RPC request (v2).
+    pub async fn send_thread_start_request(
+        &mut self,
+        params: ThreadStartParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/start", params).await
     }
 
     /// Send a `resumeConversation` JSON-RPC request.
@@ -305,6 +320,51 @@ impl McpProcess {
     /// Send a `loginChatGpt` JSON-RPC request.
     pub async fn send_login_chat_gpt_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("loginChatGpt", None).await
+    }
+
+    /// Send a `thread/archive` JSON-RPC request (v2).
+    pub async fn send_thread_archive_request(
+        &mut self,
+        params: ThreadArchiveParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/archive", params).await
+    }
+
+    /// Send a `thread/list` JSON-RPC request (v2).
+    pub async fn send_thread_list_request(
+        &mut self,
+        params: ThreadListParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/list", params).await
+    }
+
+    /// Send a `thread/resume` JSON-RPC request (v2).
+    pub async fn send_thread_resume_request(
+        &mut self,
+        params: ThreadResumeParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/resume", params).await
+    }
+
+    /// Send a `turn/start` JSON-RPC request (v2).
+    pub async fn send_turn_start_request(
+        &mut self,
+        params: V2TurnStartParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("turn/start", params).await
+    }
+
+    /// Send a `turn/interrupt` JSON-RPC request (v2).
+    pub async fn send_turn_interrupt_request(
+        &mut self,
+        params: V2TurnInterruptParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("turn/interrupt", params).await
     }
 
     /// Send a `cancelLoginChatGpt` JSON-RPC request.

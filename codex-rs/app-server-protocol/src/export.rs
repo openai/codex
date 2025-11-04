@@ -2,8 +2,12 @@ use crate::ClientNotification;
 use crate::ClientRequest;
 use crate::ServerNotification;
 use crate::ServerRequest;
+use crate::export_client_notification_schemas;
+use crate::export_client_param_schemas;
 use crate::export_client_response_schemas;
 use crate::export_client_responses;
+use crate::export_server_notification_schemas;
+use crate::export_server_param_schemas;
 use crate::export_server_response_schemas;
 use crate::export_server_responses;
 use anyhow::Context;
@@ -28,84 +32,7 @@ use ts_rs::TS;
 
 const HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
 
-macro_rules! for_each_schema_type {
-    ($macro:ident) => {
-        $macro!(crate::RequestId);
-        $macro!(crate::JSONRPCMessage);
-        $macro!(crate::JSONRPCRequest);
-        $macro!(crate::JSONRPCNotification);
-        $macro!(crate::JSONRPCResponse);
-        $macro!(crate::JSONRPCError);
-        $macro!(crate::JSONRPCErrorError);
-        $macro!(crate::AddConversationListenerParams);
-        $macro!(crate::AddConversationSubscriptionResponse);
-        $macro!(crate::ApplyPatchApprovalParams);
-        $macro!(crate::ApplyPatchApprovalResponse);
-        $macro!(crate::ArchiveConversationParams);
-        $macro!(crate::ArchiveConversationResponse);
-        $macro!(crate::AuthMode);
-        $macro!(crate::AccountUpdatedNotification);
-        $macro!(crate::AuthStatusChangeNotification);
-        $macro!(crate::CancelLoginChatGptParams);
-        $macro!(crate::CancelLoginChatGptResponse);
-        $macro!(crate::ClientInfo);
-        $macro!(crate::ClientNotification);
-        $macro!(crate::ClientRequest);
-        $macro!(crate::ConversationSummary);
-        $macro!(crate::ExecCommandApprovalParams);
-        $macro!(crate::ExecCommandApprovalResponse);
-        $macro!(crate::ExecOneOffCommandParams);
-        $macro!(crate::ExecOneOffCommandResponse);
-        $macro!(crate::FuzzyFileSearchParams);
-        $macro!(crate::FuzzyFileSearchResponse);
-        $macro!(crate::FuzzyFileSearchResult);
-        $macro!(crate::GetAuthStatusParams);
-        $macro!(crate::GetAuthStatusResponse);
-        $macro!(crate::GetUserAgentResponse);
-        $macro!(crate::GetUserSavedConfigResponse);
-        $macro!(crate::GitDiffToRemoteParams);
-        $macro!(crate::GitDiffToRemoteResponse);
-        $macro!(crate::GitSha);
-        $macro!(crate::InitializeParams);
-        $macro!(crate::InitializeResponse);
-        $macro!(crate::InputItem);
-        $macro!(crate::InterruptConversationParams);
-        $macro!(crate::InterruptConversationResponse);
-        $macro!(crate::ListConversationsParams);
-        $macro!(crate::ListConversationsResponse);
-        $macro!(crate::LoginApiKeyParams);
-        $macro!(crate::LoginApiKeyResponse);
-        $macro!(crate::LoginChatGptCompleteNotification);
-        $macro!(crate::LoginChatGptResponse);
-        $macro!(crate::LogoutChatGptParams);
-        $macro!(crate::LogoutChatGptResponse);
-        $macro!(crate::NewConversationParams);
-        $macro!(crate::NewConversationResponse);
-        $macro!(crate::Profile);
-        $macro!(crate::RemoveConversationListenerParams);
-        $macro!(crate::RemoveConversationSubscriptionResponse);
-        $macro!(crate::ResumeConversationParams);
-        $macro!(crate::ResumeConversationResponse);
-        $macro!(crate::SandboxSettings);
-        $macro!(crate::SendUserMessageParams);
-        $macro!(crate::SendUserMessageResponse);
-        $macro!(crate::SendUserTurnParams);
-        $macro!(crate::SendUserTurnResponse);
-        $macro!(crate::ServerNotification);
-        $macro!(crate::ServerRequest);
-        $macro!(crate::SessionConfiguredNotification);
-        $macro!(crate::SetDefaultModelParams);
-        $macro!(crate::SetDefaultModelResponse);
-        $macro!(crate::Tools);
-        $macro!(crate::UserInfoResponse);
-        $macro!(crate::UserSavedConfig);
-        $macro!(codex_protocol::protocol::EventMsg);
-        $macro!(codex_protocol::protocol::FileChange);
-        $macro!(codex_protocol::parse_command::ParsedCommand);
-        $macro!(codex_protocol::protocol::SandboxPolicy);
-    };
-}
-
+type JsonSchemaEmitter = fn(&Path) -> Result<RootSchema>;
 pub fn generate_types(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     generate_ts(out_dir, prettier)?;
     generate_json(out_dir)?;
@@ -113,7 +40,9 @@ pub fn generate_types(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
 }
 
 pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
+    let v2_out_dir = out_dir.join("v2");
     ensure_dir(out_dir)?;
+    ensure_dir(&v2_out_dir)?;
 
     ClientRequest::export_all_to(out_dir)?;
     export_client_responses(out_dir)?;
@@ -124,12 +53,15 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     ServerNotification::export_all_to(out_dir)?;
 
     generate_index_ts(out_dir)?;
+    generate_index_ts(&v2_out_dir)?;
 
-    let ts_files = ts_files_in(out_dir)?;
+    // Ensure our header is present on all TS files (root + subdirs like v2/).
+    let ts_files = ts_files_in_recursive(out_dir)?;
     for file in &ts_files {
         prepend_header_if_missing(file)?;
     }
 
+    // Optionally run Prettier on all generated TS files.
     if let Some(prettier_bin) = prettier
         && !ts_files.is_empty()
     {
@@ -148,20 +80,57 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
 
 pub fn generate_json(out_dir: &Path) -> Result<()> {
     ensure_dir(out_dir)?;
+    // Emit schemas for core envelope/wire types that may not be referenced
+    // by params/responses but are useful as standalone:
     let mut bundle: BTreeMap<String, RootSchema> = BTreeMap::new();
 
-    macro_rules! add_schema {
-        ($ty:path) => {{
-            let name = type_basename(stringify!($ty));
-            let schema = write_json_schema_with_return::<$ty>(out_dir, &name)?;
-            bundle.insert(name, schema);
-        }};
+    let envelope_emitters: &[(&str, JsonSchemaEmitter)] = &[
+        ("RequestId", |d| {
+            write_json_schema_with_return::<crate::RequestId>(d, "RequestId")
+        }),
+        ("JSONRPCMessage", |d| {
+            write_json_schema_with_return::<crate::JSONRPCMessage>(d, "JSONRPCMessage")
+        }),
+        ("JSONRPCRequest", |d| {
+            write_json_schema_with_return::<crate::JSONRPCRequest>(d, "JSONRPCRequest")
+        }),
+        ("JSONRPCNotification", |d| {
+            write_json_schema_with_return::<crate::JSONRPCNotification>(d, "JSONRPCNotification")
+        }),
+        ("JSONRPCResponse", |d| {
+            write_json_schema_with_return::<crate::JSONRPCResponse>(d, "JSONRPCResponse")
+        }),
+        ("JSONRPCError", |d| {
+            write_json_schema_with_return::<crate::JSONRPCError>(d, "JSONRPCError")
+        }),
+        ("JSONRPCErrorError", |d| {
+            write_json_schema_with_return::<crate::JSONRPCErrorError>(d, "JSONRPCErrorError")
+        }),
+        ("ClientRequest", |d| {
+            write_json_schema_with_return::<crate::ClientRequest>(d, "ClientRequest")
+        }),
+        ("ServerRequest", |d| {
+            write_json_schema_with_return::<crate::ServerRequest>(d, "ServerRequest")
+        }),
+        ("ClientNotification", |d| {
+            write_json_schema_with_return::<crate::ClientNotification>(d, "ClientNotification")
+        }),
+        ("ServerNotification", |d| {
+            write_json_schema_with_return::<crate::ServerNotification>(d, "ServerNotification")
+        }),
+    ];
+    for (name, emit) in envelope_emitters {
+        let schema = emit(out_dir)?;
+        bundle.insert((*name).to_string(), schema);
     }
 
-    for_each_schema_type!(add_schema);
-
+    // Have the macros generate per-type JSON for params, responses, and notifications.
+    export_client_param_schemas(out_dir)?;
     export_client_response_schemas(out_dir)?;
+    export_server_param_schemas(out_dir)?;
     export_server_response_schemas(out_dir)?;
+    export_client_notification_schemas(out_dir)?;
+    export_server_notification_schemas(out_dir)?;
 
     let mut definitions = Map::new();
 
@@ -177,10 +146,44 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
         "ServerRequest",
     ];
 
-    for (name, schema) in bundle {
-        let mut schema_value = serde_json::to_value(schema)?;
-        annotate_schema(&mut schema_value, Some(name.as_str()));
+    // Merge all generated per-type JSON files (including the envelopes above)
+    // into a single definitions bundle. Also recognize a v2 namespace so that
+    // types like RateLimitSnapshot can co-exist between legacy and v2.
+    let json_files = json_files_in_recursive(out_dir)?;
+    for path in json_files {
+        // Skip the bundle we’re about to (re)generate.
+        if path.file_name().and_then(OsStr::to_str)
+            == Some("codex_app_server_protocol.schemas.json")
+        {
+            continue;
+        }
 
+        let file_stem = path
+            .file_stem()
+            .and_then(OsStr::to_str)
+            .ok_or_else(|| anyhow!(format!("Invalid schema file name {}", path.display())))?;
+
+        // Determine namespace and logical type name from either the stem
+        // (e.g., "v2::Type") or the directory layout (e.g., ".../v2/Type.json").
+        let (ns_opt, logical_name) = detect_namespace(&path, file_stem);
+
+        let mut schema_value: Value = serde_json::from_str(
+            &fs::read_to_string(&path)
+                .with_context(|| format!("Failed to read {}", path.display()))?,
+        )
+        .with_context(|| format!("Failed to parse JSON from {}", path.display()))?;
+
+        // Normalize; use the original stem as the base so existing naming rules apply.
+        annotate_schema(&mut schema_value, Some(file_stem));
+
+        if let Some(ref ns) = ns_opt {
+            // Rewrite internal $ref targets to point to the namespaced location
+            // under the bundle's definitions.
+            rewrite_refs_to_namespace(&mut schema_value, ns);
+        }
+
+        // Pull embedded definitions out and insert into our bundle map at the
+        // appropriate namespace.
         if let Value::Object(ref mut obj) = schema_value
             && let Some(defs) = obj.remove("definitions")
             && let Value::Object(defs_obj) = defs
@@ -188,11 +191,37 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
             for (def_name, mut def_schema) in defs_obj {
                 if !SPECIAL_DEFINITIONS.contains(&def_name.as_str()) {
                     annotate_schema(&mut def_schema, Some(def_name.as_str()));
-                    definitions.insert(def_name, def_schema);
+                    if let Some(ref ns) = ns_opt {
+                        definitions
+                            .entry(ns.to_string())
+                            .or_insert_with(|| Value::Object(Map::new()));
+                        if let Value::Object(defs_ns) = definitions
+                            .get_mut(ns)
+                            .ok_or_else(|| anyhow!("just inserted v2 namespace"))?
+                        {
+                            defs_ns.insert(def_name, def_schema);
+                        }
+                    } else {
+                        definitions.insert(def_name, def_schema);
+                    }
                 }
             }
         }
-        definitions.insert(name, schema_value);
+
+        // Insert the schema root itself into the bundle under the namespace.
+        if let Some(ref ns) = ns_opt {
+            definitions
+                .entry(ns.to_string())
+                .or_insert_with(|| Value::Object(Map::new()));
+            if let Value::Object(defs_ns) = definitions
+                .get_mut(ns)
+                .ok_or_else(|| anyhow!("just inserted v2 namespace"))?
+            {
+                defs_ns.insert(logical_name.to_string(), schema_value);
+            }
+        } else {
+            definitions.insert(logical_name.to_string(), schema_value);
+        }
     }
 
     let mut root = Map::new();
@@ -223,7 +252,19 @@ where
     let schema = schema_for!(T);
     let mut schema_value = serde_json::to_value(schema)?;
     annotate_schema(&mut schema_value, Some(file_stem));
-    write_pretty_json(out_dir.join(format!("{file_stem}.json")), &schema_value)
+    // If the name looks like a namespaced path (e.g., "v2::Type"), mirror
+    // the TypeScript layout and write to out_dir/v2/Type.json. Otherwise
+    // write alongside the legacy files.
+    let (ns_opt, logical_name) = split_namespace(file_stem);
+    let out_path = if let Some(ns) = ns_opt {
+        let dir = out_dir.join(ns);
+        ensure_dir(&dir)?;
+        dir.join(format!("{logical_name}.json"))
+    } else {
+        out_dir.join(format!("{file_stem}.json"))
+    };
+
+    write_pretty_json(out_path, &schema_value)
         .with_context(|| format!("Failed to write JSON schema for {file_stem}"))?;
     let annotated_schema = serde_json::from_value(schema_value)?;
     Ok(annotated_schema)
@@ -242,13 +283,76 @@ fn write_pretty_json(path: PathBuf, value: &impl Serialize) -> Result<()> {
     fs::write(&path, json).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
 }
-fn type_basename(type_path: &str) -> String {
-    type_path
-        .rsplit_once("::")
-        .map(|(_, name)| name)
-        .unwrap_or(type_path)
-        .trim()
-        .to_string()
+
+/// Detect a namespace from a schema file path and stem.
+/// Supports both legacy on-disk names like "v2::Type.json" and the new
+/// directory layout ".../v2/Type.json".
+fn detect_namespace(path: &Path, stem: &str) -> (Option<String>, String) {
+    // Prefer directory-based detection.
+    if let Some(parent) = path.parent()
+        && parent.file_name().and_then(OsStr::to_str) == Some("v2")
+    {
+        return (Some("v2".to_string()), stem.to_string());
+    }
+    split_namespace(stem)
+}
+
+/// Split a "ns::Type" name into (Some(ns), Type). Returns (None, name) if no ns.
+fn split_namespace(name: &str) -> (Option<String>, String) {
+    if let Some(idx) = name.find("::") {
+        let (ns, rest) = name.split_at(idx);
+        // rest starts with "::"
+        let typ = &rest[2..];
+        return (Some(ns.to_string()), typ.to_string());
+    }
+    (None, name.to_string())
+}
+
+/// Recursively rewrite $ref values that point at "#/definitions/..." so that
+/// they point to a namespaced location under the bundle.
+fn rewrite_refs_to_namespace(value: &mut Value, ns: &str) {
+    match value {
+        Value::Object(obj) => {
+            if let Some(Value::String(r)) = obj.get_mut("$ref")
+                && let Some(suffix) = r.strip_prefix("#/definitions/")
+            {
+                *r = format!("#/definitions/{ns}/{suffix}");
+            }
+            for v in obj.values_mut() {
+                rewrite_refs_to_namespace(v, ns);
+            }
+        }
+        Value::Array(items) => {
+            for v in items.iter_mut() {
+                rewrite_refs_to_namespace(v, ns);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn json_files_in_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in
+            fs::read_dir(&d).with_context(|| format!("Failed to read dir {}", d.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                // Skip known non-protocol directories.
+                if path.file_name().and_then(OsStr::to_str) == Some("serde_json") {
+                    continue;
+                }
+                stack.push(path);
+            } else if path.is_file() && path.extension() == Some(OsStr::new("json")) {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
 }
 
 fn variant_definition_name(base: &str, variant: &Value) -> Option<String> {
@@ -505,6 +609,26 @@ fn ts_files_in(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+fn ts_files_in_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in
+            fs::read_dir(&d).with_context(|| format!("Failed to read dir {}", d.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.is_file() && path.extension() == Some(OsStr::new("ts")) {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
 fn generate_index_ts(out_dir: &Path) -> Result<PathBuf> {
     let mut entries: Vec<String> = Vec::new();
     let mut stems: Vec<String> = ts_files_in(out_dir)?
@@ -519,6 +643,14 @@ fn generate_index_ts(out_dir: &Path) -> Result<PathBuf> {
 
     for name in stems {
         entries.push(format!("export type {{ {name} }} from \"./{name}\";\n"));
+    }
+
+    // If this is the root out_dir and a ./v2 folder exists with TS files,
+    // expose it as a namespace to avoid symbol collisions at the root.
+    let v2_dir = out_dir.join("v2");
+    let has_v2_ts = ts_files_in(&v2_dir).map(|v| !v.is_empty()).unwrap_or(false);
+    if has_v2_ts {
+        entries.push("export * as v2 from \"./v2\";\n".to_string());
     }
 
     let mut content =
@@ -547,6 +679,7 @@ mod tests {
 
     #[test]
     fn generated_ts_has_no_optional_nullable_fields() -> Result<()> {
+        // Assert that there are no types of the form "?: T | null" in the generated TS files.
         let output_dir = std::env::temp_dir().join(format!("codex_ts_types_{}", Uuid::now_v7()));
         fs::create_dir(&output_dir)?;
 
