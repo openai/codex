@@ -96,9 +96,7 @@ impl SessionTask for UserShellCommandTask {
         let cwd_display = turn_context.cwd.to_string_lossy();
         let raw_command = self.command.clone();
         let command_text = format!(
-            "<user_shell_command cwd=\"{cwd}\">\n{command}\n</user_shell_command>",
-            cwd = cwd_display,
-            command = raw_command
+            "<user_shell_command cwd=\"{cwd_display}\">\n{raw_command}\n</user_shell_command>"
         );
         let command_items = [build_user_message(command_text)];
         session
