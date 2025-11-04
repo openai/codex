@@ -1,5 +1,13 @@
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
+use http::Error as HttpError;
+use reqwest::IntoUrl;
+use reqwest::Method;
+use reqwest::Response;
+use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
+use serde::Serialize;
+use std::collections::HashMap;
+use std::fmt::Display;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -20,8 +28,132 @@ use std::sync::OnceLock;
 /// The full user agent string is returned from the mcp initialize response.
 /// Parenthesis will be added by Codex. This should only specify what goes inside of the parenthesis.
 pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
-
+pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
+
+#[derive(Clone, Debug)]
+pub struct CodexHttpClient {
+    inner: reqwest::Client,
+}
+
+impl CodexHttpClient {
+    fn new(inner: reqwest::Client) -> Self {
+        Self { inner }
+    }
+
+    pub fn get<U>(&self, url: U) -> CodexRequestBuilder
+    where
+        U: IntoUrl,
+    {
+        self.request(Method::GET, url)
+    }
+
+    pub fn post<U>(&self, url: U) -> CodexRequestBuilder
+    where
+        U: IntoUrl,
+    {
+        self.request(Method::POST, url)
+    }
+
+    pub fn request<U>(&self, method: Method, url: U) -> CodexRequestBuilder
+    where
+        U: IntoUrl,
+    {
+        let url_str = url.as_str().to_string();
+        CodexRequestBuilder::new(self.inner.request(method.clone(), url), method, url_str)
+    }
+}
+
+#[must_use = "requests are not sent unless `send` is awaited"]
+#[derive(Debug)]
+pub struct CodexRequestBuilder {
+    builder: reqwest::RequestBuilder,
+    method: Method,
+    url: String,
+}
+
+impl CodexRequestBuilder {
+    fn new(builder: reqwest::RequestBuilder, method: Method, url: String) -> Self {
+        Self {
+            builder,
+            method,
+            url,
+        }
+    }
+
+    fn map(self, f: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder) -> Self {
+        Self {
+            builder: f(self.builder),
+            method: self.method,
+            url: self.url,
+        }
+    }
+
+    pub fn header<K, V>(self, key: K, value: V) -> Self
+    where
+        HeaderName: TryFrom<K>,
+        <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
+        HeaderValue: TryFrom<V>,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
+    {
+        self.map(|builder| builder.header(key, value))
+    }
+
+    pub fn bearer_auth<T>(self, token: T) -> Self
+    where
+        T: Display,
+    {
+        self.map(|builder| builder.bearer_auth(token))
+    }
+
+    pub fn json<T>(self, value: &T) -> Self
+    where
+        T: ?Sized + Serialize,
+    {
+        self.map(|builder| builder.json(value))
+    }
+
+    pub async fn send(self) -> Result<Response, reqwest::Error> {
+        match self.builder.send().await {
+            Ok(response) => {
+                let request_ids = Self::extract_request_ids(&response);
+                tracing::debug!(
+                    method = %self.method,
+                    url = %self.url,
+                    status = %response.status(),
+                    request_ids = ?request_ids,
+                    version = ?response.version(),
+                    "Request completed"
+                );
+
+                Ok(response)
+            }
+            Err(error) => {
+                let status = error.status();
+                tracing::debug!(
+                    method = %self.method,
+                    url = %self.url,
+                    status = status.map(|s| s.as_u16()),
+                    error = %error,
+                    "Request failed"
+                );
+                Err(error)
+            }
+        }
+    }
+
+    fn extract_request_ids(response: &Response) -> HashMap<String, String> {
+        ["cf-ray", "x-request-id", "x-oai-request-id"]
+            .iter()
+            .filter_map(|&name| {
+                let header_name = HeaderName::from_static(name);
+                let value = response.headers().get(header_name)?;
+                let value = value.to_str().ok()?.to_owned();
+                Some((name.to_owned(), value))
+            })
+            .collect()
+    }
+}
 #[derive(Debug, Clone)]
 pub struct Originator {
     pub value: String,
@@ -35,10 +167,11 @@ pub enum SetOriginatorError {
     AlreadyInitialized,
 }
 
-fn init_originator_from_env() -> Originator {
-    let default = "codex_cli_rs";
+fn get_originator_value(provided: Option<String>) -> Originator {
     let value = std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
-        .unwrap_or_else(|_| default.to_string());
+        .ok()
+        .or(provided)
+        .unwrap_or(DEFAULT_ORIGINATOR.to_string());
 
     match HeaderValue::from_str(&value) {
         Ok(header_value) => Originator {
@@ -48,31 +181,22 @@ fn init_originator_from_env() -> Originator {
         Err(e) => {
             tracing::error!("Unable to turn originator override {value} into header value: {e}");
             Originator {
-                value: default.to_string(),
-                header_value: HeaderValue::from_static(default),
+                value: DEFAULT_ORIGINATOR.to_string(),
+                header_value: HeaderValue::from_static(DEFAULT_ORIGINATOR),
             }
         }
     }
 }
 
-fn build_originator(value: String) -> Result<Originator, SetOriginatorError> {
-    let header_value =
-        HeaderValue::from_str(&value).map_err(|_| SetOriginatorError::InvalidHeaderValue)?;
-    Ok(Originator {
-        value,
-        header_value,
-    })
-}
-
-pub fn set_default_originator(value: &str) -> Result<(), SetOriginatorError> {
-    let originator = build_originator(value.to_string())?;
+pub fn set_default_originator(value: String) -> Result<(), SetOriginatorError> {
+    let originator = get_originator_value(Some(value));
     ORIGINATOR
         .set(originator)
         .map_err(|_| SetOriginatorError::AlreadyInitialized)
 }
 
 pub fn originator() -> &'static Originator {
-    ORIGINATOR.get_or_init(init_originator_from_env)
+    ORIGINATOR.get_or_init(|| get_originator_value(None))
 }
 
 pub fn get_codex_user_agent() -> String {
@@ -132,8 +256,8 @@ fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
     }
 }
 
-/// Create a reqwest client with default `originator` and `User-Agent` headers set.
-pub fn create_client() -> reqwest::Client {
+/// Create an HTTP client with default `originator` and `User-Agent` headers set.
+pub fn create_client() -> CodexHttpClient {
     use reqwest::header::HeaderMap;
 
     let mut headers = HeaderMap::new();
@@ -148,7 +272,8 @@ pub fn create_client() -> reqwest::Client {
         builder = builder.no_proxy();
     }
 
-    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+    let inner = builder.build().unwrap_or_else(|_| reqwest::Client::new());
+    CodexHttpClient::new(inner)
 }
 
 fn is_sandboxed() -> bool {

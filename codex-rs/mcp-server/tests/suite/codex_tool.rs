@@ -3,6 +3,7 @@ use std::env;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_core::parse_command;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::ReviewDecision;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
@@ -176,6 +177,7 @@ fn create_expected_elicitation_request(
         shlex::try_join(command.iter().map(std::convert::AsRef::as_ref))?,
         workdir.to_string_lossy()
     );
+    let codex_parsed_cmd = parse_command::parse_command(&command);
     Ok(JSONRPCRequest {
         jsonrpc: JSONRPC_VERSION.into(),
         id: elicitation_request_id,
@@ -193,6 +195,8 @@ fn create_expected_elicitation_request(
             codex_command: command,
             codex_cwd: workdir.to_path_buf(),
             codex_call_id: "call1234".to_string(),
+            codex_parsed_cmd,
+            codex_risk: None,
         })?),
     })
 }
@@ -337,6 +341,7 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
         .send_codex_tool_call(CodexToolCallParam {
             prompt: "How are you?".to_string(),
             base_instructions: Some("You are a helpful assistant.".to_string()),
+            developer_instructions: Some("Foreshadow upcoming tool calls.".to_string()),
             ..Default::default()
         })
         .await?;
@@ -363,9 +368,27 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
     );
 
     let requests = server.received_requests().await.unwrap();
-    let request = requests[0].body_json::<serde_json::Value>().unwrap();
+    let request = requests[0].body_json::<serde_json::Value>()?;
     let instructions = request["messages"][0]["content"].as_str().unwrap();
     assert!(instructions.starts_with("You are a helpful assistant."));
+
+    let developer_msg = request["messages"]
+        .as_array()
+        .and_then(|messages| {
+            messages
+                .iter()
+                .find(|msg| msg.get("role").and_then(|role| role.as_str()) == Some("developer"))
+        })
+        .unwrap();
+    let developer_content = developer_msg
+        .get("content")
+        .and_then(|value| value.as_str())
+        .unwrap();
+    assert!(
+        !developer_content.contains('<'),
+        "expected developer instructions without XML tags, got `{developer_content}`"
+    );
+    assert_eq!(developer_content, "Foreshadow upcoming tool calls.");
 
     Ok(())
 }
@@ -442,7 +465,7 @@ fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()
             r#"
 model = "mock-model"
 approval_policy = "untrusted"
-sandbox_policy = "read-only"
+sandbox_policy = "workspace-write"
 
 model_provider = "mock_provider"
 

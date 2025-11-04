@@ -3,9 +3,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::history_cell::HistoryCell;
+use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+use crate::render::Insets;
+use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
+use crate::style::user_message_style;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crossterm::event::KeyCode;
@@ -13,6 +17,7 @@ use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -317,33 +322,51 @@ impl PagerView {
     }
 }
 
-struct CachedParagraph {
-    paragraph: Paragraph<'static>,
+/// A renderable that caches its desired height.
+struct CachedRenderable {
+    renderable: Box<dyn Renderable>,
     height: std::cell::Cell<Option<u16>>,
     last_width: std::cell::Cell<Option<u16>>,
 }
 
-impl CachedParagraph {
-    fn new(paragraph: Paragraph<'static>) -> Self {
+impl CachedRenderable {
+    fn new(renderable: impl Into<Box<dyn Renderable>>) -> Self {
         Self {
-            paragraph,
+            renderable: renderable.into(),
             height: std::cell::Cell::new(None),
             last_width: std::cell::Cell::new(None),
         }
     }
 }
 
-impl Renderable for CachedParagraph {
+impl Renderable for CachedRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.paragraph.render_ref(area, buf);
+        self.renderable.render(area, buf);
     }
     fn desired_height(&self, width: u16) -> u16 {
         if self.last_width.get() != Some(width) {
-            let height = self.paragraph.line_count(width) as u16;
+            let height = self.renderable.desired_height(width);
             self.height.set(Some(height));
             self.last_width.set(Some(width));
         }
         self.height.get().unwrap_or(0)
+    }
+}
+
+struct CellRenderable {
+    cell: Arc<dyn HistoryCell>,
+    style: Style,
+}
+
+impl Renderable for CellRenderable {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let p =
+            Paragraph::new(Text::from(self.cell.transcript_lines(area.width))).style(self.style);
+        p.render(area, buf);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.cell.desired_transcript_height(width)
     }
 }
 
@@ -358,7 +381,7 @@ impl TranscriptOverlay {
     pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
         Self {
             view: PagerView::new(
-                Self::render_cells_to_texts(&transcript_cells, None),
+                Self::render_cells(&transcript_cells, None),
                 "T R A N S C R I P T".to_string(),
                 usize::MAX,
             ),
@@ -368,46 +391,46 @@ impl TranscriptOverlay {
         }
     }
 
-    fn render_cells_to_texts(
+    fn render_cells(
         cells: &[Arc<dyn HistoryCell>],
         highlight_cell: Option<usize>,
     ) -> Vec<Box<dyn Renderable>> {
-        let mut texts: Vec<Box<dyn Renderable>> = Vec::new();
-        let mut first = true;
-        for (idx, cell) in cells.iter().enumerate() {
-            let mut lines: Vec<Line<'static>> = Vec::new();
-            if !cell.is_stream_continuation() && !first {
-                lines.push(Line::from(""));
-            }
-            let cell_lines = if Some(idx) == highlight_cell {
-                cell.transcript_lines()
-                    .into_iter()
-                    .map(Stylize::reversed)
-                    .collect()
-            } else {
-                cell.transcript_lines()
-            };
-            lines.extend(cell_lines);
-            texts.push(Box::new(CachedParagraph::new(
-                Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
-            )));
-            first = false;
-        }
-        texts
+        cells
+            .iter()
+            .enumerate()
+            .flat_map(|(i, c)| {
+                let mut v: Vec<Box<dyn Renderable>> = Vec::new();
+                let mut cell_renderable = if c.as_any().is::<UserHistoryCell>() {
+                    Box::new(CachedRenderable::new(CellRenderable {
+                        cell: c.clone(),
+                        style: if highlight_cell == Some(i) {
+                            user_message_style().reversed()
+                        } else {
+                            user_message_style()
+                        },
+                    })) as Box<dyn Renderable>
+                } else {
+                    Box::new(CachedRenderable::new(CellRenderable {
+                        cell: c.clone(),
+                        style: Style::default(),
+                    })) as Box<dyn Renderable>
+                };
+                if !c.is_stream_continuation() && i > 0 {
+                    cell_renderable = Box::new(InsetRenderable::new(
+                        cell_renderable,
+                        Insets::tlbr(1, 0, 0, 0),
+                    ));
+                }
+                v.push(cell_renderable);
+                v
+            })
+            .collect()
     }
 
     pub(crate) fn insert_cell(&mut self, cell: Arc<dyn HistoryCell>) {
         let follow_bottom = self.view.is_scrolled_to_bottom();
-        // Append as a new Text chunk (with a separating blank if needed)
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        if !cell.is_stream_continuation() && !self.cells.is_empty() {
-            lines.push(Line::from(""));
-        }
-        lines.extend(cell.transcript_lines());
-        self.view.renderables.push(Box::new(CachedParagraph::new(
-            Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
-        )));
         self.cells.push(cell);
+        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
         }
@@ -415,7 +438,7 @@ impl TranscriptOverlay {
 
     pub(crate) fn set_highlight_cell(&mut self, cell: Option<usize>) {
         self.highlight_cell = cell;
-        self.view.renderables = Self::render_cells_to_texts(&self.cells, self.highlight_cell);
+        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
         if let Some(idx) = self.highlight_cell {
             self.view.scroll_chunk_into_view(idx);
         }
@@ -474,12 +497,8 @@ pub(crate) struct StaticOverlay {
 
 impl StaticOverlay {
     pub(crate) fn with_title(lines: Vec<Line<'static>>, title: String) -> Self {
-        Self::with_renderables(
-            vec![Box::new(CachedParagraph::new(Paragraph::new(Text::from(
-                lines,
-            ))))],
-            title,
-        )
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+        Self::with_renderables(vec![Box::new(CachedRenderable::new(paragraph))], title)
     }
 
     pub(crate) fn with_renderables(renderables: Vec<Box<dyn Renderable>>, title: String) -> Self {
@@ -560,6 +579,7 @@ fn render_offset_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::protocol::ReviewDecision;
     use insta::assert_snapshot;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -567,6 +587,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::exec_cell::CommandOutput;
+    use crate::history_cell;
     use crate::history_cell::HistoryCell;
     use crate::history_cell::new_patch_event;
     use codex_core::protocol::FileChange;
@@ -585,7 +606,7 @@ mod tests {
             self.lines.clone()
         }
 
-        fn transcript_lines(&self) -> Vec<Line<'static>> {
+        fn transcript_lines(&self, _width: u16) -> Vec<Line<'static>> {
             self.lines.clone()
         }
     }
@@ -690,23 +711,21 @@ mod tests {
         cells.push(apply_begin_cell);
 
         let apply_end_cell: Arc<dyn HistoryCell> =
-            Arc::new(crate::history_cell::new_user_approval_decision(vec![
-                "✓ Patch applied".green().bold().into(),
-                "src/foo.txt".dim().into(),
-            ]));
+            history_cell::new_approval_decision_cell(vec!["ls".into()], ReviewDecision::Approved)
+                .into();
         cells.push(apply_end_cell);
 
         let mut exec_cell = crate::exec_cell::new_active_exec_command(
             "exec-1".into(),
             vec!["bash".into(), "-lc".into(), "ls".into()],
             vec![ParsedCommand::Unknown { cmd: "ls".into() }],
+            false,
         );
         exec_cell.complete_call(
             "exec-1",
             CommandOutput {
                 exit_code: 0,
-                stdout: "src\nREADME.md\n".into(),
-                stderr: String::new(),
+                aggregated_output: "src\nREADME.md\n".into(),
                 formatted_output: "src\nREADME.md\n".into(),
             },
             Duration::from_millis(420),
@@ -785,6 +804,18 @@ mod tests {
             "S T A T I C".to_string(),
         );
         let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
+        term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        assert_snapshot!(term.backend());
+    }
+
+    #[test]
+    fn static_overlay_wraps_long_lines() {
+        let mut overlay = StaticOverlay::with_title(
+            vec!["a very long line that should wrap when rendered within a narrow pager overlay width".into()],
+            "S T A T I C".to_string(),
+        );
+        let mut term = Terminal::new(TestBackend::new(24, 8)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());

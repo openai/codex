@@ -11,7 +11,9 @@ In the codex-rs folder where the rust code lives:
 - Always collapse if statements per https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
 - Always inline format! args when possible per https://rust-lang.github.io/rust-clippy/master/index.html#uninlined_format_args
 - Use method references over closures when possible per https://rust-lang.github.io/rust-clippy/master/index.html#redundant_closure_for_method_calls
+- Do not use unsigned integer even if the number cannot be negative.
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
+- When making a change that adds or changes an API, ensure that the documentation in the `docs/` folder is up to date if applicable.
 
 Run `just fmt` (in `codex-rs` directory) automatically after making Rust code changes; do not ask for approval to run it. Before finalizing a change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Additionally, run the tests:
 
@@ -73,3 +75,28 @@ If you don’t have the tool:
 ### Test assertions
 
 - Tests should use pretty_assertions::assert_eq for clearer diffs. Import this at the top of the test module if it isn't already.
+
+### Integration tests (core)
+
+- Prefer the utilities in `core_test_support::responses` when writing end-to-end Codex tests.
+
+- All `mount_sse*` helpers return a `ResponseMock`; hold onto it so you can assert against outbound `/responses` POST bodies.
+- Use `ResponseMock::single_request()` when a test should only issue one POST, or `ResponseMock::requests()` to inspect every captured `ResponsesRequest`.
+- `ResponsesRequest` exposes helpers (`body_json`, `input`, `function_call_output`, `custom_tool_call_output`, `call_output`, `header`, `path`, `query_param`) so assertions can target structured payloads instead of manual JSON digging.
+- Build SSE payloads with the provided `ev_*` constructors and the `sse(...)`.
+
+- Typical pattern:
+
+  ```rust
+  let mock = responses::mount_sse_once(&server, responses::sse(vec![
+      responses::ev_response_created("resp-1"),
+      responses::ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+      responses::ev_completed("resp-1"),
+  ])).await;
+
+  codex.submit(Op::UserTurn { ... }).await?;
+
+  // Assert request body if needed.
+  let request = mock.single_request();
+  // assert using request.function_call_output(call_id) or request.json_body() or other helpers.
+  ```

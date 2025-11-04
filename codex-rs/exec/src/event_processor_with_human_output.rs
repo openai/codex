@@ -4,6 +4,7 @@ use codex_core::config::Config;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -20,7 +21,7 @@ use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
-use codex_core::protocol::WebSearchBeginEvent;
+use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::num_format::format_with_separators;
 use owo_colors::OwoColorize;
@@ -54,6 +55,7 @@ pub(crate) struct EventProcessorWithHumanOutput {
     red: Style,
     green: Style,
     cyan: Style,
+    yellow: Style,
 
     /// Whether to include `AgentReasoning` events in the output.
     show_agent_reasoning: bool,
@@ -81,6 +83,7 @@ impl EventProcessorWithHumanOutput {
                 red: Style::new().red(),
                 green: Style::new().green(),
                 cyan: Style::new().cyan(),
+                yellow: Style::new().yellow(),
                 show_agent_reasoning: !config.hide_agent_reasoning,
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,
                 last_message_path,
@@ -97,6 +100,7 @@ impl EventProcessorWithHumanOutput {
                 red: Style::new(),
                 green: Style::new(),
                 cyan: Style::new(),
+                yellow: Style::new(),
                 show_agent_reasoning: !config.hide_agent_reasoning,
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,
                 last_message_path,
@@ -161,6 +165,23 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 let prefix = "ERROR:".style(self.red);
                 ts_msg!(self, "{prefix} {message}");
             }
+            EventMsg::Warning(WarningEvent { message }) => {
+                ts_msg!(
+                    self,
+                    "{} {message}",
+                    "warning:".style(self.yellow).style(self.bold)
+                );
+            }
+            EventMsg::DeprecationNotice(DeprecationNoticeEvent { summary, details }) => {
+                ts_msg!(
+                    self,
+                    "{} {summary}",
+                    "deprecated:".style(self.magenta).style(self.bold)
+                );
+                if let Some(details) = details {
+                    ts_msg!(self, "  {}", details.style(self.dimmed));
+                }
+            }
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 ts_msg!(self, "{}", message.style(self.dimmed));
             }
@@ -216,7 +237,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     cwd.to_string_lossy(),
                 );
             }
-            EventMsg::ExecCommandOutputDelta(_) => {}
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 aggregated_output,
                 duration,
@@ -283,7 +303,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     }
                 }
             }
-            EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id: _ }) => {}
             EventMsg::WebSearchEnd(WebSearchEndEvent { call_id: _, query }) => {
                 ts_msg!(self, "🌐 Searched: {query}");
             }
@@ -411,12 +430,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
                 eprintln!("{unified_diff}");
             }
-            EventMsg::ExecApprovalRequest(_) => {
-                // Should we exit?
-            }
-            EventMsg::ApplyPatchApprovalRequest(_) => {
-                // Should we exit?
-            }
             EventMsg::AgentReasoning(agent_reasoning_event) => {
                 if self.show_agent_reasoning {
                     ts_msg!(
@@ -481,15 +494,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     }
                 }
             }
-            EventMsg::GetHistoryEntryResponse(_) => {
-                // Currently ignored in exec output.
-            }
-            EventMsg::McpListToolsResponse(_) => {
-                // Currently ignored in exec output.
-            }
-            EventMsg::ListCustomPromptsResponse(_) => {
-                // Currently ignored in exec output.
-            }
             EventMsg::ViewImageToolCall(view) => {
                 ts_msg!(
                     self,
@@ -510,13 +514,27 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
             },
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
-            EventMsg::ConversationPath(_) => {}
-            EventMsg::UserMessage(_) => {}
-            EventMsg::EnteredReviewMode(_) => {}
-            EventMsg::ExitedReviewMode(_) => {}
-            EventMsg::AgentMessageDelta(_) => {}
-            EventMsg::AgentReasoningDelta(_) => {}
-            EventMsg::AgentReasoningRawContentDelta(_) => {}
+            EventMsg::WebSearchBegin(_)
+            | EventMsg::ExecApprovalRequest(_)
+            | EventMsg::ApplyPatchApprovalRequest(_)
+            | EventMsg::ExecCommandOutputDelta(_)
+            | EventMsg::GetHistoryEntryResponse(_)
+            | EventMsg::McpListToolsResponse(_)
+            | EventMsg::ListCustomPromptsResponse(_)
+            | EventMsg::RawResponseItem(_)
+            | EventMsg::UserMessage(_)
+            | EventMsg::EnteredReviewMode(_)
+            | EventMsg::ExitedReviewMode(_)
+            | EventMsg::AgentMessageDelta(_)
+            | EventMsg::AgentReasoningDelta(_)
+            | EventMsg::AgentReasoningRawContentDelta(_)
+            | EventMsg::ItemStarted(_)
+            | EventMsg::ItemCompleted(_)
+            | EventMsg::AgentMessageContentDelta(_)
+            | EventMsg::ReasoningContentDelta(_)
+            | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::UndoCompleted(_)
+            | EventMsg::UndoStarted(_) => {}
         }
         CodexStatus::Running
     }

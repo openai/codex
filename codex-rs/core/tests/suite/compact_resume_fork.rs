@@ -7,22 +7,23 @@
 //! request payload that Codex would send to the model and assert that the
 //! model-visible history matches the expected sequence of messages.
 
+use super::compact::COMPACT_WARNING_MESSAGE;
 use super::compact::FIRST_REPLY;
 use super::compact::SUMMARY_TEXT;
+use super::compact::TEST_COMPACT_PROMPT;
 use codex_core::CodexAuth;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
-use codex_core::codex::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
 use codex_core::config::OPENAI_DEFAULT_MODEL;
-use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::WarningEvent;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -37,9 +38,55 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
+const COMPACT_PROMPT_MARKER: &str =
+    "You are performing a CONTEXT CHECKPOINT COMPACTION for a tool.";
 
 fn network_disabled() -> bool {
     std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
+}
+
+fn filter_out_ghost_snapshot_entries(items: &[Value]) -> Vec<Value> {
+    items
+        .iter()
+        .filter(|item| !is_ghost_snapshot_message(item))
+        .cloned()
+        .collect()
+}
+
+fn is_ghost_snapshot_message(item: &Value) -> bool {
+    if item.get("type").and_then(Value::as_str) != Some("message") {
+        return false;
+    }
+    if item.get("role").and_then(Value::as_str) != Some("user") {
+        return false;
+    }
+    item.get("content")
+        .and_then(Value::as_array)
+        .and_then(|content| content.first())
+        .and_then(|entry| entry.get("text"))
+        .and_then(Value::as_str)
+        .is_some_and(|text| text.trim_start().starts_with("<ghost_snapshot>"))
+}
+
+fn extract_summary_message(request: &Value, summary_text: &str) -> Value {
+    request
+        .get("input")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("type").and_then(Value::as_str) == Some("message")
+                    && item.get("role").and_then(Value::as_str) == Some("user")
+                    && item
+                        .get("content")
+                        .and_then(Value::as_array)
+                        .and_then(|arr| arr.first())
+                        .and_then(|entry| entry.get("text"))
+                        .and_then(Value::as_str)
+                        == Some(summary_text)
+            })
+        })
+        .cloned()
+        .unwrap_or_else(|| panic!("expected summary message {summary_text}"))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -61,7 +108,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
     user_turn(&base, "AFTER_COMPACT").await;
-    let base_path = fetch_conversation_path(&base, "base conversation").await;
+    let base_path = fetch_conversation_path(&base).await;
     assert!(
         base_path.exists(),
         "compact+resume test expects base path {base_path:?} to exist",
@@ -69,7 +116,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
 
     let resumed = resume_conversation(&manager, &config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
-    let resumed_path = fetch_conversation_path(&resumed, "resumed conversation").await;
+    let resumed_path = fetch_conversation_path(&resumed).await;
     assert!(
         resumed_path.exists(),
         "compact+resume test expects resumed path {resumed_path:?} to exist",
@@ -133,6 +180,9 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .unwrap_or_default()
         .to_string();
     let expected_model = OPENAI_DEFAULT_MODEL;
+    let summary_after_compact = extract_summary_message(&requests[2], SUMMARY_TEXT);
+    let summary_after_resume = extract_summary_message(&requests[3], SUMMARY_TEXT);
+    let summary_after_fork = extract_summary_message(&requests[4], SUMMARY_TEXT);
     let user_turn_1 = json!(
     {
       "model": expected_model,
@@ -233,7 +283,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
           "content": [
             {
               "type": "input_text",
-              "text": SUMMARIZATION_PROMPT
+              "text": TEST_COMPACT_PROMPT
             }
           ]
         }
@@ -282,16 +332,11 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
           "content": [
             {
               "type": "input_text",
-              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:
-
-hello world
-
-Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:
-
-SUMMARY_ONLY_CONTEXT"
+              "text": "hello world"
             }
           ]
         },
+        summary_after_compact,
         {
           "type": "message",
           "role": "user",
@@ -347,16 +392,11 @@ SUMMARY_ONLY_CONTEXT"
           "content": [
             {
               "type": "input_text",
-              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:
-
-hello world
-
-Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:
-
-SUMMARY_ONLY_CONTEXT"
+              "text": "hello world"
             }
           ]
         },
+        summary_after_resume,
         {
           "type": "message",
           "role": "user",
@@ -432,16 +472,11 @@ SUMMARY_ONLY_CONTEXT"
           "content": [
             {
               "type": "input_text",
-              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:
-
-hello world
-
-Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:
-
-SUMMARY_ONLY_CONTEXT"
+              "text": "hello world"
             }
           ]
         },
+        summary_after_fork,
         {
           "type": "message",
           "role": "user",
@@ -518,7 +553,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
     user_turn(&base, "AFTER_COMPACT").await;
-    let base_path = fetch_conversation_path(&base, "base conversation").await;
+    let base_path = fetch_conversation_path(&base).await;
     assert!(
         base_path.exists(),
         "second compact test expects base path {base_path:?} to exist",
@@ -526,7 +561,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
 
     let resumed = resume_conversation(&manager, &config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
-    let resumed_path = fetch_conversation_path(&resumed, "resumed conversation").await;
+    let resumed_path = fetch_conversation_path(&resumed).await;
     assert!(
         resumed_path.exists(),
         "second compact test expects resumed path {resumed_path:?} to exist",
@@ -537,7 +572,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
 
     compact_conversation(&forked).await;
     user_turn(&forked, "AFTER_COMPACT_2").await;
-    let forked_path = fetch_conversation_path(&forked, "forked conversation").await;
+    let forked_path = fetch_conversation_path(&forked).await;
     assert!(
         forked_path.exists(),
         "second compact test expects forked path {forked_path:?} to exist",
@@ -557,13 +592,15 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     let resume_input_array = input_after_resume
         .as_array()
         .expect("input after resume should be an array");
+    let compact_filtered = filter_out_ghost_snapshot_entries(compact_input_array);
+    let resume_filtered = filter_out_ghost_snapshot_entries(resume_input_array);
     assert!(
-        compact_input_array.len() <= resume_input_array.len(),
+        compact_filtered.len() <= resume_filtered.len(),
         "after-resume input should have at least as many items as after-compact"
     );
     assert_eq!(
-        compact_input_array.as_slice(),
-        &resume_input_array[..compact_input_array.len()]
+        compact_filtered.as_slice(),
+        &resume_filtered[..compact_filtered.len()]
     );
     // hard coded test
     let prompt = requests[0]["instructions"]
@@ -578,6 +615,11 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         .as_str()
         .unwrap_or_default()
         .to_string();
+
+    // Build expected final request input: initial context + forked user message +
+    // compacted summary + post-compact user message + resumed user message.
+    let summary_after_second_compact =
+        extract_summary_message(&requests[requests.len() - 3], SUMMARY_TEXT);
 
     let mut expected = json!([
       {
@@ -609,10 +651,11 @@ async fn compact_resume_after_second_compaction_preserves_history() {
             "content": [
               {
                 "type": "input_text",
-                "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:\n\nAFTER_FORK\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\nSUMMARY_ONLY_CONTEXT"
+                "text": "AFTER_FORK"
               }
             ]
           },
+          summary_after_second_compact,
           {
             "type": "message",
             "role": "user",
@@ -698,7 +741,7 @@ async fn mount_initial_flow(server: &MockServer) {
     let match_first = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"hello world\"")
-            && !body.contains("You have exceeded the maximum number of tokens")
+            && !body.contains(COMPACT_PROMPT_MARKER)
             && !body.contains(&format!("\"text\":\"{SUMMARY_TEXT}\""))
             && !body.contains("\"text\":\"AFTER_COMPACT\"")
             && !body.contains("\"text\":\"AFTER_RESUME\"")
@@ -708,7 +751,7 @@ async fn mount_initial_flow(server: &MockServer) {
 
     let match_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("You have exceeded the maximum number of tokens")
+        body.contains(COMPACT_PROMPT_MARKER)
     };
     mount_sse_once_match(server, match_compact, sse2).await;
 
@@ -742,8 +785,7 @@ async fn mount_second_compact_flow(server: &MockServer) {
 
     let match_second_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("You have exceeded the maximum number of tokens")
-            && body.contains("AFTER_FORK")
+        body.contains(COMPACT_PROMPT_MARKER) && body.contains("AFTER_FORK")
     };
     mount_sse_once_match(server, match_second_compact, sse6).await;
 
@@ -764,6 +806,7 @@ async fn start_test_conversation(
     let home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
+    config.compact_prompt = Some(TEST_COMPACT_PROMPT.to_string());
 
     let manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
     let NewConversation { conversation, .. } = manager
@@ -777,7 +820,7 @@ async fn start_test_conversation(
 async fn user_turn(conversation: &Arc<CodexConversation>, text: &str) {
     conversation
         .submit(Op::UserInput {
-            items: vec![InputItem::Text { text: text.into() }],
+            items: vec![UserInput::Text { text: text.into() }],
         })
         .await
         .expect("submit user turn");
@@ -789,25 +832,16 @@ async fn compact_conversation(conversation: &Arc<CodexConversation>) {
         .submit(Op::Compact)
         .await
         .expect("compact conversation");
+    let warning_event = wait_for_event(conversation, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    let EventMsg::Warning(WarningEvent { message }) = warning_event else {
+        panic!("expected warning event after compact");
+    };
+    assert_eq!(message, COMPACT_WARNING_MESSAGE);
     wait_for_event(conversation, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 }
 
-async fn fetch_conversation_path(
-    conversation: &Arc<CodexConversation>,
-    context: &str,
-) -> std::path::PathBuf {
-    conversation
-        .submit(Op::GetPath)
-        .await
-        .expect("request conversation path");
-    match wait_for_event(conversation, |ev| {
-        matches!(ev, EventMsg::ConversationPath(_))
-    })
-    .await
-    {
-        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path,
-        _ => panic!("expected ConversationPath event for {context}"),
-    }
+async fn fetch_conversation_path(conversation: &Arc<CodexConversation>) -> std::path::PathBuf {
+    conversation.rollout_path()
 }
 
 async fn resume_conversation(

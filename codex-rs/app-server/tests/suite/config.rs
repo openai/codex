@@ -1,6 +1,4 @@
-use std::collections::HashMap;
-use std::path::Path;
-
+use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
@@ -11,11 +9,14 @@ use codex_app_server_protocol::SandboxSettings;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_core::protocol::AskForApproval;
+use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -33,6 +34,8 @@ model_reasoning_summary = "detailed"
 model_reasoning_effort = "high"
 model_verbosity = "medium"
 profile = "test"
+forced_chatgpt_workspace_id = "12345678-0000-0000-0000-000000000000"
+forced_login_method = "chatgpt"
 
 [sandbox_workspace_write]
 writable_roots = ["/tmp"]
@@ -57,31 +60,21 @@ chatgpt_base_url = "https://api.chatgpt.com"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn get_config_toml_parses_all_fields() {
-    let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
-    create_config_toml(codex_home.path()).expect("write config.toml");
+async fn get_config_toml_parses_all_fields() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path())
-        .await
-        .expect("spawn mcp process");
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
-        .await
-        .expect("init timeout")
-        .expect("init failed");
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let request_id = mcp
-        .send_get_user_saved_config_request()
-        .await
-        .expect("send getUserSavedConfig");
+    let request_id = mcp.send_get_user_saved_config_request().await?;
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
-    .await
-    .expect("getUserSavedConfig timeout")
-    .expect("getUserSavedConfig response");
+    .await??;
 
-    let config: GetUserSavedConfigResponse = to_response(resp).expect("deserialize config");
+    let config: GetUserSavedConfigResponse = to_response(resp)?;
     let expected = GetUserSavedConfigResponse {
         config: UserSavedConfig {
             approval_policy: Some(AskForApproval::OnRequest),
@@ -92,6 +85,8 @@ async fn get_config_toml_parses_all_fields() {
                 exclude_tmpdir_env_var: Some(true),
                 exclude_slash_tmp: Some(true),
             }),
+            forced_chatgpt_workspace_id: Some("12345678-0000-0000-0000-000000000000".into()),
+            forced_login_method: Some(ForcedLoginMethod::Chatgpt),
             model: Some("gpt-5-codex".into()),
             model_reasoning_effort: Some(ReasoningEffort::High),
             model_reasoning_summary: Some(ReasoningSummary::Detailed),
@@ -117,38 +112,31 @@ async fn get_config_toml_parses_all_fields() {
     };
 
     assert_eq!(config, expected);
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn get_config_toml_empty() {
-    let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
+async fn get_config_toml_empty() -> Result<()> {
+    let codex_home = TempDir::new()?;
 
-    let mut mcp = McpProcess::new(codex_home.path())
-        .await
-        .expect("spawn mcp process");
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
-        .await
-        .expect("init timeout")
-        .expect("init failed");
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let request_id = mcp
-        .send_get_user_saved_config_request()
-        .await
-        .expect("send getUserSavedConfig");
+    let request_id = mcp.send_get_user_saved_config_request().await?;
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
-    .await
-    .expect("getUserSavedConfig timeout")
-    .expect("getUserSavedConfig response");
+    .await??;
 
-    let config: GetUserSavedConfigResponse = to_response(resp).expect("deserialize config");
+    let config: GetUserSavedConfigResponse = to_response(resp)?;
     let expected = GetUserSavedConfigResponse {
         config: UserSavedConfig {
             approval_policy: None,
             sandbox_mode: None,
             sandbox_settings: None,
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
             model: None,
             model_reasoning_effort: None,
             model_reasoning_summary: None,
@@ -160,4 +148,5 @@ async fn get_config_toml_empty() {
     };
 
     assert_eq!(config, expected);
+    Ok(())
 }
