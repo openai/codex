@@ -5,6 +5,7 @@ import { ThreadItem } from "./items";
 import { ThreadOptions } from "./threadOptions";
 import { TurnOptions } from "./turnOptions";
 import { createOutputSchemaFile } from "./outputSchemaFile";
+import { validateFilePath } from "./pathValidation";
 
 /** Completed turn. */
 export type Turn = {
@@ -73,7 +74,7 @@ export class Thread {
   ): AsyncGenerator<ThreadEvent> {
     const { schemaPath, cleanup } = await createOutputSchemaFile(turnOptions.outputSchema);
     const options = this._threadOptions;
-    const { prompt, images } = normalizeInput(input);
+    const { prompt, images } = await normalizeInput(input);
     const generator = this._exec.run({
       input: prompt,
       baseUrl: this._options.baseUrl,
@@ -131,7 +132,7 @@ export class Thread {
   }
 }
 
-function normalizeInput(input: Input): { prompt: string; images: string[] } {
+async function normalizeInput(input: Input): Promise<{ prompt: string; images: string[] }> {
   if (typeof input === "string") {
     return { prompt: input, images: [] };
   }
@@ -141,7 +142,9 @@ function normalizeInput(input: Input): { prompt: string; images: string[] } {
     if (item.type === "text") {
       promptParts.push(item.text);
     } else if (item.type === "local_image") {
-      images.push(item.path);
+      // Validate the image path to prevent path traversal attacks
+      const validatedPath = await validateFilePath(item.path);
+      images.push(validatedPath);
     }
   }
   return { prompt: promptParts.join("\n\n"), images };
