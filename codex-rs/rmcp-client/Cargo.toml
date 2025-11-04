@@ -1,0 +1,64 @@
+[package]
+edition = "2024"
+name = "codex-rmcp-client"
+version = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1"
+axum = { workspace = true, default-features = false, features = [
+    "http1",
+    "tokio",
+] }
+codex-keyring-store = { workspace = true }
+codex-protocol = { workspace = true }
+dirs = { workspace = true }
+futures = { workspace = true, default-features = false, features = ["std"] }
+keyring = { workspace = true, features = [
+    "apple-native",
+    "crypto-rust",
+    "linux-native-async-persistent",
+    "windows-native",
+] }
+mcp-types = { path = "../mcp-types" }
+oauth2 = "5"
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "stream",
+    "rustls-tls",
+] }
+rmcp = { workspace = true, default-features = false, features = [
+    "auth",
+    "base64",
+    "client",
+    "macros",
+    "schemars",
+    "server",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+    "transport-streamable-http-server",
+] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tiny_http = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-util",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "sync",
+    "io-std",
+    "time",
+] }
+tracing = { workspace = true, features = ["log"] }
+urlencoding = { workspace = true }
+webbrowser = { workspace = true }
+
+[dev-dependencies]
+escargot = { workspace = true }
+pretty_assertions = { workspace = true }
+serial_test = { workspace = true }
+tempfile = { workspace = true }

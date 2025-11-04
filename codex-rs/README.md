@@ -4,18 +4,23 @@ We provide Codex CLI as a standalone, native executable to ensure a zero-depende
 
 ## Installing Codex
 
-Today, the easiest way to install Codex is via `npm`, though we plan to publish Codex to other package managers soon.
+Today, the easiest way to install Codex is via `npm`:
 
 ```shell
-npm i -g @openai/codex@native
+npm i -g @openai/codex
 codex
 ```
 
-You can also download a platform-specific release directly from our [GitHub Releases](https://github.com/openai/codex/releases).
+You can also install via Homebrew (`brew install --cask codex`) or download a platform-specific release directly from our [GitHub Releases](https://github.com/openai/codex/releases).
+
+## Documentation quickstart
+
+- First run with Codex? Follow the walkthrough in [`docs/getting-started.md`](../docs/getting-started.md) for prompts, keyboard shortcuts, and session management.
+- Already shipping with Codex and want deeper control? Jump to [`docs/advanced.md`](../docs/advanced.md) and the configuration reference at [`docs/config.md`](../docs/config.md).
 
 ## What's new in the Rust CLI
 
-While we are [working to close the gap between the TypeScript and Rust implementations of Codex CLI](https://github.com/openai/codex/issues/1262), note that the Rust CLI has a number of features that the TypeScript CLI does not!
+The Rust implementation is now the maintained Codex CLI and serves as the default experience. It includes a number of features that the legacy TypeScript CLI never supported.
 
 ### Config
 
@@ -23,13 +28,21 @@ Codex supports a rich set of configuration options. Note that the Rust CLI uses 
 
 ### Model Context Protocol Support
 
-Codex CLI functions as an MCP client that can connect to MCP servers on startup. See the [`mcp_servers`](../docs/config.md#mcp_servers) section in the configuration documentation for details.
+#### MCP client
 
-It is still experimental, but you can also launch Codex as an MCP _server_ by running `codex mcp`. Use the [`@modelcontextprotocol/inspector`](https://github.com/modelcontextprotocol/inspector) to try it out:
+Codex CLI functions as an MCP client that allows the Codex CLI and IDE extension to connect to MCP servers on startup. See the [`configuration documentation`](../docs/config.md#mcp_servers) for details.
+
+#### MCP server (experimental)
+
+Codex can be launched as an MCP _server_ by running `codex mcp-server`. This allows _other_ MCP clients to use Codex as a tool for another agent.
+
+Use the [`@modelcontextprotocol/inspector`](https://github.com/modelcontextprotocol/inspector) to try it out:
 
 ```shell
-npx @modelcontextprotocol/inspector codex mcp
+npx @modelcontextprotocol/inspector codex mcp-server
 ```
+
+Use `codex mcp` to add/list/get/remove MCP server launchers defined in `config.toml`, and `codex mcp-server` to run the MCP server directly.
 
 ### Notifications
 
@@ -39,39 +52,22 @@ You can enable notifications by configuring a script that is run whenever the ag
 
 To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the prompt via `stdin`) and Codex will work on your task until it decides that it is done and exits. Output is printed to the terminal directly. You can set the `RUST_LOG` environment variable to see more about what's going on.
 
-### Use `@` for file search
-
-Typing `@` triggers a fuzzy-filename search over the workspace root. Use up/down to select among the results and Tab or Enter to replace the `@` with the selected path. You can use Esc to cancel the search.
-
-### Esc–Esc to edit a previous message
-
-When the chat composer is empty, press Esc to prime “backtrack” mode. Press Esc again to open a transcript preview highlighting the last user message; press Esc repeatedly to step to older user messages. Press Enter to confirm and Codex will fork the conversation from that point, trim the visible transcript accordingly, and pre‑fill the composer with the selected user message so you can edit and resubmit it.
-
-In the transcript preview, the footer shows an `Esc edit prev` hint while editing is active.
-
-### `--cd`/`-C` flag
-
-Sometimes it is not convenient to `cd` to the directory you want Codex to use as the "working root" before running Codex. Fortunately, `codex` supports a `--cd` option so you can specify whatever folder you want. You can confirm that Codex is honoring `--cd` by double-checking the **workdir** it reports in the TUI at the start of a new session.
-
-### Shell completions
-
-Generate shell completion scripts via:
-
-```shell
-codex completion bash
-codex completion zsh
-codex completion fish
-```
-
 ### Experimenting with the Codex Sandbox
 
 To test to see what happens when a command is run under the sandbox provided by Codex, we provide the following subcommands in Codex CLI:
 
 ```
 # macOS
-codex debug seatbelt [--full-auto] [COMMAND]...
+codex sandbox macos [--full-auto] [COMMAND]...
 
 # Linux
+codex sandbox linux [--full-auto] [COMMAND]...
+
+# Windows
+codex sandbox windows [--full-auto] [COMMAND]...
+
+# Legacy aliases
+codex debug seatbelt [--full-auto] [COMMAND]...
 codex debug landlock [--full-auto] [COMMAND]...
 ```
 

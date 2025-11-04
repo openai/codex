@@ -10,6 +10,7 @@ workspace = true
 clap = { workspace = true, features = ["derive", "wrap_help"], optional = true }
 codex-core = { workspace = true }
 codex-protocol = { workspace = true }
+codex-app-server-protocol = { workspace = true }
 serde = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
 

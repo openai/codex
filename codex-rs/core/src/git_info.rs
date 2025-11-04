@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_protocol::mcp_protocol::GitSha;
+use codex_app_server_protocol::GitSha;
 use codex_protocol::protocol::GitInfo;
 use futures::future::join_all;
 use serde::Deserialize;
@@ -258,6 +258,16 @@ async fn get_default_branch(cwd: &Path) -> Option<String> {
 
     // No remote-derived default; try common local defaults if they exist
     get_default_branch_local(cwd).await
+}
+
+/// Determine the repository's default branch name, if available.
+///
+/// This inspects remote configuration first (including the symbolic `HEAD`
+/// reference) and falls back to common local defaults such as `main` or
+/// `master`. Returns `None` when the information cannot be determined, for
+/// example when the current directory is not inside a Git repository.
+pub async fn default_branch_name(cwd: &Path) -> Option<String> {
+    get_default_branch(cwd).await
 }
 
 /// Attempt to determine the repository's default branch name from local branches.
@@ -589,6 +599,7 @@ pub async fn current_branch_name(cwd: &Path) -> Option<String> {
 mod tests {
     use super::*;
 
+    use core_test_support::skip_if_sandbox;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -660,6 +671,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_recent_commits_orders_and_limits() {
+        skip_if_sandbox!();
         use tokio::time::Duration;
         use tokio::time::sleep;
 

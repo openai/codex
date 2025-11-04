@@ -1,14 +1,20 @@
 [package]
+edition = "2024"
 name = "core_test_support"
 version = { workspace = true }
-edition = "2024"
 
 [lib]
 path = "lib.rs"
 
 [dependencies]
+anyhow = { workspace = true }
+assert_cmd = { workspace = true }
 codex-core = { workspace = true }
+codex-protocol = { workspace = true }
+notify = { workspace = true }
+regex-lite = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
+walkdir = { workspace = true }
 wiremock = { workspace = true }

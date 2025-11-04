@@ -14,6 +14,12 @@ use textwrap::Options;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+const WORD_SEPARATORS: &str = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
+
+fn is_word_separator(ch: char) -> bool {
+    WORD_SEPARATORS.contains(ch)
+}
+
 #[derive(Debug, Clone)]
 struct TextElement {
     range: Range<usize>,
@@ -26,6 +32,7 @@ pub(crate) struct TextArea {
     wrap_cache: RefCell<Option<WrapCache>>,
     preferred_col: Option<usize>,
     elements: Vec<TextElement>,
+    kill_buffer: String,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +55,7 @@ impl TextArea {
             wrap_cache: RefCell::new(None),
             preferred_col: None,
             elements: Vec::new(),
+            kill_buffer: String::new(),
         }
     }
 
@@ -57,6 +65,7 @@ impl TextArea {
         self.wrap_cache.replace(None);
         self.preferred_col = None;
         self.elements.clear();
+        self.kill_buffer.clear();
     }
 
     pub fn text(&self) -> &str {
@@ -305,6 +314,13 @@ impl TextArea {
             } => {
                 self.kill_to_end_of_line();
             }
+            KeyEvent {
+                code: KeyCode::Char('y'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.yank();
+            }
 
             // Cursor movement
             KeyEvent {
@@ -437,7 +453,7 @@ impl TextArea {
 
     pub fn delete_backward_word(&mut self) {
         let start = self.beginning_of_previous_word();
-        self.replace_range(start..self.cursor_pos, "");
+        self.kill_range(start..self.cursor_pos);
     }
 
     /// Delete text to the right of the cursor using "word" semantics.
@@ -448,30 +464,61 @@ impl TextArea {
     pub fn delete_forward_word(&mut self) {
         let end = self.end_of_next_word();
         if end > self.cursor_pos {
-            self.replace_range(self.cursor_pos..end, "");
+            self.kill_range(self.cursor_pos..end);
         }
     }
 
     pub fn kill_to_end_of_line(&mut self) {
         let eol = self.end_of_current_line();
-        if self.cursor_pos == eol {
+        let range = if self.cursor_pos == eol {
             if eol < self.text.len() {
-                self.replace_range(self.cursor_pos..eol + 1, "");
+                Some(self.cursor_pos..eol + 1)
+            } else {
+                None
             }
         } else {
-            self.replace_range(self.cursor_pos..eol, "");
+            Some(self.cursor_pos..eol)
+        };
+
+        if let Some(range) = range {
+            self.kill_range(range);
         }
     }
 
     pub fn kill_to_beginning_of_line(&mut self) {
         let bol = self.beginning_of_current_line();
-        if self.cursor_pos == bol {
-            if bol > 0 {
-                self.replace_range(bol - 1..bol, "");
-            }
+        let range = if self.cursor_pos == bol {
+            if bol > 0 { Some(bol - 1..bol) } else { None }
         } else {
-            self.replace_range(bol..self.cursor_pos, "");
+            Some(bol..self.cursor_pos)
+        };
+
+        if let Some(range) = range {
+            self.kill_range(range);
         }
+    }
+
+    pub fn yank(&mut self) {
+        if self.kill_buffer.is_empty() {
+            return;
+        }
+        let text = self.kill_buffer.clone();
+        self.insert_str(&text);
+    }
+
+    fn kill_range(&mut self, range: Range<usize>) {
+        let range = self.expand_range_to_element_boundaries(range);
+        if range.start >= range.end {
+            return;
+        }
+
+        let removed = self.text[range.clone()].to_string();
+        if removed.is_empty() {
+            return;
+        }
+
+        self.kill_buffer = removed;
+        self.replace_range_raw(range, "");
     }
 
     /// Move the cursor left by a single grapheme cluster.
@@ -799,16 +846,24 @@ impl TextArea {
     }
 
     pub(crate) fn beginning_of_previous_word(&self) -> usize {
-        if let Some(first_non_ws) = self.text[..self.cursor_pos].rfind(|c: char| !c.is_whitespace())
-        {
-            let candidate = self.text[..first_non_ws]
-                .rfind(|c: char| c.is_whitespace())
-                .map(|i| i + 1)
-                .unwrap_or(0);
-            self.adjust_pos_out_of_elements(candidate, true)
-        } else {
-            0
+        let prefix = &self.text[..self.cursor_pos];
+        let Some((first_non_ws_idx, ch)) = prefix
+            .char_indices()
+            .rev()
+            .find(|&(_, ch)| !ch.is_whitespace())
+        else {
+            return 0;
+        };
+        let is_separator = is_word_separator(ch);
+        let mut start = first_non_ws_idx;
+        for (idx, ch) in prefix[..first_non_ws_idx].char_indices().rev() {
+            if ch.is_whitespace() || is_word_separator(ch) != is_separator {
+                start = idx + ch.len_utf8();
+                break;
+            }
+            start = idx;
         }
+        self.adjust_pos_out_of_elements(start, true)
     }
 
     pub(crate) fn end_of_next_word(&self) -> usize {
@@ -817,11 +872,19 @@ impl TextArea {
             return self.text.len();
         };
         let word_start = self.cursor_pos + first_non_ws;
-        let candidate = match self.text[word_start..].find(|c: char| c.is_whitespace()) {
-            Some(rel_idx) => word_start + rel_idx,
-            None => self.text.len(),
+        let mut iter = self.text[word_start..].char_indices();
+        let Some((_, first_ch)) = iter.next() else {
+            return word_start;
         };
-        self.adjust_pos_out_of_elements(candidate, false)
+        let is_separator = is_word_separator(first_ch);
+        let mut end = self.text.len();
+        for (idx, ch) in iter {
+            if ch.is_whitespace() || is_word_separator(ch) != is_separator {
+                end = word_start + idx;
+                break;
+            }
+        }
+        self.adjust_pos_out_of_elements(end, false)
     }
 
     fn adjust_pos_out_of_elements(&self, pos: usize, prefer_start: bool) -> usize {
@@ -1193,6 +1256,89 @@ mod tests {
     }
 
     #[test]
+    fn delete_backward_word_respects_word_separators() {
+        let mut t = ta_with("path/to/file");
+        t.set_cursor(t.text().len());
+        t.delete_backward_word();
+        assert_eq!(t.text(), "path/to/");
+        assert_eq!(t.cursor(), t.text().len());
+
+        t.delete_backward_word();
+        assert_eq!(t.text(), "path/to");
+        assert_eq!(t.cursor(), t.text().len());
+
+        let mut t = ta_with("foo/ ");
+        t.set_cursor(t.text().len());
+        t.delete_backward_word();
+        assert_eq!(t.text(), "foo");
+        assert_eq!(t.cursor(), 3);
+
+        let mut t = ta_with("foo /");
+        t.set_cursor(t.text().len());
+        t.delete_backward_word();
+        assert_eq!(t.text(), "foo ");
+        assert_eq!(t.cursor(), 4);
+    }
+
+    #[test]
+    fn delete_forward_word_respects_word_separators() {
+        let mut t = ta_with("path/to/file");
+        t.set_cursor(0);
+        t.delete_forward_word();
+        assert_eq!(t.text(), "/to/file");
+        assert_eq!(t.cursor(), 0);
+
+        t.delete_forward_word();
+        assert_eq!(t.text(), "to/file");
+        assert_eq!(t.cursor(), 0);
+
+        let mut t = ta_with("/ foo");
+        t.set_cursor(0);
+        t.delete_forward_word();
+        assert_eq!(t.text(), " foo");
+        assert_eq!(t.cursor(), 0);
+
+        let mut t = ta_with(" /foo");
+        t.set_cursor(0);
+        t.delete_forward_word();
+        assert_eq!(t.text(), "foo");
+        assert_eq!(t.cursor(), 0);
+    }
+
+    #[test]
+    fn yank_restores_last_kill() {
+        let mut t = ta_with("hello");
+        t.set_cursor(0);
+        t.kill_to_end_of_line();
+        assert_eq!(t.text(), "");
+        assert_eq!(t.cursor(), 0);
+
+        t.yank();
+        assert_eq!(t.text(), "hello");
+        assert_eq!(t.cursor(), 5);
+
+        let mut t = ta_with("hello world");
+        t.set_cursor(t.text().len());
+        t.delete_backward_word();
+        assert_eq!(t.text(), "hello ");
+        assert_eq!(t.cursor(), 6);
+
+        t.yank();
+        assert_eq!(t.text(), "hello world");
+        assert_eq!(t.cursor(), 11);
+
+        let mut t = ta_with("hello");
+        t.set_cursor(5);
+        t.kill_to_beginning_of_line();
+        assert_eq!(t.text(), "");
+        assert_eq!(t.cursor(), 0);
+
+        t.yank();
+        assert_eq!(t.text(), "hello");
+        assert_eq!(t.cursor(), 5);
+    }
+
+    #[test]
     fn cursor_left_and_right_handle_graphemes() {
         let mut t = ta_with("a👍b");
         t.set_cursor(t.text().len());
@@ -1260,6 +1406,15 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
         assert_eq!(t.text(), "hello ");
         assert_eq!(t.cursor(), 6);
+    }
+
+    #[test]
+    fn delete_backward_word_handles_narrow_no_break_space() {
+        let mut t = ta_with("32\u{202F}AM");
+        t.set_cursor(t.text().len());
+        t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
+        pretty_assertions::assert_eq!(t.text(), "32\u{202F}");
+        pretty_assertions::assert_eq!(t.cursor(), t.text().len());
     }
 
     #[test]

@@ -4,19 +4,23 @@ use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
+use codex_core::config::OPENAI_DEFAULT_MODEL;
+use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
+use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
+use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
+use std::collections::HashMap;
 use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -67,6 +71,7 @@ fn assert_tool_names(body: &serde_json::Value, expected_names: &[&str]) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn codex_mini_latest_tools() {
+    skip_if_no_network!();
     use pretty_assertions::assert_eq;
 
     let server = MockServer::start().await;
@@ -95,10 +100,10 @@ async fn codex_mini_latest_tools() {
     config.cwd = cwd.path().to_path_buf();
     config.model_provider = model_provider;
     config.user_instructions = Some("be consistent and helpful".to_string());
+    config.features.disable(Feature::ApplyPatchFreeform);
 
     let conversation_manager =
         ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    config.include_apply_patch_tool = false;
     config.model = "codex-mini-latest".to_string();
     config.model_family = find_family_for_model("codex-mini-latest").unwrap();
 
@@ -110,7 +115,7 @@ async fn codex_mini_latest_tools() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
         })
@@ -120,7 +125,7 @@ async fn codex_mini_latest_tools() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
         })
@@ -151,6 +156,7 @@ async fn codex_mini_latest_tools() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn prompt_tools_are_consistent_across_requests() {
+    skip_if_no_network!();
     use pretty_assertions::assert_eq;
 
     let server = MockServer::start().await;
@@ -175,16 +181,15 @@ async fn prompt_tools_are_consistent_across_requests() {
 
     let cwd = TempDir::new().unwrap();
     let codex_home = TempDir::new().unwrap();
+
     let mut config = load_default_config_for_test(&codex_home);
     config.cwd = cwd.path().to_path_buf();
     config.model_provider = model_provider;
     config.user_instructions = Some("be consistent and helpful".to_string());
-    config.include_apply_patch_tool = true;
-    config.include_plan_tool = true;
 
     let conversation_manager =
         ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    let expected_instructions = config.model_family.base_instructions.clone();
+    let base_instructions = config.model_family.base_instructions.clone();
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -193,7 +198,7 @@ async fn prompt_tools_are_consistent_across_requests() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
         })
@@ -203,7 +208,7 @@ async fn prompt_tools_are_consistent_across_requests() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
         })
@@ -216,8 +221,47 @@ async fn prompt_tools_are_consistent_across_requests() {
 
     // our internal implementation is responsible for keeping tools in sync
     // with the OpenAI schema, so we just verify the tool presence here
-    let expected_tools_names: &[&str] = &["shell", "update_plan", "apply_patch", "view_image"];
+    let tools_by_model: HashMap<&'static str, Vec<&'static str>> = HashMap::from([
+        (
+            "gpt-5",
+            vec![
+                "shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "view_image",
+            ],
+        ),
+        (
+            "gpt-5-codex",
+            vec![
+                "shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "view_image",
+            ],
+        ),
+    ]);
+    let expected_tools_names = tools_by_model
+        .get(OPENAI_DEFAULT_MODEL)
+        .unwrap_or_else(|| panic!("expected tools to be defined for model {OPENAI_DEFAULT_MODEL}"))
+        .as_slice();
     let body0 = requests[0].body_json::<serde_json::Value>().unwrap();
+
+    let expected_instructions = if expected_tools_names.contains(&"apply_patch") {
+        base_instructions
+    } else {
+        [
+            base_instructions.clone(),
+            include_str!("../../../apply-patch/apply_patch_tool_instructions.md").to_string(),
+        ]
+        .join("\n")
+    };
+
     assert_eq!(
         body0["instructions"],
         serde_json::json!(expected_instructions),
@@ -234,6 +278,7 @@ async fn prompt_tools_are_consistent_across_requests() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prefixes_context_and_instructions_once_and_consistently_across_requests() {
+    skip_if_no_network!();
     use pretty_assertions::assert_eq;
 
     let server = MockServer::start().await;
@@ -273,7 +318,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
         })
@@ -283,7 +328,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
         })
@@ -309,8 +354,10 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
             None => String::new(),
         }
     );
-    let expected_ui_text =
-        "<user_instructions>\n\nbe consistent and helpful\n\n</user_instructions>";
+    let expected_ui_text = format!(
+        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\nbe consistent and helpful\n</INSTRUCTIONS>",
+        cwd.path().to_string_lossy()
+    );
 
     let expected_env_msg = serde_json::json!({
         "type": "message",
@@ -352,6 +399,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
+    skip_if_no_network!();
     use pretty_assertions::assert_eq;
 
     let server = MockServer::start().await;
@@ -392,7 +440,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
     // First turn
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
         })
@@ -421,7 +469,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
     // Second turn after overrides
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
         })
@@ -460,7 +508,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
     <root>{}</root>
   </writable_roots>
 </environment_context>"#,
-        writable.path().to_string_lossy()
+        writable.path().to_string_lossy(),
     );
     let expected_env_msg_2 = serde_json::json!({
         "type": "message",
@@ -479,6 +527,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn per_turn_overrides_keep_cached_prefix_and_key_constant() {
+    skip_if_no_network!();
     use pretty_assertions::assert_eq;
 
     let server = MockServer::start().await;
@@ -519,7 +568,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() {
     // First turn
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
         })
@@ -532,7 +581,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() {
     let writable = TempDir::new().unwrap();
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
             cwd: new_cwd.path().to_path_buf(),
@@ -546,6 +595,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() {
             model: "o3".to_string(),
             effort: Some(ReasoningEffort::High),
             summary: ReasoningSummary::Detailed,
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -601,6 +651,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
+    skip_if_no_network!();
     use pretty_assertions::assert_eq;
 
     let server = MockServer::start().await;
@@ -646,7 +697,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
             cwd: default_cwd.clone(),
@@ -655,6 +706,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
             model: default_model.clone(),
             effort: default_effort,
             summary: default_summary,
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -662,7 +714,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
             cwd: default_cwd.clone(),
@@ -671,6 +723,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
             model: default_model.clone(),
             effort: default_effort,
             summary: default_summary,
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -683,9 +736,11 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
     let body2 = requests[1].body_json::<serde_json::Value>().unwrap();
 
     let shell = default_user_shell().await;
-    let expected_ui_text =
-        "<user_instructions>\n\nbe consistent and helpful\n\n</user_instructions>";
-    let expected_ui_msg = text_user_input(expected_ui_text.to_string());
+    let expected_ui_text = format!(
+        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\nbe consistent and helpful\n</INSTRUCTIONS>",
+        default_cwd.to_string_lossy()
+    );
+    let expected_ui_msg = text_user_input(expected_ui_text);
 
     let expected_env_msg_1 = text_user_input(default_env_context_str(
         &cwd.path().to_string_lossy(),
@@ -712,6 +767,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn send_user_turn_with_changes_sends_environment_context() {
+    skip_if_no_network!();
     use pretty_assertions::assert_eq;
 
     let server = MockServer::start().await;
@@ -757,7 +813,7 @@ async fn send_user_turn_with_changes_sends_environment_context() {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
             cwd: default_cwd.clone(),
@@ -766,6 +822,7 @@ async fn send_user_turn_with_changes_sends_environment_context() {
             model: default_model,
             effort: default_effort,
             summary: default_summary,
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -773,7 +830,7 @@ async fn send_user_turn_with_changes_sends_environment_context() {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
             cwd: default_cwd.clone(),
@@ -782,6 +839,7 @@ async fn send_user_turn_with_changes_sends_environment_context() {
             model: "o3".to_string(),
             effort: Some(ReasoningEffort::High),
             summary: ReasoningSummary::Detailed,
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -794,8 +852,10 @@ async fn send_user_turn_with_changes_sends_environment_context() {
     let body2 = requests[1].body_json::<serde_json::Value>().unwrap();
 
     let shell = default_user_shell().await;
-    let expected_ui_text =
-        "<user_instructions>\n\nbe consistent and helpful\n\n</user_instructions>";
+    let expected_ui_text = format!(
+        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\nbe consistent and helpful\n</INSTRUCTIONS>",
+        default_cwd.to_string_lossy()
+    );
     let expected_ui_msg = serde_json::json!({
         "type": "message",
         "role": "user",
@@ -811,15 +871,14 @@ async fn send_user_turn_with_changes_sends_environment_context() {
     ]);
     assert_eq!(body1["input"], expected_input_1);
 
-    let expected_env_msg_2 = text_user_input(format!(
+    let expected_env_msg_2 = text_user_input(
         r#"<environment_context>
-  <cwd>{}</cwd>
   <approval_policy>never</approval_policy>
   <sandbox_mode>danger-full-access</sandbox_mode>
   <network_access>enabled</network_access>
-</environment_context>"#,
-        default_cwd.to_string_lossy()
-    ));
+</environment_context>"#
+            .to_string(),
+    );
     let expected_user_message_2 = text_user_input("hello 2".to_string());
     let expected_input_2 = serde_json::Value::Array(vec![
         expected_ui_msg,
