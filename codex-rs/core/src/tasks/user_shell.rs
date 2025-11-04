@@ -95,10 +95,9 @@ impl SessionTask for UserShellCommandTask {
         }
 
         let call_id = Uuid::new_v4().to_string();
-        let cwd_display = turn_context.cwd.to_string_lossy();
         let raw_command = self.command.clone();
         let command_text = format!(
-            "<user_shell_command cwd=\"{cwd_display}\">\n{raw_command}\n</user_shell_command>"
+            "<user_shell_command>\n{raw_command}\n</user_shell_command>"
         );
         let command_items = [build_user_message(command_text)];
         session
@@ -153,7 +152,7 @@ impl SessionTask for UserShellCommandTask {
             None => {
                 let aborted_message = "command aborted by user".to_string();
                 let aborted_text =
-                    format!("<user_shell_output>\n{aborted_message}\n</user_shell_output>");
+                    format!("<user_shell_command_output>\n{aborted_message}\n</user_shell_command_output>");
                 let output_items = [build_user_message(aborted_text)];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
@@ -191,7 +190,7 @@ impl SessionTask for UserShellCommandTask {
 
                 let output_payload = format_exec_output_for_model(&output);
                 let output_text =
-                    format!("<user_shell_output>\n{output_payload}\n</user_shell_output>");
+                    format!("<user_shell_command_output>\n{output_payload}\n</user_shell_command_output>");
                 let output_items = [build_user_message(output_text)];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
@@ -224,7 +223,7 @@ impl SessionTask for UserShellCommandTask {
                     .await;
                 let output_payload = format_exec_output_for_model(&exec_output);
                 let output_text =
-                    format!("<user_shell_output>\n{output_payload}\n</user_shell_output>");
+                    format!("<user_shell_command_output>\n{output_payload}\n</user_shell_command_output>");
                 let output_items = [build_user_message(output_text)];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
