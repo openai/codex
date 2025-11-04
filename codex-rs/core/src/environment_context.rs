@@ -227,20 +227,21 @@ impl From<EnvironmentContext> for ResponseItem {
 // Restrict Operating System Info to Windows and Linux inside WSL for now
 #[cfg(target_os = "windows")]
 fn operating_system_info_impl() -> Option<OperatingSystemInfo> {
-    let os_info = os_info::get();
+    let info = os_info::get();
     Some(OperatingSystemInfo {
-        name: os_info.os_type().to_string(),
-        version: os_info.version().to_string(),
+        name: info.os_type().to_string(),
+        version: info.version().to_string(),
         is_likely_windows_subsystem_for_linux: Some(has_wsl_env_markers()),
     })
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn operating_system_info_impl() -> Option<OperatingSystemInfo> {
+    let info = os_info::get();
     match has_wsl_env_markers() {
         true => Some(OperatingSystemInfo {
-            name: "Windows Subsystem for Linux".to_string(),
-            version: "".to_string(),
+            name: info.os_type().to_string(),
+            version: info.version().to_string(),
             is_likely_windows_subsystem_for_linux: Some(true),
         }),
         false => None,
@@ -307,10 +308,11 @@ mod tests {
     #[test]
     fn operating_system_info_matches_wsl_detection_on_unix() {
         let info = operating_system_info_impl();
+        let os_details = os_info::get();
         if has_wsl_env_markers() {
             let info = info.expect("expected WSL operating system info");
-            assert_eq!(info.name, "Windows Subsystem for Linux");
-            assert_eq!(info.version, "");
+            assert_eq!(info.name, os_details.os_type().to_string());
+            assert_eq!(info.version, os_details.version().to_string());
             assert_eq!(info.is_likely_windows_subsystem_for_linux, Some(true));
         } else {
             assert_eq!(info, None);

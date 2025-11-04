@@ -50,17 +50,18 @@ fn operating_system_context_block() -> String {
         let name = info.os_type().to_string();
         let version = info.version().to_string();
         let is_wsl = has_wsl_env_markers();
-        return format!(
+        format!(
             "  <operating_system>\n    <name>{name}</name>\n    <version>{version}</version>\n    <is_likely_windows_subsystem_for_linux>{is_wsl}</is_likely_windows_subsystem_for_linux>\n  </operating_system>\n"
-        );
+        )
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         if has_wsl_env_markers() {
-            return "  <operating_system>\n    <name>Windows Subsystem for Linux</name>\n    <version></version>\n    <is_likely_windows_subsystem_for_linux>true</is_likely_windows_subsystem_for_linux>\n  </operating_system>\n".to_string();
+            "  <operating_system>\n    <name>{name}</name>\n    <version></version>\n    <is_likely_windows_subsystem_for_linux>true</is_likely_windows_subsystem_for_linux>\n  </operating_system>\n".to_string()
+        } else {
+            String::new()
         }
-        return String::new();
     }
 
     #[cfg(target_os = "macos")]
@@ -374,22 +375,10 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
     let shell = default_user_shell().await;
 
-    let expected_env_text = format!(
-        r#"<environment_context>
-  <cwd>{}</cwd>
-  <approval_policy>on-request</approval_policy>
-  <sandbox_mode>read-only</sandbox_mode>
-  <network_access>restricted</network_access>
-{}</environment_context>"#,
-        cwd.path().to_string_lossy(),
-        match shell.name() {
-            Some(name) => format!("  <shell>{name}</shell>\n"),
-            None => String::new(),
-        }
-    );
+    let cwd_str = cwd.path().to_string_lossy().into_owned();
+    let expected_env_text = default_env_context_str(&cwd_str, &shell);
     let expected_ui_text = format!(
-        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\nbe consistent and helpful\n</INSTRUCTIONS>",
-        cwd.path().to_string_lossy()
+        "# AGENTS.md instructions for {cwd_str}\n\n<INSTRUCTIONS>\nbe consistent and helpful\n</INSTRUCTIONS>"
     );
 
     let expected_env_msg = serde_json::json!({
