@@ -7,3 +7,7 @@ disallowed-methods = [
     { path = "ratatui::style::Stylize::black", reason = "Avoid hardcoding black; prefer default fg or dim/bold. Exception: Disable this rule if rendering over a hardcoded ANSI background." },
     { path = "ratatui::style::Stylize::yellow", reason = "Avoid yellow; prefer other colors in `tui/styles.md`." },
 ]
+
+# Increase the size threshold for result_large_err to accommodate
+# richer error variants.
+large-error-threshold = 256

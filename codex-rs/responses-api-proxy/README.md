@@ -33,31 +33,42 @@ curl --fail --silent --show-error "${PROXY_BASE_URL}/shutdown"
 - Reads the API key from `stdin`. All callers should pipe the key in (for example, `printenv OPENAI_API_KEY | codex-responses-api-proxy`).
 - Formats the header value as `Bearer <key>` and attempts to `mlock(2)` the memory holding that header so it is not swapped to disk.
 - Listens on the provided port or an ephemeral port if `--port` is not specified.
-- Accepts exactly `POST /v1/responses` (no query string). The request body is forwarded to `https://api.openai.com/v1/responses` with `Authorization: Bearer <key>` set. All original request headers (except any incoming `Authorization`) are forwarded upstream. For other requests, it responds with `403`.
-- Optionally writes a single-line JSON file with server info, currently `{ "port": <u16> }`.
+- Accepts exactly `POST /v1/responses` (no query string). The request body is forwarded to `https://api.openai.com/v1/responses` with `Authorization: Bearer <key>` set. All original request headers (except any incoming `Authorization`) are forwarded upstream, with `Host` overridden to `api.openai.com`. For other requests, it responds with `403`.
+- Optionally writes a single-line JSON file with server info, currently `{ "port": <u16>, "pid": <u32> }`.
 - Optional `--http-shutdown` enables `GET /shutdown` to terminate the process with exit code `0`. This allows one user (e.g., `root`) to start the proxy and another unprivileged user on the host to shut it down.
 
 ## CLI
 
 ```
-codex-responses-api-proxy [--port <PORT>] [--server-info <FILE>] [--http-shutdown]
+codex-responses-api-proxy [--port <PORT>] [--server-info <FILE>] [--http-shutdown] [--upstream-url <URL>]
 ```
 
 - `--port <PORT>`: Port to bind on `127.0.0.1`. If omitted, an ephemeral port is chosen.
 - `--server-info <FILE>`: If set, the proxy writes a single line of JSON with `{ "port": <PORT>, "pid": <PID> }` once listening.
 - `--http-shutdown`: If set, enables `GET /shutdown` to exit the process with code `0`.
+- `--upstream-url <URL>`: Absolute URL to forward requests to. Defaults to `https://api.openai.com/v1/responses`.
+- Authentication is fixed to `Authorization: Bearer <key>` to match the Codex CLI expectations.
+
+For Azure, for example (ensure your deployment accepts `Authorization: Bearer <key>`):
+
+```shell
+printenv AZURE_OPENAI_API_KEY | env -u AZURE_OPENAI_API_KEY codex-responses-api-proxy \
+  --http-shutdown \
+  --server-info /tmp/server-info.json \
+  --upstream-url "https://YOUR_PROJECT_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT/responses?api-version=2025-04-01-preview"
+```
 
 ## Notes
 
 - Only `POST /v1/responses` is permitted. No query strings are allowed.
-- All request headers are forwarded to the upstream call (aside from overriding `Authorization`). Response status and content-type are mirrored from upstream.
+- All request headers are forwarded to the upstream call (aside from overriding `Authorization` and `Host`). Response status and content-type are mirrored from upstream.
 
 ## Hardening Details
 
 Care is taken to restrict access/copying to the value of `OPENAI_API_KEY` retained in memory:
 
 - We leverage [`codex_process_hardening`](https://github.com/openai/codex/blob/main/codex-rs/process-hardening/README.md) so `codex-responses-api-proxy` is run with standard process-hardening techniques.
-- At startup, we allocate a `1024` byte buffer on the stack and write `"Bearer "` as the first `7` bytes.
+- At startup, we allocate a `1024` byte buffer on the stack and copy `"Bearer "` into the start of the buffer.
 - We then read from `stdin`, copying the contents into the buffer after `"Bearer "`.
 - After verifying the key matches `/^[a-zA-Z0-9_-]+$/` (and does not exceed the buffer), we create a `String` from that buffer (so the data is now on the heap).
 - We zero out the stack-allocated buffer using https://crates.io/crates/zeroize so it is not optimized away by the compiler.
