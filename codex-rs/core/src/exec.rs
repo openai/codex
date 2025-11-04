@@ -6,6 +6,7 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitStatus;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -23,6 +24,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::SandboxPolicy;
+use crate::protocol::UserCommandOutputDeltaEvent;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::ExecEnv;
 use crate::sandboxing::SandboxManager;
@@ -84,6 +86,41 @@ pub struct StdoutStream {
     pub tx_event: Sender<Event>,
 }
 
+#[derive(Clone)]
+pub struct DeltaEventBuilder {
+    inner: Arc<dyn Fn(&str, ExecOutputStream, Vec<u8>) -> EventMsg + Send + Sync>,
+}
+
+impl DeltaEventBuilder {
+    pub fn exec_command() -> Self {
+        Self {
+            inner: Arc::new(|call_id, stream, chunk| {
+                EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+                    call_id: call_id.to_string(),
+                    stream,
+                    chunk,
+                })
+            }),
+        }
+    }
+
+    pub fn user_command() -> Self {
+        Self {
+            inner: Arc::new(|call_id, stream, chunk| {
+                EventMsg::UserCommandOutputDelta(UserCommandOutputDeltaEvent {
+                    call_id: call_id.to_string(),
+                    stream,
+                    chunk,
+                })
+            }),
+        }
+    }
+
+    pub fn build(&self, call_id: &str, stream: ExecOutputStream, chunk: Vec<u8>) -> EventMsg {
+        (self.inner)(call_id, stream, chunk)
+    }
+}
+
 pub async fn process_exec_tool_call(
     params: ExecParams,
     sandbox_type: SandboxType,
@@ -138,6 +175,7 @@ pub(crate) async fn execute_exec_env(
     env: ExecEnv,
     sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
+    delta_event_builder: Option<DeltaEventBuilder>,
 ) -> Result<ExecToolCallOutput> {
     let ExecEnv {
         command,
@@ -161,7 +199,15 @@ pub(crate) async fn execute_exec_env(
     };
 
     let start = Instant::now();
-    let raw_output_result = exec(params, sandbox, sandbox_policy, stdout_stream).await;
+    let delta_event_builder = delta_event_builder.unwrap_or_else(DeltaEventBuilder::exec_command);
+    let raw_output_result = exec(
+        params,
+        sandbox,
+        sandbox_policy,
+        stdout_stream,
+        delta_event_builder.clone(),
+    )
+    .await;
     let duration = start.elapsed();
     finalize_exec_result(raw_output_result, sandbox, duration)
 }
@@ -434,6 +480,7 @@ async fn exec(
     sandbox: SandboxType,
     sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
+    delta_event_builder: DeltaEventBuilder,
 ) -> Result<RawExecToolCallOutput> {
     #[cfg(target_os = "windows")]
     if sandbox == SandboxType::WindowsRestrictedToken {
@@ -465,7 +512,7 @@ async fn exec(
         env,
     )
     .await?;
-    consume_truncated_output(child, timeout, stdout_stream).await
+    consume_truncated_output(child, timeout, stdout_stream, delta_event_builder).await
 }
 
 /// Consumes the output of a child process, truncating it so it is suitable for
@@ -474,6 +521,7 @@ async fn consume_truncated_output(
     mut child: Child,
     timeout: Duration,
     stdout_stream: Option<StdoutStream>,
+    delta_event_builder: DeltaEventBuilder,
 ) -> Result<RawExecToolCallOutput> {
     // Both stdout and stderr were configured with `Stdio::piped()`
     // above, therefore `take()` should normally return `Some`.  If it doesn't
@@ -497,12 +545,14 @@ async fn consume_truncated_output(
         stdout_stream.clone(),
         false,
         Some(agg_tx.clone()),
+        delta_event_builder.clone(),
     ));
     let stderr_handle = tokio::spawn(read_capped(
         BufReader::new(stderr_reader),
         stdout_stream.clone(),
         true,
         Some(agg_tx.clone()),
+        delta_event_builder.clone(),
     ));
 
     let (exit_status, timed_out) = tokio::select! {
@@ -554,6 +604,7 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
     stream: Option<StdoutStream>,
     is_stderr: bool,
     aggregate_tx: Option<Sender<Vec<u8>>>,
+    delta_event_builder: DeltaEventBuilder,
 ) -> io::Result<StreamOutput<Vec<u8>>> {
     let mut buf = Vec::with_capacity(AGGREGATE_BUFFER_INITIAL_CAPACITY);
     let mut tmp = [0u8; READ_CHUNK_SIZE];
@@ -571,15 +622,15 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
             && emitted_deltas < MAX_EXEC_OUTPUT_DELTAS_PER_CALL
         {
             let chunk = tmp[..n].to_vec();
-            let msg = EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
-                call_id: stream.call_id.clone(),
-                stream: if is_stderr {
+            let msg = delta_event_builder.build(
+                &stream.call_id,
+                if is_stderr {
                     ExecOutputStream::Stderr
                 } else {
                     ExecOutputStream::Stdout
                 },
                 chunk,
-            });
+            );
             let event = Event {
                 id: stream.sub_id.clone(),
                 msg,

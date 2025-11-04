@@ -1,9 +1,9 @@
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::TurnAbortReason;
+use codex_core::protocol::UserCommandEndEvent;
 use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
 use std::path::PathBuf;
@@ -63,8 +63,8 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
         .submit(Op::RunUserShellCommand { command: list_cmd })
         .await
         .unwrap();
-    let msg = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandEnd(_))).await;
-    let EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+    let msg = wait_for_event(&codex, |ev| matches!(ev, EventMsg::UserCommandEnd(_))).await;
+    let EventMsg::UserCommandEnd(UserCommandEndEvent {
         stdout, exit_code, ..
     }) = msg
     else {
@@ -84,8 +84,8 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
         .submit(Op::RunUserShellCommand { command: cat_cmd })
         .await
         .unwrap();
-    let msg = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandEnd(_))).await;
-    let EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+    let msg = wait_for_event(&codex, |ev| matches!(ev, EventMsg::UserCommandEnd(_))).await;
+    let EventMsg::UserCommandEnd(UserCommandEndEvent {
         mut stdout,
         exit_code,
         ..
@@ -128,7 +128,7 @@ async fn user_shell_cmd_can_be_interrupted() {
         .unwrap();
 
     // Wait until it has started (ExecCommandBegin), then interrupt.
-    let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_))).await;
+    let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::UserCommandBegin(_))).await;
     codex.submit(Op::Interrupt).await.unwrap();
 
     // Expect a TurnAborted(Interrupted) notification.

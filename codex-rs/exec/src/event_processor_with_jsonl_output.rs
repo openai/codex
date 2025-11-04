@@ -48,6 +48,8 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
+use codex_core::protocol::UserCommandBeginEvent;
+use codex_core::protocol::UserCommandEndEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -109,6 +111,9 @@ impl EventProcessorWithJsonOutput {
             EventMsg::AgentReasoning(ev) => self.handle_reasoning_event(ev),
             EventMsg::ExecCommandBegin(ev) => self.handle_exec_command_begin(ev),
             EventMsg::ExecCommandEnd(ev) => self.handle_exec_command_end(ev),
+            EventMsg::UserCommandBegin(ev) => self.handle_user_command_begin(ev),
+            EventMsg::UserCommandEnd(ev) => self.handle_user_command_end(ev),
+            EventMsg::UserCommandOutputDelta(_) => Vec::new(),
             EventMsg::McpToolCallBegin(ev) => self.handle_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.handle_mcp_tool_call_end(ev),
             EventMsg::PatchApplyBegin(ev) => self.handle_patch_apply_begin(ev),
@@ -314,6 +319,70 @@ impl EventProcessorWithJsonOutput {
                 arguments,
                 result,
                 error,
+                status,
+            }),
+        };
+
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
+    }
+
+    fn handle_user_command_begin(&mut self, ev: &UserCommandBeginEvent) -> Vec<ThreadEvent> {
+        let item_id = self.get_next_item_id();
+
+        let command_string = match shlex::try_join(ev.command.iter().map(String::as_str)) {
+            Ok(command_string) => command_string,
+            Err(e) => {
+                warn!(
+                    call_id = ev.call_id,
+                    "Failed to stringify user command: {e:?}; skipping item.started"
+                );
+                ev.command.join(" ")
+            }
+        };
+
+        self.running_commands.insert(
+            ev.call_id.clone(),
+            RunningCommand {
+                command: command_string.clone(),
+                item_id: item_id.clone(),
+            },
+        );
+
+        let item = ThreadItem {
+            id: item_id,
+            details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
+                command: command_string,
+                aggregated_output: String::new(),
+                exit_code: None,
+                status: CommandExecutionStatus::InProgress,
+            }),
+        };
+
+        vec![ThreadEvent::ItemStarted(ItemStartedEvent { item })]
+    }
+
+    fn handle_user_command_end(&mut self, ev: &UserCommandEndEvent) -> Vec<ThreadEvent> {
+        let Some(RunningCommand { command, item_id }) = self.running_commands.remove(&ev.call_id)
+        else {
+            warn!(
+                call_id = ev.call_id,
+                "UserCommandEnd without matching UserCommandBegin; skipping item.completed"
+            );
+            return Vec::new();
+        };
+
+        let status = if ev.exit_code == 0 {
+            CommandExecutionStatus::Completed
+        } else {
+            CommandExecutionStatus::Failed
+        };
+
+        let item = ThreadItem {
+            id: item_id,
+            details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
+                command,
+                aggregated_output: ev.aggregated_output.clone(),
+                exit_code: Some(ev.exit_code),
                 status,
             }),
         };
