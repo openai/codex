@@ -227,6 +227,7 @@ This is analogous to `model_context_window`, but for the maximum number of outpu
 Specifies the default OSS provider to use when running Codex. This is used when the `--oss` flag is provided without a specific provider.
 
 Valid values are:
+
 - `"lmstudio"` - Use LM Studio as the local model provider
 - `"ollama"` - Use Ollama as the local model provider
 
