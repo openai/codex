@@ -366,9 +366,8 @@ fn load_oauth_tokens_from_file(server_name: &str, url: &str) -> Result<Option<St
             token_response.set_scopes(Some(scopes.into_iter().map(Scope::new).collect()));
         }
 
-        if let Some(expires_at) = entry.expires_at
-            && let Some(seconds) = expires_in_from_timestamp(expires_at)
-        {
+        if let Some(expires_at) = entry.expires_at {
+            let seconds = expires_in_from_timestamp(expires_at).unwrap_or(0);
             let duration = Duration::from_secs(seconds);
             token_response.set_expires_in(Some(&duration));
         }
