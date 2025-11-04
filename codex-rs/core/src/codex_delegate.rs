@@ -158,6 +158,11 @@ async fn forward_events(
 ) {
     while let Ok(event) = codex.next_event().await {
         match event {
+            // ignore all legacy delta events
+            Event {
+                id: _,
+                msg: EventMsg::AgentMessageDelta(_) | EventMsg::AgentReasoningDelta(_),
+            } => continue,
             Event {
                 id: _,
                 msg: EventMsg::SessionConfigured(_),
