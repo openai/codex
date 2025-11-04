@@ -19,8 +19,8 @@ anyhow = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
-codex-login = { workspace = true }
 codex-protocol = { workspace = true }
+codex-utils-json-to-toml = { workspace = true }
 mcp-types = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -33,14 +33,11 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "signal",
 ] }
-toml = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
-uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
-base64 = { workspace = true }
 core_test_support = { workspace = true }
 mcp_test_support = { workspace = true }
 os_info = { workspace = true }

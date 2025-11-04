@@ -1,0 +1,38 @@
+{
+  "task": {
+    "id": "task_123",
+    "title": "Refactor cloud task client",
+    "archived": false,
+    "external_pull_requests": []
+  },
+  "current_user_turn": {
+    "input_items": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          { "content_type": "text", "text": "First line" },
+          { "content_type": "text", "text": "Second line" }
+        ]
+      }
+    ]
+  },
+  "current_assistant_turn": {
+    "output_items": [
+      {
+        "type": "message",
+        "content": [
+          { "content_type": "text", "text": "Assistant response" }
+        ]
+      }
+    ]
+  },
+  "current_diff_task_turn": {
+    "output_items": [
+      {
+        "type": "output_diff",
+        "diff": "diff --git a/src/main.rs b/src/main.rs\n+fn main() { println!(\"hi\"); }\n"
+      }
+    ]
+  }
+}
