@@ -11,8 +11,10 @@ use uuid::Uuid;
 
 use crate::codex::TurnContext;
 use crate::exec::DeltaEventBuilder;
+use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
+use crate::exec::StreamOutput;
 use crate::exec::execute_exec_env;
 use crate::exec_env::create_env;
 use crate::parse_command::parse_command;
@@ -172,7 +174,6 @@ impl SessionTask for UserShellCommandTask {
                     .await;
             }
             Some(Ok(output)) => {
-                let formatted_output = format_exec_output_str(&output);
                 session
                     .send_event(
                         turn_context.as_ref(),
@@ -183,7 +184,7 @@ impl SessionTask for UserShellCommandTask {
                             aggregated_output: output.aggregated_output.text.clone(),
                             exit_code: output.exit_code,
                             duration: output.duration,
-                            formatted_output: formatted_output.clone(),
+                            formatted_output: format_exec_output_str(&output),
                         }),
                     )
                     .await;
@@ -198,22 +199,32 @@ impl SessionTask for UserShellCommandTask {
             }
             Some(Err(err)) => {
                 error!("user shell command failed: {err:?}");
-                let message = err.to_string();
+                let message = format!("execution error: {err:?}");
+                let exec_output = ExecToolCallOutput {
+                    exit_code: -1,
+                    stdout: StreamOutput::new(String::new()),
+                    stderr: StreamOutput::new(message.clone()),
+                    aggregated_output: StreamOutput::new(message.clone()),
+                    duration: Duration::ZERO,
+                    timed_out: false,
+                };
                 session
                     .send_event(
                         turn_context.as_ref(),
                         EventMsg::UserCommandEnd(UserCommandEndEvent {
                             call_id,
-                            stdout: String::new(),
-                            stderr: message.clone(),
-                            aggregated_output: message.clone(),
-                            exit_code: -1,
-                            duration: Duration::ZERO,
-                            formatted_output: message.clone(),
+                            stdout: exec_output.stdout.text.clone(),
+                            stderr: exec_output.stderr.text.clone(),
+                            aggregated_output: exec_output.aggregated_output.text.clone(),
+                            exit_code: exec_output.exit_code,
+                            duration: exec_output.duration,
+                            formatted_output: format_exec_output_str(&exec_output),
                         }),
                     )
                     .await;
-                let output_text = format!("<user_shell_output>\n{message}\n</user_shell_output>");
+                let output_payload = format_exec_output_for_model(&exec_output);
+                let output_text =
+                    format!("<user_shell_output>\n{output_payload}\n</user_shell_output>");
                 let output_items = [build_user_message(output_text)];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
