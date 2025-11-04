@@ -1,0 +1,47 @@
+name: Setup musl 1.2.5 toolchain
+description: Install musl 1.2.5 from source and configure the linker for the requested target.
+inputs:
+  target:
+    description: Cargo target triple that requires musl (e.g., x86_64-unknown-linux-musl).
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Install musl 1.2.5
+      shell: bash
+      env:
+        MUSL_VERSION: 1.2.5
+        MUSL_PREFIX: /opt/musl-1.2.5
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        set -euo pipefail
+        sudo apt-get -y update -o Acquire::Retries=3
+        sudo apt-get -y install --no-install-recommends build-essential curl pkg-config
+
+        curl -sSfL --retry 3 --retry-delay 1 "https://musl.libc.org/releases/musl-${MUSL_VERSION}.tar.gz" -o /tmp/musl.tar.gz
+        tar -xf /tmp/musl.tar.gz -C /tmp
+
+        pushd "/tmp/musl-${MUSL_VERSION}"
+        ./configure --prefix="${MUSL_PREFIX}"
+        make -j"$(nproc)"
+        sudo make install
+        popd
+
+        echo "${MUSL_PREFIX}/bin" >> "$GITHUB_PATH"
+        musl_gcc="${MUSL_PREFIX}/bin/musl-gcc"
+        "${musl_gcc}" --version
+
+        case "${{ inputs.target }}" in
+          x86_64-unknown-linux-musl)
+            echo "CC_x86_64_unknown_linux_musl=${musl_gcc}" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=${musl_gcc}" >> "$GITHUB_ENV"
+            ;;
+          aarch64-unknown-linux-musl)
+            echo "CC_aarch64_unknown_linux_musl=${musl_gcc}" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=${musl_gcc}" >> "$GITHUB_ENV"
+            ;;
+          *)
+            echo "Unsupported musl target '${{ inputs.target }}'" >&2
+            exit 1
+            ;;
+        esac
