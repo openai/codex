@@ -199,8 +199,8 @@ mod tests {
                 "params": {
                     "rateLimits": {
                         "primary": {
-                            "usedPercent": 25.0,
-                            "windowMinutes": 15,
+                            "usedPercent": 25,
+                            "windowDurationMins": 15,
                             "resetsAt": 123
                         },
                         "secondary": null
