@@ -1,3 +1,4 @@
+mod account;
 mod archive_conversation;
 mod auth;
 mod codex_message_processor_flow;
