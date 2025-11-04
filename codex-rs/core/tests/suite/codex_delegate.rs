@@ -175,8 +175,6 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 }
 
-/// Delegate should drop legacy delta events (AgentReasoningDelta/AgentMessageDelta)
-/// while forwarding the new delta variants.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_delegate_ignores_legacy_deltas() {
     skip_if_no_network!();
@@ -219,12 +217,9 @@ async fn codex_delegate_ignores_legacy_deltas() {
         }
     }
 
-    assert_eq!(
-        reasoning_delta_count, 1,
-        "expected exactly one new reasoning delta"
-    );
+    assert_eq!(reasoning_delta_count, 1, "expected one new reasoning delta");
     assert_eq!(
         legacy_reasoning_delta_count, 1,
-        "delegator should forward at most one legacy reasoning delta (no duplicates)"
+        "expected one legacy reasoning delta"
     );
 }
