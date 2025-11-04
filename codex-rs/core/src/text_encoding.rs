@@ -73,15 +73,18 @@ fn try_decode_windows_1252(bytes: &[u8]) -> Option<String> {
     let mut result = String::with_capacity(bytes.len());
     for &byte in bytes {
         let ch = match byte {
-            0x00..=0x7F => byte as char, // ASCII range
+            0x00..=0x7F => byte as char,                             // ASCII range
             0x80..=0x9F => WINDOWS_1252_MAP[(byte - 0x80) as usize], // Windows-1252 specific
-            0xA0..=0xFF => byte as char, // ISO-8859-1 compatible range
+            0xA0..=0xFF => byte as char,                             // ISO-8859-1 compatible range
         };
         result.push(ch);
     }
 
     // Validate that the result makes sense (contains reasonable characters)
-    if result.chars().any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t') {
+    if result
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t')
+    {
         return None;
     }
 
@@ -94,7 +97,10 @@ fn try_decode_latin1(bytes: &[u8]) -> Option<String> {
     let result: String = bytes.iter().map(|&b| b as char).collect();
 
     // Validate that the result doesn't contain too many control characters
-    let control_count = result.chars().filter(|c| c.is_control() && *c != '\n' && *c != '\r' && *c != '\t').count();
+    let control_count = result
+        .chars()
+        .filter(|c| c.is_control() && *c != '\n' && *c != '\r' && *c != '\t')
+        .count();
     let total_chars = result.chars().count();
 
     // If more than 10% are control characters, this probably isn't Latin-1 text

@@ -90,13 +90,15 @@ trait EncodeLatin1 {
 
 impl EncodeLatin1 for str {
     fn encode_latin1(&self) -> Vec<u8> {
-        self.chars().map(|c| {
-            let code = c as u32;
-            if code <= 255 {
-                code as u8
-            } else {
-                b'?' // Replacement for non-Latin-1 characters
-            }
-        }).collect()
+        self.chars()
+            .map(|c| {
+                let code = c as u32;
+                if code <= 255 {
+                    code as u8
+                } else {
+                    b'?' // Replacement for non-Latin-1 characters
+                }
+            })
+            .collect()
     }
 }
