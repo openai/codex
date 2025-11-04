@@ -86,9 +86,11 @@ pub struct StdoutStream {
     pub tx_event: Sender<Event>,
 }
 
+type DeltaEventFn = dyn Fn(&str, ExecOutputStream, Vec<u8>) -> EventMsg + Send + Sync;
+
 #[derive(Clone)]
 pub struct DeltaEventBuilder {
-    inner: Arc<dyn Fn(&str, ExecOutputStream, Vec<u8>) -> EventMsg + Send + Sync>,
+    inner: Arc<DeltaEventFn>,
 }
 
 impl DeltaEventBuilder {

@@ -981,7 +981,7 @@ impl ChatWidget {
             self.flush_active_cell();
 
             self.active_cell = Some(Box::new(new_active_exec_command(
-                call_id.clone(),
+                call_id,
                 command,
                 parsed_cmd,
                 is_user_shell_command,
