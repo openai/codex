@@ -341,10 +341,6 @@ impl CodexMessageProcessor {
                 self.outgoing
                     .send_server_notification(ServerNotification::AuthStatusChange(payload))
                     .await;
-
-                self.outgoing
-                    .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
-                    .await;
             }
             Err(err) => {
                 let error = JSONRPCErrorError {

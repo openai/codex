@@ -125,6 +125,5 @@ pub struct UploadFeedbackResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountUpdatedNotification {
-    /// Mirrors the deprecated v1 AuthStatusChangeNotification payload but on a new endpoint.
     pub auth_method: Option<AuthMode>,
 }
