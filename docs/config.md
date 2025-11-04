@@ -44,7 +44,7 @@ Supported feature keys:
 | ----------------------------------------- | :-----: | ------------ | ------------------------------------------------ |
 | `unified_exec`                            |  false  | Experimental | Use the unified PTY-backed exec tool             |
 | `streamable_shell`                        |  false  | Experimental | Use the streamable exec-command/write-stdin pair |
-| `rmcp_client`                             |  false  | Experimental | Enable experimental RMCP (e.g., OAuth) support   |
+| `rmcp_client`                             |  false  | Experimental | Enable oauth support for streamable HTTP MCP servers   |
 | `apply_patch_freeform`                    |  false  | Beta         | Include the freeform `apply_patch` tool          |
 | `view_image_tool`                         |  true   | Stable       | Include the `view_image` tool                    |
 | `web_search_request`                      |  false  | Stable       | Allow the model to issue web searches            |
