@@ -15,14 +15,11 @@ use crate::SeatbeltCommand;
 use crate::WindowsCommand;
 use crate::exit_status::handle_exit_status;
 
+#[cfg(target_os = "macos")]
 pub async fn run_command_under_seatbelt(
     command: SeatbeltCommand,
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> anyhow::Result<()> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        anyhow::bail!("Seatbelt sandbox is only available on macOS");
-    }
     let SeatbeltCommand {
         full_auto,
         config_overrides,
@@ -36,6 +33,14 @@ pub async fn run_command_under_seatbelt(
         SandboxType::Seatbelt,
     )
     .await
+}
+
+#[cfg(not(target_os = "macos"))]
+pub async fn run_command_under_seatbelt(
+    _command: SeatbeltCommand,
+    _codex_linux_sandbox_exe: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    anyhow::bail!("Seatbelt sandbox is only available on macOS");
 }
 
 pub async fn run_command_under_landlock(
