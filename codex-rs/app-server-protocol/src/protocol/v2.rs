@@ -1,3 +1,4 @@
+use crate::protocol::common::AuthMode;
 use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningEffort;
@@ -119,4 +120,10 @@ pub struct UploadFeedbackParams {
 #[serde(rename_all = "camelCase")]
 pub struct UploadFeedbackResponse {
     pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUpdatedNotification {
+    pub auth_method: Option<AuthMode>,
 }
