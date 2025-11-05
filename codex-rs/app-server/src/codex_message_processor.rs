@@ -67,6 +67,7 @@ use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_backend_client::Client as BackendClient;
@@ -967,11 +968,10 @@ impl CodexMessageProcessor {
                 };
                 self.outgoing.send_response(request_id, response).await;
 
-                // TODO(owen): Uncomment this when we have a v2 thread/started notification.
-                // let notif = ThreadStartedNotification { thread };
-                // self.outgoing
-                //     .send_server_notification(ServerNotification::ThreadStarted(notif))
-                //     .await;
+                let notif = ThreadStartedNotification { thread };
+                self.outgoing
+                    .send_server_notification(ServerNotification::ThreadStarted(notif))
+                    .await;
 
                 // Auto-attach a conversation listener when starting a thread.
                 // Use the same behavior as the v1 API with experimental_raw_events=false.

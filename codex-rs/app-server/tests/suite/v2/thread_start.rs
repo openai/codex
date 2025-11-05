@@ -7,7 +7,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use pretty_assertions::assert_eq;
+use codex_app_server_protocol::ThreadStartedNotification;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -29,7 +29,7 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     // Start a v2 thread with an explicit model override.
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("o3".to_string()),
+            model: Some("gpt-5".to_string()),
             ..Default::default()
         })
         .await?;
@@ -49,10 +49,9 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         mcp.read_stream_until_notification_message("thread/started"),
     )
     .await??;
-    // TODO(owen): Uncomment this when we have a v2 thread/started notification.
-    // let started: ThreadStartedNotification =
-    //     serde_json::from_value(notif.params.expect("params must be present"))?;
-    // assert_eq!(started.thread.id, thread.id);
+    let started: ThreadStartedNotification =
+        serde_json::from_value(notif.params.expect("params must be present"))?;
+    assert_eq!(started.thread.id, thread.id);
 
     Ok(())
 }
@@ -66,7 +65,7 @@ fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()
             r#"
 model = "mock-model"
 approval_policy = "never"
-sandbox_mode = "workspace-write"
+sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
 

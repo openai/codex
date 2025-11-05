@@ -36,7 +36,7 @@ async fn thread_list_basic_empty() -> Result<()> {
     .await??;
     let ThreadListResponse { data, next_cursor } = to_response::<ThreadListResponse>(list_resp)?;
     assert!(data.is_empty());
-    assert!(next_cursor.is_none());
+    assert_eq!(next_cursor, None);
 
     Ok(())
 }
@@ -122,10 +122,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         next_cursor: cursor2,
     } = to_response::<ThreadListResponse>(page2_resp)?;
     assert!(data2.len() <= 2);
-    assert!(
-        cursor2.is_none(),
-        "expected nextCursor to be null on last page"
-    );
+    assert_eq!(cursor2, None, "expected nextCursor to be null on last page");
 
     Ok(())
 }
@@ -202,7 +199,7 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
     .await??;
     let ThreadListResponse { data, next_cursor } = to_response::<ThreadListResponse>(resp)?;
     assert_eq!(data.len(), 1);
-    assert!(next_cursor.is_none());
+    assert_eq!(next_cursor, None);
 
     Ok(())
 }

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 
 use crate::JSONRPCNotification;
@@ -324,7 +325,7 @@ macro_rules! server_request_definitions {
 
         #[allow(clippy::vec_init_then_push)]
         pub fn export_server_response_schemas(
-            out_dir: &::std::path::Path,
+            out_dir: &Path,
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
             let mut schemas = Vec::new();
             paste! {
@@ -335,7 +336,7 @@ macro_rules! server_request_definitions {
 
         #[allow(clippy::vec_init_then_push)]
         pub fn export_server_param_schemas(
-            out_dir: &::std::path::Path,
+            out_dir: &Path,
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
             let mut schemas = Vec::new();
             paste! {
@@ -417,15 +418,6 @@ macro_rules! client_notification_definitions {
             let schemas = Vec::new();
             $( $(schemas.push(crate::export::write_json_schema::<$payload>(_out_dir, stringify!($payload))?);)? )*
             Ok(schemas)
-        }
-
-        pub fn export_server_param_schemas(
-            out_dir: &::std::path::Path,
-        ) -> ::anyhow::Result<()> {
-            paste! {
-                $(crate::export::write_json_schema::<[<$variant Params>]>(out_dir, stringify!([<$variant Params>]))?;)*
-            }
-            Ok(())
         }
     };
 }

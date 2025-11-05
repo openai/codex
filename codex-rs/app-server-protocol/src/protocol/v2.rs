@@ -12,7 +12,6 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use std::path::PathBuf;
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -61,7 +60,7 @@ pub enum SandboxPolicy {
     DangerFullAccess,
     ReadOnly,
     WorkspaceWrite {
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(default)]
         writable_roots: Vec<PathBuf>,
         #[serde(default)]
         network_access: bool,
@@ -220,7 +219,7 @@ pub struct ReasoningEffortOption {
 pub struct ModelListResponse {
     pub data: Vec<Model>,
     /// Opaque cursor to pass to the next call to continue after the last item.
-    /// if None, there are no more items to return.
+    /// If None, there are no more items to return.
     pub next_cursor: Option<String>,
 }
 

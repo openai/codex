@@ -13,6 +13,7 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-core = { workspace = true }
+codex-protocol = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = [
@@ -21,5 +22,5 @@ tokio = { workspace = true, features = [
     "process",
     "rt-multi-thread",
 ] }
-wiremock = { workspace = true }
 uuid = { workspace = true }
+wiremock = { workspace = true }

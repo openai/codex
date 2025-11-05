@@ -1,7 +1,11 @@
 use anyhow::Result;
+use codex_protocol::ConversationId;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionSource;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 /// Create a minimal rollout file under `CODEX_HOME/sessions/YYYY/MM/DD/`.
@@ -20,6 +24,8 @@ pub fn create_fake_rollout(
     model_provider: Option<&str>,
 ) -> Result<String> {
     let uuid = Uuid::new_v4();
+    let uuid_str = uuid.to_string();
+    let conversation_id = ConversationId::from_string(&uuid_str)?;
 
     // sessions/YYYY/MM/DD derived from filename_ts (YYYY-MM-DDThh-mm-ss)
     let year = &filename_ts[0..4];
@@ -31,17 +37,16 @@ pub fn create_fake_rollout(
     let file_path = dir.join(format!("rollout-{filename_ts}-{uuid}.jsonl"));
 
     // Build JSONL lines
-    let mut payload = json!({
-        "id": uuid,
-        "timestamp": meta_rfc3339,
-        "cwd": "/",
-        "originator": "codex",
-        "cli_version": "0.0.0",
-        "instructions": null,
-    });
-    if let Some(provider) = model_provider {
-        payload["model_provider"] = json!(provider);
-    }
+    let payload = serde_json::to_value(SessionMeta {
+        id: conversation_id,
+        timestamp: meta_rfc3339.to_string(),
+        cwd: PathBuf::from("/"),
+        originator: "codex".to_string(),
+        cli_version: "0.0.0".to_string(),
+        instructions: None,
+        source: SessionSource::Cli,
+        model_provider: model_provider.map(str::to_string),
+    })?;
 
     let lines = [
         json!({
@@ -73,5 +78,5 @@ pub fn create_fake_rollout(
     ];
 
     fs::write(file_path, lines.join("\n") + "\n")?;
-    Ok(uuid.to_string())
+    Ok(uuid_str)
 }

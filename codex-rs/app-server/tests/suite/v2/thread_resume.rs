@@ -63,7 +63,7 @@ fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io
             r#"
 model = "mock-model"
 approval_policy = "never"
-sandbox_mode = "workspace-write"
+sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
 
