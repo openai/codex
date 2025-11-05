@@ -164,6 +164,8 @@ impl Renderable for ColumnRenderable<'_> {
 
     /// Returns the cursor position of the first child that has a cursor position, offset by the
     /// child's position in the column.
+    ///
+    /// It is generally assumed that either zero or one child will have a cursor position.
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let mut y = area.y;
         for child in &self.children {
