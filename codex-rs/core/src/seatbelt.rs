@@ -110,6 +110,8 @@ pub(crate) fn create_seatbelt_command_args(
 (allow network-inbound)
 (allow system-socket)
 (allow mach-lookup
+    (global-name "com.apple.bsd.dirhelper")
+    (global-name "com.apple.system.opendirectoryd.membership")
     ; Communicate with the security server for TLS certificate information.
     (global-name "com.apple.SecurityServer")
     (global-name "com.apple.networkd")
