@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use codex_core::config::Config;
 use codex_core::config::types::Notifications;
@@ -61,6 +62,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::time::sleep;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
@@ -131,7 +133,8 @@ struct RunningCommand {
     is_user_shell_command: bool,
 }
 
-const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
+const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [0.0, 90.0, 95.0];
+const LOWER_COST_MODEL_SLUG: &str = "gpt-5-codex";
 
 #[derive(Default)]
 struct RateLimitWarningState {
@@ -242,6 +245,7 @@ pub(crate) struct ChatWidget {
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
     rate_limit_warnings: RateLimitWarningState,
+    rate_limit_switch_prompt_pending: bool,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
@@ -463,6 +467,8 @@ impl ChatWidget {
         self.notify(Notification::AgentTurnComplete {
             response: last_agent_message.unwrap_or_default(),
         });
+
+        self.maybe_show_pending_rate_limit_prompt();
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -497,6 +503,18 @@ impl ChatWidget {
                     .and_then(|window| window.window_minutes),
             );
 
+            if !warnings.is_empty() && self.config.model != LOWER_COST_MODEL_SLUG {
+                if let Some(preset) = self.lower_cost_preset() {
+                    let task_running = self.stream_controller.is_some()
+                        || self.bottom_pane.status_widget().is_some();
+                    if task_running {
+                        self.rate_limit_switch_prompt_pending = true;
+                    } else {
+                        self.open_rate_limit_switch_prompt(preset);
+                    }
+                }
+            }
+
             let display = crate::status::rate_limit_snapshot_display(&snapshot, Local::now());
             self.rate_limit_snapshot = Some(display);
 
@@ -518,6 +536,7 @@ impl ChatWidget {
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
         self.stream_controller = None;
+        self.maybe_show_pending_rate_limit_prompt();
     }
 
     fn on_error(&mut self, message: String) {
@@ -1001,6 +1020,7 @@ impl ChatWidget {
             token_info: None,
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
+            rate_limit_switch_prompt_pending: false,
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -1067,6 +1087,7 @@ impl ChatWidget {
             token_info: None,
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
+            rate_limit_switch_prompt_pending: false,
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -1664,6 +1685,79 @@ impl ChatWidget {
             self.rate_limit_snapshot.as_ref(),
             Local::now(),
         ));
+    }
+
+    fn lower_cost_preset(&self) -> Option<ModelPreset> {
+        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
+        builtin_model_presets(auth_mode)
+            .into_iter()
+            .find(|preset| preset.model == LOWER_COST_MODEL_SLUG)
+    }
+
+    fn maybe_show_pending_rate_limit_prompt(&mut self) {
+        if !self.rate_limit_switch_prompt_pending {
+            return;
+        }
+        self.rate_limit_switch_prompt_pending = false;
+        if let Some(preset) = self.lower_cost_preset() {
+            self.open_rate_limit_switch_prompt(preset);
+        }
+    }
+
+    fn open_rate_limit_switch_prompt(&mut self, preset: ModelPreset) {
+        let switch_model = preset.model.to_string();
+        let display_name = preset.display_name.to_string();
+        let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
+
+        let switch_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                model: Some(switch_model.clone()),
+                effort: Some(Some(default_effort)),
+                summary: None,
+            }));
+            tx.send(AppEvent::UpdateModel(switch_model.clone()));
+        })];
+
+        let keep_actions: Vec<SelectionAction> = Vec::new();
+        let description = if preset.description.is_empty() {
+            Some("Uses fewer credits for upcoming turns.".to_string())
+        } else {
+            Some(preset.description.to_string())
+        };
+
+        let items = vec![
+            SelectionItem {
+                name: format!("Switch to {display_name}"),
+                description,
+                selected_description: None,
+                is_current: false,
+                actions: switch_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Keep current model".to_string(),
+                description: None,
+                selected_description: None,
+                is_current: true,
+                actions: keep_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Approaching rate limits".to_string()),
+            subtitle: Some(format!(
+                "You've used over 75% of your limit. Switch to {display_name} for lower credit usage?"
+            )),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
     }
 
     /// Open a popup to choose the model (stage 1). After selecting a model,
