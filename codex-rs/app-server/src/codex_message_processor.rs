@@ -1666,6 +1666,7 @@ impl CodexMessageProcessor {
         conversation_id: ConversationId,
         rollout_path: &Path,
     ) -> Result<(), JSONRPCErrorError> {
+        // Verify rollout_path is under sessions dir.
         let rollout_folder = self.config.codex_home.join(codex_core::SESSIONS_SUBDIR);
 
         let canonical_sessions_dir = match tokio::fs::canonicalize(&rollout_folder).await {
@@ -1696,6 +1697,7 @@ impl CodexMessageProcessor {
             });
         };
 
+        // Verify file name matches conversation id.
         let required_suffix = format!("{conversation_id}.jsonl");
         let Some(file_name) = canonical_rollout_path.file_name().map(OsStr::to_owned) else {
             return Err(JSONRPCErrorError {
@@ -1707,7 +1709,6 @@ impl CodexMessageProcessor {
                 data: None,
             });
         };
-
         if !file_name
             .to_string_lossy()
             .ends_with(required_suffix.as_str())
@@ -1722,62 +1723,54 @@ impl CodexMessageProcessor {
             });
         }
 
-        tracing::debug!(
-            "thread/archive canonical path {}",
-            canonical_rollout_path.display()
-        );
-
-        let removed_conversation = self
+        // If the conversation is active, request shutdown and wait briefly.
+        if let Some(conversation) = self
             .conversation_manager
             .remove_conversation(&conversation_id)
-            .await;
-        if let Some(conversation) = removed_conversation {
+            .await
+        {
             info!("conversation {conversation_id} was active; shutting down");
             let conversation_clone = conversation.clone();
             let notify = Arc::new(tokio::sync::Notify::new());
             let notify_clone = notify.clone();
-
             let is_shutdown = tokio::spawn(async move {
+                // Create the notified future outside the loop to avoid losing notifications.
+                let notified = notify_clone.notified();
+                tokio::pin!(notified);
                 loop {
                     select! {
-                        _ = notify_clone.notified() => {
-                            break;
-                        }
+                        _ = &mut notified => { break; }
                         event = conversation_clone.next_event() => {
-                            if let Ok(event) = event && matches!(event.msg, EventMsg::ShutdownComplete) {
-                                break;
+                            match event {
+                                Ok(event) => {
+                                    if matches!(event.msg, EventMsg::ShutdownComplete) { break; }
+                                }
+                                // Break on errors to avoid tight loops when the agent loop has exited.
+                                Err(_) => { break; }
                             }
                         }
                     }
                 }
             });
-
             match conversation.submit(Op::Shutdown).await {
                 Ok(_) => {
                     select! {
                         _ = is_shutdown => {}
                         _ = tokio::time::sleep(Duration::from_secs(10)) => {
                             warn!("conversation {conversation_id} shutdown timed out; proceeding with archive");
-                            notify.notify_one();
+                            // Wake any waiter; use notify_waiters to avoid missing the signal.
+                            notify.notify_waiters();
                         }
                     }
                 }
                 Err(err) => {
                     error!("failed to submit Shutdown to conversation {conversation_id}: {err}");
-                    notify.notify_one();
+                    notify.notify_waiters();
                 }
             }
         }
 
-        tracing::debug!(
-            "thread/archive moving {} -> {}",
-            canonical_rollout_path.display(),
-            self.config
-                .codex_home
-                .join(codex_core::ARCHIVED_SESSIONS_SUBDIR)
-                .join(&file_name)
-                .display()
-        );
+        // Move the rollout file to archived.
         let result: std::io::Result<()> = async {
             let archive_folder = self
                 .config
