@@ -3,10 +3,15 @@
 //! This module provides integration between Codex and Windows 11's native AI APIs,
 //! enabling OS-level optimizations and kernel driver acceleration.
 
-use anyhow::{Context, Result};
-use tracing::{debug, info};
+use anyhow::Result;
 
 #[cfg(target_os = "windows")]
+use anyhow::Context;
+
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
+use tracing::{debug, info};
+
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
 use codex_windows_ai::{GpuStats, WindowsAiRuntime, kernel_driver::KernelBridge};
 
 /// Windows AI execution options
@@ -31,7 +36,7 @@ impl Default for WindowsAiOptions {
 }
 
 /// Execute prompt with Windows AI optimization
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
 pub async fn execute_with_windows_ai(
     prompt: &str,
     options: &WindowsAiOptions,
@@ -66,7 +71,7 @@ pub async fn execute_with_windows_ai(
 }
 
 /// Execute with kernel driver acceleration
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
 async fn execute_with_kernel_driver(
     prompt: &str,
     _runtime: &WindowsAiRuntime,
@@ -96,36 +101,46 @@ async fn execute_with_kernel_driver(
     Ok(format!("Kernel-accelerated execution: {prompt} (placeholder)"))
 }
 
-/// Stub for non-Windows platforms
-#[cfg(not(target_os = "windows"))]
+/// Stub for non-Windows or non-feature platforms
+#[cfg(not(all(target_os = "windows", feature = "windows-ai")))]
 pub async fn execute_with_windows_ai(
     _prompt: &str,
     _options: &WindowsAiOptions,
 ) -> Result<String> {
-    anyhow::bail!("Windows AI is only available on Windows 11 25H2+")
+    anyhow::bail!("Windows AI is only available on Windows 11 25H2+ with windows-ai feature")
 }
 
-/// Get GPU statistics (Windows-only)
-#[cfg(target_os = "windows")]
+/// Placeholder GpuStats for when feature is disabled
+#[cfg(not(all(target_os = "windows", feature = "windows-ai")))]
+#[derive(Debug, Clone)]
+pub struct GpuStats {
+    pub utilization: f32,
+    pub memory_used: u64,
+    pub memory_total: u64,
+    pub temperature: f32,
+}
+
+/// Get GPU statistics (Windows-only with feature)
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
 pub async fn get_gpu_statistics() -> Result<GpuStats> {
     let runtime = WindowsAiRuntime::new()?;
     runtime.get_gpu_stats().await
 }
 
 /// Get GPU statistics stub
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(all(target_os = "windows", feature = "windows-ai")))]
 pub async fn get_gpu_statistics() -> Result<GpuStats> {
-    anyhow::bail!("Windows AI is only available on Windows")
+    anyhow::bail!("Windows AI is only available on Windows with windows-ai feature")
 }
 
 /// Check if Windows AI is available on this system
 pub fn is_windows_ai_available() -> bool {
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "windows-ai"))]
     {
         WindowsAiRuntime::is_available()
     }
     
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(all(target_os = "windows", feature = "windows-ai")))]
     {
         false
     }
