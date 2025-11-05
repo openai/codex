@@ -1,3 +1,7 @@
+// Allow expect/unwrap for locale parsing - en-US and "und" are guaranteed to parse
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
+
 use std::rc::Rc;
 
 use icu_decimal::DecimalFormatter;
@@ -11,18 +15,9 @@ fn make_local_formatter() -> Option<DecimalFormatter> {
 }
 
 fn make_en_us_formatter() -> DecimalFormatter {
-    let loc: Locale = "en-US".parse().unwrap_or_else(|_| {
-        // Fallback to root locale if en-US fails (should never happen)
-        "und".parse().unwrap()
-    });
-    DecimalFormatter::try_new(loc.into(), DecimalFormatterOptions::default()).unwrap_or_else(|_| {
-        // Fallback to a minimal formatter
-        DecimalFormatter::try_new(
-            "und".parse::<Locale>().unwrap().into(),
-            DecimalFormatterOptions::default(),
-        )
-        .unwrap()
-    })
+    let loc: Locale = "en-US".parse().expect("en-US locale should always parse");
+    DecimalFormatter::try_new(loc.into(), DecimalFormatterOptions::default())
+        .expect("DecimalFormatter creation with en-US should not fail")
 }
 
 fn formatter() -> Rc<DecimalFormatter> {

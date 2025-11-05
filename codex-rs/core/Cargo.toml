@@ -11,6 +11,8 @@ path = "src/lib.rs"
 [features]
 default = []
 agent_security = []
+windows-ai = ["codex-windows-ai"]
+cuda = ["codex-cuda-runtime"]
 
 [lints]
 workspace = true
@@ -107,7 +109,8 @@ uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 wildmatch = { workspace = true }
 codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
-# codex_windows_ai = { package = "codex-windows-ai", path = "../windows-ai" }  # Experimental - disabled
+codex-windows-ai = { path = "../windows-ai", optional = true }
+codex-cuda-runtime = { path = "../cuda-runtime", optional = true }
 
 
 [target.'cfg(target_os = "linux")'.dependencies]
