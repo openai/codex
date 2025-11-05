@@ -1880,25 +1880,32 @@ impl ChatWidget {
                         preset: preset_clone.clone(),
                     });
                 })]
-            } else if cfg!(target_os = "windows") && preset.id == "auto" {
-                if codex_core::get_platform_sandbox().is_none() {
-                    vec![Box::new(|tx| {
-                        tx.send(AppEvent::ShowWindowsAutoModeInstructions);
-                    })]
-                } else if !self
-                    .config
-                    .notices
-                    .hide_world_writable_warning
-                    .unwrap_or(false)
-                    && self.windows_world_writable_flagged()
+            } else if preset.id == "auto" {
+                #[cfg(target_os = "windows")]
                 {
-                    let preset_clone = preset.clone();
-                    vec![Box::new(move |tx| {
-                        tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
-                            preset: preset_clone.clone(),
-                        });
-                    })]
-                } else {
+                    if codex_core::get_platform_sandbox().is_none() {
+                        vec![Box::new(|tx| {
+                            tx.send(AppEvent::ShowWindowsAutoModeInstructions);
+                        })]
+                    } else if !self
+                        .config
+                        .notices
+                        .hide_world_writable_warning
+                        .unwrap_or(false)
+                        && self.windows_world_writable_flagged()
+                    {
+                        let preset_clone = preset.clone();
+                        vec![Box::new(move |tx| {
+                            tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
+                                preset: preset_clone.clone(),
+                            });
+                        })]
+                    } else {
+                        Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
                     Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
                 }
             } else {
