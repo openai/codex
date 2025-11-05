@@ -168,26 +168,25 @@ pub(crate) async fn stream_chat_completions(
         tool_call: serde_json::Value,
         reasoning: Option<String>,
     ) {
-        if let Some(idx) = *last_assistant_index {
-            if let Some(serde_json::Value::Object(obj)) = messages.get_mut(idx)
-                && obj.get("role").and_then(|v| v.as_str()) == Some("assistant")
-            {
-                let entry = obj
-                    .entry("tool_calls")
-                    .or_insert_with(|| serde_json::Value::Array(Vec::new()));
-                if let serde_json::Value::Array(arr) = entry {
-                    arr.push(tool_call);
-                }
-                if let Some(reasoning) = reasoning.as_ref() {
-                    let entry = obj
-                        .entry("reasoning")
-                        .or_insert_with(|| serde_json::Value::String(String::new()));
-                    if let serde_json::Value::String(existing) = entry {
-                        existing.push_str(reasoning);
-                    }
-                }
-                return;
+        if let Some(idx) = *last_assistant_index
+            && let Some(serde_json::Value::Object(obj)) = messages.get_mut(idx)
+            && obj.get("role").and_then(|v| v.as_str()) == Some("assistant")
+        {
+            let entry = obj
+                .entry("tool_calls")
+                .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+            if let serde_json::Value::Array(arr) = entry {
+                arr.push(tool_call);
             }
+            if let Some(reasoning) = reasoning.as_ref() {
+                let entry = obj
+                    .entry("reasoning")
+                    .or_insert_with(|| serde_json::Value::String(String::new()));
+                if let serde_json::Value::String(existing) = entry {
+                    existing.push_str(reasoning);
+                }
+            }
+            return;
         }
 
         let mut msg = json!({
@@ -195,13 +194,13 @@ pub(crate) async fn stream_chat_completions(
             "content": null,
             "tool_calls": [tool_call],
         });
-        if let Some(reasoning) = reasoning {
-            if let Some(obj) = msg.as_object_mut() {
-                obj.insert(
-                    "reasoning".to_string(),
-                    serde_json::Value::String(reasoning),
-                );
-            }
+        if let Some(reasoning) = reasoning
+            && let Some(obj) = msg.as_object_mut()
+        {
+            obj.insert(
+                "reasoning".to_string(),
+                serde_json::Value::String(reasoning),
+            );
         }
         let idx = messages.len();
         messages.push(msg);
@@ -324,10 +323,10 @@ pub(crate) async fn stream_chat_completions(
                         .iter()
                         .map(|it| match it {
                             FunctionCallOutputContentItem::InputText { text } => {
-                                json!({"type":"text","text": text})
+                                json!({"type": "text", "text": text})
                             }
                             FunctionCallOutputContentItem::InputImage { image_url } => {
-                                json!({"type":"image_url","image_url": {"url": image_url}})
+                                json!({"type": "image_url", "image_url": {"url": image_url}})
                             }
                         })
                         .collect();
