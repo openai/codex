@@ -12,8 +12,10 @@ use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
 use codex_app_server_protocol::ArchiveConversationParams;
 use codex_app_server_protocol::ArchiveConversationResponse;
+use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthStatusChangeNotification;
+use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConversationSummary;
 use codex_app_server_protocol::ExecCommandApprovalParams;
@@ -25,6 +27,8 @@ use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::FuzzyFileSearchParams;
 use codex_app_server_protocol::FuzzyFileSearchResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
+use codex_app_server_protocol::GetAuthStatusParams;
+use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::GetConversationSummaryParams;
 use codex_app_server_protocol::GetConversationSummaryResponse;
 use codex_app_server_protocol::GetUserAgentResponse;
@@ -40,6 +44,8 @@ use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::LoginApiKeyResponse;
 use codex_app_server_protocol::LoginChatGptCompleteNotification;
 use codex_app_server_protocol::LoginChatGptResponse;
+use codex_app_server_protocol::LogoutAccountResponse;
+use codex_app_server_protocol::LogoutChatGptResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
@@ -49,6 +55,8 @@ use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ResumeConversationParams;
+use codex_app_server_protocol::ResumeConversationResponse;
+use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
 use codex_app_server_protocol::SendUserTurnParams;
@@ -61,6 +69,7 @@ use codex_app_server_protocol::SetDefaultModelResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -68,6 +77,13 @@ use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
+use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnInterruptParams;
+use codex_app_server_protocol::TurnInterruptResponse;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnStartedNotification;
+use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::UserSavedConfig;
@@ -526,10 +542,7 @@ impl CodexMessageProcessor {
             }
             drop(guard);
             self.outgoing
-                .send_response(
-                    request_id,
-                    codex_app_server_protocol::CancelLoginChatGptResponse {},
-                )
+                .send_response(request_id, CancelLoginChatGptResponse {})
                 .await;
         } else {
             drop(guard);
@@ -567,10 +580,7 @@ impl CodexMessageProcessor {
         match self.logout_common().await {
             Ok(current_auth_method) => {
                 self.outgoing
-                    .send_response(
-                        request_id,
-                        codex_app_server_protocol::LogoutChatGptResponse {},
-                    )
+                    .send_response(request_id, LogoutChatGptResponse {})
                     .await;
 
                 let payload = AuthStatusChangeNotification {
@@ -590,10 +600,7 @@ impl CodexMessageProcessor {
         match self.logout_common().await {
             Ok(current_auth_method) => {
                 self.outgoing
-                    .send_response(
-                        request_id,
-                        codex_app_server_protocol::LogoutAccountResponse {},
-                    )
+                    .send_response(request_id, LogoutAccountResponse {})
                     .await;
 
                 let payload_v2 = AccountUpdatedNotification {
@@ -609,11 +616,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn get_auth_status(
-        &self,
-        request_id: RequestId,
-        params: codex_app_server_protocol::GetAuthStatusParams,
-    ) {
+    async fn get_auth_status(&self, request_id: RequestId, params: GetAuthStatusParams) {
         let include_token = params.include_token.unwrap_or(false);
         let do_refresh = params.refresh_token.unwrap_or(false);
 
@@ -627,7 +630,7 @@ impl CodexMessageProcessor {
         let requires_openai_auth = self.config.model_provider.requires_openai_auth;
 
         let response = if !requires_openai_auth {
-            codex_app_server_protocol::GetAuthStatusResponse {
+            GetAuthStatusResponse {
                 auth_method: None,
                 auth_token: None,
                 requires_openai_auth: Some(false),
@@ -647,13 +650,13 @@ impl CodexMessageProcessor {
                             (None, None)
                         }
                     };
-                    codex_app_server_protocol::GetAuthStatusResponse {
+                    GetAuthStatusResponse {
                         auth_method: reported_auth_method,
                         auth_token: token_opt,
                         requires_openai_auth: Some(true),
                     }
                 }
-                None => codex_app_server_protocol::GetAuthStatusResponse {
+                None => GetAuthStatusResponse {
                     auth_method: None,
                     auth_token: None,
                     requires_openai_auth: Some(true),
@@ -937,12 +940,8 @@ impl CodexMessageProcessor {
         let overrides = ConfigOverrides {
             model: params.model,
             cwd: params.cwd.map(PathBuf::from),
-            approval_policy: params
-                .approval_policy
-                .map(codex_app_server_protocol::AskForApproval::to_core),
-            sandbox_mode: params
-                .sandbox
-                .map(codex_app_server_protocol::SandboxMode::to_core),
+            approval_policy: params.approval_policy.map(AskForApproval::to_core),
+            sandbox_mode: params.sandbox.map(SandboxMode::to_core),
             model_provider: params.model_provider,
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             base_instructions: params.base_instructions,
@@ -1259,111 +1258,6 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn turn_start(
-        &self,
-        request_id: RequestId,
-        params: codex_app_server_protocol::TurnStartParams,
-    ) {
-        // Resolve conversation id from v2 thread id string.
-        let conversation_id = match ConversationId::from_string(&params.thread_id) {
-            Ok(id) => id,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("invalid thread id: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
-        let Ok(conversation) = self
-            .conversation_manager
-            .get_conversation(conversation_id)
-            .await
-        else {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("conversation not found: {conversation_id}"),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
-        };
-
-        // Keep a copy of v2 inputs for the notification payload.
-        let v2_inputs_for_notif = params.input.clone();
-
-        // Map v2 input items to core input items.
-        let mapped_items: Vec<CoreInputItem> = params
-            .input
-            .into_iter()
-            .map(V2UserInput::into_core)
-            .collect();
-
-        let has_any_overrides = params.cwd.is_some()
-            || params.approval_policy.is_some()
-            || params.sandbox_policy.is_some()
-            || params.model.is_some()
-            || params.effort.is_some()
-            || params.summary.is_some();
-
-        // If any overrides are provided, update the session turn context first.
-        if has_any_overrides {
-            let _ = conversation
-                .submit(Op::OverrideTurnContext {
-                    cwd: params.cwd,
-                    approval_policy: params
-                        .approval_policy
-                        .map(codex_app_server_protocol::AskForApproval::to_core),
-                    sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
-                    model: params.model,
-                    effort: params.effort.map(Some),
-                    summary: params.summary,
-                })
-                .await;
-        }
-
-        // Start the turn by submitting the user input. Return its submission id as turn_id.
-        let turn_id = conversation
-            .submit(Op::UserInput {
-                items: mapped_items,
-            })
-            .await;
-
-        match turn_id {
-            Ok(turn_id) => {
-                let turn = codex_app_server_protocol::Turn {
-                    id: turn_id.clone(),
-                    items: vec![codex_app_server_protocol::ThreadItem::UserMessage {
-                        id: turn_id,
-                        content: v2_inputs_for_notif,
-                    }],
-                    status: codex_app_server_protocol::TurnStatus::InProgress,
-                    error: None,
-                };
-
-                let response = codex_app_server_protocol::TurnStartResponse { turn: turn.clone() };
-                self.outgoing.send_response(request_id, response).await;
-
-                // Emit v2 turn/started notification.
-                let notif = codex_app_server_protocol::TurnStartedNotification { turn };
-                self.outgoing
-                    .send_server_notification(ServerNotification::TurnStarted(notif))
-                    .await;
-            }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to start turn: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-            }
-        }
-    }
-
     async fn handle_list_conversations(
         &self,
         request_id: RequestId,
@@ -1665,7 +1559,7 @@ impl CodexMessageProcessor {
                     .map(|msgs| msgs.into_iter().collect());
 
                 // Reply with conversation id + model and initial messages (when present)
-                let response = codex_app_server_protocol::ResumeConversationResponse {
+                let response = ResumeConversationResponse {
                     conversation_id,
                     model: session_configured.model.clone(),
                     initial_messages,
@@ -1985,12 +1879,107 @@ impl CodexMessageProcessor {
         let _ = conversation.submit(Op::Interrupt).await;
     }
 
-    async fn turn_interrupt(
-        &mut self,
-        request_id: RequestId,
-        params: codex_app_server_protocol::TurnInterruptParams,
-    ) {
-        let codex_app_server_protocol::TurnInterruptParams { thread_id, .. } = params;
+    async fn turn_start(&self, request_id: RequestId, params: TurnStartParams) {
+        // Resolve conversation id from v2 thread id string.
+        let conversation_id = match ConversationId::from_string(&params.thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("invalid thread id: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let Ok(conversation) = self
+            .conversation_manager
+            .get_conversation(conversation_id)
+            .await
+        else {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("conversation not found: {conversation_id}"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        };
+
+        // Keep a copy of v2 inputs for the notification payload.
+        let v2_inputs_for_notif = params.input.clone();
+
+        // Map v2 input items to core input items.
+        let mapped_items: Vec<CoreInputItem> = params
+            .input
+            .into_iter()
+            .map(V2UserInput::into_core)
+            .collect();
+
+        let has_any_overrides = params.cwd.is_some()
+            || params.approval_policy.is_some()
+            || params.sandbox_policy.is_some()
+            || params.model.is_some()
+            || params.effort.is_some()
+            || params.summary.is_some();
+
+        // If any overrides are provided, update the session turn context first.
+        if has_any_overrides {
+            let _ = conversation
+                .submit(Op::OverrideTurnContext {
+                    cwd: params.cwd,
+                    approval_policy: params.approval_policy.map(AskForApproval::to_core),
+                    sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
+                    model: params.model,
+                    effort: params.effort.map(Some),
+                    summary: params.summary,
+                })
+                .await;
+        }
+
+        // Start the turn by submitting the user input. Return its submission id as turn_id.
+        let turn_id = conversation
+            .submit(Op::UserInput {
+                items: mapped_items,
+            })
+            .await;
+
+        match turn_id {
+            Ok(turn_id) => {
+                let turn = Turn {
+                    id: turn_id.clone(),
+                    items: vec![ThreadItem::UserMessage {
+                        id: turn_id,
+                        content: v2_inputs_for_notif,
+                    }],
+                    status: TurnStatus::InProgress,
+                    error: None,
+                };
+
+                let response = TurnStartResponse { turn: turn.clone() };
+                self.outgoing.send_response(request_id, response).await;
+
+                // Emit v2 turn/started notification.
+                let notif = TurnStartedNotification { turn };
+                self.outgoing
+                    .send_server_notification(ServerNotification::TurnStarted(notif))
+                    .await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to start turn: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn turn_interrupt(&mut self, request_id: RequestId, params: TurnInterruptParams) {
+        let TurnInterruptParams { thread_id, .. } = params;
 
         // Resolve conversation id from v2 thread id string.
         let conversation_id = match ConversationId::from_string(&thread_id) {
@@ -2386,7 +2375,7 @@ async fn apply_bespoke_event_handling(
                             outgoing.send_response(rid, response).await;
                         }
                         ApiVersion::V2 => {
-                            let response = codex_app_server_protocol::TurnInterruptResponse {};
+                            let response = TurnInterruptResponse {};
                             outgoing.send_response(rid, response).await;
                         }
                     }
