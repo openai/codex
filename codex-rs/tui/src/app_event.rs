@@ -72,6 +72,11 @@ pub(crate) enum AppEvent {
         preset: ApprovalPreset,
     },
 
+    /// Open the Windows world-writable directories warning when enabling Auto mode.
+    OpenWorldWritableWarningConfirmation {
+        preset: ApprovalPreset,
+    },
+
     /// Show Windows Subsystem for Linux setup instructions for auto mode.
     ShowWindowsAutoModeInstructions,
 
@@ -84,8 +89,17 @@ pub(crate) enum AppEvent {
     /// Update whether the full access warning prompt has been acknowledged.
     UpdateFullAccessWarningAcknowledged(bool),
 
+    /// Update whether the world-writable directories warning has been acknowledged.
+    UpdateWorldWritableWarningAcknowledged(bool),
+
     /// Persist the acknowledgement flag for the full access warning prompt.
     PersistFullAccessWarningAcknowledged,
+
+    /// Persist the acknowledgement flag for the world-writable directories warning.
+    PersistWorldWritableWarningAcknowledged,
+
+    /// Skip the next world-writable scan (one-shot) after a user-confirmed continue.
+    SkipNextWorldWritableScan,
 
     /// Re-open the approval presets popup.
     OpenApprovalsPopup,

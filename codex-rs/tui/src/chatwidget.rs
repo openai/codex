@@ -1880,13 +1880,27 @@ impl ChatWidget {
                         preset: preset_clone.clone(),
                     });
                 })]
-            } else if cfg!(target_os = "windows")
-                && preset.id == "auto"
-                && codex_core::get_platform_sandbox().is_none()
-            {
-                vec![Box::new(|tx| {
-                    tx.send(AppEvent::ShowWindowsAutoModeInstructions);
-                })]
+            } else if cfg!(target_os = "windows") && preset.id == "auto" {
+                if codex_core::get_platform_sandbox().is_none() {
+                    vec![Box::new(|tx| {
+                        tx.send(AppEvent::ShowWindowsAutoModeInstructions);
+                    })]
+                } else if !self
+                    .config
+                    .notices
+                    .hide_world_writable_warning
+                    .unwrap_or(false)
+                    && self.windows_world_writable_flagged()
+                {
+                    let preset_clone = preset.clone();
+                    vec![Box::new(move |tx| {
+                        tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
+                            preset: preset_clone.clone(),
+                        });
+                    })]
+                } else {
+                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                }
             } else {
                 Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
             };
@@ -1926,6 +1940,22 @@ impl ChatWidget {
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
         })]
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_world_writable_flagged(&self) -> bool {
+        use std::collections::HashMap;
+        let mut env_map: HashMap<String, String> = HashMap::new();
+        for (k, v) in std::env::vars() {
+            env_map.insert(k, v);
+        }
+        match codex_windows_sandbox::preflight_audit_everyone_writable(
+            &self.config.cwd,
+            &env_map,
+        ) {
+            Ok(()) => false,
+            Err(_) => true,
+        }
     }
 
     pub(crate) fn open_full_access_confirmation(&mut self, preset: ApprovalPreset) {
@@ -1993,6 +2023,84 @@ impl ChatWidget {
     }
 
     #[cfg(target_os = "windows")]
+    pub(crate) fn open_world_writable_warning_confirmation(
+        &mut self,
+        preset: ApprovalPreset,
+    ) {
+        let approval = preset.approval;
+        let sandbox = preset.sandbox;
+        let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
+        let title_line = Line::from("Auto mode has unprotected directories").bold();
+        let info_line = Line::from(vec![
+            "Some important directories on this system are world-writable. "
+                .into(),
+            "The Windows sandbox cannot protect writes to these locations in Auto mode."
+                .fg(Color::Red),
+        ]);
+        header_children.push(Box::new(title_line));
+        header_children.push(Box::new(
+            Paragraph::new(vec![info_line]).wrap(Wrap { trim: false }),
+        ));
+        let header = ColumnRenderable::with(header_children);
+
+        // Build actions ensuring acknowledgement happens before applying the new sandbox policy,
+        // so downstream policy-change hooks don't re-trigger the warning.
+        let mut accept_actions: Vec<SelectionAction> = Vec::new();
+        {
+            let s = sandbox.clone();
+            // Suppress the immediate re-scan once after user confirms continue.
+            accept_actions.push(Box::new(|tx| {
+                tx.send(AppEvent::SkipNextWorldWritableScan);
+            }));
+            accept_actions.extend(Self::approval_preset_actions(approval, s));
+        }
+
+        let mut accept_and_remember_actions: Vec<SelectionAction> = Vec::new();
+        accept_and_remember_actions.push(Box::new(|tx| {
+            tx.send(AppEvent::UpdateWorldWritableWarningAcknowledged(true));
+            tx.send(AppEvent::PersistWorldWritableWarningAcknowledged);
+        }));
+        accept_and_remember_actions.extend(Self::approval_preset_actions(approval, sandbox));
+
+        let deny_actions: Vec<SelectionAction> = vec![Box::new(|tx| {
+            tx.send(AppEvent::OpenApprovalsPopup);
+        })];
+
+        let items = vec![
+            SelectionItem {
+                name: "Continue".to_string(),
+                description: Some("Apply Auto mode for this session".to_string()),
+                actions: accept_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Continue and don't warn again".to_string(),
+                description: Some(
+                    "Enable Auto mode and remember this choice".to_string(),
+                ),
+                actions: accept_and_remember_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Cancel".to_string(),
+                description: Some("Go back without enabling Auto mode".to_string()),
+                actions: deny_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            header: Box::new(header),
+            ..Default::default()
+        });
+    }
+
+    #[cfg(target_os = "windows")]
     pub(crate) fn open_windows_auto_mode_instructions(&mut self) {
         use ratatui_macros::line;
 
@@ -2041,6 +2149,17 @@ impl ChatWidget {
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
         self.config.notices.hide_full_access_warning = Some(acknowledged);
+    }
+
+    pub(crate) fn set_world_writable_warning_acknowledged(&mut self, acknowledged: bool) {
+        self.config.notices.hide_world_writable_warning = Some(acknowledged);
+    }
+
+    pub(crate) fn world_writable_warning_hidden(&self) -> bool {
+        self.config
+            .notices
+            .hide_world_writable_warning
+            .unwrap_or(false)
     }
 
     /// Set the reasoning effort in the widget's config copy.

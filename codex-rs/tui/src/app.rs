@@ -79,6 +79,9 @@ pub(crate) struct App {
     pub(crate) feedback: codex_feedback::CodexFeedback,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
+
+    // One-shot suppression of the next world-writable scan after user confirmation.
+    skip_world_writable_scan_once: bool,
 }
 
 impl App {
@@ -168,7 +171,41 @@ impl App {
             backtrack: BacktrackState::default(),
             feedback: feedback.clone(),
             pending_update_action: None,
+            skip_world_writable_scan_once: false,
         };
+
+        // On startup, if Auto mode (workspace-write) is active, warn about world-writable dirs on Windows.
+        #[cfg(target_os = "windows")]
+        {
+            let should_check = codex_core::get_platform_sandbox().is_some()
+                && matches!(
+                    app.config.sandbox_policy,
+                    codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                )
+                && !app
+                    .config
+                    .notices
+                    .hide_world_writable_warning
+                    .unwrap_or(false);
+            if should_check {
+                use std::collections::HashMap;
+                let cwd = app.config.cwd.clone();
+                let env_map: HashMap<String, String> = std::env::vars().collect();
+                let tx = app.app_event_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    if codex_windows_sandbox::preflight_audit_everyone_writable(&cwd, &env_map)
+                        .is_err()
+                    {
+                        // Use the built-in Auto preset for labels and to drive actions.
+                        let preset = codex_common::approval_presets::builtin_approval_presets()
+                            .into_iter()
+                            .find(|p| p.id == "auto")
+                            .unwrap();
+                        tx.send(AppEvent::OpenWorldWritableWarningConfirmation { preset });
+                    }
+                });
+            }
+        }
 
         #[cfg(not(debug_assertions))]
         if let Some(latest_version) = upgrade_version {
@@ -360,6 +397,10 @@ impl App {
             AppEvent::OpenFullAccessConfirmation { preset } => {
                 self.chat_widget.open_full_access_confirmation(preset);
             }
+            AppEvent::OpenWorldWritableWarningConfirmation { preset } => {
+                self.chat_widget
+                    .open_world_writable_warning_confirmation(preset);
+            }
             AppEvent::OpenFeedbackNote {
                 category,
                 include_logs,
@@ -418,10 +459,54 @@ impl App {
                 self.chat_widget.set_approval_policy(policy);
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
-                self.chat_widget.set_sandbox_policy(policy);
+                self.chat_widget.set_sandbox_policy(policy.clone());
+
+                // If sandbox policy becomes workspace-write, run the Windows world-writable scan.
+                #[cfg(target_os = "windows")]
+                {
+                    // One-shot suppression if the user just confirmed continue.
+                    if self.skip_world_writable_scan_once {
+                        self.skip_world_writable_scan_once = false;
+                        return Ok(true);
+                    }
+
+                    let should_check = codex_core::get_platform_sandbox().is_some()
+                        && matches!(
+                            policy,
+                            codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        )
+                        && !self.chat_widget.world_writable_warning_hidden();
+                    if should_check {
+                        use std::collections::HashMap;
+                        let cwd = self.config.cwd.clone();
+                        let env_map: HashMap<String, String> = std::env::vars().collect();
+                        let tx = self.app_event_tx.clone();
+                        tokio::task::spawn_blocking(move || {
+                            if codex_windows_sandbox::preflight_audit_everyone_writable(
+                                &cwd, &env_map,
+                            )
+                            .is_err()
+                            {
+                                // Use the built-in Auto preset to drive the confirmation.
+                                let preset = codex_common::approval_presets::builtin_approval_presets()
+                                    .into_iter()
+                                    .find(|p| p.id == "auto")
+                                    .unwrap();
+                                tx.send(AppEvent::OpenWorldWritableWarningConfirmation { preset });
+                            }
+                        });
+                    }
+                }
+            }
+            AppEvent::SkipNextWorldWritableScan => {
+                self.skip_world_writable_scan_once = true;
             }
             AppEvent::UpdateFullAccessWarningAcknowledged(ack) => {
                 self.chat_widget.set_full_access_warning_acknowledged(ack);
+            }
+            AppEvent::UpdateWorldWritableWarningAcknowledged(ack) => {
+                self.chat_widget
+                    .set_world_writable_warning_acknowledged(ack);
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
@@ -435,6 +520,21 @@ impl App {
                     );
                     self.chat_widget.add_error_message(format!(
                         "Failed to save full access confirmation preference: {err}"
+                    ));
+                }
+            }
+            AppEvent::PersistWorldWritableWarningAcknowledged => {
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_hide_world_writable_warning(true)
+                    .apply()
+                    .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist world-writable warning acknowledgement"
+                    );
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save Auto mode warning preference: {err}"
                     ));
                 }
             }
