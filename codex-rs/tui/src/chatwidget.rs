@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use codex_core::config::Config;
 use codex_core::config::types::Notifications;
@@ -62,7 +61,6 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::time::sleep;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
@@ -133,8 +131,8 @@ struct RunningCommand {
     is_user_shell_command: bool,
 }
 
-const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [0.0, 90.0, 95.0];
-const LOWER_COST_MODEL_SLUG: &str = "gpt-5-codex";
+const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
+const NUDGE_MODEL_SLUG: &str = "gpt-5-codex";
 
 #[derive(Default)]
 struct RateLimitWarningState {
@@ -503,15 +501,16 @@ impl ChatWidget {
                     .and_then(|window| window.window_minutes),
             );
 
-            if !warnings.is_empty() && self.config.model != LOWER_COST_MODEL_SLUG {
-                if let Some(preset) = self.lower_cost_preset() {
-                    let task_running = self.stream_controller.is_some()
-                        || self.bottom_pane.status_widget().is_some();
-                    if task_running {
-                        self.rate_limit_switch_prompt_pending = true;
-                    } else {
-                        self.open_rate_limit_switch_prompt(preset);
-                    }
+            if !warnings.is_empty()
+                && self.config.model != NUDGE_MODEL_SLUG
+                && let Some(preset) = self.lower_cost_preset()
+            {
+                let task_running =
+                    self.stream_controller.is_some() || self.bottom_pane.status_widget().is_some();
+                if task_running {
+                    self.rate_limit_switch_prompt_pending = true;
+                } else {
+                    self.open_rate_limit_switch_prompt(preset);
                 }
             }
 
@@ -1691,7 +1690,7 @@ impl ChatWidget {
         let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
         builtin_model_presets(auth_mode)
             .into_iter()
-            .find(|preset| preset.model == LOWER_COST_MODEL_SLUG)
+            .find(|preset| preset.model == NUDGE_MODEL_SLUG)
     }
 
     fn maybe_show_pending_rate_limit_prompt(&mut self) {
