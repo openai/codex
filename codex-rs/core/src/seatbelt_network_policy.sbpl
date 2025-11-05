@@ -27,5 +27,4 @@
 
 (allow file-write*
   (subpath (param "DARWIN_USER_CACHE_DIR"))
-  (subpath (param "DARWIN_USER_TEMP_DIR"))
 )
