@@ -313,6 +313,9 @@ pub(crate) mod errors {
                 SandboxTransformError::MissingLinuxSandboxExecutable => {
                     CodexErr::LandlockSandboxExecutableNotProvided
                 }
+                SandboxTransformError::SeatbeltUnavailable => CodexErr::UnsupportedOperation(
+                    "seatbelt sandbox is only available on macOS".to_string(),
+                ),
             }
         }
     }
