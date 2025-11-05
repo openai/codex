@@ -79,10 +79,12 @@ impl RefreshTokenError {
     }
 }
 
-fn refresh_token_error_to_io(err: RefreshTokenError) -> std::io::Error {
-    match err {
-        RefreshTokenError::Permanent(failed) => std::io::Error::other(failed),
-        RefreshTokenError::Transient(inner) => inner,
+impl From<RefreshTokenError> for std::io::Error {
+    fn from(err: RefreshTokenError) -> Self {
+        match err {
+            RefreshTokenError::Permanent(failed) => std::io::Error::other(failed),
+            RefreshTokenError::Transient(inner) => inner,
+        }
     }
 }
 
@@ -145,7 +147,7 @@ impl CodexAuth {
                     .await;
                     let refresh_response = match refresh_result {
                         Ok(Ok(response)) => response,
-                        Ok(Err(err)) => return Err(refresh_token_error_to_io(err)),
+                        Ok(Err(err)) => return Err(err.into()),
                         Err(_) => {
                             return Err(std::io::Error::new(
                                 ErrorKind::TimedOut,
