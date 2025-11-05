@@ -13,6 +13,10 @@ use crate::export_server_responses;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::SandboxPolicy;
 use schemars::JsonSchema;
 use schemars::schema_for;
 use serde::Serialize;
@@ -113,6 +117,11 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
         |d| write_json_schema_with_return::<crate::ServerRequest>(d, "ServerRequest"),
         |d| write_json_schema_with_return::<crate::ClientNotification>(d, "ClientNotification"),
         |d| write_json_schema_with_return::<crate::ServerNotification>(d, "ServerNotification"),
+        |d| write_json_schema_with_return::<EventMsg>(d, "EventMsg"),
+        |d| write_json_schema_with_return::<FileChange>(d, "FileChange"),
+        |d| write_json_schema_with_return::<crate::protocol::v1::InputItem>(d, "InputItem"),
+        |d| write_json_schema_with_return::<ParsedCommand>(d, "ParsedCommand"),
+        |d| write_json_schema_with_return::<SandboxPolicy>(d, "SandboxPolicy"),
     ];
 
     let mut schemas: Vec<GeneratedSchema> = Vec::new();
