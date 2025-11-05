@@ -698,6 +698,7 @@ mod tests {
             backtrack: BacktrackState::default(),
             feedback: codex_feedback::CodexFeedback::new(),
             pending_update_action: None,
+            skip_world_writable_scan_once: false,
         }
     }
 

@@ -2098,6 +2098,9 @@ impl ChatWidget {
         });
     }
 
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn open_world_writable_warning_confirmation(&mut self, _preset: ApprovalPreset) {}
+
     #[cfg(target_os = "windows")]
     pub(crate) fn open_windows_auto_mode_instructions(&mut self) {
         use ratatui_macros::line;
