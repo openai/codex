@@ -441,7 +441,7 @@ mod tests {
         // Known safe commands should not require approval under ReadOnly
         let safe = ShellRequest {
             command: vec!["echo".into(), "ok".into()],
-            ..req.clone()
+            ..req
         };
         assert!(!rt.wants_initial_approval(
             &safe,
