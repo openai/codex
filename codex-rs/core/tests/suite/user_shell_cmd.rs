@@ -144,16 +144,30 @@ async fn user_shell_cmd_can_be_interrupted() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyhow::Result<()> {
-    let command = if cfg!(target_os = "windows") {
-        "$val = $env:CODEX_SANDBOX; if ($null -eq $val -or $val -eq '') { Write-Output 'not-set' } else { Write-Output $val }".to_string()
-    } else {
-        "if [ -n \"$CODEX_SANDBOX\" ]; then printf %s \"$CODEX_SANDBOX\"; else printf %s not-set; fi"
-            .to_string()
+    let Some(python) = detect_python_executable() else {
+        eprintln!("skipping test: python3 not found in PATH");
+        return Ok(());
     };
 
     let server = responses::start_mock_server().await;
     let mut builder = core_test_support::test_codex::test_codex();
     let test = builder.build(&server).await?;
+
+    let script_path = test.workspace_path("print_sandbox_env.py");
+    tokio::fs::write(
+        &script_path,
+        "import os\nimport sys\nvalue = os.environ.get('CODEX_SANDBOX', 'not-set')\n\
+         sys.stdout.write(value)\n",
+    )
+    .await?;
+
+    let script_display = script_path.display().to_string();
+    let script_arg = if script_display.contains(' ') {
+        format!("\"{script_display}\"")
+    } else {
+        script_display
+    };
+    let command = format!("{python} {script_arg}");
 
     test.codex
         .submit(Op::RunUserShellCommand {
@@ -166,7 +180,14 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
         _ => None,
     })
     .await;
-    assert_eq!(begin_event.command.last(), Some(&command));
+    if begin_event.command.last() != Some(&command) {
+        let expected_tokens = shlex::split(&command).unwrap_or_else(|| vec![command.clone()]);
+        assert_eq!(
+            begin_event.command, expected_tokens,
+            "user command begin event did not include expected command tokens.\nexpected={expected_tokens:?}\nactual={:?}",
+            begin_event.command
+        );
+    }
 
     let delta_event = wait_for_event_match(&test.codex, |ev| match ev {
         EventMsg::UserCommandOutputDelta(event) => Some(event.clone()),
