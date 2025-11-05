@@ -34,6 +34,11 @@ use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
 
+pub use crate::approvals::ApplyPatchApprovalRequestEvent;
+pub use crate::approvals::ExecApprovalRequestEvent;
+pub use crate::approvals::SandboxCommandAssessment;
+pub use crate::approvals::SandboxRiskLevel;
+
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
 pub const USER_INSTRUCTIONS_OPEN_TAG: &str = "<user_instructions>";
@@ -160,10 +165,6 @@ pub enum Op {
     /// Request a single history entry identified by `log_id` + `offset`.
     GetHistoryEntryRequest { offset: usize, log_id: u64 },
 
-    /// Request the full in-memory conversation transcript for the current session.
-    /// Reply is delivered via `EventMsg::ConversationHistory`.
-    GetPath,
-
     /// Request the list of MCP tools available across all configured servers.
     /// Reply is delivered via `EventMsg::McpListToolsResponse`.
     ListMcpTools,
@@ -176,11 +177,24 @@ pub enum Op {
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
 
+    /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
+    Undo,
+
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
 
     /// Request to shut down codex instance.
     Shutdown,
+
+    /// Execute a user-initiated one-off shell command (triggered by "!cmd").
+    ///
+    /// The command string is executed using the user's default shell and may
+    /// include shell syntax (pipes, redirects, etc.). Output is streamed via
+    /// `ExecCommand*` events and the UI regains control upon `TaskComplete`.
+    RunUserShellCommand {
+        /// The raw command string after '!'
+        command: String,
+    },
 }
 
 /// Determines the conditions under which the user is consulted to approve
@@ -423,6 +437,10 @@ pub enum EventMsg {
     /// Error while executing a submission
     Error(ErrorEvent),
 
+    /// Warning issued while processing a submission. Unlike `Error`, this
+    /// indicates the task continued but the user should still be notified.
+    Warning(WarningEvent),
+
     /// Agent has started a task
     TaskStarted(TaskStartedEvent),
 
@@ -482,7 +500,15 @@ pub enum EventMsg {
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
 
+    /// Notification advising the user that something they are using has been
+    /// deprecated and should be phased out.
+    DeprecationNotice(DeprecationNoticeEvent),
+
     BackgroundEvent(BackgroundEventEvent),
+
+    UndoStarted(UndoStartedEvent),
+
+    UndoCompleted(UndoCompletedEvent),
 
     /// Notification that a model stream experienced an error or disconnect
     /// and the system is handling it (e.g., retrying with backoff).
@@ -513,16 +539,25 @@ pub enum EventMsg {
     /// Notification that the agent is shutting down.
     ShutdownComplete,
 
-    ConversationPath(ConversationPathResponseEvent),
-
     /// Entered review mode.
     EnteredReviewMode(ReviewRequest),
 
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
 
+    RawResponseItem(RawResponseItemEvent),
+
     ItemStarted(ItemStartedEvent),
     ItemCompleted(ItemCompletedEvent),
+
+    AgentMessageContentDelta(AgentMessageContentDeltaEvent),
+    ReasoningContentDelta(ReasoningContentDeltaEvent),
+    ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct RawResponseItemEvent {
+    pub item: ResponseItem,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -532,11 +567,100 @@ pub struct ItemStartedEvent {
     pub item: TurnItem,
 }
 
+impl HasLegacyEvent for ItemStartedEvent {
+    fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
+        match &self.item {
+            TurnItem::WebSearch(item) => vec![EventMsg::WebSearchBegin(WebSearchBeginEvent {
+                call_id: item.id.clone(),
+            })],
+            _ => Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct ItemCompletedEvent {
     pub thread_id: ConversationId,
     pub turn_id: String,
     pub item: TurnItem,
+}
+
+pub trait HasLegacyEvent {
+    fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg>;
+}
+
+impl HasLegacyEvent for ItemCompletedEvent {
+    fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
+        self.item.as_legacy_events(show_raw_agent_reasoning)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct AgentMessageContentDeltaEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub delta: String,
+}
+
+impl HasLegacyEvent for AgentMessageContentDeltaEvent {
+    fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
+        vec![EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: self.delta.clone(),
+        })]
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct ReasoningContentDeltaEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub delta: String,
+}
+
+impl HasLegacyEvent for ReasoningContentDeltaEvent {
+    fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
+        vec![EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: self.delta.clone(),
+        })]
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct ReasoningRawContentDeltaEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub delta: String,
+}
+
+impl HasLegacyEvent for ReasoningRawContentDeltaEvent {
+    fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
+        vec![EventMsg::AgentReasoningRawContentDelta(
+            AgentReasoningRawContentDeltaEvent {
+                delta: self.delta.clone(),
+            },
+        )]
+    }
+}
+
+impl HasLegacyEvent for EventMsg {
+    fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
+        match self {
+            EventMsg::ItemCompleted(event) => event.as_legacy_events(show_raw_agent_reasoning),
+            EventMsg::AgentMessageContentDelta(event) => {
+                event.as_legacy_events(show_raw_agent_reasoning)
+            }
+            EventMsg::ReasoningContentDelta(event) => {
+                event.as_legacy_events(show_raw_agent_reasoning)
+            }
+            EventMsg::ReasoningRawContentDelta(event) => {
+                event.as_legacy_events(show_raw_agent_reasoning)
+            }
+            _ => Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -548,6 +672,11 @@ pub struct ExitedReviewModeEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ErrorEvent {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct WarningEvent {
     pub message: String,
 }
 
@@ -683,12 +812,8 @@ impl TokenUsage {
         (self.non_cached_input() + self.output_tokens.max(0)).max(0)
     }
 
-    /// For estimating what % of the model's context window is used, we need to account
-    /// for reasoning output tokens from prior turns being dropped from the context window.
-    /// We approximate this here by subtracting reasoning output tokens from the total.
-    /// This will be off for the current turn and pending function calls.
     pub fn tokens_in_context_window(&self) -> i64 {
-        (self.total_tokens - self.reasoning_output_tokens).max(0)
+        self.total_tokens
     }
 
     /// Estimate the remaining user-controllable percentage of the model's context window.
@@ -805,7 +930,7 @@ pub struct AgentReasoningDeltaEvent {
     pub delta: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
 pub struct McpInvocation {
     /// Name of the MCP server as defined in the config.
     pub server: String,
@@ -815,14 +940,14 @@ pub struct McpInvocation {
     pub arguments: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
 pub struct McpToolCallBeginEvent {
     /// Identifier so this can be paired with the McpToolCallEnd event.
     pub call_id: String,
     pub invocation: McpInvocation,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
 pub struct McpToolCallEndEvent {
     /// Identifier for the corresponding McpToolCallBegin that finished.
     pub call_id: String,
@@ -910,7 +1035,7 @@ impl InitialHistory {
     }
 }
 
-#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, JsonSchema, TS, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS, Default)]
 #[serde(rename_all = "lowercase")]
 #[ts(rename_all = "lowercase")]
 pub enum SessionSource {
@@ -919,8 +1044,18 @@ pub enum SessionSource {
     VSCode,
     Exec,
     Mcp,
+    SubAgent(SubAgentSource),
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SubAgentSource {
+    Review,
+    Compact,
+    Other(String),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
@@ -933,6 +1068,7 @@ pub struct SessionMeta {
     pub instructions: Option<String>,
     #[serde(default)]
     pub source: SessionSource,
+    pub model_provider: Option<String>,
 }
 
 impl Default for SessionMeta {
@@ -945,6 +1081,7 @@ impl Default for SessionMeta {
             cli_version: String::new(),
             instructions: None,
             source: SessionSource::default(),
+            model_provider: None,
         }
     }
 }
@@ -1075,6 +1212,10 @@ pub struct ExecCommandBeginEvent {
     /// The command's working directory if not the default cwd for the agent.
     pub cwd: PathBuf,
     pub parsed_cmd: Vec<ParsedCommand>,
+    /// True when this exec was initiated directly by the user (e.g. bang command),
+    /// not by the agent/model. Defaults to false for backwards compatibility.
+    #[serde(default)]
+    pub is_user_shell_command: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1127,35 +1268,30 @@ pub struct ExecCommandOutputDeltaEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ExecApprovalRequestEvent {
-    /// Identifier for the associated exec call, if available.
-    pub call_id: String,
-    /// The command to be executed.
-    pub command: Vec<String>,
-    /// The command's working directory.
-    pub cwd: PathBuf,
-    /// Optional human-readable reason for the approval (e.g. retry without sandbox).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    pub parsed_cmd: Vec<ParsedCommand>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ApplyPatchApprovalRequestEvent {
-    /// Responses API call id for the associated patch apply call, if available.
-    pub call_id: String,
-    pub changes: HashMap<PathBuf, FileChange>,
-    /// Optional explanatory reason (e.g. request for extra write access).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    /// When set, the agent is asking the user to allow writes under this root for the remainder of the session.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub grant_root: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct BackgroundEventEvent {
     pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct DeprecationNoticeEvent {
+    /// Concise summary of what is deprecated.
+    pub summary: String,
+    /// Optional extra guidance, such as migration steps or rationale.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct UndoStartedEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct UndoCompletedEvent {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1333,9 +1469,41 @@ pub enum TurnAbortReason {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::items::UserMessageItem;
+    use crate::items::WebSearchItem;
     use anyhow::Result;
     use serde_json::json;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn item_started_event_from_web_search_emits_begin_event() {
+        let event = ItemStartedEvent {
+            thread_id: ConversationId::new(),
+            turn_id: "turn-1".into(),
+            item: TurnItem::WebSearch(WebSearchItem {
+                id: "search-1".into(),
+                query: "find docs".into(),
+            }),
+        };
+
+        let legacy_events = event.as_legacy_events(false);
+        assert_eq!(legacy_events.len(), 1);
+        match &legacy_events[0] {
+            EventMsg::WebSearchBegin(event) => assert_eq!(event.call_id, "search-1"),
+            _ => panic!("expected WebSearchBegin event"),
+        }
+    }
+
+    #[test]
+    fn item_started_event_from_non_web_search_emits_no_legacy_events() {
+        let event = ItemStartedEvent {
+            thread_id: ConversationId::new(),
+            turn_id: "turn-1".into(),
+            item: TurnItem::UserMessage(UserMessageItem::new(&[])),
+        };
+
+        assert!(event.as_legacy_events(false).is_empty());
+    }
 
     /// Serialize Event to verify that its JSON representation has the expected
     /// amount of nesting.
