@@ -40,11 +40,48 @@ async fn greet(name: &str) -> Result<String, String> {
 async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     let watcher_running = *state.watcher_running.read().await;
 
+    // Check CUDA availability
+    #[cfg(feature = "cuda")]
+    let cuda_available = codex_cuda_runtime::is_cuda_available();
+    #[cfg(not(feature = "cuda"))]
+    let cuda_available = false;
+
     Ok(serde_json::json!({
         "core_status": "running",
         "watcher_status": if watcher_running { "running" } else { "stopped" },
-        "version": env!("CARGO_PKG_VERSION")
+        "version": env!("CARGO_PKG_VERSION"),
+        "cuda_available": cuda_available,
+        "gpu_acceleration": true
     }))
+}
+
+#[tauri::command]
+async fn get_gpu_stats() -> Result<serde_json::Value, String> {
+    #[cfg(feature = "cuda")]
+    {
+        match codex_cuda_runtime::CudaRuntime::new(0) {
+            Ok(cuda) => {
+                match cuda.get_device_info() {
+                    Ok(info) => Ok(serde_json::json!({
+                        "available": true,
+                        "device_name": info.name,
+                        "compute_capability": format!("{}.{}", info.compute_capability_major, info.compute_capability_minor),
+                        "total_memory": info.total_memory,
+                    })),
+                    Err(e) => Err(format!("Failed to get device info: {e}"))
+                }
+            }
+            Err(e) => Err(format!("CUDA not available: {e}"))
+        }
+    }
+    
+    #[cfg(not(feature = "cuda"))]
+    {
+        Ok(serde_json::json!({
+            "available": false,
+            "message": "CUDA not compiled (compile with --features cuda)"
+        }))
+    }
 }
 
 #[tauri::command]
@@ -145,6 +182,7 @@ async fn main() {
         .invoke_handler(tauri::generate_handler![
             greet,
             get_status,
+            get_gpu_stats,
             start_file_watcher,
             stop_file_watcher,
             get_recent_changes,

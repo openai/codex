@@ -76,6 +76,7 @@ pub mod updates;
 mod version;
 
 mod wrapping;
+pub mod git_visualizer;
 
 #[cfg(test)]
 pub mod test_backend;

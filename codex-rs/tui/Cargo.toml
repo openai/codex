@@ -16,6 +16,8 @@ path = "src/lib.rs"
 vt100-tests = []
 # Gate verbose debug logging inside the TUI implementation.
 debug-logs = []
+# Enable CUDA-accelerated git analysis
+cuda = ["codex-cuda-runtime/cuda"]
 
 [lints]
 workspace = true
@@ -35,6 +37,7 @@ codex-common = { workspace = true, features = [
     "sandbox_summary",
 ] }
 codex-core = { workspace = true }
+codex-cuda-runtime = { path = "../cuda-runtime", optional = true }
 codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
 codex-login = { workspace = true }
@@ -47,6 +50,7 @@ crossterm = { workspace = true, features = [
 ] }
 diffy = { workspace = true }
 dirs = { workspace = true }
+git2 = { workspace = true }
 dunce = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png"] }
 itertools = { workspace = true }

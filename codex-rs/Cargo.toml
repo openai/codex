@@ -36,7 +36,6 @@ members = [
     "stdio-to-uds",
     "otel",
     "gui",
-    "tauri-gui/src-tauri",          # Tauri GUI with VR/AR support
     "tui",
     "utils/git",
     "utils/cache",
@@ -48,11 +47,12 @@ members = [
     "utils/tokenizer",
     "tauri-gui/src-tauri",          # Tauri GUI with VR/AR support
     "windows-ai",                   # Windows 11 AI API integration
+    "cuda-runtime",                 # CUDA GPU acceleration
 ]
 resolver = "2"
 
 [workspace.package]
-version = "1.5.0"
+version = "2.0.0"
 # Track the edition for all workspace crates in one place. Individual
 # crates can still override this value, but keeping it here means new
 # crates created with `cargo new -w ...` automatically inherit the 2024

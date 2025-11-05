@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use tracing::{debug, info};
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
 use codex_windows_ai::{GpuStats, WindowsAiRuntime, kernel_driver::KernelBridge};
 
 /// Windows AI execution options
@@ -31,7 +31,7 @@ impl Default for WindowsAiOptions {
 }
 
 /// Execute prompt with Windows AI optimization
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
 pub async fn execute_with_windows_ai(
     prompt: &str,
     options: &WindowsAiOptions,

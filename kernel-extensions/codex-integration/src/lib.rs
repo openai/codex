@@ -5,6 +5,9 @@
 use std::fs;
 use std::io;
 
+#[cfg(target_os = "windows")]
+pub mod windows_ai_bridge;
+
 /// AI kernel module statistics
 #[derive(Debug, Clone, Default)]
 pub struct KernelModuleStats {
