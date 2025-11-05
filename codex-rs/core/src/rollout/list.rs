@@ -458,6 +458,28 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
     Ok(summary.head)
 }
 
+pub async fn conversation_item_from_path(path: &Path) -> io::Result<Option<ConversationItem>> {
+    let summary = read_head_and_tail(path, HEAD_RECORD_LIMIT, TAIL_RECORD_LIMIT).await?;
+    if !(summary.saw_session_meta && summary.saw_user_event) {
+        return Ok(None);
+    }
+    let HeadTailSummary {
+        head,
+        tail,
+        created_at,
+        updated_at,
+        ..
+    } = summary;
+    let updated_at = updated_at.or_else(|| created_at.clone());
+    Ok(Some(ConversationItem {
+        path: path.to_path_buf(),
+        head,
+        tail,
+        created_at,
+        updated_at,
+    }))
+}
+
 async fn read_tail_records(
     path: &Path,
     max_records: usize,

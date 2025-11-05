@@ -13,6 +13,7 @@ use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::response_processing::process_items;
+use crate::rollout::SessionIndex;
 use crate::terminal;
 use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
@@ -516,6 +517,18 @@ impl Session {
             anyhow::anyhow!("failed to initialize rollout recorder: {e:#}")
         })?;
         let rollout_path = rollout_recorder.rollout_path.clone();
+
+        if let Ok(index) = SessionIndex::new(&config.codex_home) {
+            if let Err(err) = index.record_session_usage(
+                &session_configuration.cwd,
+                &conversation_id,
+                &rollout_path,
+            ) {
+                warn!(?err, "failed to update session directory index");
+            }
+        } else {
+            warn!("failed to initialize session directory index");
+        }
 
         // Handle MCP manager result and record any startup failures.
         let (mcp_connection_manager, failed_clients) = match mcp_res {

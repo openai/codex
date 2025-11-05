@@ -133,6 +133,10 @@ struct ResumeCommand {
     #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
     last: bool,
 
+    /// Show all recorded sessions instead of filtering to the current directory.
+    #[arg(long = "all", default_value_t = false, conflicts_with = "session_id")]
+    all: bool,
+
     #[clap(flatten)]
     config_overrides: TuiCli,
 }
@@ -393,6 +397,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::Resume(ResumeCommand {
             session_id,
             last,
+            all,
             config_overrides,
         })) => {
             interactive = finalize_resume_interactive(
@@ -400,6 +405,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
                 session_id,
                 last,
+                all,
                 config_overrides,
             );
             let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
@@ -559,6 +565,7 @@ fn finalize_resume_interactive(
     root_config_overrides: CliConfigOverrides,
     session_id: Option<String>,
     last: bool,
+    show_all: bool,
     resume_cli: TuiCli,
 ) -> TuiCli {
     // Start with the parsed interactive CLI so resume shares the same
@@ -567,6 +574,7 @@ fn finalize_resume_interactive(
     interactive.resume_picker = resume_session_id.is_none() && !last;
     interactive.resume_last = last;
     interactive.resume_session_id = resume_session_id;
+    interactive.resume_show_all = show_all;
 
     // Merge resume-scoped flags and overrides with highest precedence.
     merge_resume_cli_flags(&mut interactive, resume_cli);
@@ -616,6 +624,9 @@ fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
     }
     if let Some(prompt) = resume_cli.prompt {
         interactive.prompt = Some(prompt);
+    }
+    if resume_cli.resume_show_all {
+        interactive.resume_show_all = true;
     }
 
     interactive

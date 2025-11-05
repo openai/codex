@@ -21,6 +21,8 @@ Key flags: `--model/-m`, `--ask-for-approval/-a`.
 - Run `codex resume` to display the session picker UI
 - Resume most recent: `codex resume --last`
 - Resume by id: `codex resume <SESSION_ID>` (You can get session ids from /status or `~/.codex/sessions/`)
+- Codex hoists sessions launched from your current working directory to the top of the picker. Use `Ctrl+F` inside the picker to toggle a "current directory only" filter; matching rows are marked with `*`.
+- Show every recorded session: `codex resume --all`
 
 Examples:
 

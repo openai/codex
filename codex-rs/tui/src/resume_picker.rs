@@ -10,11 +10,14 @@ use codex_core::ConversationsPage;
 use codex_core::Cursor;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
+use codex_core::SessionIndex;
+use codex_core::conversation_item_from_path;
 use codex_protocol::items::TurnItem;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
@@ -24,6 +27,7 @@ use ratatui::text::Span;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use tracing::warn;
 use unicode_width::UnicodeWidthStr;
 
 use crate::key_hint;
@@ -69,11 +73,14 @@ pub async fn run_resume_picker(
     tui: &mut Tui,
     codex_home: &Path,
     default_provider: &str,
+    current_cwd: &Path,
+    show_all: bool,
 ) -> Result<ResumeSelection> {
     let alt = AltScreenGuard::enter(tui);
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
     let default_provider = default_provider.to_string();
+    let session_index = SessionIndex::new(codex_home).ok();
 
     let loader_tx = bg_tx.clone();
     let page_loader: PageLoader = Arc::new(move |request: PageLoadRequest| {
@@ -102,6 +109,9 @@ pub async fn run_resume_picker(
         alt.tui.frame_requester(),
         page_loader,
         default_provider.clone(),
+        current_cwd.to_path_buf(),
+        session_index,
+        show_all,
     );
     state.load_initial_page().await?;
     state.request_frame();
@@ -177,6 +187,11 @@ struct PickerState {
     page_loader: PageLoader,
     view_rows: Option<usize>,
     default_provider: String,
+    current_cwd: PathBuf,
+    session_index: Option<SessionIndex>,
+    filter_current_directory: bool,
+    filter_explicitly_toggled: bool,
+    has_full_history: bool,
 }
 
 struct PaginationState {
@@ -234,6 +249,7 @@ struct Row {
     preview: String,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
+    matches_current_cwd: bool,
 }
 
 impl PickerState {
@@ -242,6 +258,9 @@ impl PickerState {
         requester: FrameRequester,
         page_loader: PageLoader,
         default_provider: String,
+        current_cwd: PathBuf,
+        session_index: Option<SessionIndex>,
+        show_all: bool,
     ) -> Self {
         Self {
             codex_home,
@@ -264,7 +283,21 @@ impl PickerState {
             page_loader,
             view_rows: None,
             default_provider,
+            current_cwd,
+            session_index,
+            filter_current_directory: !show_all,
+            filter_explicitly_toggled: show_all,
+            has_full_history: show_all,
         }
+    }
+
+    fn clear_rows(&mut self) {
+        self.reset_pagination();
+        self.all_rows.clear();
+        self.filtered_rows.clear();
+        self.seen_paths.clear();
+        self.selected = 0;
+        self.scroll_top = 0;
     }
 
     fn request_frame(&self) {
@@ -274,12 +307,12 @@ impl PickerState {
     async fn handle_key(&mut self, key: KeyEvent) -> Result<Option<ResumeSelection>> {
         match key.code {
             KeyCode::Esc => return Ok(Some(ResumeSelection::StartFresh)),
-            KeyCode::Char('c')
-                if key
-                    .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
-            {
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 return Ok(Some(ResumeSelection::Exit));
+            }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_current_directory_filter().await?;
+                return Ok(None);
             }
             KeyCode::Enter => {
                 if let Some(row) = self.filtered_rows.get(self.selected) {
@@ -326,10 +359,8 @@ impl PickerState {
             }
             KeyCode::Char(c) => {
                 // basic text input for search
-                if !key
-                    .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL)
-                    && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT)
                 {
                     let mut new_query = self.query.clone();
                     new_query.push(c);
@@ -342,6 +373,66 @@ impl PickerState {
     }
 
     async fn load_initial_page(&mut self) -> Result<()> {
+        self.clear_rows();
+        self.search_state = SearchState::Idle;
+        if self.filter_current_directory && self.load_rows_from_index().await? {
+            self.apply_filter();
+            return Ok(());
+        }
+
+        self.load_full_history_first_page().await?;
+        self.apply_filter();
+        Ok(())
+    }
+
+    async fn load_rows_from_index(&mut self) -> Result<bool> {
+        let Some(index) = &self.session_index else {
+            return Ok(false);
+        };
+        let entries = match index.sessions_for_dir(&self.current_cwd) {
+            Ok(entries) => entries,
+            Err(err) => {
+                warn!(?err, "failed to read session index");
+                return Ok(false);
+            }
+        };
+        self.has_full_history = false;
+        if entries.is_empty() {
+            self.pagination.next_cursor = None;
+            self.pagination.reached_scan_cap = false;
+            self.pagination.num_scanned_files = 0;
+            return Ok(false);
+        }
+
+        let mut items: Vec<ConversationItem> = Vec::with_capacity(entries.len());
+        for entry in entries {
+            match conversation_item_from_path(&entry.rollout_path).await {
+                Ok(Some(item)) => items.push(item),
+                Ok(None) => {}
+                Err(err) => {
+                    warn!(path = ?entry.rollout_path, ?err, "failed to load indexed session summary");
+                }
+            }
+        }
+
+        let count = items.len();
+        if count == 0 {
+            self.pagination.next_cursor = None;
+            self.pagination.reached_scan_cap = false;
+            self.pagination.num_scanned_files = 0;
+            return Ok(false);
+        }
+        let page = ConversationsPage {
+            items,
+            next_cursor: None,
+            num_scanned_files: count,
+            reached_scan_cap: false,
+        };
+        self.ingest_page(page);
+        Ok(true)
+    }
+
+    async fn load_full_history_first_page(&mut self) -> Result<()> {
         let provider_filter = vec![self.default_provider.clone()];
         let page = RolloutRecorder::list_conversations(
             &self.codex_home,
@@ -352,12 +443,7 @@ impl PickerState {
             self.default_provider.as_str(),
         )
         .await?;
-        self.reset_pagination();
-        self.all_rows.clear();
-        self.filtered_rows.clear();
-        self.seen_paths.clear();
-        self.search_state = SearchState::Idle;
-        self.selected = 0;
+        self.has_full_history = true;
         self.ingest_page(page);
         Ok(())
     }
@@ -407,28 +493,60 @@ impl PickerState {
             self.pagination.reached_scan_cap = true;
         }
 
-        let rows = rows_from_items(page.items);
+        let rows = rows_from_items(page.items, &self.current_cwd);
+        let mut added_any = false;
         for row in rows {
             if self.seen_paths.insert(row.path.clone()) {
+                if row.matches_current_cwd {
+                    added_any = true;
+                }
                 self.all_rows.push(row);
             }
+        }
+
+        if added_any && !self.filter_explicitly_toggled {
+            self.filter_current_directory = true;
+        }
+        if !self.filter_explicitly_toggled
+            && !self.filter_current_directory
+            && self.has_current_directory_matches()
+        {
+            self.filter_current_directory = true;
         }
 
         self.apply_filter();
     }
 
     fn apply_filter(&mut self) {
-        if self.query.is_empty() {
-            self.filtered_rows = self.all_rows.clone();
+        let query = if self.query.is_empty() {
+            None
         } else {
-            let q = self.query.to_lowercase();
-            self.filtered_rows = self
-                .all_rows
-                .iter()
-                .filter(|r| r.preview.to_lowercase().contains(&q))
-                .cloned()
-                .collect();
+            Some(self.query.to_lowercase())
+        };
+        let mut filtered = Vec::new();
+        for row in &self.all_rows {
+            if self.filter_current_directory && !row.matches_current_cwd {
+                continue;
+            }
+            if let Some(q) = &query
+                && !row.preview.to_lowercase().contains(q)
+            {
+                continue;
+            }
+            filtered.push(row.clone());
         }
+
+        let mut matching = Vec::new();
+        let mut others = Vec::new();
+        for row in filtered.drain(..) {
+            if row.matches_current_cwd {
+                matching.push(row);
+            } else {
+                others.push(row);
+            }
+        }
+        matching.extend(others);
+        self.filtered_rows = matching;
         if self.selected >= self.filtered_rows.len() {
             self.selected = self.filtered_rows.len().saturating_sub(1);
         }
@@ -513,6 +631,9 @@ impl PickerState {
     }
 
     fn ensure_minimum_rows_for_view(&mut self, minimum_rows: usize) {
+        if self.filter_current_directory {
+            return;
+        }
         if minimum_rows == 0 {
             return;
         }
@@ -535,6 +656,9 @@ impl PickerState {
     }
 
     fn maybe_load_more_for_scroll(&mut self) {
+        if self.filter_current_directory {
+            return;
+        }
         if self.pagination.loading.is_pending() {
             return;
         }
@@ -548,6 +672,31 @@ impl PickerState {
         if remaining <= LOAD_NEAR_THRESHOLD {
             self.load_more_if_needed(LoadTrigger::Scroll);
         }
+    }
+
+    fn has_current_directory_matches(&self) -> bool {
+        self.all_rows.iter().any(|row| row.matches_current_cwd)
+    }
+
+    async fn toggle_current_directory_filter(&mut self) -> Result<()> {
+        self.filter_current_directory = !self.filter_current_directory;
+        self.filter_explicitly_toggled = true;
+        self.selected = 0;
+        self.scroll_top = 0;
+
+        if !self.filter_current_directory && !self.has_full_history {
+            self.clear_rows();
+            self.load_full_history_first_page().await?;
+        } else if self.filter_current_directory && !self.has_full_history {
+            self.clear_rows();
+            self.load_rows_from_index().await?;
+        }
+
+        self.apply_filter();
+        if self.search_state.is_active() {
+            self.continue_search_if_needed();
+        }
+        Ok(())
     }
 
     fn load_more_if_needed(&mut self, trigger: LoadTrigger) {
@@ -590,11 +739,14 @@ impl PickerState {
     }
 }
 
-fn rows_from_items(items: Vec<ConversationItem>) -> Vec<Row> {
-    items.into_iter().map(|item| head_to_row(&item)).collect()
+fn rows_from_items(items: Vec<ConversationItem>, current_cwd: &Path) -> Vec<Row> {
+    items
+        .into_iter()
+        .map(|item| head_to_row(&item, current_cwd))
+        .collect()
 }
 
-fn head_to_row(item: &ConversationItem) -> Row {
+fn head_to_row(item: &ConversationItem, current_cwd: &Path) -> Row {
     let created_at = item
         .created_at
         .as_deref()
@@ -611,11 +763,17 @@ fn head_to_row(item: &ConversationItem) -> Row {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| String::from("(no message yet)"));
 
+    let matches_current_cwd = session_meta_cwd(&item.head)
+        .as_ref()
+        .map(|stored| paths_equal(stored, current_cwd))
+        .unwrap_or(false);
+
     Row {
         path: item.path.clone(),
         preview,
         created_at,
         updated_at,
+        matches_current_cwd,
     }
 }
 
@@ -642,6 +800,50 @@ fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
         })
 }
 
+fn session_meta_cwd(head: &[serde_json::Value]) -> Option<PathBuf> {
+    head.iter()
+        .filter_map(extract_session_meta_payload)
+        .find_map(|payload| payload.get("cwd").and_then(|cwd| cwd.as_str()))
+        .map(PathBuf::from)
+}
+
+fn extract_session_meta_payload(value: &serde_json::Value) -> Option<&serde_json::Value> {
+    if value
+        .get("type")
+        .and_then(|ty| ty.as_str())
+        .is_some_and(|ty| ty.eq_ignore_ascii_case("session_meta"))
+    {
+        return value.get("payload");
+    }
+
+    let item = value.get("item")?;
+    if item
+        .get("type")
+        .and_then(|ty| ty.as_str())
+        .is_some_and(|ty| ty.eq_ignore_ascii_case("session_meta"))
+    {
+        return item.get("payload");
+    }
+    None
+}
+
+fn paths_equal(a: &Path, b: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        fn normalize(path: &Path) -> String {
+            path.as_os_str()
+                .to_string_lossy()
+                .replace('\\', "/")
+                .to_lowercase()
+        }
+        normalize(a) == normalize(b)
+    }
+    #[cfg(not(windows))]
+    {
+        a == b
+    }
+}
+
 fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
     // Render full-screen overlay
     let height = tui.terminal.size()?.height;
@@ -663,12 +865,23 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         );
 
         // Search line
-        let q = if state.query.is_empty() {
-            "Type to search".dim().to_string()
+        let mut search_spans: Vec<Span> = if state.query.is_empty() {
+            vec!["Type to search".dim()]
         } else {
-            format!("Search: {}", state.query)
+            vec![Span::from(format!("Search: {}", state.query))]
         };
-        frame.render_widget_ref(Line::from(q), search);
+        if state.filter_current_directory {
+            if !search_spans.is_empty() {
+                search_spans.push("    ".into());
+            }
+            let label = if state.filtered_rows.is_empty() && state.pagination.loading.is_pending() {
+                "Filtering current directory…".dim()
+            } else {
+                "Current directory filter on".dim()
+            };
+            search_spans.push(label);
+        }
+        frame.render_widget_ref(Line::from(search_spans), search);
 
         let metrics = calculate_column_metrics(&state.filtered_rows);
 
@@ -691,6 +904,12 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             "/".dim(),
             key_hint::plain(KeyCode::Down).into(),
             " to browse".dim(),
+            "    ".dim(),
+            key_hint::ctrl(KeyCode::Char('f')).into(),
+            " toggle project filter".dim(),
+            "    ".dim(),
+            "*".green(),
+            " current dir".dim(),
         ]
         .into();
         frame.render_widget_ref(hint_line, hint);
@@ -753,6 +972,7 @@ fn render_list(
         if add_leading_gap {
             preview_width = preview_width.saturating_sub(2);
         }
+        preview_width = preview_width.saturating_sub(2);
         let preview = truncate_text(&row.preview, preview_width);
         let mut spans: Vec<Span> = vec![marker];
         if let Some(created) = created_span {
@@ -764,6 +984,11 @@ fn render_list(
             spans.push("  ".into());
         }
         if add_leading_gap {
+            spans.push("  ".into());
+        }
+        if row.matches_current_cwd {
+            spans.push("* ".green());
+        } else {
             spans.push("  ".into());
         }
         spans.push(preview.into());
@@ -796,6 +1021,22 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
             return vec![Span::from(msg).italic().dim()].into();
         }
         return vec!["No results for your search".italic().dim()].into();
+    }
+
+    if state.filter_current_directory && state.filtered_rows.is_empty() {
+        if state.pagination.loading.is_pending() && state.pagination.next_cursor.is_some() {
+            return vec!["Searching for matching sessions…".italic().dim()].into();
+        }
+        if state.has_current_directory_matches() {
+            return vec!["No sessions yet".italic().dim()].into();
+        }
+        return vec![
+            "No sessions for current directory".italic().dim(),
+            "    ".dim(),
+            key_hint::ctrl(KeyCode::Char('f')).into(),
+            " to show all sessions".dim(),
+        ]
+        .into();
     }
 
     if state.all_rows.is_empty() && state.pagination.num_scanned_files == 0 {
@@ -925,7 +1166,9 @@ mod tests {
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use serde_json::json;
+    use std::fs;
     use std::future::Future;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Mutex;
@@ -944,10 +1187,45 @@ mod tests {
         ]
     }
 
+    fn head_with_session_meta(ts: &str, cwd: &str, preview: &str) -> Vec<serde_json::Value> {
+        vec![
+            json!({
+                "timestamp": ts,
+                "type": "session_meta",
+                "payload": {
+                    "id": "00000000-0000-0000-0000-000000000000",
+                    "timestamp": ts,
+                    "cwd": cwd,
+                    "originator": "test_originator",
+                    "cli_version": "test_version",
+                    "instructions": null,
+                    "source": "cli",
+                    "model_provider": "openai",
+                }
+            }),
+            json!({
+                "timestamp": ts,
+                "type": "message",
+                "role": "user",
+                "content": [ { "type": "input_text", "text": preview } ],
+            }),
+        ]
+    }
+
     fn make_item(path: &str, ts: &str, preview: &str) -> ConversationItem {
         ConversationItem {
             path: PathBuf::from(path),
             head: head_with_ts_and_user_text(ts, &[preview]),
+            tail: Vec::new(),
+            created_at: Some(ts.to_string()),
+            updated_at: Some(ts.to_string()),
+        }
+    }
+
+    fn make_item_with_cwd(path: &str, ts: &str, preview: &str, cwd: &str) -> ConversationItem {
+        ConversationItem {
+            path: PathBuf::from(path),
+            head: head_with_session_meta(ts, cwd, preview),
             tail: Vec::new(),
             created_at: Some(ts.to_string()),
             updated_at: Some(ts.to_string()),
@@ -1034,11 +1312,178 @@ mod tests {
             created_at: Some("2025-01-02T00:00:00Z".into()),
             updated_at: Some("2025-01-02T00:00:00Z".into()),
         };
-        let rows = rows_from_items(vec![a, b]);
+        let rows = rows_from_items(vec![a, b], Path::new("/tmp/project"));
         assert_eq!(rows.len(), 2);
         // Preserve the given order even if timestamps differ; backend already provides newest-first.
         assert!(rows[0].preview.contains('A'));
         assert!(rows[1].preview.contains('B'));
+    }
+
+    #[test]
+    fn rows_mark_matching_cwd_entries() {
+        let item = make_item_with_cwd(
+            "/tmp/a.jsonl",
+            "2025-01-01T00:00:00Z",
+            "match",
+            "/tmp/project",
+        );
+        let rows = rows_from_items(vec![item], Path::new("/tmp/project"));
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].matches_current_cwd);
+    }
+
+    #[test]
+    fn picker_auto_filters_matching_cwd_rows() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            PathBuf::from("/tmp/project"),
+            None,
+            false,
+        );
+        state.reset_pagination();
+        state.ingest_page(page(
+            vec![
+                make_item_with_cwd(
+                    "/tmp/match.jsonl",
+                    "2025-01-02T00:00:00Z",
+                    "match",
+                    "/tmp/project",
+                ),
+                make_item_with_cwd(
+                    "/tmp/other.jsonl",
+                    "2025-01-01T00:00:00Z",
+                    "other",
+                    "/tmp/other",
+                ),
+            ],
+            None,
+            2,
+            false,
+        ));
+
+        assert!(state.filter_current_directory);
+        let paths: Vec<_> = state
+            .filtered_rows
+            .iter()
+            .map(|row| row.path.clone())
+            .collect();
+        assert_eq!(paths, vec![PathBuf::from("/tmp/match.jsonl")]);
+    }
+
+    #[test]
+    fn initial_load_falls_back_when_index_empty() {
+        let temp = tempfile::tempdir().unwrap();
+        let codex_home = temp.path().to_path_buf();
+        let current_cwd = codex_home.join("workspace");
+        fs::create_dir_all(&current_cwd).unwrap();
+
+        let sessions_dir = codex_home
+            .join("sessions")
+            .join("2025")
+            .join("01")
+            .join("02");
+        fs::create_dir_all(&sessions_dir).unwrap();
+        let file_path = sessions_dir
+            .join("rollout-2025-01-02T03-04-05-00000000-0000-0000-0000-000000000000.jsonl");
+        let timestamp = "2025-01-02T03:04:05Z";
+        let cwd_str = current_cwd.to_string_lossy().to_string();
+        let meta = json!({
+            "timestamp": timestamp,
+            "type": "session_meta",
+            "payload": {
+                "id": "00000000-0000-0000-0000-000000000000",
+                "timestamp": timestamp,
+                "cwd": cwd_str,
+                "originator": "test_originator",
+                "cli_version": "test_version",
+                "instructions": null,
+                "source": "cli",
+                "model_provider": "openai",
+            }
+        });
+        let message = json!({
+            "timestamp": timestamp,
+            "type": "message",
+            "role": "user",
+            "content": [
+                { "type": "input_text", "text": "resume picker fallback" }
+            ],
+        });
+        fs::write(&file_path, format!("{meta}\n{message}\n")).unwrap();
+
+        let loader: PageLoader = Arc::new(|_| {});
+        let session_index = SessionIndex::new(&codex_home).unwrap();
+        let mut state = PickerState::new(
+            codex_home,
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            current_cwd,
+            Some(session_index),
+            false,
+        );
+
+        block_on_future(async {
+            state.load_initial_page().await.unwrap();
+        });
+
+        assert!(!state.filtered_rows.is_empty());
+        assert_eq!(state.filtered_rows[0].path, file_path);
+    }
+
+    #[test]
+    fn toggling_filter_shows_all_rows() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            PathBuf::from("/tmp/project"),
+            None,
+            false,
+        );
+        state.reset_pagination();
+        state.ingest_page(page(
+            vec![
+                make_item_with_cwd(
+                    "/tmp/match.jsonl",
+                    "2025-01-02T00:00:00Z",
+                    "match",
+                    "/tmp/project",
+                ),
+                make_item_with_cwd(
+                    "/tmp/other.jsonl",
+                    "2025-01-01T00:00:00Z",
+                    "other",
+                    "/tmp/other",
+                ),
+            ],
+            None,
+            2,
+            false,
+        ));
+
+        block_on_future(async {
+            state.toggle_current_directory_filter().await.unwrap();
+        });
+        assert!(!state.filter_current_directory);
+        let paths: Vec<_> = state
+            .filtered_rows
+            .iter()
+            .map(|row| row.path.clone())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/tmp/match.jsonl"),
+                PathBuf::from("/tmp/other.jsonl"),
+            ]
+        );
     }
 
     #[test]
@@ -1063,7 +1508,7 @@ mod tests {
             updated_at: Some("2025-01-01T01:00:00Z".into()),
         };
 
-        let row = head_to_row(&item);
+        let row = head_to_row(&item, Path::new("/tmp/project"));
         let expected_created = chrono::DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
@@ -1088,6 +1533,9 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            PathBuf::from("/tmp/project"),
+            None,
+            false,
         );
 
         let now = Utc::now();
@@ -1097,18 +1545,21 @@ mod tests {
                 preview: String::from("Fix resume picker timestamps"),
                 created_at: Some(now - Duration::minutes(16)),
                 updated_at: Some(now - Duration::seconds(42)),
+                matches_current_cwd: true,
             },
             Row {
                 path: PathBuf::from("/tmp/b.jsonl"),
                 preview: String::from("Investigate lazy pagination cap"),
                 created_at: Some(now - Duration::hours(1)),
                 updated_at: Some(now - Duration::minutes(35)),
+                matches_current_cwd: false,
             },
             Row {
                 path: PathBuf::from("/tmp/c.jsonl"),
                 preview: String::from("Explain the codebase"),
                 created_at: Some(now - Duration::hours(2)),
                 updated_at: Some(now - Duration::hours(2)),
+                matches_current_cwd: false,
             },
         ];
         state.all_rows = rows.clone();
@@ -1148,6 +1599,9 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            PathBuf::from("/tmp/project"),
+            None,
+            true,
         );
 
         state.reset_pagination();
@@ -1214,6 +1668,9 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            PathBuf::from("/tmp/project"),
+            None,
+            true,
         );
         state.reset_pagination();
         state.ingest_page(page(
@@ -1243,6 +1700,9 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            PathBuf::from("/tmp/project"),
+            None,
+            true,
         );
 
         let mut items = Vec::new();
@@ -1291,6 +1751,9 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            PathBuf::from("/tmp/project"),
+            None,
+            true,
         );
 
         let mut items = Vec::new();
@@ -1335,6 +1798,9 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            PathBuf::from("/tmp/project"),
+            None,
+            true,
         );
         state.reset_pagination();
         state.ingest_page(page(
