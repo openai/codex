@@ -10,9 +10,11 @@ use axum::extract::State;
 use axum::http::Request;
 use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
+use axum::http::header::CONTENT_TYPE;
 use axum::middleware;
 use axum::middleware::Next;
 use axum::response::Response;
+use axum::routing::get;
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::CallToolRequestParam;
@@ -256,14 +258,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     eprintln!("starting rmcp streamable http test server on http://{bind_addr}/mcp");
 
-    let router = Router::new().nest_service(
-        "/mcp",
-        StreamableHttpService::new(
-            || Ok(TestToolServer::new()),
-            Arc::new(LocalSessionManager::default()),
-            StreamableHttpServerConfig::default(),
-        ),
-    );
+    let router = Router::new()
+        .route(
+            "/.well-known/oauth-authorization-server/mcp",
+            get({
+                move || async move {
+                    let metadata_base = format!("http://{bind_addr}");
+                    #[expect(clippy::expect_used)]
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&json!({
+                                "authorization_endpoint": format!("{metadata_base}/oauth/authorize"),
+                                "token_endpoint": format!("{metadata_base}/oauth/token"),
+                                "scopes_supported": [""],
+                            })).expect("failed to serialize metadata"),
+                        ))
+                        .expect("valid metadata response")
+                }
+            }),
+        )
+        .nest_service(
+            "/mcp",
+            StreamableHttpService::new(
+                || Ok(TestToolServer::new()),
+                Arc::new(LocalSessionManager::default()),
+                StreamableHttpServerConfig::default(),
+            ),
+        );
 
     let router = if let Ok(token) = std::env::var("MCP_EXPECT_BEARER") {
         let expected = Arc::new(format!("Bearer {token}"));
@@ -282,6 +305,9 @@ async fn require_bearer(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    if request.uri().path().contains("/.well-known/") {
+        return Ok(next.run(request).await);
+    }
     if request
         .headers()
         .get(AUTHORIZATION)
