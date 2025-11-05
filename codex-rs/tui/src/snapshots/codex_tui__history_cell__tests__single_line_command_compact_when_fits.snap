@@ -2,5 +2,5 @@
 source: tui/src/history_cell.rs
 expression: rendered
 ---
-• Ran echo ok
+• Ran: echo ok
   └ (no output)
