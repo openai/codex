@@ -57,6 +57,8 @@ const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Your access token could not be refre
 const REFRESH_TOKEN_INVALIDATED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.";
 const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
     "Your access token could not be refreshed. Please log out and sign in again.";
+const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
 
 #[derive(Debug, Error)]
 pub enum RefreshTokenError {
@@ -480,9 +482,11 @@ async fn try_refresh_token(
         scope: "openid profile email",
     };
 
+    let endpoint = refresh_token_endpoint();
+
     // Use shared client factory to include standard headers
     let response = client
-        .post("https://auth.openai.com/oauth/token")
+        .post(endpoint.as_str())
         .header("Content-Type", "application/json")
         .json(&refresh_request)
         .send()
@@ -582,6 +586,11 @@ struct RefreshResponse {
 
 // Shared constant for token refresh (client id used for oauth token refresh flow)
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+
+fn refresh_token_endpoint() -> String {
+    std::env::var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR)
+        .unwrap_or_else(|_| REFRESH_TOKEN_URL.to_string())
+}
 
 use std::sync::RwLock;
 
