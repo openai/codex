@@ -5,7 +5,9 @@ use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::TurnAbortReason;
 use core_test_support::load_default_config_for_test;
+use core_test_support::responses;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
@@ -137,4 +139,139 @@ async fn user_shell_cmd_can_be_interrupted() {
         unreachable!()
     };
     assert_eq!(ev.reason, TurnAbortReason::Interrupted);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyhow::Result<()> {
+    let Some(python) = detect_python_executable() else {
+        eprintln!("skipping test: python3 not found in PATH");
+        return Ok(());
+    };
+
+    let server = responses::start_mock_server().await;
+    let mut builder = core_test_support::test_codex::test_codex();
+    let test = builder.build(&server).await?;
+
+    let script_path = test.workspace_path("print_sandbox_env.py");
+    tokio::fs::write(
+        &script_path,
+        "import os\nimport sys\nvalue = os.environ.get('CODEX_SANDBOX', 'not-set')\n\
+         sys.stdout.write(value)\n",
+    )
+    .await?;
+
+    let script_display = script_path.display().to_string();
+    let script_arg = if script_display.contains(' ') {
+        format!("\"{script_display}\"")
+    } else {
+        script_display
+    };
+    let command = format!("{python} {script_arg}");
+
+    test.codex
+        .submit(Op::RunUserShellCommand {
+            command: command.clone(),
+        })
+        .await?;
+
+    let begin_event = wait_for_event_match(&test.codex, |ev| match ev {
+        EventMsg::UserCommandBegin(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    if begin_event.command.last() != Some(&command) {
+        let expected_tokens = shlex::split(&command).unwrap_or_else(|| vec![command.clone()]);
+        assert_eq!(
+            begin_event.command, expected_tokens,
+            "user command begin event did not include expected command tokens.\nexpected={expected_tokens:?}\nactual={:?}",
+            begin_event.command
+        );
+    }
+
+    let delta_event = wait_for_event_match(&test.codex, |ev| match ev {
+        EventMsg::UserCommandOutputDelta(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(delta_event.stream, ExecOutputStream::Stdout);
+    let chunk_text =
+        String::from_utf8(delta_event.chunk.clone()).expect("user command chunk is valid utf-8");
+    assert_eq!(chunk_text.trim(), "not-set");
+
+    let end_event = wait_for_event_match(&test.codex, |ev| match ev {
+        EventMsg::UserCommandEnd(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(end_event.exit_code, 0);
+    assert_eq!(end_event.stdout.trim(), "not-set");
+
+    let _ = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let responses = vec![responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "done"),
+        responses::ev_completed("resp-1"),
+    ])];
+    let mock = responses::mount_sse_sequence(&server, responses).await;
+
+    test.submit_turn("follow-up after shell command").await?;
+
+    let request = mock.single_request();
+    let items = request.input();
+
+    fn find_user_text(items: &[serde_json::Value], marker: &str) -> Option<String> {
+        items.iter().find_map(|item| {
+            if item.get("type").and_then(serde_json::Value::as_str) != Some("message") {
+                return None;
+            }
+            if item.get("role").and_then(serde_json::Value::as_str) != Some("user") {
+                return None;
+            }
+            let content = item.get("content")?.as_array()?;
+            content.iter().find_map(|span| {
+                if span.get("type").and_then(serde_json::Value::as_str) == Some("input_text") {
+                    let text = span.get("text").and_then(serde_json::Value::as_str)?;
+                    if text.contains(marker) {
+                        return Some(text.to_string());
+                    }
+                }
+                None
+            })
+        })
+    }
+
+    let command_message = find_user_text(&items, "<user_shell_command>")
+        .expect("command message recorded in request");
+    assert!(
+        command_message.contains(&command),
+        "command message should include shell invocation: {command_message}"
+    );
+
+    let output_message = find_user_text(&items, "<user_shell_command_output>")
+        .expect("output message recorded in request");
+    let payload = output_message
+        .strip_prefix("<user_shell_command_output>\n")
+        .and_then(|text| text.strip_suffix("\n</user_shell_command_output>"))
+        .expect("shell command output payload present");
+    let parsed: serde_json::Value =
+        serde_json::from_str(payload).expect("parse shell command output payload");
+    assert_eq!(
+        parsed
+            .get("metadata")
+            .and_then(|meta| meta.get("exit_code"))
+            .and_then(serde_json::Value::as_i64),
+        Some(0),
+        "expected exit_code metadata to be present and zero",
+    );
+    let output_text = parsed
+        .get("output")
+        .and_then(serde_json::Value::as_str)
+        .expect("model-facing output string present");
+    assert!(
+        output_text.contains("not-set"),
+        "model-facing output should include stdout content: {output_text:?}"
+    );
+
+    Ok(())
 }
