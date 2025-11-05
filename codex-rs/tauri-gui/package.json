@@ -12,12 +12,16 @@
     "tauri:build": "tauri build"
   },
   "dependencies": {
+    "@mediapipe/hands": "^0.4.1646424915",
     "@react-three/drei": "^9.92.0",
     "@react-three/fiber": "^8.15.0",
     "@react-three/postprocessing": "^2.16.0",
+    "@react-three/usdz": "^3.0.0",
+    "@react-three/xr": "^6.2.0",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-notification": "^2.0.0",
     "@tauri-apps/plugin-shell": "^2.0.0",
+    "@webxr-input-profiles/motion-controllers": "^1.0.0",
     "png-to-ico": "^3.0.1",
     "postprocessing": "^6.35.0",
     "react": "^18.3.1",
@@ -25,7 +29,8 @@
     "react-router-dom": "^6.20.0",
     "sharp": "^0.34.4",
     "sharp-ico": "^0.1.5",
-    "three": "^0.160.0"
+    "three": "^0.160.0",
+    "three-stdlib": "^2.29.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",

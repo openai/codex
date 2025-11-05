@@ -1,0 +1,34 @@
+[package]
+authors = ["zapabob"]
+description = "Windows 11 AI API integration for Codex"
+edition = "2024"
+license = "Apache-2.0"
+name = "codex-windows-ai"
+version = "0.1.0"
+
+[dependencies]
+# Windows AI API
+windows = { version = "0.58", features = [
+    "AI_MachineLearning",
+    "Foundation",
+    "Foundation_Collections",
+    "Storage",
+    "Storage_Streams",
+    "Win32_Foundation",
+    "Win32_System_Com",
+] }
+
+# Workspace dependencies
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[features]
+default = []
+experimental-actions = [] # Windows.AI.Actions (実験的API)

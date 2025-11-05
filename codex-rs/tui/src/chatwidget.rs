@@ -1334,6 +1334,9 @@ impl ChatWidget {
             SlashCommand::Research => {
                 self.add_info_message("Research command is not yet implemented in TUI mode. Use CLI: `codex research <topic>`".to_string(), None);
             }
+            SlashCommand::Plan => {
+                self.add_info_message("Plan command is not yet implemented in TUI mode. Use CLI: `codex plan create <description>`".to_string(), None);
+            }
             SlashCommand::Hook => {
                 self.add_info_message("Hook command is not yet implemented in TUI mode. Use CLI: `codex hook <event>`".to_string(), None);
             }
