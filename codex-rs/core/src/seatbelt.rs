@@ -227,14 +227,11 @@ mod tests {
             format!("-DWRITABLE_ROOT_2={}", cwd.to_string_lossy()),
         ];
 
-        #[cfg(target_os = "macos")]
-        {
-            expected_args.extend(
-                macos_dir_params().into_iter().map(|(key, value)| {
-                    format!("-D{key}={value}", value = value.to_string_lossy())
-                }),
-            );
-        }
+      expected_args.extend(
+          macos_dir_params().into_iter().map(|(key, value)| {
+              format!("-D{key}={value}", value = value.to_string_lossy())
+          }),
+      );
 
         expected_args.extend(vec![
             "--".to_string(),
