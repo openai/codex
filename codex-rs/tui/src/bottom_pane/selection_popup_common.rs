@@ -96,8 +96,9 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
     let this_name_width = Line::from(name_spans.clone()).width();
     let mut full_spans: Vec<Span> = name_spans;
     if let Some(display_shortcut) = row.display_shortcut {
-        full_spans.push(" ".into());
+        full_spans.push(" (".into());
         full_spans.push(display_shortcut.into());
+        full_spans.push(")".into());
     }
     if let Some(desc) = row.description.as_ref() {
         let gap = desc_col.saturating_sub(this_name_width);
