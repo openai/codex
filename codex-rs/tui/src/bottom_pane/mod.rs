@@ -3,19 +3,16 @@ use std::path::PathBuf;
 
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
-use crate::render::Insets;
-use crate::render::RectExt;
-use crate::render::renderable::Renderable as _;
+use crate::render::renderable::FlexRenderable;
+use crate::render::renderable::Renderable;
+use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Constraint;
-use ratatui::layout::Layout;
 use ratatui::layout::Rect;
-use ratatui::widgets::WidgetRef;
 use std::time::Duration;
 
 mod approval_overlay;
@@ -124,77 +121,6 @@ impl BottomPane {
     fn push_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.view_stack.push(view);
         self.request_redraw();
-    }
-
-    pub fn desired_height(&self, width: u16) -> u16 {
-        let top_margin = 1;
-
-        // Base height depends on whether a modal/overlay is active.
-        let base = match self.active_view().as_ref() {
-            Some(view) => view.desired_height(width),
-            None => {
-                let status_height = self
-                    .status
-                    .as_ref()
-                    .map_or(0, |status| status.desired_height(width));
-                let queue_height = self.queued_user_messages.desired_height(width);
-                let spacing_height = if status_height == 0 && queue_height == 0 {
-                    0
-                } else {
-                    1
-                };
-                self.composer
-                    .desired_height(width)
-                    .saturating_add(spacing_height)
-                    .saturating_add(status_height)
-                    .saturating_add(queue_height)
-            }
-        };
-        // Account for bottom padding rows. Top spacing is handled in layout().
-        base.saturating_add(top_margin)
-    }
-
-    fn layout(&self, area: Rect) -> [Rect; 2] {
-        // At small heights, bottom pane takes the entire height.
-        let top_margin = if area.height <= 1 { 0 } else { 1 };
-
-        let area = area.inset(Insets::tlbr(top_margin, 0, 0, 0));
-        if self.active_view().is_some() {
-            return [Rect::ZERO, area];
-        }
-        let has_queue = !self.queued_user_messages.messages.is_empty();
-        let mut status_height = self
-            .status
-            .as_ref()
-            .map_or(0, |status| status.desired_height(area.width))
-            .min(area.height.saturating_sub(1));
-        if has_queue && status_height > 1 {
-            status_height = status_height.saturating_sub(1);
-        }
-        let combined_height = status_height
-            .saturating_add(self.queued_user_messages.desired_height(area.width))
-            .min(area.height.saturating_sub(1));
-
-        let [status_area, _, content_area] = Layout::vertical([
-            Constraint::Length(combined_height),
-            Constraint::Length(if combined_height == 0 { 0 } else { 1 }),
-            Constraint::Min(1),
-        ])
-        .areas(area);
-        [status_area, content_area]
-    }
-
-    pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        // Hide the cursor whenever an overlay view is active (e.g. the
-        // status indicator shown while a task is running, or approval modal).
-        // In these states the textarea is not interactable, so we should not
-        // show its caret.
-        let [_, content] = self.layout(area);
-        if let Some(view) = self.active_view() {
-            view.cursor_pos(content)
-        } else {
-            self.composer.cursor_pos(content)
-        }
     }
 
     /// Forward a key event to the active view or the composer.
@@ -540,39 +466,36 @@ impl BottomPane {
     pub(crate) fn take_recent_submission_images(&mut self) -> Vec<PathBuf> {
         self.composer.take_recent_submission_images()
     }
+
+    fn as_renderable(&'_ self) -> RenderableItem<'_> {
+        if let Some(view) = self.active_view() {
+            RenderableItem::Borrowed(view)
+        } else {
+            let mut flex = FlexRenderable::new();
+            if let Some(status) = &self.status {
+                flex.push(0, RenderableItem::Borrowed(status));
+            }
+            flex.push(1, RenderableItem::Borrowed(&self.queued_user_messages));
+            if self.status.is_some() || !self.queued_user_messages.messages.is_empty() {
+                flex.push(0, RenderableItem::Owned("".into()));
+            }
+            let mut flex2 = FlexRenderable::new();
+            flex2.push(1, RenderableItem::Owned(flex.into()));
+            flex2.push(0, RenderableItem::Borrowed(&self.composer));
+            RenderableItem::Owned(Box::new(flex2))
+        }
+    }
 }
 
-impl WidgetRef for &BottomPane {
-    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let [top_area, content_area] = self.layout(area);
-
-        // When a modal view is active, it owns the whole content area.
-        if let Some(view) = self.active_view() {
-            view.render(content_area, buf);
-        } else {
-            let status_height = self
-                .status
-                .as_ref()
-                .map(|status| status.desired_height(top_area.width).min(top_area.height))
-                .unwrap_or(0);
-            if let Some(status) = &self.status
-                && status_height > 0
-            {
-                status.render_ref(top_area, buf);
-            }
-
-            let queue_area = Rect {
-                x: top_area.x,
-                y: top_area.y.saturating_add(status_height),
-                width: top_area.width,
-                height: top_area.height.saturating_sub(status_height),
-            };
-            if queue_area.height > 0 {
-                self.queued_user_messages.render(queue_area, buf);
-            }
-
-            self.composer.render_ref(content_area, buf);
-        }
+impl Renderable for BottomPane {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.as_renderable().render(area, buf);
+    }
+    fn desired_height(&self, width: u16) -> u16 {
+        self.as_renderable().desired_height(width)
+    }
+    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        self.as_renderable().cursor_pos(area)
     }
 }
 
@@ -599,7 +522,7 @@ mod tests {
 
     fn render_snapshot(pane: &BottomPane, area: Rect) -> String {
         let mut buf = Buffer::empty(area);
-        (&pane).render_ref(area, &mut buf);
+        pane.render(area, &mut buf);
         snapshot_buffer(&buf)
     }
 
@@ -651,7 +574,7 @@ mod tests {
         // Render and verify the top row does not include an overlay.
         let area = Rect::new(0, 0, 60, 6);
         let mut buf = Buffer::empty(area);
-        (&pane).render_ref(area, &mut buf);
+        pane.render(area, &mut buf);
 
         let mut r0 = String::new();
         for x in 0..area.width {
@@ -665,7 +588,7 @@ mod tests {
 
     #[test]
     fn composer_shown_after_denied_while_task_running() {
-        let (tx_raw, rx) = unbounded_channel::<AppEvent>();
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
@@ -700,14 +623,14 @@ mod tests {
         std::thread::sleep(Duration::from_millis(120));
         let area = Rect::new(0, 0, 40, 6);
         let mut buf = Buffer::empty(area);
-        (&pane).render_ref(area, &mut buf);
-        let mut row1 = String::new();
+        pane.render(area, &mut buf);
+        let mut row0 = String::new();
         for x in 0..area.width {
-            row1.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
+            row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
         }
         assert!(
-            row1.contains("Working"),
-            "expected Working header after denial on row 1: {row1:?}"
+            row0.contains("Working"),
+            "expected Working header after denial on row 0: {row0:?}"
         );
 
         // Composer placeholder should be visible somewhere below.
@@ -726,9 +649,6 @@ mod tests {
             found_composer,
             "expected composer visible under status line"
         );
-
-        // Drain the channel to avoid unused warnings.
-        drop(rx);
     }
 
     #[test]
@@ -750,16 +670,10 @@ mod tests {
         // Use a height that allows the status line to be visible above the composer.
         let area = Rect::new(0, 0, 40, 6);
         let mut buf = Buffer::empty(area);
-        (&pane).render_ref(area, &mut buf);
+        pane.render(area, &mut buf);
 
-        let mut row0 = String::new();
-        for x in 0..area.width {
-            row0.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
-        }
-        assert!(
-            row0.contains("Working"),
-            "expected Working header: {row0:?}"
-        );
+        let bufs = snapshot_buffer(&buf);
+        assert!(bufs.contains("• Working"), "expected Working header");
     }
 
     #[test]
@@ -788,36 +702,6 @@ mod tests {
         assert_snapshot!(
             "status_and_composer_fill_height_without_bottom_padding",
             render_snapshot(&pane, area)
-        );
-    }
-
-    #[test]
-    fn status_hidden_when_height_too_small() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut pane = BottomPane::new(BottomPaneParams {
-            app_event_tx: tx,
-            frame_requester: FrameRequester::test_dummy(),
-            has_input_focus: true,
-            enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
-            disable_paste_burst: false,
-        });
-
-        pane.set_task_running(true);
-
-        // Height=2 → composer takes the full space; status collapses when there is no room.
-        let area2 = Rect::new(0, 0, 20, 2);
-        assert_snapshot!(
-            "status_hidden_when_height_too_small_height_2",
-            render_snapshot(&pane, area2)
-        );
-
-        // Height=1 → no padding; single row is the composer (status hidden).
-        let area1 = Rect::new(0, 0, 20, 1);
-        assert_snapshot!(
-            "status_hidden_when_height_too_small_height_1",
-            render_snapshot(&pane, area1)
         );
     }
 

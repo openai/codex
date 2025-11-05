@@ -141,6 +141,7 @@ pub(crate) struct OutgoingError {
 
 #[cfg(test)]
 mod tests {
+    use codex_app_server_protocol::AccountLoginCompletedNotification;
     use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
     use codex_app_server_protocol::AccountUpdatedNotification;
     use codex_app_server_protocol::AuthMode;
@@ -175,6 +176,31 @@ mod tests {
             serde_json::to_value(jsonrpc_notification)
                 .expect("ensure the strum macros serialize the method field correctly"),
             "ensure the strum macros serialize the method field correctly"
+        );
+    }
+
+    #[test]
+    fn verify_account_login_completed_notification_serialization() {
+        let notification =
+            ServerNotification::AccountLoginCompleted(AccountLoginCompletedNotification {
+                login_id: Some(Uuid::nil().to_string()),
+                success: true,
+                error: None,
+            });
+
+        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
+        assert_eq!(
+            json!({
+                "method": "account/login/completed",
+                "params": {
+                    "loginId": Uuid::nil().to_string(),
+                    "success": true,
+                    "error": null,
+                },
+            }),
+            serde_json::to_value(jsonrpc_notification)
+                .expect("ensure the notification serializes correctly"),
+            "ensure the notification serializes correctly"
         );
     }
 
@@ -216,7 +242,7 @@ mod tests {
     #[test]
     fn verify_account_updated_notification_serialization() {
         let notification = ServerNotification::AccountUpdated(AccountUpdatedNotification {
-            auth_method: Some(AuthMode::ApiKey),
+            auth_mode: Some(AuthMode::ApiKey),
         });
 
         let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
@@ -224,7 +250,7 @@ mod tests {
             json!({
                 "method": "account/updated",
                 "params": {
-                    "authMethod": "apikey"
+                    "authMode": "apikey"
                 },
             }),
             serde_json::to_value(jsonrpc_notification)

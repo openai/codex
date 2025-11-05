@@ -16,6 +16,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::exec_cell::spinner;
 use crate::key_hint;
+use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 
@@ -62,10 +63,6 @@ impl StatusIndicatorWidget {
         }
     }
 
-    pub fn desired_height(&self, _width: u16) -> u16 {
-        1
-    }
-
     pub(crate) fn interrupt(&self) {
         self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
     }
@@ -75,13 +72,13 @@ impl StatusIndicatorWidget {
         self.header = header;
     }
 
-    pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
-        self.show_interrupt_hint = visible;
-    }
-
     #[cfg(test)]
     pub(crate) fn header(&self) -> &str {
         &self.header
+    }
+
+    pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
+        self.show_interrupt_hint = visible;
     }
 
     #[cfg(test)]
@@ -131,8 +128,12 @@ impl StatusIndicatorWidget {
     }
 }
 
-impl WidgetRef for StatusIndicatorWidget {
-    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+impl Renderable for StatusIndicatorWidget {
+    fn desired_height(&self, _width: u16) -> u16 {
+        1
+    }
+
+    fn render(&self, area: Rect, buf: &mut Buffer) {
         if area.is_empty() {
             return;
         }
@@ -200,7 +201,7 @@ mod tests {
         // Render into a fixed-size test terminal and snapshot the backend.
         let mut terminal = Terminal::new(TestBackend::new(80, 2)).expect("terminal");
         terminal
-            .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
+            .draw(|f| w.render(f.area(), f.buffer_mut()))
             .expect("draw");
         insta::assert_snapshot!(terminal.backend());
     }
@@ -214,7 +215,7 @@ mod tests {
         // Render into a fixed-size test terminal and snapshot the backend.
         let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal");
         terminal
-            .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
+            .draw(|f| w.render(f.area(), f.buffer_mut()))
             .expect("draw");
         insta::assert_snapshot!(terminal.backend());
     }

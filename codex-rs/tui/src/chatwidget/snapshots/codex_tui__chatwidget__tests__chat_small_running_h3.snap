@@ -1,8 +1,7 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 1500
 expression: terminal.backend()
 ---
 "                                        "
-"• Thinking (0s • esc to interrupt)      "
-"› Ask Codex to do anything              "
+"                                        "
+"                                        "

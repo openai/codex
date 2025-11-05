@@ -3,7 +3,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
-import { SandboxMode } from "./threadOptions";
+import { SandboxMode, ModelReasoningEffort } from "./threadOptions";
 
 export type CodexExecArgs = {
   input: string;
@@ -22,6 +22,8 @@ export type CodexExecArgs = {
   skipGitRepoCheck?: boolean;
   // --output-schema
   outputSchemaFile?: string;
+  // --config model_reasoning_effort
+  modelReasoningEffort?: ModelReasoningEffort;
 };
 
 const INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
@@ -54,6 +56,10 @@ export class CodexExec {
 
     if (args.outputSchemaFile) {
       commandArgs.push("--output-schema", args.outputSchemaFile);
+    }
+
+    if (args.modelReasoningEffort) {
+      commandArgs.push("--config", `model_reasoning_effort="${args.modelReasoningEffort}"`);
     }
 
     if (args.images?.length) {

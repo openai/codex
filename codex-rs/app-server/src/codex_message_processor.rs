@@ -4,6 +4,7 @@ use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
@@ -20,6 +21,8 @@ use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::ExecOneOffCommandParams;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
+use codex_app_server_protocol::FeedbackUploadParams;
+use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::FuzzyFileSearchParams;
 use codex_app_server_protocol::FuzzyFileSearchResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
@@ -34,12 +37,13 @@ use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::ListConversationsResponse;
-use codex_app_server_protocol::ListModelsParams;
-use codex_app_server_protocol::ListModelsResponse;
+use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::LoginApiKeyResponse;
 use codex_app_server_protocol::LoginChatGptCompleteNotification;
 use codex_app_server_protocol::LoginChatGptResponse;
+use codex_app_server_protocol::ModelListParams;
+use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RemoveConversationListenerParams;
@@ -56,8 +60,16 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
-use codex_app_server_protocol::UploadFeedbackParams;
-use codex_app_server_protocol::UploadFeedbackResponse;
+use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadListParams;
+use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_backend_client::Client as BackendClient;
@@ -83,6 +95,7 @@ use codex_core::exec_env::create_env;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::git_info::git_diff_to_remote;
+use codex_core::parse_cursor;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -98,7 +111,7 @@ use codex_protocol::ConversationId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
@@ -176,6 +189,26 @@ impl CodexMessageProcessor {
             ClientRequest::Initialize { .. } => {
                 panic!("Initialize should be handled in MessageProcessor");
             }
+            // === v2 Thread APIs ===
+            ClientRequest::ThreadStart { request_id, params } => {
+                self.thread_start(request_id, params).await;
+            }
+            ClientRequest::ThreadResume { request_id, params } => {
+                self.thread_resume(request_id, params).await;
+            }
+            ClientRequest::ThreadArchive { request_id, params } => {
+                self.thread_archive(request_id, params).await;
+            }
+            ClientRequest::ThreadList { request_id, params } => {
+                self.thread_list(request_id, params).await;
+            }
+            ClientRequest::ThreadCompact {
+                request_id,
+                params: _,
+            } => {
+                self.send_unimplemented_error(request_id, "thread/compact")
+                    .await;
+            }
             ClientRequest::NewConversation { request_id, params } => {
                 // Do not tokio::spawn() to process new_conversation()
                 // asynchronously because we need to ensure the conversation is
@@ -188,15 +221,11 @@ impl CodexMessageProcessor {
             ClientRequest::ListConversations { request_id, params } => {
                 self.handle_list_conversations(request_id, params).await;
             }
-            ClientRequest::ListModels { request_id, params } => {
+            ClientRequest::ModelList { request_id, params } => {
                 self.list_models(request_id, params).await;
             }
-            ClientRequest::LoginAccount {
-                request_id,
-                params: _,
-            } => {
-                self.send_unimplemented_error(request_id, "account/login")
-                    .await;
+            ClientRequest::LoginAccount { request_id, params } => {
+                self.login_v2(request_id, params).await;
             }
             ClientRequest::LogoutAccount {
                 request_id,
@@ -236,13 +265,13 @@ impl CodexMessageProcessor {
                 self.git_diff_to_origin(request_id, params.cwd).await;
             }
             ClientRequest::LoginApiKey { request_id, params } => {
-                self.login_api_key(request_id, params).await;
+                self.login_api_key_v1(request_id, params).await;
             }
             ClientRequest::LoginChatGpt {
                 request_id,
                 params: _,
             } => {
-                self.login_chatgpt(request_id).await;
+                self.login_chatgpt_v1(request_id).await;
             }
             ClientRequest::CancelLoginChatGpt { request_id, params } => {
                 self.cancel_login_chatgpt(request_id, params.login_id).await;
@@ -289,7 +318,7 @@ impl CodexMessageProcessor {
             } => {
                 self.get_account_rate_limits(request_id).await;
             }
-            ClientRequest::UploadFeedback { request_id, params } => {
+            ClientRequest::FeedbackUpload { request_id, params } => {
                 self.upload_feedback(request_id, params).await;
             }
         }
@@ -304,20 +333,34 @@ impl CodexMessageProcessor {
         self.outgoing.send_error(request_id, error).await;
     }
 
-    async fn login_api_key(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
+    async fn login_v2(&mut self, request_id: RequestId, params: LoginAccountParams) {
+        match params {
+            LoginAccountParams::ApiKey { api_key } => {
+                self.login_api_key_v2(request_id, LoginApiKeyParams { api_key })
+                    .await;
+            }
+            LoginAccountParams::Chatgpt => {
+                self.login_chatgpt_v2(request_id).await;
+            }
+        }
+    }
+
+    async fn login_api_key_common(
+        &mut self,
+        params: &LoginApiKeyParams,
+    ) -> std::result::Result<(), JSONRPCErrorError> {
         if matches!(
             self.config.forced_login_method,
             Some(ForcedLoginMethod::Chatgpt)
         ) {
-            let error = JSONRPCErrorError {
+            return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: "API key login is disabled. Use ChatGPT login instead.".to_string(),
                 data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
+            });
         }
 
+        // Cancel any active login attempt.
         {
             let mut guard = self.active_login.lock().await;
             if let Some(active) = guard.take() {
@@ -332,6 +375,19 @@ impl CodexMessageProcessor {
         ) {
             Ok(()) => {
                 self.auth_manager.reload();
+                Ok(())
+            }
+            Err(err) => Err(JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to save api key: {err}"),
+                data: None,
+            }),
+        }
+    }
+
+    async fn login_api_key_v1(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
+        match self.login_api_key_common(&params).await {
+            Ok(()) => {
                 self.outgoing
                     .send_response(request_id, LoginApiKeyResponse {})
                     .await;
@@ -343,31 +399,57 @@ impl CodexMessageProcessor {
                     .send_server_notification(ServerNotification::AuthStatusChange(payload))
                     .await;
             }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to save api key: {err}"),
-                    data: None,
-                };
+            Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
             }
         }
     }
 
-    async fn login_chatgpt(&mut self, request_id: RequestId) {
+    async fn login_api_key_v2(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
+        match self.login_api_key_common(&params).await {
+            Ok(()) => {
+                let response = codex_app_server_protocol::LoginAccountResponse::ApiKey {};
+                self.outgoing.send_response(request_id, response).await;
+
+                let payload_login_completed = AccountLoginCompletedNotification {
+                    login_id: None,
+                    success: true,
+                    error: None,
+                };
+                self.outgoing
+                    .send_server_notification(ServerNotification::AccountLoginCompleted(
+                        payload_login_completed,
+                    ))
+                    .await;
+
+                let payload_v2 = AccountUpdatedNotification {
+                    auth_mode: self.auth_manager.auth().map(|auth| auth.mode),
+                };
+                self.outgoing
+                    .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
+                    .await;
+            }
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    // Build options for a ChatGPT login attempt; performs validation.
+    async fn login_chatgpt_common(
+        &self,
+    ) -> std::result::Result<LoginServerOptions, JSONRPCErrorError> {
         let config = self.config.as_ref();
 
         if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
-            let error = JSONRPCErrorError {
+            return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: "ChatGPT login is disabled. Use API key login instead.".to_string(),
                 data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
+            });
         }
 
-        let opts = LoginServerOptions {
+        Ok(LoginServerOptions {
             open_browser: false,
             ..LoginServerOptions::new(
                 config.codex_home.clone(),
@@ -375,99 +457,190 @@ impl CodexMessageProcessor {
                 config.forced_chatgpt_workspace_id.clone(),
                 config.cli_auth_credentials_store_mode,
             )
-        };
+        })
+    }
 
-        enum LoginChatGptReply {
-            Response(LoginChatGptResponse),
-            Error(JSONRPCErrorError),
-        }
+    // Deprecated in favor of login_chatgpt_v2.
+    async fn login_chatgpt_v1(&mut self, request_id: RequestId) {
+        match self.login_chatgpt_common().await {
+            Ok(opts) => match run_login_server(opts) {
+                Ok(server) => {
+                    let login_id = Uuid::new_v4();
+                    let shutdown_handle = server.cancel_handle();
 
-        let reply = match run_login_server(opts) {
-            Ok(server) => {
-                let login_id = Uuid::new_v4();
-                let shutdown_handle = server.cancel_handle();
-
-                // Replace active login if present.
-                {
-                    let mut guard = self.active_login.lock().await;
-                    if let Some(existing) = guard.take() {
-                        existing.drop();
-                    }
-                    *guard = Some(ActiveLogin {
-                        shutdown_handle: shutdown_handle.clone(),
-                        login_id,
-                    });
-                }
-
-                let response = LoginChatGptResponse {
-                    login_id,
-                    auth_url: server.auth_url.clone(),
-                };
-
-                // Spawn background task to monitor completion.
-                let outgoing_clone = self.outgoing.clone();
-                let active_login = self.active_login.clone();
-                let auth_manager = self.auth_manager.clone();
-                tokio::spawn(async move {
-                    let (success, error_msg) = match tokio::time::timeout(
-                        LOGIN_CHATGPT_TIMEOUT,
-                        server.block_until_done(),
-                    )
-                    .await
+                    // Replace active login if present.
                     {
-                        Ok(Ok(())) => (true, None),
-                        Ok(Err(err)) => (false, Some(format!("Login server error: {err}"))),
-                        Err(_elapsed) => {
-                            // Timeout: cancel server and report
-                            shutdown_handle.shutdown();
-                            (false, Some("Login timed out".to_string()))
+                        let mut guard = self.active_login.lock().await;
+                        if let Some(existing) = guard.take() {
+                            existing.drop();
                         }
-                    };
-                    let payload = LoginChatGptCompleteNotification {
-                        login_id,
-                        success,
-                        error: error_msg,
-                    };
-                    outgoing_clone
-                        .send_server_notification(ServerNotification::LoginChatGptComplete(payload))
-                        .await;
+                        *guard = Some(ActiveLogin {
+                            shutdown_handle: shutdown_handle.clone(),
+                            login_id,
+                        });
+                    }
 
-                    // Send an auth status change notification.
-                    if success {
-                        // Update in-memory auth cache now that login completed.
-                        auth_manager.reload();
+                    // Spawn background task to monitor completion.
+                    let outgoing_clone = self.outgoing.clone();
+                    let active_login = self.active_login.clone();
+                    let auth_manager = self.auth_manager.clone();
+                    let auth_url = server.auth_url.clone();
+                    tokio::spawn(async move {
+                        let (success, error_msg) = match tokio::time::timeout(
+                            LOGIN_CHATGPT_TIMEOUT,
+                            server.block_until_done(),
+                        )
+                        .await
+                        {
+                            Ok(Ok(())) => (true, None),
+                            Ok(Err(err)) => (false, Some(format!("Login server error: {err}"))),
+                            Err(_elapsed) => {
+                                shutdown_handle.shutdown();
+                                (false, Some("Login timed out".to_string()))
+                            }
+                        };
 
-                        // Notify clients with the actual current auth mode.
-                        let current_auth_method = auth_manager.auth().map(|a| a.mode);
-                        let payload = AuthStatusChangeNotification {
-                            auth_method: current_auth_method,
+                        let payload = LoginChatGptCompleteNotification {
+                            login_id,
+                            success,
+                            error: error_msg.clone(),
                         };
                         outgoing_clone
-                            .send_server_notification(ServerNotification::AuthStatusChange(payload))
+                            .send_server_notification(ServerNotification::LoginChatGptComplete(
+                                payload,
+                            ))
                             .await;
+
+                        if success {
+                            auth_manager.reload();
+
+                            // Notify clients with the actual current auth mode.
+                            let current_auth_method = auth_manager.auth().map(|a| a.mode);
+                            let payload = AuthStatusChangeNotification {
+                                auth_method: current_auth_method,
+                            };
+                            outgoing_clone
+                                .send_server_notification(ServerNotification::AuthStatusChange(
+                                    payload,
+                                ))
+                                .await;
+                        }
+
+                        // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
+                        let mut guard = active_login.lock().await;
+                        if guard.as_ref().map(|l| l.login_id) == Some(login_id) {
+                            *guard = None;
+                        }
+                    });
+
+                    let response = LoginChatGptResponse { login_id, auth_url };
+                    self.outgoing.send_response(request_id, response).await;
+                }
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to start login server: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                }
+            },
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+            }
+        }
+    }
+
+    async fn login_chatgpt_v2(&mut self, request_id: RequestId) {
+        match self.login_chatgpt_common().await {
+            Ok(opts) => match run_login_server(opts) {
+                Ok(server) => {
+                    let login_id = Uuid::new_v4();
+                    let shutdown_handle = server.cancel_handle();
+
+                    // Replace active login if present.
+                    {
+                        let mut guard = self.active_login.lock().await;
+                        if let Some(existing) = guard.take() {
+                            existing.drop();
+                        }
+                        *guard = Some(ActiveLogin {
+                            shutdown_handle: shutdown_handle.clone(),
+                            login_id,
+                        });
                     }
 
-                    // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
-                    let mut guard = active_login.lock().await;
-                    if guard.as_ref().map(|l| l.login_id) == Some(login_id) {
-                        *guard = None;
-                    }
-                });
+                    // Spawn background task to monitor completion.
+                    let outgoing_clone = self.outgoing.clone();
+                    let active_login = self.active_login.clone();
+                    let auth_manager = self.auth_manager.clone();
+                    let auth_url = server.auth_url.clone();
+                    tokio::spawn(async move {
+                        let (success, error_msg) = match tokio::time::timeout(
+                            LOGIN_CHATGPT_TIMEOUT,
+                            server.block_until_done(),
+                        )
+                        .await
+                        {
+                            Ok(Ok(())) => (true, None),
+                            Ok(Err(err)) => (false, Some(format!("Login server error: {err}"))),
+                            Err(_elapsed) => {
+                                shutdown_handle.shutdown();
+                                (false, Some("Login timed out".to_string()))
+                            }
+                        };
 
-                LoginChatGptReply::Response(response)
-            }
-            Err(err) => LoginChatGptReply::Error(JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to start login server: {err}"),
-                data: None,
-            }),
-        };
+                        let payload_v2 = AccountLoginCompletedNotification {
+                            login_id: Some(login_id.to_string()),
+                            success,
+                            error: error_msg,
+                        };
+                        outgoing_clone
+                            .send_server_notification(ServerNotification::AccountLoginCompleted(
+                                payload_v2,
+                            ))
+                            .await;
 
-        match reply {
-            LoginChatGptReply::Response(resp) => {
-                self.outgoing.send_response(request_id, resp).await
+                        if success {
+                            auth_manager.reload();
+
+                            // Notify clients with the actual current auth mode.
+                            let current_auth_method = auth_manager.auth().map(|a| a.mode);
+                            let payload_v2 = AccountUpdatedNotification {
+                                auth_mode: current_auth_method,
+                            };
+                            outgoing_clone
+                                .send_server_notification(ServerNotification::AccountUpdated(
+                                    payload_v2,
+                                ))
+                                .await;
+                        }
+
+                        // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
+                        let mut guard = active_login.lock().await;
+                        if guard.as_ref().map(|l| l.login_id) == Some(login_id) {
+                            *guard = None;
+                        }
+                    });
+
+                    let response = codex_app_server_protocol::LoginAccountResponse::Chatgpt {
+                        login_id: login_id.to_string(),
+                        auth_url,
+                    };
+                    self.outgoing.send_response(request_id, response).await;
+                }
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to start login server: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                }
+            },
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
             }
-            LoginChatGptReply::Error(err) => self.outgoing.send_error(request_id, err).await,
         }
     }
 
@@ -550,7 +723,7 @@ impl CodexMessageProcessor {
                     .await;
 
                 let payload_v2 = AccountUpdatedNotification {
-                    auth_method: current_auth_method,
+                    auth_mode: current_auth_method,
                 };
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
@@ -637,7 +810,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn fetch_account_rate_limits(&self) -> Result<RateLimitSnapshot, JSONRPCErrorError> {
+    async fn fetch_account_rate_limits(&self) -> Result<CoreRateLimitSnapshot, JSONRPCErrorError> {
         let Some(auth) = self.auth_manager.auth() else {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -816,19 +989,47 @@ impl CodexMessageProcessor {
     }
 
     async fn process_new_conversation(&self, request_id: RequestId, params: NewConversationParams) {
-        let config =
-            match derive_config_from_params(params, self.codex_linux_sandbox_exe.clone()).await {
-                Ok(config) => config,
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("error deriving config: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            };
+        let NewConversationParams {
+            model,
+            model_provider,
+            profile,
+            cwd,
+            approval_policy,
+            sandbox: sandbox_mode,
+            config: cli_overrides,
+            base_instructions,
+            developer_instructions,
+            compact_prompt,
+            include_apply_patch_tool,
+        } = params;
+
+        let overrides = ConfigOverrides {
+            model,
+            config_profile: profile,
+            cwd: cwd.map(PathBuf::from),
+            approval_policy,
+            sandbox_mode,
+            model_provider,
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+            base_instructions,
+            developer_instructions,
+            compact_prompt,
+            include_apply_patch_tool,
+            ..Default::default()
+        };
+
+        let config = match derive_config_from_params(overrides, cli_overrides).await {
+            Ok(config) => config,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("error deriving config: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(conversation_id) => {
@@ -849,6 +1050,276 @@ impl CodexMessageProcessor {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!("error creating conversation: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn thread_start(&mut self, request_id: RequestId, params: ThreadStartParams) {
+        // Build ConfigOverrides directly from ThreadStartParams for config derivation.
+        let cli_overrides = params.config;
+        let overrides = ConfigOverrides {
+            model: params.model,
+            cwd: params.cwd.map(PathBuf::from),
+            approval_policy: params
+                .approval_policy
+                .map(codex_app_server_protocol::AskForApproval::to_core),
+            sandbox_mode: params
+                .sandbox
+                .map(codex_app_server_protocol::SandboxMode::to_core),
+            model_provider: params.model_provider,
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+            base_instructions: params.base_instructions,
+            developer_instructions: params.developer_instructions,
+            ..Default::default()
+        };
+
+        let config = match derive_config_from_params(overrides, cli_overrides).await {
+            Ok(config) => config,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("error deriving config: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self.conversation_manager.new_conversation(config).await {
+            Ok(new_conv) => {
+                let thread = Thread {
+                    id: new_conv.conversation_id.to_string(),
+                };
+
+                let response = ThreadStartResponse {
+                    thread: thread.clone(),
+                };
+
+                // Auto-attach a conversation listener when starting a thread.
+                // Use the same behavior as the v1 API with experimental_raw_events=false.
+                if let Err(err) = self
+                    .attach_conversation_listener(new_conv.conversation_id, false)
+                    .await
+                {
+                    tracing::warn!(
+                        "failed to attach listener for conversation {}: {}",
+                        new_conv.conversation_id,
+                        err.message
+                    );
+                }
+
+                self.outgoing.send_response(request_id, response).await;
+
+                let notif = ThreadStartedNotification { thread };
+                self.outgoing
+                    .send_server_notification(ServerNotification::ThreadStarted(notif))
+                    .await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("error creating thread: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn thread_archive(&mut self, request_id: RequestId, params: ThreadArchiveParams) {
+        let conversation_id = match ConversationId::from_string(&params.thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("invalid thread id: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let rollout_path = match find_conversation_path_by_id_str(
+            &self.config.codex_home,
+            &conversation_id.to_string(),
+        )
+        .await
+        {
+            Ok(Some(p)) => p,
+            Ok(None) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("no rollout found for conversation id {conversation_id}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("failed to locate conversation id {conversation_id}: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self
+            .archive_conversation_common(conversation_id, &rollout_path)
+            .await
+        {
+            Ok(()) => {
+                let response = ThreadArchiveResponse {};
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+            }
+        }
+    }
+
+    async fn thread_list(&self, request_id: RequestId, params: ThreadListParams) {
+        let ThreadListParams {
+            cursor,
+            limit,
+            model_providers,
+        } = params;
+
+        let page_size = limit.unwrap_or(25).max(1) as usize;
+
+        let (summaries, next_cursor) = match self
+            .list_conversations_common(page_size, cursor, model_providers)
+            .await
+        {
+            Ok(r) => r,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let data = summaries
+            .into_iter()
+            .map(|s| Thread {
+                id: s.conversation_id.to_string(),
+            })
+            .collect();
+
+        let response = ThreadListResponse { data, next_cursor };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn thread_resume(&mut self, request_id: RequestId, params: ThreadResumeParams) {
+        let conversation_id = match ConversationId::from_string(&params.thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("invalid thread id: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let path = match find_conversation_path_by_id_str(
+            &self.config.codex_home,
+            &conversation_id.to_string(),
+        )
+        .await
+        {
+            Ok(Some(p)) => p,
+            Ok(None) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("no rollout found for conversation id {conversation_id}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("failed to locate conversation id {conversation_id}: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let fallback_provider = self.config.model_provider_id.as_str();
+        let summary = match read_summary_from_rollout(&path, fallback_provider).await {
+            Ok(s) => s,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("failed to load rollout `{}`: {err}", path.display()),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let initial_history = match RolloutRecorder::get_rollout_history(&summary.path).await {
+            Ok(initial_history) => initial_history,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!(
+                        "failed to load rollout `{}` for conversation {conversation_id}: {err}",
+                        summary.path.display()
+                    ),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self
+            .conversation_manager
+            .resume_conversation_with_history(
+                self.config.as_ref().clone(),
+                initial_history,
+                self.auth_manager.clone(),
+            )
+            .await
+        {
+            Ok(_) => {
+                // Auto-attach a conversation listener when resuming a thread.
+                if let Err(err) = self
+                    .attach_conversation_listener(conversation_id, false)
+                    .await
+                {
+                    tracing::warn!(
+                        "failed to attach listener for conversation {}: {}",
+                        conversation_id,
+                        err.message
+                    );
+                }
+
+                let response = ThreadResumeResponse {
+                    thread: Thread {
+                        id: conversation_id.to_string(),
+                    },
+                };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("error resuming thread: {err}"),
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
@@ -925,11 +1396,7 @@ impl CodexMessageProcessor {
             model_providers: model_provider,
         } = params;
         let page_size = page_size.unwrap_or(25);
-        // Decode the optional cursor string to a Cursor via serde (Cursor implements Deserialize from string)
-        let cursor_obj: Option<RolloutCursor> = match cursor {
-            Some(s) => serde_json::from_str::<RolloutCursor>(&format!("\"{s}\"")).ok(),
-            None => None,
-        };
+        let cursor_obj: Option<RolloutCursor> = cursor.as_ref().and_then(|s| parse_cursor(s));
         let cursor_ref = cursor_obj.as_ref();
         let model_provider_filter = match model_provider {
             Some(providers) => {
@@ -973,33 +1440,86 @@ impl CodexMessageProcessor {
             .collect();
 
         // Encode next_cursor as a plain string
-        let next_cursor = match page.next_cursor {
-            Some(c) => match serde_json::to_value(&c) {
-                Ok(serde_json::Value::String(s)) => Some(s),
-                _ => None,
-            },
-            None => None,
-        };
+        let next_cursor = page
+            .next_cursor
+            .and_then(|cursor| serde_json::to_value(&cursor).ok())
+            .and_then(|value| value.as_str().map(str::to_owned));
 
         let response = ListConversationsResponse { items, next_cursor };
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn list_models(&self, request_id: RequestId, params: ListModelsParams) {
-        let ListModelsParams { page_size, cursor } = params;
+    async fn list_conversations_common(
+        &self,
+        page_size: usize,
+        cursor: Option<String>,
+        model_providers: Option<Vec<String>>,
+    ) -> Result<(Vec<ConversationSummary>, Option<String>), JSONRPCErrorError> {
+        let cursor_obj: Option<RolloutCursor> = cursor.as_ref().and_then(|s| parse_cursor(s));
+        let cursor_ref = cursor_obj.as_ref();
+
+        let model_provider_filter = match model_providers {
+            Some(providers) => {
+                if providers.is_empty() {
+                    None
+                } else {
+                    Some(providers)
+                }
+            }
+            None => Some(vec![self.config.model_provider_id.clone()]),
+        };
+        let fallback_provider = self.config.model_provider_id.clone();
+
+        let page = match RolloutRecorder::list_conversations(
+            &self.config.codex_home,
+            page_size,
+            cursor_ref,
+            INTERACTIVE_SESSION_SOURCES,
+            model_provider_filter.as_deref(),
+            fallback_provider.as_str(),
+        )
+        .await
+        {
+            Ok(p) => p,
+            Err(err) => {
+                return Err(JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to list conversations: {err}"),
+                    data: None,
+                });
+            }
+        };
+
+        let items = page
+            .items
+            .into_iter()
+            .filter_map(|it| extract_conversation_summary(it.path, &it.head, &fallback_provider))
+            .collect::<Vec<_>>();
+
+        let next_cursor = page
+            .next_cursor
+            .and_then(|cursor| serde_json::to_value(&cursor).ok())
+            .and_then(|value| value.as_str().map(str::to_owned));
+
+        Ok((items, next_cursor))
+    }
+
+    async fn list_models(&self, request_id: RequestId, params: ModelListParams) {
+        let ModelListParams { limit, cursor } = params;
         let models = supported_models();
         let total = models.len();
 
         if total == 0 {
-            let response = ListModelsResponse {
-                items: Vec::new(),
+            let response = ModelListResponse {
+                data: Vec::new(),
                 next_cursor: None,
             };
             self.outgoing.send_response(request_id, response).await;
             return;
         }
 
-        let effective_page_size = page_size.unwrap_or(total).max(1).min(total);
+        let effective_page_size = limit.unwrap_or(total as u32).max(1) as usize;
+        let effective_page_size = effective_page_size.min(total);
         let start = match cursor {
             Some(cursor) => match cursor.parse::<usize>() {
                 Ok(idx) => idx,
@@ -1033,7 +1553,10 @@ impl CodexMessageProcessor {
         } else {
             None
         };
-        let response = ListModelsResponse { items, next_cursor };
+        let response = ModelListResponse {
+            data: items,
+            next_cursor,
+        };
         self.outgoing.send_response(request_id, response).await;
     }
 
@@ -1052,7 +1575,36 @@ impl CodexMessageProcessor {
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let config = match overrides {
             Some(overrides) => {
-                derive_config_from_params(overrides, self.codex_linux_sandbox_exe.clone()).await
+                let NewConversationParams {
+                    model,
+                    model_provider,
+                    profile,
+                    cwd,
+                    approval_policy,
+                    sandbox,
+                    config: cli_overrides,
+                    base_instructions,
+                    developer_instructions,
+                    compact_prompt,
+                    include_apply_patch_tool,
+                } = overrides;
+
+                let overrides = ConfigOverrides {
+                    model,
+                    config_profile: profile,
+                    cwd: cwd.map(PathBuf::from),
+                    approval_policy,
+                    sandbox_mode: sandbox,
+                    model_provider,
+                    codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+                    base_instructions,
+                    developer_instructions,
+                    compact_prompt,
+                    include_apply_patch_tool,
+                    ..Default::default()
+                };
+
+                derive_config_from_params(overrides, cli_overrides).await
             }
             None => Ok(self.config.as_ref().clone()),
         };
@@ -1196,82 +1748,103 @@ impl CodexMessageProcessor {
         self.outgoing.send_error(request_id, error).await;
     }
 
-    async fn archive_conversation(&self, request_id: RequestId, params: ArchiveConversationParams) {
+    async fn archive_conversation(
+        &mut self,
+        request_id: RequestId,
+        params: ArchiveConversationParams,
+    ) {
         let ArchiveConversationParams {
             conversation_id,
             rollout_path,
         } = params;
 
-        // Verify that the rollout path is in the sessions directory or else
-        // a malicious client could specify an arbitrary path.
+        match self
+            .archive_conversation_common(conversation_id, &rollout_path)
+            .await
+        {
+            Ok(()) => {
+                tracing::info!("thread/archive succeeded for {conversation_id}");
+                let response = ArchiveConversationResponse {};
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "thread/archive failed for {conversation_id}: {}",
+                    err.message
+                );
+                self.outgoing.send_error(request_id, err).await;
+            }
+        }
+    }
+
+    async fn archive_conversation_common(
+        &mut self,
+        conversation_id: ConversationId,
+        rollout_path: &Path,
+    ) -> Result<(), JSONRPCErrorError> {
+        // Verify rollout_path is under sessions dir.
         let rollout_folder = self.config.codex_home.join(codex_core::SESSIONS_SUBDIR);
+
         let canonical_sessions_dir = match tokio::fs::canonicalize(&rollout_folder).await {
             Ok(path) => path,
             Err(err) => {
-                let error = JSONRPCErrorError {
+                return Err(JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!(
                         "failed to archive conversation: unable to resolve sessions directory: {err}"
                     ),
                     data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
+                });
             }
         };
-        let canonical_rollout_path = tokio::fs::canonicalize(&rollout_path).await;
+        let canonical_rollout_path = tokio::fs::canonicalize(rollout_path).await;
         let canonical_rollout_path = if let Ok(path) = canonical_rollout_path
             && path.starts_with(&canonical_sessions_dir)
         {
             path
         } else {
-            let error = JSONRPCErrorError {
+            return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: format!(
                     "rollout path `{}` must be in sessions directory",
                     rollout_path.display()
                 ),
                 data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
+            });
         };
 
+        // Verify file name matches conversation id.
         let required_suffix = format!("{conversation_id}.jsonl");
         let Some(file_name) = canonical_rollout_path.file_name().map(OsStr::to_owned) else {
-            let error = JSONRPCErrorError {
+            return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: format!(
                     "rollout path `{}` missing file name",
                     rollout_path.display()
                 ),
                 data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
+            });
         };
-
         if !file_name
             .to_string_lossy()
             .ends_with(required_suffix.as_str())
         {
-            let error = JSONRPCErrorError {
+            return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: format!(
                     "rollout path `{}` does not match conversation id {conversation_id}",
                     rollout_path.display()
                 ),
                 data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
+            });
         }
 
-        let removed_conversation = self
+        // If the conversation is active, request shutdown and wait briefly.
+        if let Some(conversation) = self
             .conversation_manager
             .remove_conversation(&conversation_id)
-            .await;
-        if let Some(conversation) = removed_conversation {
+            .await
+        {
             info!("conversation {conversation_id} was active; shutting down");
             let conversation_clone = conversation.clone();
             let notify = Arc::new(tokio::sync::Notify::new());
@@ -1280,20 +1853,24 @@ impl CodexMessageProcessor {
             // Establish the listener for ShutdownComplete before submitting
             // Shutdown so it is not missed.
             let is_shutdown = tokio::spawn(async move {
+                // Create the notified future outside the loop to avoid losing notifications.
+                let notified = notify_clone.notified();
+                tokio::pin!(notified);
                 loop {
                     select! {
-                        _ = notify_clone.notified() => {
-                            break;
-                        }
+                        _ = &mut notified => { break; }
                         event = conversation_clone.next_event() => {
-                            if let Ok(event) = event && matches!(event.msg, EventMsg::ShutdownComplete) {
-                                break;
+                            match event {
+                                Ok(event) => {
+                                    if matches!(event.msg, EventMsg::ShutdownComplete) { break; }
+                                }
+                                // Break on errors to avoid tight loops when the agent loop has exited.
+                                Err(_) => { break; }
                             }
                         }
                     }
                 }
             });
-
             // Request shutdown.
             match conversation.submit(Op::Shutdown).await {
                 Ok(_) => {
@@ -1304,20 +1881,21 @@ impl CodexMessageProcessor {
                         }
                         _ = tokio::time::sleep(Duration::from_secs(10)) => {
                             warn!("conversation {conversation_id} shutdown timed out; proceeding with archive");
-                            notify.notify_one();
+                            // Wake any waiter; use notify_waiters to avoid missing the signal.
+                            notify.notify_waiters();
+                            // Perhaps we lost a shutdown race, so let's continue to
+                            // clean up the .jsonl file.
                         }
                     }
                 }
                 Err(err) => {
                     error!("failed to submit Shutdown to conversation {conversation_id}: {err}");
-                    notify.notify_one();
-                    // Perhaps we lost a shutdown race, so let's continue to
-                    // clean up the .jsonl file.
+                    notify.notify_waiters();
                 }
             }
         }
 
-        // Move the .jsonl file to the archived sessions subdir.
+        // Move the rollout file to archived.
         let result: std::io::Result<()> = async {
             let archive_folder = self
                 .config
@@ -1329,20 +1907,11 @@ impl CodexMessageProcessor {
         }
         .await;
 
-        match result {
-            Ok(()) => {
-                let response = ArchiveConversationResponse {};
-                self.outgoing.send_response(request_id, response).await;
-            }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to archive conversation: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-            }
-        }
+        result.map_err(|err| JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            message: format!("failed to archive conversation: {err}"),
+            data: None,
+        })
     }
 
     async fn send_user_message(&self, request_id: RequestId, params: SendUserMessageParams) {
@@ -1478,24 +2047,70 @@ impl CodexMessageProcessor {
             conversation_id,
             experimental_raw_events,
         } = params;
-        let Ok(conversation) = self
+
+        match self
+            .attach_conversation_listener(conversation_id, experimental_raw_events)
+            .await
+        {
+            Ok(subscription_id) => {
+                let response = AddConversationSubscriptionResponse { subscription_id };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+            }
+        }
+    }
+
+    async fn remove_conversation_listener(
+        &mut self,
+        request_id: RequestId,
+        params: RemoveConversationListenerParams,
+    ) {
+        let RemoveConversationListenerParams { subscription_id } = params;
+        match self.conversation_listeners.remove(&subscription_id) {
+            Some(sender) => {
+                // Signal the spawned task to exit and acknowledge.
+                let _ = sender.send(());
+                let response = RemoveConversationSubscriptionResponse {};
+                self.outgoing.send_response(request_id, response).await;
+            }
+            None => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("subscription not found: {subscription_id}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn attach_conversation_listener(
+        &mut self,
+        conversation_id: ConversationId,
+        experimental_raw_events: bool,
+    ) -> Result<Uuid, JSONRPCErrorError> {
+        let conversation = match self
             .conversation_manager
             .get_conversation(conversation_id)
             .await
-        else {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("conversation not found: {conversation_id}"),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
+        {
+            Ok(conv) => conv,
+            Err(_) => {
+                return Err(JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("conversation not found: {conversation_id}"),
+                    data: None,
+                });
+            }
         };
 
         let subscription_id = Uuid::new_v4();
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
         self.conversation_listeners
             .insert(subscription_id, cancel_tx);
+
         let outgoing_for_task = self.outgoing.clone();
         let pending_interrupts = self.pending_interrupts.clone();
         tokio::spawn(async move {
@@ -1535,45 +2150,32 @@ impl CodexMessageProcessor {
                                 continue;
                             }
                         };
-                        params.insert("conversationId".to_string(), conversation_id.to_string().into());
+                        params.insert(
+                            "conversationId".to_string(),
+                            conversation_id.to_string().into(),
+                        );
 
-                        outgoing_for_task.send_notification(OutgoingNotification {
-                            method,
-                            params: Some(params.into()),
-                        })
+                        outgoing_for_task
+                            .send_notification(OutgoingNotification {
+                                method,
+                                params: Some(params.into()),
+                            })
+                            .await;
+
+                        apply_bespoke_event_handling(
+                            event.clone(),
+                            conversation_id,
+                            conversation.clone(),
+                            outgoing_for_task.clone(),
+                            pending_interrupts.clone(),
+                        )
                         .await;
-
-                        apply_bespoke_event_handling(event.clone(), conversation_id, conversation.clone(), outgoing_for_task.clone(), pending_interrupts.clone()).await;
                     }
                 }
             }
         });
-        let response = AddConversationSubscriptionResponse { subscription_id };
-        self.outgoing.send_response(request_id, response).await;
-    }
 
-    async fn remove_conversation_listener(
-        &mut self,
-        request_id: RequestId,
-        params: RemoveConversationListenerParams,
-    ) {
-        let RemoveConversationListenerParams { subscription_id } = params;
-        match self.conversation_listeners.remove(&subscription_id) {
-            Some(sender) => {
-                // Signal the spawned task to exit and acknowledge.
-                let _ = sender.send(());
-                let response = RemoveConversationSubscriptionResponse {};
-                self.outgoing.send_response(request_id, response).await;
-            }
-            None => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("subscription not found: {subscription_id}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-            }
-        }
+        Ok(subscription_id)
     }
 
     async fn git_diff_to_origin(&self, request_id: RequestId, cwd: PathBuf) {
@@ -1637,8 +2239,8 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn upload_feedback(&self, request_id: RequestId, params: UploadFeedbackParams) {
-        let UploadFeedbackParams {
+    async fn upload_feedback(&self, request_id: RequestId, params: FeedbackUploadParams) {
+        let FeedbackUploadParams {
             classification,
             reason,
             conversation_id,
@@ -1683,7 +2285,7 @@ impl CodexMessageProcessor {
 
         match upload_result {
             Ok(()) => {
-                let response = UploadFeedbackResponse { thread_id };
+                let response = FeedbackUploadResponse { thread_id };
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
@@ -1797,41 +2399,9 @@ async fn apply_bespoke_event_handling(
 }
 
 async fn derive_config_from_params(
-    params: NewConversationParams,
-    codex_linux_sandbox_exe: Option<PathBuf>,
+    overrides: ConfigOverrides,
+    cli_overrides: Option<std::collections::HashMap<String, serde_json::Value>>,
 ) -> std::io::Result<Config> {
-    let NewConversationParams {
-        model,
-        model_provider,
-        profile,
-        cwd,
-        approval_policy,
-        sandbox: sandbox_mode,
-        config: cli_overrides,
-        base_instructions,
-        developer_instructions,
-        compact_prompt,
-        include_apply_patch_tool,
-    } = params;
-    let overrides = ConfigOverrides {
-        model,
-        review_model: None,
-        config_profile: profile,
-        cwd: cwd.map(PathBuf::from),
-        approval_policy,
-        sandbox_mode,
-        model_provider,
-        codex_linux_sandbox_exe,
-        base_instructions,
-        developer_instructions,
-        compact_prompt,
-        include_apply_patch_tool,
-        show_raw_agent_reasoning: None,
-        tools_web_search_request: None,
-        experimental_sandbox_command_assessment: None,
-        additional_writable_roots: Vec::new(),
-    };
-
     let cli_overrides = cli_overrides
         .unwrap_or_default()
         .into_iter()

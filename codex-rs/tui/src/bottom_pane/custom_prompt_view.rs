@@ -103,26 +103,6 @@ impl BottomPaneView for CustomPromptView {
         self.textarea.insert_str(&pasted);
         true
     }
-
-    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        if area.height < 2 || area.width <= 2 {
-            return None;
-        }
-        let text_area_height = self.input_height(area.width).saturating_sub(1);
-        if text_area_height == 0 {
-            return None;
-        }
-        let extra_offset: u16 = if self.context_label.is_some() { 1 } else { 0 };
-        let top_line_count = 1u16 + extra_offset;
-        let textarea_rect = Rect {
-            x: area.x.saturating_add(2),
-            y: area.y.saturating_add(top_line_count).saturating_add(1),
-            width: area.width.saturating_sub(2),
-            height: text_area_height,
-        };
-        let state = *self.textarea_state.borrow();
-        self.textarea.cursor_pos_with_state(textarea_rect, state)
-    }
 }
 
 impl Renderable for CustomPromptView {
@@ -231,6 +211,26 @@ impl Renderable for CustomPromptView {
                 buf,
             );
         }
+    }
+
+    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        if area.height < 2 || area.width <= 2 {
+            return None;
+        }
+        let text_area_height = self.input_height(area.width).saturating_sub(1);
+        if text_area_height == 0 {
+            return None;
+        }
+        let extra_offset: u16 = if self.context_label.is_some() { 1 } else { 0 };
+        let top_line_count = 1u16 + extra_offset;
+        let textarea_rect = Rect {
+            x: area.x.saturating_add(2),
+            y: area.y.saturating_add(top_line_count).saturating_add(1),
+            width: area.width.saturating_sub(2),
+            height: text_area_height,
+        };
+        let state = *self.textarea_state.borrow();
+        self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
 }
 

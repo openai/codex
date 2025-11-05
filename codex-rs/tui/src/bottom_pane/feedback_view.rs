@@ -163,6 +163,12 @@ impl BottomPaneView for FeedbackNoteView {
         self.textarea.insert_str(&pasted);
         true
     }
+}
+
+impl Renderable for FeedbackNoteView {
+    fn desired_height(&self, width: u16) -> u16 {
+        1u16 + self.input_height(width) + 3u16
+    }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         if area.height < 2 || area.width <= 2 {
@@ -181,12 +187,6 @@ impl BottomPaneView for FeedbackNoteView {
         };
         let state = *self.textarea_state.borrow();
         self.textarea.cursor_pos_with_state(textarea_rect, state)
-    }
-}
-
-impl Renderable for FeedbackNoteView {
-    fn desired_height(&self, width: u16) -> u16 {
-        1u16 + self.input_height(width) + 3u16
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {

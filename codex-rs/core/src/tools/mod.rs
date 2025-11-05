@@ -9,7 +9,7 @@ pub mod runtimes;
 pub mod sandboxing;
 pub mod spec;
 
-use crate::conversation_history::format_output_for_model_body;
+use crate::context_manager::format_output_for_model_body;
 use crate::exec::ExecToolCallOutput;
 pub use router::ToolRouter;
 use serde::Serialize;

@@ -170,6 +170,12 @@ impl OnboardingScreen {
         out
     }
 
+    fn is_auth_in_progress(&self) -> bool {
+        self.steps.iter().any(|step| {
+            matches!(step, Step::Auth(_)) && matches!(step.get_step_state(), StepState::InProgress)
+        })
+    }
+
     pub(crate) fn is_done(&self) -> bool {
         self.is_done
             || !self
@@ -216,7 +222,9 @@ impl KeyboardHandler for OnboardingScreen {
                 kind: KeyEventKind::Press,
                 ..
             } => {
-                self.is_done = true;
+                if !self.is_auth_in_progress() {
+                    self.is_done = true;
+                }
             }
             _ => {
                 if let Some(Step::Welcome(widget)) = self
