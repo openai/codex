@@ -1254,7 +1254,6 @@ impl CodexMessageProcessor {
             model_providers: model_provider,
         } = params;
         let page_size = page_size.unwrap_or(25);
-        // Decode the optional cursor string to a Cursor via serde (Cursor implements Deserialize from string)
         let cursor_obj: Option<RolloutCursor> = cursor.as_ref().and_then(|s| parse_cursor(s));
         let cursor_ref = cursor_obj.as_ref();
         let model_provider_filter = match model_provider {
@@ -1299,13 +1298,10 @@ impl CodexMessageProcessor {
             .collect();
 
         // Encode next_cursor as a plain string
-        let next_cursor = match page.next_cursor {
-            Some(c) => match serde_json::to_value(&c) {
-                Ok(serde_json::Value::String(s)) => Some(s),
-                _ => None,
-            },
-            None => None,
-        };
+        let next_cursor = page
+            .next_cursor
+            .and_then(|cursor| serde_json::to_value(&cursor).ok())
+            .and_then(|value| value.as_str().map(str::to_owned));
 
         let response = ListConversationsResponse { items, next_cursor };
         self.outgoing.send_response(request_id, response).await;
@@ -1317,10 +1313,7 @@ impl CodexMessageProcessor {
         cursor: Option<String>,
         model_providers: Option<Vec<String>>,
     ) -> Result<(Vec<ConversationSummary>, Option<String>), JSONRPCErrorError> {
-        let cursor_obj: Option<RolloutCursor> = match cursor {
-            Some(s) => serde_json::from_str::<RolloutCursor>(&format!("\"{s}\"")).ok(),
-            None => None,
-        };
+        let cursor_obj: Option<RolloutCursor> = cursor.as_ref().and_then(|s| parse_cursor(s));
         let cursor_ref = cursor_obj.as_ref();
 
         let model_provider_filter = match model_providers {
@@ -1361,13 +1354,10 @@ impl CodexMessageProcessor {
             .filter_map(|it| extract_conversation_summary(it.path, &it.head, &fallback_provider))
             .collect::<Vec<_>>();
 
-        let next_cursor = match page.next_cursor {
-            Some(c) => match serde_json::to_value(&c) {
-                Ok(serde_json::Value::String(s)) => Some(s),
-                _ => None,
-            },
-            None => None,
-        };
+        let next_cursor = page
+            .next_cursor
+            .and_then(|cursor| serde_json::to_value(&cursor).ok())
+            .and_then(|value| value.as_str().map(str::to_owned));
 
         Ok((items, next_cursor))
     }
