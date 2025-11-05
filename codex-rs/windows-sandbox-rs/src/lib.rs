@@ -182,6 +182,7 @@ mod windows_impl {
         cwd: &Path,
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
+        logs_base_dir: Option<&Path>,
     ) -> Result<CaptureResult> {
         let policy = SandboxPolicy::parse(policy_json_or_preset)?;
         normalize_null_device_env(&mut env_map);
@@ -191,7 +192,7 @@ mod windows_impl {
         let current_dir = cwd.to_path_buf();
         // for now, don't fail if we detect world-writable directories
         // audit::audit_everyone_writable(&current_dir, &env_map)?;
-        log_start(&command);
+        log_start(&command, logs_base_dir);
         let (h_token, psid_to_use): (HANDLE, *mut c_void) = unsafe {
             match &policy.0 {
                 SandboxMode::ReadOnly => {
@@ -295,7 +296,7 @@ mod windows_impl {
                 env_block.len(),
                 si.dwFlags,
             );
-            debug_log(&dbg);
+            debug_log(&dbg, logs_base_dir);
             unsafe {
                 CloseHandle(in_r);
                 CloseHandle(in_w);
@@ -395,9 +396,9 @@ mod windows_impl {
         };
 
         if exit_code == 0 {
-            log_success(&command);
+            log_success(&command, logs_base_dir);
         } else {
-            log_failure(&command, &format!("exit code {}", exit_code));
+            log_failure(&command, &format!("exit code {}", exit_code), logs_base_dir);
         }
 
         if !persist_aces {
@@ -446,6 +447,7 @@ mod stub {
         _cwd: &Path,
         _env_map: HashMap<String, String>,
         _timeout_ms: Option<u64>,
+        _logs_base_dir: Option<&Path>,
     ) -> Result<CaptureResult> {
         bail!("Windows sandbox is only available on Windows")
     }

@@ -31,6 +31,7 @@ use tracing::warn;
 
 use crate::AuthManager;
 use crate::auth::CodexAuth;
+use crate::auth::RefreshTokenError;
 use crate::chat_completions::AggregateStreamExt;
 use crate::chat_completions::stream_chat_completions;
 use crate::client_common::Prompt;
@@ -389,12 +390,17 @@ impl ModelClient {
                     && let Some(manager) = auth_manager.as_ref()
                     && let Some(auth) = auth.as_ref()
                     && auth.mode == AuthMode::ChatGPT
+                    && let Err(err) = manager.refresh_token().await
                 {
-                    manager.refresh_token().await.map_err(|err| {
-                        StreamAttemptError::Fatal(CodexErr::Fatal(format!(
-                            "Failed to refresh ChatGPT credentials: {err}"
-                        )))
-                    })?;
+                    let stream_error = match err {
+                        RefreshTokenError::Permanent(failed) => {
+                            StreamAttemptError::Fatal(CodexErr::RefreshTokenFailed(failed))
+                        }
+                        RefreshTokenError::Transient(other) => {
+                            StreamAttemptError::RetryableTransportError(CodexErr::Io(other))
+                        }
+                    };
+                    return Err(stream_error);
                 }
 
                 // The OpenAI Responses endpoint returns structured JSON bodies even for 4xx/5xx
@@ -931,8 +937,10 @@ async fn stream_from_fixture(
 fn rate_limit_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
 
+    // Match both OpenAI-style messages like "Please try again in 1.898s"
+    // and Azure OpenAI-style messages like "Try again in 35 seconds".
     #[expect(clippy::unwrap_used)]
-    RE.get_or_init(|| Regex::new(r"Please try again in (\d+(?:\.\d+)?)(s|ms)").unwrap())
+    RE.get_or_init(|| Regex::new(r"(?i)try again in\s*(\d+(?:\.\d+)?)\s*(s|ms|seconds?)").unwrap())
 }
 
 fn try_parse_retry_after(err: &Error) -> Option<Duration> {
@@ -940,7 +948,8 @@ fn try_parse_retry_after(err: &Error) -> Option<Duration> {
         return None;
     }
 
-    // parse the Please try again in 1.898s format using regex
+    // parse retry hints like "try again in 1.898s" or
+    // "Try again in 35 seconds" using regex
     let re = rate_limit_regex();
     if let Some(message) = &err.message
         && let Some(captures) = re.captures(message)
@@ -950,9 +959,9 @@ fn try_parse_retry_after(err: &Error) -> Option<Duration> {
 
         if let (Some(value), Some(unit)) = (seconds, unit) {
             let value = value.as_str().parse::<f64>().ok()?;
-            let unit = unit.as_str();
+            let unit = unit.as_str().to_ascii_lowercase();
 
-            if unit == "s" {
+            if unit == "s" || unit.starts_with("second") {
                 return Some(Duration::from_secs_f64(value));
             } else if unit == "ms" {
                 return Some(Duration::from_millis(value as u64));
@@ -1425,6 +1434,19 @@ mod tests {
         };
         let delay = try_parse_retry_after(&err);
         assert_eq!(delay, Some(Duration::from_secs_f64(1.898)));
+    }
+
+    #[test]
+    fn test_try_parse_retry_after_azure() {
+        let err = Error {
+            r#type: None,
+            message: Some("Rate limit exceeded. Try again in 35 seconds.".to_string()),
+            code: Some("rate_limit_exceeded".to_string()),
+            plan_type: None,
+            resets_at: None,
+        };
+        let delay = try_parse_retry_after(&err);
+        assert_eq!(delay, Some(Duration::from_secs(35)));
     }
 
     #[test]

@@ -13,9 +13,9 @@ use crate::protocol::ErrorEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
+use crate::protocol::WarningEvent;
 use crate::truncate::truncate_middle;
 use crate::util::backoff;
-use askama::Template;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -27,13 +27,6 @@ use tracing::error;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
-
-#[derive(Template)]
-#[template(path = "compact/history_bridge.md", escape = "none")]
-struct HistoryBridgeTemplate<'a> {
-    user_messages_text: &'a str,
-    summary_text: &'a str,
-}
 
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
@@ -149,6 +142,7 @@ async fn run_compact_task_inner(
     let history_snapshot = sess.clone_history().await.get_history();
     let summary_text = get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
     let user_messages = collect_user_messages(&history_snapshot);
+
     let initial_context = sess.build_initial_context(turn_context.as_ref());
     let mut new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
     let ghost_snapshots: Vec<ResponseItem> = history_snapshot
@@ -168,6 +162,11 @@ async fn run_compact_task_inner(
         message: "Compact task completed".to_string(),
     });
     sess.send_event(&turn_context, event).await;
+
+    let warning = EventMsg::Warning(WarningEvent {
+        message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start new a new conversation when possible to keep conversations small and targeted.".to_string(),
+    });
+    sess.send_event(&turn_context, warning).await;
 }
 
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
@@ -218,33 +217,47 @@ fn build_compacted_history_with_limit(
     summary_text: &str,
     max_bytes: usize,
 ) -> Vec<ResponseItem> {
-    let mut user_messages_text = if user_messages.is_empty() {
-        "(none)".to_string()
-    } else {
-        user_messages.join("\n\n")
-    };
-    // Truncate the concatenated prior user messages so the bridge message
-    // stays well under the context window (approx. 4 bytes/token).
-    if user_messages_text.len() > max_bytes {
-        user_messages_text = truncate_middle(&user_messages_text, max_bytes).0;
+    let mut selected_messages: Vec<String> = Vec::new();
+    if max_bytes > 0 {
+        let mut remaining = max_bytes;
+        for message in user_messages.iter().rev() {
+            if remaining == 0 {
+                break;
+            }
+            if message.len() <= remaining {
+                selected_messages.push(message.clone());
+                remaining = remaining.saturating_sub(message.len());
+            } else {
+                let (truncated, _) = truncate_middle(message, remaining);
+                selected_messages.push(truncated);
+                break;
+            }
+        }
+        selected_messages.reverse();
     }
+
+    for message in &selected_messages {
+        history.push(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: message.clone(),
+            }],
+        });
+    }
+
     let summary_text = if summary_text.is_empty() {
         "(no summary available)".to_string()
     } else {
         summary_text.to_string()
     };
-    let Ok(bridge) = HistoryBridgeTemplate {
-        user_messages_text: &user_messages_text,
-        summary_text: &summary_text,
-    }
-    .render() else {
-        return vec![];
-    };
+
     history.push(ResponseItem::Message {
         id: None,
         role: "user".to_string(),
-        content: vec![ContentItem::InputText { text: bridge }],
+        content: vec![ContentItem::InputText { text: summary_text }],
     });
+
     history
 }
 
@@ -384,30 +397,55 @@ mod tests {
             "SUMMARY",
             max_bytes,
         );
+        assert_eq!(history.len(), 2);
 
-        // Expect exactly one bridge message added to history (plus any initial context we provided, which is none).
-        assert_eq!(history.len(), 1);
+        let truncated_message = &history[0];
+        let summary_message = &history[1];
 
-        // Extract the text content of the bridge message.
-        let bridge_text = match &history[0] {
+        let truncated_text = match truncated_message {
             ResponseItem::Message { role, content, .. } if role == "user" => {
                 content_items_to_text(content).unwrap_or_default()
             }
             other => panic!("unexpected item in history: {other:?}"),
         };
 
-        // The bridge should contain the truncation marker and not the full original payload.
         assert!(
-            bridge_text.contains("tokens truncated"),
-            "expected truncation marker in bridge message"
+            truncated_text.contains("tokens truncated"),
+            "expected truncation marker in truncated user message"
         );
         assert!(
-            !bridge_text.contains(&big),
-            "bridge should not include the full oversized user text"
+            !truncated_text.contains(&big),
+            "truncated user message should not include the full oversized user text"
         );
+
+        let summary_text = match summary_message {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                content_items_to_text(content).unwrap_or_default()
+            }
+            other => panic!("unexpected item in history: {other:?}"),
+        };
+        assert_eq!(summary_text, "SUMMARY");
+    }
+
+    #[test]
+    fn build_compacted_history_appends_summary_message() {
+        let initial_context: Vec<ResponseItem> = Vec::new();
+        let user_messages = vec!["first user message".to_string()];
+        let summary_text = "summary text";
+
+        let history = build_compacted_history(initial_context, &user_messages, summary_text);
         assert!(
-            bridge_text.contains("SUMMARY"),
-            "bridge should include the provided summary text"
+            !history.is_empty(),
+            "expected compacted history to include summary"
         );
+
+        let last = history.last().expect("history should have a summary entry");
+        let summary = match last {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                content_items_to_text(content).unwrap_or_default()
+            }
+            other => panic!("expected summary message, found {other:?}"),
+        };
+        assert_eq!(summary, summary_text);
     }
 }
