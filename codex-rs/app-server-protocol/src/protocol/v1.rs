@@ -400,6 +400,7 @@ pub struct SessionConfiguredNotification {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+/// Deprecated notification. Use AccountUpdatedNotification instead.
 pub struct AuthStatusChangeNotification {
     pub auth_method: Option<AuthMode>,
 }
