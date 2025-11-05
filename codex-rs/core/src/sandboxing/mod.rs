@@ -165,5 +165,5 @@ pub async fn execute_env(
     policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
 ) -> crate::error::Result<ExecToolCallOutput> {
-    execute_exec_env(env.clone(), policy, stdout_stream).await
+    execute_exec_env(env.clone(), policy, stdout_stream, None).await
 }
