@@ -1715,7 +1715,6 @@ impl ChatWidget {
     }
 
     fn open_rate_limit_switch_prompt(&mut self, preset: ModelPreset) {
-        std::thread::sleep(Duration::from_millis(500));
         let switch_model = preset.model.to_string();
         let display_name = preset.display_name.to_string();
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
@@ -1730,6 +1729,7 @@ impl ChatWidget {
                 summary: None,
             }));
             tx.send(AppEvent::UpdateModel(switch_model.clone()));
+            tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
         })];
 
         let keep_actions: Vec<SelectionAction> = Vec::new();
