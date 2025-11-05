@@ -217,6 +217,7 @@ fn enforce_history_limit(file: &mut File, max_bytes: Option<usize>) -> Result<()
     reader.read_to_end(&mut tail)?;
 
     file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
     file.write_all(&tail)?;
     file.flush()?;
 
