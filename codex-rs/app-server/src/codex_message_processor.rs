@@ -4,6 +4,7 @@ use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
@@ -625,7 +626,9 @@ impl CodexMessageProcessor {
     async fn get_account_rate_limits(&self, request_id: RequestId) {
         match self.fetch_account_rate_limits().await {
             Ok(rate_limits) => {
-                let response = GetAccountRateLimitsResponse { rate_limits };
+                let response = GetAccountRateLimitsResponse {
+                    rate_limits: rate_limits.into(),
+                };
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(error) => {
@@ -1766,7 +1769,9 @@ async fn apply_bespoke_event_handling(
             if let Some(rate_limits) = token_count_event.rate_limits {
                 outgoing
                     .send_server_notification(ServerNotification::AccountRateLimitsUpdated(
-                        rate_limits,
+                        AccountRateLimitsUpdatedNotification {
+                            rate_limits: rate_limits.into(),
+                        },
                     ))
                     .await;
             }
