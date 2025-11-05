@@ -4,12 +4,13 @@ use std::path::PathBuf;
 use crate::JSONRPCNotification;
 use crate::JSONRPCRequest;
 use crate::RequestId;
+use crate::export::GeneratedSchema;
+use crate::export::write_json_schema;
 use crate::protocol::v1;
 use crate::protocol::v2;
 use codex_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxCommandAssessment;
 use paste::paste;
@@ -74,13 +75,26 @@ macro_rules! client_request_definitions {
             Ok(())
         }
 
+        #[allow(clippy::vec_init_then_push)]
         pub fn export_client_response_schemas(
             out_dir: &::std::path::Path,
-        ) -> ::anyhow::Result<()> {
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let mut schemas = Vec::new();
             $(
-                crate::export::write_json_schema::<$response>(out_dir, stringify!($response))?;
+                schemas.push(write_json_schema::<$response>(out_dir, stringify!($response))?);
             )*
-            Ok(())
+            Ok(schemas)
+        }
+
+        #[allow(clippy::vec_init_then_push)]
+        pub fn export_client_param_schemas(
+            out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let mut schemas = Vec::new();
+            $(
+                schemas.push(write_json_schema::<$params>(out_dir, stringify!($params))?);
+            )*
+            Ok(schemas)
         }
     };
 }
@@ -276,13 +290,101 @@ macro_rules! server_request_definitions {
             Ok(())
         }
 
+        #[allow(clippy::vec_init_then_push)]
         pub fn export_server_response_schemas(
             out_dir: &::std::path::Path,
-        ) -> ::anyhow::Result<()> {
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let mut schemas = Vec::new();
             paste! {
-                $(crate::export::write_json_schema::<[<$variant Response>]>(out_dir, stringify!([<$variant Response>]))?;)*
+                $(schemas.push(crate::export::write_json_schema::<[<$variant Response>]>(out_dir, stringify!([<$variant Response>]))?);)*
             }
-            Ok(())
+            Ok(schemas)
+        }
+
+        #[allow(clippy::vec_init_then_push)]
+        pub fn export_server_param_schemas(
+            out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let mut schemas = Vec::new();
+            paste! {
+                $(schemas.push(crate::export::write_json_schema::<[<$variant Params>]>(out_dir, stringify!([<$variant Params>]))?);)*
+            }
+            Ok(schemas)
+        }
+    };
+}
+
+/// Generates `ServerNotification` enum and helpers, including a JSON Schema
+/// exporter for each notification.
+macro_rules! server_notification_definitions {
+    (
+        $(
+            $(#[$variant_meta:meta])*
+            $variant:ident $(=> $wire:literal)? ( $payload:ty )
+        ),* $(,)?
+    ) => {
+        /// Notification sent from the server to the client.
+        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
+        #[serde(tag = "method", content = "params", rename_all = "camelCase")]
+        #[strum(serialize_all = "camelCase")]
+        pub enum ServerNotification {
+            $(
+                $(#[$variant_meta])*
+                $(#[serde(rename = $wire)] #[ts(rename = $wire)] #[strum(serialize = $wire)])?
+                $variant($payload),
+            )*
+        }
+
+        impl ServerNotification {
+            pub fn to_params(self) -> Result<serde_json::Value, serde_json::Error> {
+                match self {
+                    $(Self::$variant(params) => serde_json::to_value(params),)*
+                }
+            }
+        }
+
+        impl TryFrom<JSONRPCNotification> for ServerNotification {
+            type Error = serde_json::Error;
+
+            fn try_from(value: JSONRPCNotification) -> Result<Self, Self::Error> {
+                serde_json::from_value(serde_json::to_value(value)?)
+            }
+        }
+
+        #[allow(clippy::vec_init_then_push)]
+        pub fn export_server_notification_schemas(
+            out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let mut schemas = Vec::new();
+            $(schemas.push(crate::export::write_json_schema::<$payload>(out_dir, stringify!($payload))?);)*
+            Ok(schemas)
+        }
+    };
+}
+/// Notifications sent from the client to the server.
+macro_rules! client_notification_definitions {
+    (
+        $(
+            $(#[$variant_meta:meta])*
+            $variant:ident $( ( $payload:ty ) )?
+        ),* $(,)?
+    ) => {
+        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
+        #[serde(tag = "method", content = "params", rename_all = "camelCase")]
+        #[strum(serialize_all = "camelCase")]
+        pub enum ClientNotification {
+            $(
+                $(#[$variant_meta])*
+                $variant $( ( $payload ) )?,
+            )*
+        }
+
+        pub fn export_client_notification_schemas(
+            _out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let schemas = Vec::new();
+            $( $(schemas.push(crate::export::write_json_schema::<$payload>(_out_dir, stringify!($payload))?);)? )*
+            Ok(schemas)
         }
     };
 }
@@ -366,58 +468,26 @@ pub struct FuzzyFileSearchResponse {
     pub files: Vec<FuzzyFileSearchResult>,
 }
 
-/// Notification sent from the server to the client.
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
-#[serde(tag = "method", content = "params", rename_all = "camelCase")]
-#[strum(serialize_all = "camelCase")]
-pub enum ServerNotification {
+server_notification_definitions! {
     /// NEW NOTIFICATIONS
-    #[serde(rename = "account/updated")]
-    #[ts(rename = "account/updated")]
-    #[strum(serialize = "account/updated")]
-    AccountUpdated(v2::AccountUpdatedNotification),
-
-    #[serde(rename = "account/rateLimits/updated")]
-    #[ts(rename = "account/rateLimits/updated")]
-    #[strum(serialize = "account/rateLimits/updated")]
-    AccountRateLimitsUpdated(RateLimitSnapshot),
+    ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
+    TurnStarted => "turn/started" (v2::TurnStartedNotification),
+    TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
+    ItemStarted => "item/started" (v2::ItemStartedNotification),
+    ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
+    AgentMessageDelta => "item/agentMessage/delta" (v2::AgentMessageDeltaNotification),
+    CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
+    McpToolCallProgress => "item/mcpToolCall/progress" (v2::McpToolCallProgressNotification),
+    AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
+    AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
 
     /// DEPRECATED NOTIFICATIONS below
-    /// Authentication status changed
     AuthStatusChange(v1::AuthStatusChangeNotification),
-
-    /// ChatGPT login flow completed
     LoginChatGptComplete(v1::LoginChatGptCompleteNotification),
-
-    /// The special session configured event for a new or resumed conversation.
     SessionConfigured(v1::SessionConfiguredNotification),
 }
 
-impl ServerNotification {
-    pub fn to_params(self) -> Result<serde_json::Value, serde_json::Error> {
-        match self {
-            ServerNotification::AccountUpdated(params) => serde_json::to_value(params),
-            ServerNotification::AccountRateLimitsUpdated(params) => serde_json::to_value(params),
-            ServerNotification::AuthStatusChange(params) => serde_json::to_value(params),
-            ServerNotification::LoginChatGptComplete(params) => serde_json::to_value(params),
-            ServerNotification::SessionConfigured(params) => serde_json::to_value(params),
-        }
-    }
-}
-
-impl TryFrom<JSONRPCNotification> for ServerNotification {
-    type Error = serde_json::Error;
-
-    fn try_from(value: JSONRPCNotification) -> Result<Self, Self::Error> {
-        serde_json::from_value(serde_json::to_value(value)?)
-    }
-}
-
-/// Notification sent from the client to the server.
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
-#[serde(tag = "method", content = "params", rename_all = "camelCase")]
-#[strum(serialize_all = "camelCase")]
-pub enum ClientNotification {
+client_notification_definitions! {
     Initialized,
 }
 
