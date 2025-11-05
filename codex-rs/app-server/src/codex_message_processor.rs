@@ -339,7 +339,7 @@ impl CodexMessageProcessor {
                 self.login_api_key_v2(request_id, LoginApiKeyParams { api_key })
                     .await;
             }
-            LoginAccountParams::ChatGpt => {
+            LoginAccountParams::Chatgpt => {
                 self.login_chatgpt_v2(request_id).await;
             }
         }
@@ -423,7 +423,7 @@ impl CodexMessageProcessor {
                     .await;
 
                 let payload_v2 = AccountUpdatedNotification {
-                    auth_method: self.auth_manager.auth().map(|auth| auth.mode),
+                    auth_mode: self.auth_manager.auth().map(|auth| auth.mode),
                 };
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
@@ -607,7 +607,7 @@ impl CodexMessageProcessor {
                             // Notify clients with the actual current auth mode.
                             let current_auth_method = auth_manager.auth().map(|a| a.mode);
                             let payload_v2 = AccountUpdatedNotification {
-                                auth_method: current_auth_method,
+                                auth_mode: current_auth_method,
                             };
                             outgoing_clone
                                 .send_server_notification(ServerNotification::AccountUpdated(
@@ -623,7 +623,7 @@ impl CodexMessageProcessor {
                         }
                     });
 
-                    let response = codex_app_server_protocol::LoginAccountResponse::ChatGpt {
+                    let response = codex_app_server_protocol::LoginAccountResponse::Chatgpt {
                         login_id: login_id.to_string(),
                         auth_url,
                     };
@@ -723,7 +723,7 @@ impl CodexMessageProcessor {
                     .await;
 
                 let payload_v2 = AccountUpdatedNotification {
-                    auth_method: current_auth_method,
+                    auth_mode: current_auth_method,
                 };
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))

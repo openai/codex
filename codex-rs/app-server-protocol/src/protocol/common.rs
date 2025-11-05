@@ -703,7 +703,7 @@ mod tests {
     fn serialize_account_login_chatgpt() -> Result<()> {
         let request = ClientRequest::LoginAccount {
             request_id: RequestId::Integer(3),
-            params: v2::LoginAccountParams::ChatGpt,
+            params: v2::LoginAccountParams::Chatgpt,
         };
         assert_eq!(
             json!({
@@ -763,7 +763,7 @@ mod tests {
             serde_json::to_value(&api_key)?,
         );
 
-        let chatgpt = v2::Account::ChatGpt {
+        let chatgpt = v2::Account::Chatgpt {
             email: Some("user@example.com".to_string()),
             plan_type: PlanType::Plus,
         };

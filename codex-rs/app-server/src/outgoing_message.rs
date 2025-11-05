@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn verify_account_updated_notification_serialization() {
         let notification = ServerNotification::AccountUpdated(AccountUpdatedNotification {
-            auth_method: Some(AuthMode::ApiKey),
+            auth_mode: Some(AuthMode::ApiKey),
         });
 
         let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
@@ -250,7 +250,7 @@ mod tests {
             json!({
                 "method": "account/updated",
                 "params": {
-                    "authMethod": "apikey"
+                    "authMode": "apikey"
                 },
             }),
             serde_json::to_value(jsonrpc_notification)

@@ -92,7 +92,7 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
         bail!("unexpected notification: {parsed:?}");
     };
     assert!(
-        payload.auth_method.is_none(),
+        payload.auth_mode.is_none(),
         "auth_method should be None after logout"
     );
 
@@ -159,7 +159,7 @@ async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
     let ServerNotification::AccountUpdated(payload) = parsed else {
         bail!("unexpected notification: {parsed:?}");
     };
-    pretty_assertions::assert_eq!(payload.auth_method, Some(AuthMode::ApiKey));
+    pretty_assertions::assert_eq!(payload.auth_mode, Some(AuthMode::ApiKey));
 
     assert!(codex_home.path().join("auth.json").exists());
     Ok(())
@@ -229,7 +229,7 @@ async fn login_account_chatgpt_start() -> Result<()> {
     .await??;
 
     let login: LoginAccountResponse = to_response(resp)?;
-    let LoginAccountResponse::ChatGpt {
+    let LoginAccountResponse::Chatgpt {
         login_id: _,
         auth_url,
     } = login
@@ -261,7 +261,7 @@ async fn login_account_chatgpt_includes_forced_workspace_query_param() -> Result
     .await??;
 
     let login: LoginAccountResponse = to_response(resp)?;
-    let LoginAccountResponse::ChatGpt { auth_url, .. } = login else {
+    let LoginAccountResponse::Chatgpt { auth_url, .. } = login else {
         bail!("unexpected login response: {login:?}");
     };
     assert!(
