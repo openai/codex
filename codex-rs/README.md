@@ -88,6 +88,16 @@ codex --sandbox danger-full-access
 
 The same setting can be persisted in `~/.codex/config.toml` via the top-level `sandbox_mode = "MODE"` key, e.g. `sandbox_mode = "workspace-write"`.
 
+### Disabling animations
+
+Codex's TUI uses subtle animations for spinners and onboarding screens. If they interfere with your terminal accessibility tools, start Codex with `--no-animations`:
+
+```shell
+codex --no-animations
+```
+
+You can make this permanent by adding `no_animations = true` to the `[tui]` section of your `~/.codex/config.toml`.
+
 ## Code Organization
 
 This folder is the root of a Cargo workspace. It contains quite a bit of experimental code, but here are the key crates:

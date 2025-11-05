@@ -8,6 +8,8 @@ use crate::frames::ALL_VARIANTS;
 use crate::frames::FRAME_TICK_DEFAULT;
 use crate::tui::FrameRequester;
 
+static EMPTY_FRAMES: [&str; 0] = [];
+
 /// Drives ASCII art animations shared across popups and onboarding widgets.
 pub(crate) struct AsciiAnimation {
     request_frame: FrameRequester,
@@ -20,6 +22,16 @@ pub(crate) struct AsciiAnimation {
 impl AsciiAnimation {
     pub(crate) fn new(request_frame: FrameRequester) -> Self {
         Self::with_variants(request_frame, ALL_VARIANTS, 0)
+    }
+
+    pub(crate) fn disabled(request_frame: FrameRequester) -> Self {
+        Self {
+            request_frame,
+            variants: &[],
+            variant_idx: 0,
+            frame_tick: FRAME_TICK_DEFAULT,
+            start: Instant::now(),
+        }
     }
 
     pub(crate) fn with_variants(
@@ -42,6 +54,9 @@ impl AsciiAnimation {
     }
 
     pub(crate) fn schedule_next_frame(&self) {
+        if self.frames().is_empty() {
+            return;
+        }
         let tick_ms = self.frame_tick.as_millis();
         if tick_ms == 0 {
             self.request_frame.schedule_frame();
@@ -92,11 +107,23 @@ impl AsciiAnimation {
 
     #[allow(dead_code)]
     pub(crate) fn request_frame(&self) {
+        if self.frames().is_empty() {
+            return;
+        }
         self.request_frame.schedule_frame();
     }
 
+    #[cfg(test)]
+    pub(crate) fn has_frames(&self) -> bool {
+        !self.frames().is_empty()
+    }
+
     fn frames(&self) -> &'static [&'static str] {
-        self.variants[self.variant_idx]
+        if self.variants.is_empty() {
+            &EMPTY_FRAMES
+        } else {
+            self.variants[self.variant_idx]
+        }
     }
 }
 

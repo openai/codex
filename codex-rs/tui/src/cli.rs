@@ -73,6 +73,10 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// Disable all animations for accessibility (useful with screen readers).
+    #[arg(long = "no-animations", default_value_t = false)]
+    pub no_animations: bool,
+
     /// Additional directories that should be writable alongside the primary workspace.
     #[arg(long = "add-dir", value_name = "DIR", value_hint = ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,

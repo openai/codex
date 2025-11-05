@@ -12,6 +12,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
+use crate::accessibility::animations_enabled;
 use crate::ascii_animation::AsciiAnimation;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
@@ -41,9 +42,16 @@ impl KeyboardHandler for WelcomeWidget {
 
 impl WelcomeWidget {
     pub(crate) fn new(is_logged_in: bool, request_frame: FrameRequester) -> Self {
+        let animation_ctor = if animations_enabled() {
+            AsciiAnimation::new
+        } else {
+            AsciiAnimation::disabled
+        };
+        let animation = animation_ctor(request_frame);
+
         Self {
             is_logged_in,
-            animation: AsciiAnimation::new(request_frame),
+            animation,
         }
     }
 }
@@ -51,19 +59,21 @@ impl WelcomeWidget {
 impl WidgetRef for &WelcomeWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
-        self.animation.schedule_next_frame();
-
         // Skip the animation entirely when the viewport is too small so we don't clip frames.
         let show_animation =
             area.height >= MIN_ANIMATION_HEIGHT && area.width >= MIN_ANIMATION_WIDTH;
 
+        if show_animation {
+            self.animation.schedule_next_frame();
+        }
+
         let mut lines: Vec<Line> = Vec::new();
         if show_animation {
             let frame = self.animation.current_frame();
-            // let frame_line_count = frame.lines().count();
-            // lines.reserve(frame_line_count + 2);
-            lines.extend(frame.lines().map(Into::into));
-            lines.push("".into());
+            if !frame.is_empty() {
+                lines.extend(frame.lines().map(Into::into));
+                lines.push("".into());
+            }
         }
         lines.push(Line::from(vec![
             "  ".into(),
@@ -90,6 +100,8 @@ impl StepStateProvider for WelcomeWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accessibility::with_cli_animations_disabled_for_tests;
+    use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
 
@@ -97,47 +109,157 @@ mod tests {
     static VARIANT_B: [&str; 1] = ["frame-b"];
     static VARIANTS: [&[&str]; 2] = [&VARIANT_A, &VARIANT_B];
 
-    #[test]
-    fn welcome_renders_animation_on_first_draw() {
-        let widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
-        let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
-        let mut buf = Buffer::empty(area);
-        (&widget).render(area, &mut buf);
-
-        let mut found = false;
-        let mut last_non_empty: Option<u16> = None;
+    fn buffer_contains(buf: &Buffer, area: Rect, needle: &str) -> bool {
         for y in 0..area.height {
+            let mut row = String::new();
             for x in 0..area.width {
-                if !buf[(x, y)].symbol().trim().is_empty() {
-                    found = true;
-                    last_non_empty = Some(y);
-                    break;
-                }
+                row.push_str(buf[(x, y)].symbol());
+            }
+            if row.contains(needle) {
+                return true;
             }
         }
 
-        assert!(found, "expected welcome animation to render characters");
-        let measured_rows = last_non_empty.map(|v| v + 2).unwrap_or(0);
-        assert!(
-            measured_rows >= MIN_ANIMATION_HEIGHT,
-            "expected measurement to report at least {MIN_ANIMATION_HEIGHT} rows, got {measured_rows}"
-        );
+        false
+    }
+
+    #[test]
+    fn disables_animation_when_cli_flag_set() {
+        with_cli_animations_disabled_for_tests(true, || {
+            let widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
+            assert_eq!(widget.animation.has_frames(), false);
+        });
+    }
+
+    #[test]
+    fn keeps_animation_enabled_by_default() {
+        with_cli_animations_disabled_for_tests(false, || {
+            let widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
+            assert_eq!(widget.animation.has_frames(), true);
+            assert!(
+                !widget.animation.current_frame().is_empty(),
+                "expected animation frame when animations are enabled"
+            );
+        });
+    }
+
+    #[test]
+    fn render_omits_animation_when_disabled() {
+        with_cli_animations_disabled_for_tests(true, || {
+            let widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
+            assert_eq!(widget.animation.has_frames(), false);
+
+            let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
+            let mut buf = Buffer::empty(area);
+            (&widget).render(area, &mut buf);
+
+            let mut first_row = String::new();
+            for x in 0..area.width {
+                first_row.push_str(buf[(x, 0)].symbol());
+            }
+            assert!(
+                first_row.contains("Welcome to"),
+                "expected welcome text to appear on the first row when animations are disabled"
+            );
+            assert!(
+                buffer_contains(&buf, area, "Codex"),
+                "expected welcome text to remain visible when animations are disabled"
+            );
+        });
+    }
+
+    #[test]
+    fn render_does_not_schedule_frame_when_animation_disabled() {
+        with_cli_animations_disabled_for_tests(true, || {
+            let (requester, mut counter) = FrameRequester::test_with_counter();
+            let widget = WelcomeWidget::new(false, requester);
+            assert_eq!(widget.animation.has_frames(), false);
+
+            let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
+            let mut buf = Buffer::empty(area);
+            (&widget).render(area, &mut buf);
+
+            assert_eq!(
+                counter.take_count(),
+                0,
+                "expected no frame scheduling when animation is disabled"
+            );
+        });
+    }
+
+    #[test]
+    fn render_includes_animation_when_enabled() {
+        with_cli_animations_disabled_for_tests(false, || {
+            let mut widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
+            assert_eq!(widget.animation.has_frames(), true);
+
+            widget.animation =
+                AsciiAnimation::with_variants(FrameRequester::test_dummy(), &VARIANTS, 0);
+
+            let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
+            let mut buf = Buffer::empty(area);
+            (&widget).render(area, &mut buf);
+
+            assert!(
+                buffer_contains(&buf, area, "frame-a"),
+                "expected animation content to render when animations are enabled"
+            );
+            assert!(
+                buffer_contains(&buf, area, "Codex"),
+                "expected welcome text to render when animations are enabled"
+            );
+        });
+    }
+
+    #[test]
+    fn welcome_renders_animation_on_first_draw() {
+        with_cli_animations_disabled_for_tests(false, || {
+            let widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
+            let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
+            let mut buf = Buffer::empty(area);
+            (&widget).render(area, &mut buf);
+
+            let mut found = false;
+            let mut last_non_empty: Option<u16> = None;
+            for y in 0..area.height {
+                for x in 0..area.width {
+                    if !buf[(x, y)].symbol().trim().is_empty() {
+                        found = true;
+                        last_non_empty = Some(y);
+                        break;
+                    }
+                }
+            }
+
+            assert!(found, "expected welcome animation to render characters");
+            let measured_rows = last_non_empty.map(|v| v + 2).unwrap_or(0);
+            assert!(
+                measured_rows >= MIN_ANIMATION_HEIGHT,
+                "expected measurement to report at least {MIN_ANIMATION_HEIGHT} rows, got {measured_rows}"
+            );
+        });
     }
 
     #[test]
     fn ctrl_dot_changes_animation_variant() {
-        let mut widget = WelcomeWidget {
-            is_logged_in: false,
-            animation: AsciiAnimation::with_variants(FrameRequester::test_dummy(), &VARIANTS, 0),
-        };
+        with_cli_animations_disabled_for_tests(false, || {
+            let mut widget = WelcomeWidget {
+                is_logged_in: false,
+                animation: AsciiAnimation::with_variants(
+                    FrameRequester::test_dummy(),
+                    &VARIANTS,
+                    0,
+                ),
+            };
 
-        let before = widget.animation.current_frame();
-        widget.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::CONTROL));
-        let after = widget.animation.current_frame();
+            let before = widget.animation.current_frame();
+            widget.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::CONTROL));
+            let after = widget.animation.current_frame();
 
-        assert_ne!(
-            before, after,
-            "expected ctrl+. to switch welcome animation variant"
-        );
+            assert_ne!(
+                before, after,
+                "expected ctrl+. to switch welcome animation variant"
+            );
+        });
     }
 }

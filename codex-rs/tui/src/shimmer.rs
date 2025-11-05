@@ -7,6 +7,7 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Span;
 
+use crate::accessibility::animations_enabled;
 use crate::color::blend;
 use crate::terminal_palette::default_bg;
 use crate::terminal_palette::default_fg;
@@ -19,6 +20,11 @@ fn elapsed_since_start() -> Duration {
 }
 
 pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
+    // If animations are disabled, return plain text
+    if !animations_enabled() {
+        return vec![Span::raw(text.to_string())];
+    }
+
     let chars: Vec<char> = text.chars().collect();
     if chars.is_empty() {
         return Vec::new();
