@@ -132,7 +132,7 @@ struct RunningCommand {
     is_user_shell_command: bool,
 }
 
-const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [0.0, 90.0, 95.0];
+const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
 const NUDGE_MODEL_SLUG: &str = "gpt-5-codex";
 
 #[derive(Default)]
