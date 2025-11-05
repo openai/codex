@@ -48,8 +48,6 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
-use codex_core::protocol::UserCommandBeginEvent;
-use codex_core::protocol::UserCommandEndEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -111,9 +109,6 @@ impl EventProcessorWithJsonOutput {
             EventMsg::AgentReasoning(ev) => self.handle_reasoning_event(ev),
             EventMsg::ExecCommandBegin(ev) => self.handle_exec_command_begin(ev),
             EventMsg::ExecCommandEnd(ev) => self.handle_exec_command_end(ev),
-            EventMsg::UserCommandBegin(ev) => self.handle_user_command_begin(ev),
-            EventMsg::UserCommandEnd(ev) => self.handle_user_command_end(ev),
-            EventMsg::UserCommandOutputDelta(_) => Vec::new(),
             EventMsg::McpToolCallBegin(ev) => self.handle_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.handle_mcp_tool_call_end(ev),
             EventMsg::PatchApplyBegin(ev) => self.handle_patch_apply_begin(ev),
@@ -200,28 +195,22 @@ impl EventProcessorWithJsonOutput {
 
         vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
     }
-
-    fn start_command_item(
-        &mut self,
-        call_id: &str,
-        command: &[String],
-        warn_subject: &'static str,
-    ) -> Vec<ThreadEvent> {
+    fn handle_exec_command_begin(&mut self, ev: &ExecCommandBeginEvent) -> Vec<ThreadEvent> {
         let item_id = self.get_next_item_id();
 
-        let command_string = match shlex::try_join(command.iter().map(String::as_str)) {
+        let command_string = match shlex::try_join(ev.command.iter().map(String::as_str)) {
             Ok(command_string) => command_string,
             Err(e) => {
                 warn!(
-                    call_id = call_id,
-                    "Failed to stringify {warn_subject}: {e:?}; skipping item.started"
+                    call_id = ev.call_id,
+                    "Failed to stringify command: {e:?}; skipping item.started"
                 );
-                command.join(" ")
+                ev.command.join(" ")
             }
         };
 
         self.running_commands.insert(
-            call_id.to_string(),
+            ev.call_id.clone(),
             RunningCommand {
                 command: command_string.clone(),
                 item_id: item_id.clone(),
@@ -239,45 +228,6 @@ impl EventProcessorWithJsonOutput {
         };
 
         vec![ThreadEvent::ItemStarted(ItemStartedEvent { item })]
-    }
-
-    fn finish_command_item(
-        &mut self,
-        call_id: &str,
-        aggregated_output: &str,
-        exit_code: i32,
-        warn_event_names: (&'static str, &'static str),
-    ) -> Vec<ThreadEvent> {
-        let some_running_command = self.running_commands.remove(call_id);
-        let Some(RunningCommand { command, item_id }) = some_running_command else {
-            let (end_event, begin_event) = warn_event_names;
-            warn!(
-                call_id = call_id,
-                "{end_event} without matching {begin_event}; skipping item.completed"
-            );
-            return Vec::new();
-        };
-
-        let status = if exit_code == 0 {
-            CommandExecutionStatus::Completed
-        } else {
-            CommandExecutionStatus::Failed
-        };
-
-        let item = ThreadItem {
-            id: item_id,
-            details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
-                command,
-                aggregated_output: aggregated_output.to_string(),
-                exit_code: Some(exit_code),
-                status,
-            }),
-        };
-
-        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
-    }
-    fn handle_exec_command_begin(&mut self, ev: &ExecCommandBeginEvent) -> Vec<ThreadEvent> {
-        self.start_command_item(&ev.call_id, &ev.command, "command")
     }
 
     fn handle_mcp_tool_call_begin(&mut self, ev: &McpToolCallBeginEvent) -> Vec<ThreadEvent> {
@@ -371,19 +321,6 @@ impl EventProcessorWithJsonOutput {
         vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
     }
 
-    fn handle_user_command_begin(&mut self, ev: &UserCommandBeginEvent) -> Vec<ThreadEvent> {
-        self.start_command_item(&ev.call_id, &ev.command, "user command")
-    }
-
-    fn handle_user_command_end(&mut self, ev: &UserCommandEndEvent) -> Vec<ThreadEvent> {
-        self.finish_command_item(
-            &ev.call_id,
-            &ev.aggregated_output,
-            ev.exit_code,
-            ("UserCommandEnd", "UserCommandBegin"),
-        )
-    }
-
     fn handle_patch_apply_begin(&mut self, ev: &PatchApplyBeginEvent) -> Vec<ThreadEvent> {
         self.running_patch_applies
             .insert(ev.call_id.clone(), ev.clone());
@@ -429,12 +366,31 @@ impl EventProcessorWithJsonOutput {
     }
 
     fn handle_exec_command_end(&mut self, ev: &ExecCommandEndEvent) -> Vec<ThreadEvent> {
-        self.finish_command_item(
-            &ev.call_id,
-            &ev.aggregated_output,
-            ev.exit_code,
-            ("ExecCommandEnd", "ExecCommandBegin"),
-        )
+        let Some(RunningCommand { command, item_id }) = self.running_commands.remove(&ev.call_id)
+        else {
+            warn!(
+                call_id = ev.call_id,
+                "ExecCommandEnd without matching ExecCommandBegin; skipping item.completed"
+            );
+            return Vec::new();
+        };
+        let status = if ev.exit_code == 0 {
+            CommandExecutionStatus::Completed
+        } else {
+            CommandExecutionStatus::Failed
+        };
+        let item = ThreadItem {
+            id: item_id,
+
+            details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
+                command,
+                aggregated_output: ev.aggregated_output.clone(),
+                exit_code: Some(ev.exit_code),
+                status,
+            }),
+        };
+
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
     }
 
     fn todo_items_from_plan(&self, args: &UpdatePlanArgs) -> Vec<TodoItem> {
