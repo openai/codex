@@ -93,6 +93,7 @@ use codex_core::exec_env::create_env;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::git_info::git_diff_to_remote;
+use codex_core::parse_cursor;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -1254,10 +1255,7 @@ impl CodexMessageProcessor {
         } = params;
         let page_size = page_size.unwrap_or(25);
         // Decode the optional cursor string to a Cursor via serde (Cursor implements Deserialize from string)
-        let cursor_obj: Option<RolloutCursor> = match cursor {
-            Some(s) => serde_json::from_str::<RolloutCursor>(&format!("\"{s}\"")).ok(),
-            None => None,
-        };
+        let cursor_obj: Option<RolloutCursor> = cursor.as_ref().and_then(|s| parse_cursor(s));
         let cursor_ref = cursor_obj.as_ref();
         let model_provider_filter = match model_provider {
             Some(providers) => {
