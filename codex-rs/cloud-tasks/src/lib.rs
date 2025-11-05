@@ -131,6 +131,160 @@ async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn run_tasks_command(args: crate::cli::TasksCommand) -> anyhow::Result<()> {
+    let ctx = init_backend("codex_cloud_tasks_cli").await?;
+
+    let resolved_env = if let Some(requested) = args.environment.as_deref() {
+        let normalized = util::normalize_base_url(&ctx.base_url);
+        let headers = util::build_chatgpt_headers().await;
+        let envs = crate::env_detect::list_environments(&normalized, &headers).await?;
+        Some(resolve_environment_id_from_list(&envs, requested)?)
+    } else {
+        None
+    };
+
+    let limit = args.limit as usize;
+    let mut tasks = fetch_tasks_with_limit(&*ctx.backend, limit, resolved_env.as_deref()).await?;
+    tasks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    if tasks.len() > limit {
+        tasks.truncate(limit);
+    }
+
+    if tasks.is_empty() {
+        if let Some(env) = resolved_env {
+            println!("No tasks found for environment {env}.");
+        } else {
+            println!("No tasks found.");
+        }
+        return Ok(());
+    }
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&tasks)?);
+        return Ok(());
+    }
+
+    let table = render_tasks_table(&tasks);
+    print!("{table}");
+
+    Ok(())
+}
+
+async fn fetch_tasks_with_limit(
+    backend: &dyn codex_cloud_tasks_client::CloudBackend,
+    limit: usize,
+    env: Option<&str>,
+) -> anyhow::Result<Vec<codex_cloud_tasks_client::TaskSummary>> {
+    let mut cursor: Option<String> = None;
+    let mut tasks: Vec<codex_cloud_tasks_client::TaskSummary> = Vec::new();
+    while tasks.len() < limit {
+        let (page, next) = codex_cloud_tasks_client::CloudBackend::list_tasks_page(
+            backend,
+            cursor.as_deref(),
+            20, // API max page size
+            env,
+        )
+        .await?;
+        if page.is_empty() {
+            break;
+        }
+        for task in page {
+            if task.is_review {
+                continue;
+            }
+            tasks.push(task);
+            if tasks.len() == limit {
+                break;
+            }
+        }
+        if next.is_none() {
+            break;
+        }
+        cursor = next;
+    }
+    Ok(tasks)
+}
+
+fn status_str(status: &codex_cloud_tasks_client::TaskStatus) -> &'static str {
+    use codex_cloud_tasks_client::TaskStatus;
+    match status {
+        TaskStatus::Pending => "Pending",
+        TaskStatus::Ready => "Ready",
+        TaskStatus::Applied => "Applied",
+        TaskStatus::Error => "Error",
+    }
+}
+
+fn format_environment_field(task: &codex_cloud_tasks_client::TaskSummary) -> String {
+    match (&task.environment_label, &task.environment_id) {
+        (Some(label), Some(id)) if label != id => format!("{label} ({id})"),
+        (Some(label), _) => label.clone(),
+        (None, Some(id)) => id.clone(),
+        _ => "-".to_string(),
+    }
+}
+
+fn render_tasks_table(tasks: &[codex_cloud_tasks_client::TaskSummary]) -> String {
+    use chrono::Local;
+    let updated_width = 19usize; // "YYYY-MM-DD HH:MM:SS"
+    let status_width = tasks
+        .iter()
+        .map(|t| status_str(&t.status).len())
+        .max()
+        .unwrap_or("Status".len())
+        .max("Status".len());
+    let env_width = tasks
+        .iter()
+        .map(format_environment_field)
+        .map(|s| s.len())
+        .max()
+        .unwrap_or("Environment".len())
+        .max("Environment".len());
+    let attempts_width = tasks
+        .iter()
+        .map(|t| t.attempt_total.unwrap_or(1).to_string().len())
+        .max()
+        .unwrap_or(1)
+        .max("Attempts".len());
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "{:<updated_width$}  {:<status_width$}  {:<env_width$}  {:>attempts_width$}  Title\n",
+        "Updated",
+        "Status",
+        "Environment",
+        "Attempts",
+        updated_width = updated_width,
+        status_width = status_width,
+        env_width = env_width,
+        attempts_width = attempts_width
+    ));
+
+    for task in tasks {
+        let updated = task
+            .updated_at
+            .with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M:%S");
+        let status = status_str(&task.status);
+        let env_label = format_environment_field(task);
+        let attempts = task.attempt_total.unwrap_or(1);
+        out.push_str(&format!(
+            "{:<updated_width$}  {:<status_width$}  {:<env_width$}  {:>attempts_width$}  {}\n",
+            updated,
+            status,
+            env_label,
+            attempts,
+            task.title,
+            updated_width = updated_width,
+            status_width = status_width,
+            env_width = env_width,
+            attempts_width = attempts_width
+        ));
+    }
+
+    out
+}
+
 async fn resolve_environment_id(ctx: &BackendContext, requested: &str) -> anyhow::Result<String> {
     let trimmed = requested.trim();
     if trimmed.is_empty() {
@@ -170,6 +324,42 @@ async fn resolve_environment_id(ctx: &BackendContext, requested: &str) -> anyhow
             } else {
                 Err(anyhow!(
                     "environment label '{trimmed}' is ambiguous; run `codex cloud` to pick the desired environment id"
+                ))
+            }
+        }
+    }
+}
+
+fn resolve_environment_id_from_list(
+    envs: &[app::EnvironmentRow],
+    requested: &str,
+) -> anyhow::Result<String> {
+    let requested_lc = requested.to_lowercase();
+    let matches: Vec<&app::EnvironmentRow> = envs
+        .iter()
+        .filter(|row| {
+            row.id == requested
+                || row
+                    .label
+                    .as_deref()
+                    .map(|label| label.eq_ignore_ascii_case(requested))
+                    .unwrap_or(false)
+                || row
+                    .repo_hints
+                    .as_deref()
+                    .map(|h| h.to_lowercase() == requested_lc)
+                    .unwrap_or(false)
+        })
+        .collect();
+    match matches.as_slice() {
+        [] => Err(anyhow!("environment '{requested}' not found")),
+        [row] => Ok(row.id.clone()),
+        [first, rest @ ..] => {
+            if rest.iter().all(|row| row.id == first.id) {
+                Ok(first.id.clone())
+            } else {
+                Err(anyhow!(
+                    "environment '{requested}' is ambiguous; please specify a unique id"
                 ))
             }
         }
@@ -332,6 +522,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
     if let Some(command) = cli.command {
         return match command {
             crate::cli::Command::Exec(args) => run_exec_command(args).await,
+            crate::cli::Command::Tasks(args) => run_tasks_command(args).await,
         };
     }
     let Cli { .. } = cli;
@@ -1723,13 +1914,49 @@ fn pretty_lines_from_error(raw: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
+    use codex_cloud_tasks_client::CloudBackend;
+    use codex_cloud_tasks_client::DiffSummary;
+    use codex_cloud_tasks_client::TaskId;
+    use codex_cloud_tasks_client::TaskStatus;
+    use codex_cloud_tasks_client::TaskSummary;
     use codex_tui::ComposerAction;
     use codex_tui::ComposerInput;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
+    use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+
+    fn make_task(
+        id: &str,
+        title: &str,
+        status: TaskStatus,
+        updated: &str,
+        env_id: Option<&str>,
+        env_label: Option<&str>,
+        attempts: Option<usize>,
+        is_review: bool,
+    ) -> TaskSummary {
+        TaskSummary {
+            id: TaskId(id.to_string()),
+            title: title.to_string(),
+            status,
+            updated_at: chrono::DateTime::parse_from_rfc3339(updated)
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            environment_id: env_id.map(str::to_string),
+            environment_label: env_label.map(str::to_string),
+            summary: DiffSummary {
+                files_changed: 0,
+                lines_added: 0,
+                lines_removed: 0,
+            },
+            is_review,
+            attempt_total: attempts,
+        }
+    }
 
     #[test]
     fn composer_input_renders_typed_characters() {
@@ -1757,5 +1984,308 @@ mod tests {
             .collect::<Vec<_>>()
             .join("");
         assert!(footer.contains("⌃O env"));
+    }
+
+    #[test]
+    fn resolve_environment_id_from_list_matches_id_label_and_repo() {
+        let envs = vec![super::app::EnvironmentRow {
+            id: "env-123".to_string(),
+            label: Some("Prod".to_string()),
+            is_pinned: false,
+            repo_hints: Some("openai/codex".to_string()),
+        }];
+
+        assert_eq!(
+            super::resolve_environment_id_from_list(&envs, "env-123").unwrap(),
+            "env-123"
+        );
+        assert_eq!(
+            super::resolve_environment_id_from_list(&envs, "prod").unwrap(),
+            "env-123"
+        );
+        assert_eq!(
+            super::resolve_environment_id_from_list(&envs, "openai/codex").unwrap(),
+            "env-123"
+        );
+        let err = super::resolve_environment_id_from_list(&envs, "missing").unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    struct TestPagedBackend {
+        pages: Vec<Vec<TaskSummary>>,
+    }
+
+    #[async_trait]
+    impl CloudBackend for TestPagedBackend {
+        async fn list_tasks(
+            &self,
+            _env: Option<&str>,
+        ) -> codex_cloud_tasks_client::Result<Vec<TaskSummary>> {
+            unimplemented!("list_tasks should not be called in pagination tests")
+        }
+
+        async fn list_tasks_page(
+            &self,
+            cursor: Option<&str>,
+            limit: usize,
+            _env: Option<&str>,
+        ) -> codex_cloud_tasks_client::Result<(Vec<TaskSummary>, Option<String>)> {
+            let idx = cursor.and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
+            if idx >= self.pages.len() {
+                return Ok((Vec::new(), None));
+            }
+            let mut page = self.pages[idx].clone();
+            if page.len() > limit {
+                page.truncate(limit);
+            }
+            let next = if idx + 1 < self.pages.len() {
+                Some((idx + 1).to_string())
+            } else {
+                None
+            };
+            Ok((page, next))
+        }
+
+        async fn get_task_diff(
+            &self,
+            _id: TaskId,
+        ) -> codex_cloud_tasks_client::Result<Option<String>> {
+            unimplemented!()
+        }
+
+        async fn get_task_messages(
+            &self,
+            _id: TaskId,
+        ) -> codex_cloud_tasks_client::Result<Vec<String>> {
+            unimplemented!()
+        }
+
+        async fn get_task_text(
+            &self,
+            _id: TaskId,
+        ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::TaskText> {
+            unimplemented!()
+        }
+
+        async fn list_sibling_attempts(
+            &self,
+            _task: TaskId,
+            _turn_id: String,
+        ) -> codex_cloud_tasks_client::Result<Vec<codex_cloud_tasks_client::TurnAttempt>> {
+            unimplemented!()
+        }
+
+        async fn apply_task_preflight(
+            &self,
+            _id: TaskId,
+            _diff_override: Option<String>,
+        ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::ApplyOutcome> {
+            unimplemented!()
+        }
+
+        async fn apply_task(
+            &self,
+            _id: TaskId,
+            _diff_override: Option<String>,
+        ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::ApplyOutcome> {
+            unimplemented!()
+        }
+
+        async fn create_task(
+            &self,
+            _env_id: &str,
+            _prompt: &str,
+            _git_ref: &str,
+            _qa_mode: bool,
+            _best_of_n: usize,
+        ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::CreatedTask> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_tasks_with_limit_paginates() {
+        let pages = vec![
+            vec![
+                make_task(
+                    "T1",
+                    "one",
+                    TaskStatus::Ready,
+                    "2025-10-01T10:00:00Z",
+                    None,
+                    None,
+                    None,
+                    false,
+                ),
+                make_task(
+                    "T2",
+                    "two",
+                    TaskStatus::Ready,
+                    "2025-10-01T09:00:00Z",
+                    None,
+                    None,
+                    None,
+                    false,
+                ),
+            ],
+            vec![make_task(
+                "T3",
+                "three",
+                TaskStatus::Ready,
+                "2025-10-01T08:00:00Z",
+                None,
+                None,
+                None,
+                false,
+            )],
+        ];
+        let backend = TestPagedBackend { pages };
+        let tasks = super::fetch_tasks_with_limit(&backend, 3, None)
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 3);
+        assert_eq!(
+            tasks.iter().map(|t| t.id.0.clone()).collect::<Vec<_>>(),
+            vec!["T1".to_string(), "T2".to_string(), "T3".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_tasks_with_limit_skips_reviews_until_limit_met() {
+        let pages = vec![
+            vec![
+                make_task(
+                    "R1",
+                    "review",
+                    TaskStatus::Ready,
+                    "2025-10-01T10:00:00Z",
+                    None,
+                    None,
+                    None,
+                    true,
+                ),
+                make_task(
+                    "T1",
+                    "one",
+                    TaskStatus::Ready,
+                    "2025-10-01T09:00:00Z",
+                    None,
+                    None,
+                    None,
+                    false,
+                ),
+            ],
+            vec![make_task(
+                "T2",
+                "two",
+                TaskStatus::Ready,
+                "2025-10-01T08:00:00Z",
+                None,
+                None,
+                None,
+                false,
+            )],
+        ];
+        let backend = TestPagedBackend { pages };
+        let tasks = super::fetch_tasks_with_limit(&backend, 2, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            tasks.iter().map(|t| t.id.0.clone()).collect::<Vec<_>>(),
+            vec!["T1".to_string(), "T2".to_string()]
+        );
+    }
+
+    #[test]
+    fn render_tasks_table_formats_columns() {
+        let tasks = vec![
+            make_task(
+                "T-1",
+                "Find default juice level for codex web tasks",
+                TaskStatus::Ready,
+                "2025-10-01T20:51:20Z",
+                None,
+                Some("openai/openai (applied)"),
+                Some(4),
+                false,
+            ),
+            make_task(
+                "T-2",
+                "Debug codex cloud upload",
+                TaskStatus::Error,
+                "2025-10-01T19:56:55Z",
+                Some("openai/codex"),
+                None,
+                Some(1),
+                false,
+            ),
+        ];
+
+        fn split_columns(line: &str) -> Vec<String> {
+            let mut cols = Vec::new();
+            let mut current = String::new();
+            let mut space_run = 0;
+            for ch in line.chars() {
+                if ch == ' ' {
+                    space_run += 1;
+                    if space_run == 2 {
+                        if !current.is_empty() {
+                            cols.push(current.clone());
+                            current.clear();
+                        }
+                        continue;
+                    }
+                } else {
+                    space_run = 0;
+                }
+                current.push(ch);
+            }
+            if !current.is_empty() {
+                cols.push(current);
+            }
+            cols.into_iter().map(|c| c.trim().to_string()).collect()
+        }
+
+        let table = super::render_tasks_table(&tasks);
+        let mut lines = table.lines();
+        let header = split_columns(lines.next().unwrap());
+        assert_eq!(
+            header,
+            vec!["Updated", "Status", "Environment", "Attempts", "Title"]
+        );
+
+        let expected_first_ts = chrono::DateTime::parse_from_rfc3339("2025-10-01T20:51:20Z")
+            .unwrap()
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
+        let expected_second_ts = chrono::DateTime::parse_from_rfc3339("2025-10-01T19:56:55Z")
+            .unwrap()
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
+
+        let first = split_columns(lines.next().unwrap());
+        assert_eq!(
+            first,
+            vec![
+                expected_first_ts,
+                "Ready".to_string(),
+                "openai/openai (applied)".to_string(),
+                "4".to_string(),
+                "Find default juice level for codex web tasks".to_string()
+            ]
+        );
+        let second = split_columns(lines.next().unwrap());
+        assert_eq!(
+            second,
+            vec![
+                expected_second_ts,
+                "Error".to_string(),
+                "openai/codex".to_string(),
+                "1".to_string(),
+                "Debug codex cloud upload".to_string()
+            ]
+        );
     }
 }

@@ -127,6 +127,16 @@ impl Default for TaskText {
 #[async_trait::async_trait]
 pub trait CloudBackend: Send + Sync {
     async fn list_tasks(&self, env: Option<&str>) -> Result<Vec<TaskSummary>>;
+    async fn list_tasks_page(
+        &self,
+        _cursor: Option<&str>,
+        limit: usize,
+        env: Option<&str>,
+    ) -> Result<(Vec<TaskSummary>, Option<String>)> {
+        let tasks = self.list_tasks(env).await?;
+        let page = tasks.into_iter().take(limit).collect();
+        Ok((page, None))
+    }
     async fn get_task_diff(&self, id: TaskId) -> Result<Option<String>>;
     /// Return assistant output messages (no diff) when available.
     async fn get_task_messages(&self, id: TaskId) -> Result<Vec<String>>;
