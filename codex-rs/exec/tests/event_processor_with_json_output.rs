@@ -12,11 +12,13 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use codex_exec::exec_events::AgentMessageItem;
 use codex_exec::exec_events::CommandExecutionItem;
 use codex_exec::exec_events::CommandExecutionStatus;
+use codex_exec::exec_events::ErrorItem;
 use codex_exec::exec_events::ItemCompletedEvent;
 use codex_exec::exec_events::ItemStartedEvent;
 use codex_exec::exec_events::ItemUpdatedEvent;
@@ -536,6 +538,28 @@ fn error_event_produces_error() {
         out,
         vec![ThreadEvent::Error(ThreadErrorEvent {
             message: "boom".to_string(),
+        })]
+    );
+}
+
+#[test]
+fn warning_event_produces_error_item() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let out = ep.collect_thread_events(&event(
+        "e1",
+        EventMsg::Warning(WarningEvent {
+            message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start new a new conversation when possible to keep conversations small and targeted.".to_string(),
+        }),
+    ));
+    assert_eq!(
+        out,
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::Error(ErrorItem {
+                    message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start new a new conversation when possible to keep conversations small and targeted.".to_string(),
+                }),
+            },
         })]
     );
 }

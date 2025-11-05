@@ -38,6 +38,7 @@ mod tool_harness;
 mod tool_parallelism;
 mod tools;
 mod truncation;
+mod undo;
 mod unified_exec;
 mod user_notification;
 mod user_shell_cmd;

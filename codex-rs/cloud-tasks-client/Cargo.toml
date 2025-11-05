@@ -22,6 +22,6 @@ chrono = { version = "0.4", features = ["serde"] }
 diffy = "0.4.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "2.0.12"
+thiserror = "2.0.17"
 codex-backend-client = { path = "../backend-client", optional = true }
 codex-git = { workspace = true }

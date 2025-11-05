@@ -479,6 +479,7 @@ pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> Res
 
     let (mock, response_mock) = base_mock();
     mock.respond_with(responder)
+        .up_to_n_times(num_calls as u64)
         .expect(num_calls as u64)
         .mount(server)
         .await;

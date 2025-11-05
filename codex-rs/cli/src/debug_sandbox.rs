@@ -124,6 +124,7 @@ async fn run_command_under_sandbox(
             let cwd_clone = cwd.clone();
             let env_map = env.clone();
             let command_vec = command.clone();
+            let base_dir = config.codex_home.clone();
             let res = tokio::task::spawn_blocking(move || {
                 run_windows_sandbox_capture(
                     policy_str,
@@ -132,6 +133,7 @@ async fn run_command_under_sandbox(
                     &cwd_clone,
                     env_map,
                     None,
+                    Some(base_dir.as_path()),
                 )
             })
             .await;

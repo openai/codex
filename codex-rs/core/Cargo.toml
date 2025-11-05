@@ -80,7 +80,7 @@ toml_edit = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
-uuid = { workspace = true, features = ["serde", "v4"] }
+uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 wildmatch = { workspace = true }
 codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }

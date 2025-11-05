@@ -123,7 +123,7 @@ fn set_if_some(
     if let Some(enabled) = maybe_value {
         set_feature(features, feature, enabled);
         log_alias(alias_key, feature);
-        features.record_legacy_usage_force(alias_key, feature);
+        features.record_legacy_usage(alias_key, feature);
     }
 }
 
