@@ -668,10 +668,10 @@ mod tests {
                 .to_string(),
             request_id: Some("ray-id".to_string()),
         };
-
+        let status = StatusCode::FORBIDDEN.to_string();
         assert_eq!(
             err.to_string(),
-            format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status 403 Forbidden). Request id: ray-id")
+            format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {status}). Request id: ray-id")
         );
     }
 
@@ -682,10 +682,10 @@ mod tests {
             body: "plain text error".to_string(),
             request_id: None,
         };
-
+        let status = StatusCode::FORBIDDEN.to_string();
         assert_eq!(
             err.to_string(),
-            "unexpected status 403 Forbidden: plain text error"
+            format!("unexpected status {status}: plain text error")
         );
     }
 
