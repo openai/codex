@@ -102,11 +102,12 @@ pub(crate) async fn append_entry(
         .map_err(|e| std::io::Error::other(format!("failed to serialise history entry: {e}")))?;
     line.push('\n');
 
-    // Open in append-only mode.
+    // Open the history file for read/write access (append-only on Unix).
     let mut options = OpenOptions::new();
-    options.append(true).read(true).write(true).create(true);
+    options.read(true).write(true).create(true);
     #[cfg(unix)]
     {
+        options.append(true);
         options.mode(0o600);
     }
 
@@ -124,6 +125,7 @@ pub(crate) async fn append_entry(
             match history_file.try_lock() {
                 Ok(()) => {
                     // While holding the exclusive lock, write the full line.
+                    history_file.seek(SeekFrom::End(0))?;
                     history_file.write_all(line.as_bytes())?;
                     history_file.flush()?;
                     enforce_history_limit(&mut history_file, history_max_bytes)?;
