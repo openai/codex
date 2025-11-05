@@ -862,7 +862,6 @@ impl CodexMessageProcessor {
 
         let overrides = ConfigOverrides {
             model,
-            review_model: None,
             config_profile: profile,
             cwd: cwd.map(PathBuf::from),
             approval_policy,
@@ -873,10 +872,7 @@ impl CodexMessageProcessor {
             developer_instructions,
             compact_prompt,
             include_apply_patch_tool,
-            show_raw_agent_reasoning: None,
-            tools_web_search_request: None,
-            experimental_sandbox_command_assessment: None,
-            additional_writable_roots: Vec::new(),
+            ..Default::default()
         };
 
         let config = match derive_config_from_params(overrides, cli_overrides).await {
@@ -923,8 +919,6 @@ impl CodexMessageProcessor {
         let cli_overrides = params.config;
         let overrides = ConfigOverrides {
             model: params.model,
-            review_model: None,
-            config_profile: None,
             cwd: params.cwd.map(PathBuf::from),
             approval_policy: params
                 .approval_policy
@@ -936,12 +930,7 @@ impl CodexMessageProcessor {
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             base_instructions: params.base_instructions,
             developer_instructions: params.developer_instructions,
-            compact_prompt: None,
-            include_apply_patch_tool: None,
-            show_raw_agent_reasoning: None,
-            tools_web_search_request: None,
-            experimental_sandbox_command_assessment: None,
-            additional_writable_roots: Vec::new(),
+            ..Default::default()
         };
 
         let config = match derive_config_from_params(overrides, cli_overrides).await {
@@ -1398,7 +1387,7 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let effective_page_size = limit.unwrap_or(total as i32).max(1) as usize;
+        let effective_page_size = limit.unwrap_or(total as u32).max(1) as usize;
         let effective_page_size = effective_page_size.min(total);
         let start = match cursor {
             Some(cursor) => match cursor.parse::<usize>() {
@@ -1471,7 +1460,6 @@ impl CodexMessageProcessor {
 
                 let overrides = ConfigOverrides {
                     model,
-                    review_model: None,
                     config_profile: profile,
                     cwd: cwd.map(PathBuf::from),
                     approval_policy,
@@ -1482,10 +1470,7 @@ impl CodexMessageProcessor {
                     developer_instructions,
                     compact_prompt,
                     include_apply_patch_tool,
-                    show_raw_agent_reasoning: None,
-                    tools_web_search_request: None,
-                    experimental_sandbox_command_assessment: None,
-                    additional_writable_roots: Vec::new(),
+                    ..Default::default()
                 };
 
                 derive_config_from_params(overrides, cli_overrides).await
@@ -1733,6 +1718,9 @@ impl CodexMessageProcessor {
             let conversation_clone = conversation.clone();
             let notify = Arc::new(tokio::sync::Notify::new());
             let notify_clone = notify.clone();
+
+            // Establish the listener for ShutdownComplete before submitting
+            // Shutdown so it is not missed.
             let is_shutdown = tokio::spawn(async move {
                 // Create the notified future outside the loop to avoid losing notifications.
                 let notified = notify_clone.notified();
@@ -1752,14 +1740,20 @@ impl CodexMessageProcessor {
                     }
                 }
             });
+            // Request shutdown.
             match conversation.submit(Op::Shutdown).await {
                 Ok(_) => {
+                    // Successfully submitted Shutdown; wait before proceeding.
                     select! {
-                        _ = is_shutdown => {}
+                        _ = is_shutdown => {
+                            // Normal shutdown: proceed with archive.
+                        }
                         _ = tokio::time::sleep(Duration::from_secs(10)) => {
                             warn!("conversation {conversation_id} shutdown timed out; proceeding with archive");
                             // Wake any waiter; use notify_waiters to avoid missing the signal.
                             notify.notify_waiters();
+                            // Perhaps we lost a shutdown race, so let's continue to
+                            // clean up the .jsonl file.
                         }
                     }
                 }
@@ -1988,15 +1982,14 @@ impl CodexMessageProcessor {
 
         let outgoing_for_task = self.outgoing.clone();
         let pending_interrupts = self.pending_interrupts.clone();
-        let conversation_for_task = conversation;
-        let conversation_id_for_task = conversation_id;
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     _ = &mut cancel_rx => {
+                        // User has unsubscribed, so exit this task.
                         break;
                     }
-                    event = conversation_for_task.next_event() => {
+                    event = conversation.next_event() => {
                         let event = match event {
                             Ok(event) => event,
                             Err(err) => {
@@ -2010,6 +2003,10 @@ impl CodexMessageProcessor {
                                 continue;
                             }
 
+                        // For now, we send a notification for every event,
+                        // JSON-serializing the `Event` as-is, but these should
+                        // be migrated to be variants of `ServerNotification`
+                        // instead.
                         let method = format!("codex/event/{}", event.msg);
                         let mut params = match serde_json::to_value(event.clone()) {
                             Ok(serde_json::Value::Object(map)) => map,
@@ -2024,7 +2021,7 @@ impl CodexMessageProcessor {
                         };
                         params.insert(
                             "conversationId".to_string(),
-                            conversation_id_for_task.to_string().into(),
+                            conversation_id.to_string().into(),
                         );
 
                         outgoing_for_task
@@ -2036,8 +2033,8 @@ impl CodexMessageProcessor {
 
                         apply_bespoke_event_handling(
                             event.clone(),
-                            conversation_id_for_task,
-                            conversation_for_task.clone(),
+                            conversation_id,
+                            conversation.clone(),
                             outgoing_for_task.clone(),
                             pending_interrupts.clone(),
                         )

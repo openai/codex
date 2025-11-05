@@ -188,7 +188,7 @@ pub struct ModelListParams {
     /// Opaque pagination cursor returned by a previous call.
     pub cursor: Option<String>,
     /// Optional page size; defaults to a reasonable server-side value.
-    pub limit: Option<i32>,
+    pub limit: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -296,7 +296,7 @@ pub struct ThreadListParams {
     /// Opaque pagination cursor returned by a previous call.
     pub cursor: Option<String>,
     /// Optional page size; defaults to a reasonable server-side value.
-    pub limit: Option<i32>,
+    pub limit: Option<u32>,
     /// Optional provider filter; when set, only sessions recorded under these
     /// providers are returned. When present but empty, includes all providers.
     pub model_providers: Option<Vec<String>>,
