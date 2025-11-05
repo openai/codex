@@ -1,4 +1,4 @@
-use crate::config_types::ReasoningSummaryFormat;
+use crate::config::types::ReasoningSummaryFormat;
 use crate::tools::handlers::apply_patch::ApplyPatchToolType;
 
 /// The `instructions` field in the payload sent to a model should always start
@@ -160,7 +160,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             reasoning_summary_format: ReasoningSummaryFormat::Experimental,
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
-            support_verbosity: true,
+            support_verbosity: false,
         )
     } else if slug.starts_with("gpt-5") {
         model_family!(

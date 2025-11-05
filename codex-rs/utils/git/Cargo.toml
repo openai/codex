@@ -1,27 +1,25 @@
 [package]
-name = "codex-git-tooling"
+name = "codex-git"
 version.workspace = true
 edition.workspace = true
 readme = "README.md"
 
-[lib]
-name = "codex_git_tooling"
-path = "src/lib.rs"
+[lints]
+workspace = true
 
 [dependencies]
-tempfile = { workspace = true }
-thiserror = { workspace = true }
-walkdir = { workspace = true }
+once_cell = "1"
+regex = "1"
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
 ts-rs = { workspace = true, features = [
     "uuid-impl",
     "serde-json-impl",
     "no-serde-warnings",
 ] }
-
-[lints]
-workspace = true
+walkdir = { workspace = true }
 
 [dev-dependencies]
 assert_matches = { workspace = true }

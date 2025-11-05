@@ -26,4 +26,4 @@ pub use mock::MockClient;
 #[cfg(feature = "online")]
 pub use http::HttpClient;
 
-// Reusable apply engine now lives in the shared crate `codex-git-apply`.
+// Reusable apply engine now lives in the shared crate `codex-git`.

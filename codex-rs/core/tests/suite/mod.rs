@@ -5,11 +5,15 @@ mod abort_tasks;
 #[cfg(not(target_os = "windows"))]
 mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]
+mod apply_patch_freeform;
+#[cfg(not(target_os = "windows"))]
 mod approvals;
 mod cli_stream;
 mod client;
+mod codex_delegate;
 mod compact;
 mod compact_resume_fork;
+mod deprecation_notice;
 mod exec;
 mod fork_conversation;
 mod grep_files;
@@ -34,6 +38,8 @@ mod tool_harness;
 mod tool_parallelism;
 mod tools;
 mod truncation;
+mod undo;
 mod unified_exec;
 mod user_notification;
+mod user_shell_cmd;
 mod view_image;

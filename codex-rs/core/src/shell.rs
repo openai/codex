@@ -98,6 +98,7 @@ pub async fn default_user_shell() -> Shell {
         .unwrap_or(false);
     let bash_exe = if Command::new("bash.exe")
         .arg("--version")
+        .stdin(std::process::Stdio::null())
         .output()
         .await
         .ok()
