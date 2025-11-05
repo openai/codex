@@ -1,0 +1,42 @@
+graph TD
+    subgraph "公式リポジトリ (OpenAI)"
+        A[openai/codex<br/>upstream/main<br/>9a10e80ab]
+        A1[600+ ブランチ]
+        A2[30+ タグ]
+        A --> A1
+        A --> A2
+    end
+
+    subgraph "zapabobリポジトリ (Fork)"
+        B[zapabob/codex<br/>origin/main<br/>2a3ddfd0c]
+        C[独自拡張機能]
+        B --> C
+    end
+
+    A -.->|fork & clean rebuild| B
+
+    subgraph "独自拡張"
+        C --> C1[サブエージェント機構]
+        C --> C2[Deep Research統合]
+        C --> C3[並列実行<br/>オーケストレーション]
+        C --> C4[Tauri GUI<br/>3D/4D可視化]
+        C --> C5[Windows<br/>カーネルドライバー]
+    end
+
+    subgraph "同期フロー"
+        D[git fetch upstream]
+        E[git merge upstream/main]
+        F[git push origin main]
+        D --> E
+        E --> F
+    end
+
+    B -.->|同期時| D
+
+    style A fill:#ff9,stroke:#333,stroke-width:2px
+    style B fill:#9ff,stroke:#333,stroke-width:2px
+    style C fill:#f9f,stroke:#333,stroke-width:2px
+    style D fill:#9f9,stroke:#333,stroke-width:1px
+    style E fill:#9f9,stroke:#333,stroke-width:1px
+    style F fill:#9f9,stroke:#333,stroke-width:1px
+
