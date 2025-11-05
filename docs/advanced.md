@@ -1,6 +1,6 @@
 ## Advanced
 
-If you already lean on Codex every day and just need a little more control, this page collects the knobs you are most likely to reach for: tweak defaults in [Config](./config.md), add extra tools through [Model Context Protocol support](./advanced.md#model-context-protocol), and script full runs with [`codex exec`](./exec.md). Jump to the section you need and keep building.
+If you already lean on Codex every day and just need a little more control, this page collects the knobs you are most likely to reach for: tweak defaults in [Config](./config.md), add extra tools through [Model Context Protocol support](#model-context-protocol), and script full runs with [`codex exec`](./exec.md). Jump to the section you need and keep building.
 
 ## Config quickstart {#config-quickstart}
 

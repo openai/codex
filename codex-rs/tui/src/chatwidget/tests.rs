@@ -37,6 +37,7 @@ use codex_core::protocol::TaskStartedEvent;
 use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
+use codex_core::protocol::WarningEvent;
 use codex_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
@@ -55,6 +56,8 @@ use tempfile::NamedTempFile;
 use tempfile::tempdir;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
+
+const TEST_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start new a new conversation when possible to keep conversations small and targeted.";
 
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
@@ -2443,6 +2446,25 @@ fn stream_error_updates_status_indicator() {
         .status_widget()
         .expect("status indicator should be visible");
     assert_eq!(status.header(), msg);
+}
+
+#[test]
+fn warning_event_adds_warning_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::Warning(WarningEvent {
+            message: TEST_WARNING_MESSAGE.to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one warning history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains(TEST_WARNING_MESSAGE),
+        "warning cell missing content: {rendered}"
+    );
 }
 
 #[test]

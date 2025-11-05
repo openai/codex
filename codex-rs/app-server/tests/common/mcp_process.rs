@@ -321,6 +321,11 @@ impl McpProcess {
         self.send_request("logoutChatGpt", None).await
     }
 
+    /// Send an `account/logout` JSON-RPC request.
+    pub async fn send_logout_account_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("account/logout", None).await
+    }
+
     /// Send a `fuzzyFileSearch` JSON-RPC request.
     pub async fn send_fuzzy_file_search_request(
         &mut self,

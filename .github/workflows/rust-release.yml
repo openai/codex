@@ -350,7 +350,7 @@ jobs:
             fi
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.target }}
           # Upload the per-binary .zst files as well as the new .tar.gz

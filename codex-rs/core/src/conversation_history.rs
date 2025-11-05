@@ -366,23 +366,10 @@ impl ConversationHistory {
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
                 let truncated = format_output_for_model_body(output.content.as_str());
-                let truncated_items = output.content_items.as_ref().map(|items| {
-                    items
-                        .iter()
-                        .map(|it| match it {
-                            FunctionCallOutputContentItem::InputText { text } => {
-                                FunctionCallOutputContentItem::InputText {
-                                    text: format_output_for_model_body(text),
-                                }
-                            }
-                            FunctionCallOutputContentItem::InputImage { image_url } => {
-                                FunctionCallOutputContentItem::InputImage {
-                                    image_url: image_url.clone(),
-                                }
-                            }
-                        })
-                        .collect()
-                });
+                let truncated_items = output
+                    .content_items
+                    .as_ref()
+                    .map(|items| globally_truncate_function_output_items(items));
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
@@ -409,6 +396,53 @@ impl ConversationHistory {
             | ResponseItem::Other => item.clone(),
         }
     }
+}
+
+fn globally_truncate_function_output_items(
+    items: &[FunctionCallOutputContentItem],
+) -> Vec<FunctionCallOutputContentItem> {
+    let mut out: Vec<FunctionCallOutputContentItem> = Vec::with_capacity(items.len());
+    let mut remaining = MODEL_FORMAT_MAX_BYTES;
+    let mut omitted_text_items = 0usize;
+
+    for it in items {
+        match it {
+            FunctionCallOutputContentItem::InputText { text } => {
+                if remaining == 0 {
+                    omitted_text_items += 1;
+                    continue;
+                }
+
+                let len = text.len();
+                if len <= remaining {
+                    out.push(FunctionCallOutputContentItem::InputText { text: text.clone() });
+                    remaining -= len;
+                } else {
+                    let slice = take_bytes_at_char_boundary(text, remaining);
+                    if !slice.is_empty() {
+                        out.push(FunctionCallOutputContentItem::InputText {
+                            text: slice.to_string(),
+                        });
+                    }
+                    remaining = 0;
+                }
+            }
+            // todo(aibrahim): handle input images; resize
+            FunctionCallOutputContentItem::InputImage { image_url } => {
+                out.push(FunctionCallOutputContentItem::InputImage {
+                    image_url: image_url.clone(),
+                });
+            }
+        }
+    }
+
+    if omitted_text_items > 0 {
+        out.push(FunctionCallOutputContentItem::InputText {
+            text: format!("[omitted {omitted_text_items} text items ...]"),
+        });
+    }
+
+    out
 }
 
 pub(crate) fn format_output_for_model_body(content: &str) -> String {
@@ -482,8 +516,8 @@ fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
     result
 }
 
-/// Anything that is not a system message or "reasoning" message is considered
-/// an API message.
+/// API messages include every non-system item (user/assistant messages, reasoning,
+/// tool calls, tool outputs, shell calls, and web-search calls).
 fn is_api_message(message: &ResponseItem) -> bool {
     match message {
         ResponseItem::Message { role, .. } => role.as_str() != "system",
@@ -508,6 +542,8 @@ mod tests {
     use codex_protocol::models::LocalShellAction;
     use codex_protocol::models::LocalShellExecAction;
     use codex_protocol::models::LocalShellStatus;
+    use codex_protocol::models::ReasoningItemContent;
+    use codex_protocol::models::ReasoningItemReasoningSummary;
     use pretty_assertions::assert_eq;
 
     fn assistant_msg(text: &str) -> ResponseItem {
@@ -536,10 +572,23 @@ mod tests {
         }
     }
 
+    fn reasoning_msg(text: &str) -> ResponseItem {
+        ResponseItem::Reasoning {
+            id: String::new(),
+            summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                text: "summary".to_string(),
+            }],
+            content: Some(vec![ReasoningItemContent::ReasoningText {
+                text: text.to_string(),
+            }]),
+            encrypted_content: None,
+        }
+    }
+
     #[test]
     fn filters_non_api_messages() {
         let mut h = ConversationHistory::default();
-        // System message is not an API message; Other is ignored.
+        // System message is not API messages; Other is ignored.
         let system = ResponseItem::Message {
             id: None,
             role: "system".to_string(),
@@ -547,7 +596,8 @@ mod tests {
                 text: "ignored".to_string(),
             }],
         };
-        h.record_items([&system, &ResponseItem::Other]);
+        let reasoning = reasoning_msg("thinking...");
+        h.record_items([&system, &reasoning, &ResponseItem::Other]);
 
         // User and assistant should be retained.
         let u = user_msg("hi");
@@ -558,6 +608,16 @@ mod tests {
         assert_eq!(
             items,
             vec![
+                ResponseItem::Reasoning {
+                    id: String::new(),
+                    summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                        text: "summary".to_string(),
+                    }],
+                    content: Some(vec![ReasoningItemContent::ReasoningText {
+                        text: "thinking...".to_string(),
+                    }]),
+                    encrypted_content: None,
+                },
                 ResponseItem::Message {
                     id: None,
                     role: "user".to_string(),
@@ -854,6 +914,81 @@ mod tests {
             !truncated.contains("output truncated to fit"),
             "line omission marker should take precedence over byte marker: {truncated}"
         );
+    }
+
+    #[test]
+    fn truncates_across_multiple_under_limit_texts_and_reports_omitted() {
+        // Arrange: several text items, none exceeding per-item limit, but total exceeds budget.
+        let budget = MODEL_FORMAT_MAX_BYTES;
+        let t1_len = (budget / 2).saturating_sub(10);
+        let t2_len = (budget / 2).saturating_sub(10);
+        let remaining_after_t1_t2 = budget.saturating_sub(t1_len + t2_len);
+        let t3_len = 50; // gets truncated to remaining_after_t1_t2
+        let t4_len = 5; // omitted
+        let t5_len = 7; // omitted
+
+        let t1 = "a".repeat(t1_len);
+        let t2 = "b".repeat(t2_len);
+        let t3 = "c".repeat(t3_len);
+        let t4 = "d".repeat(t4_len);
+        let t5 = "e".repeat(t5_len);
+
+        let item = ResponseItem::FunctionCallOutput {
+            call_id: "call-omit".to_string(),
+            output: FunctionCallOutputPayload {
+                content: "irrelevant".to_string(),
+                content_items: Some(vec![
+                    FunctionCallOutputContentItem::InputText { text: t1 },
+                    FunctionCallOutputContentItem::InputText { text: t2 },
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: "img:mid".to_string(),
+                    },
+                    FunctionCallOutputContentItem::InputText { text: t3 },
+                    FunctionCallOutputContentItem::InputText { text: t4 },
+                    FunctionCallOutputContentItem::InputText { text: t5 },
+                ]),
+                success: Some(true),
+            },
+        };
+
+        let mut history = ConversationHistory::new();
+        history.record_items([&item]);
+        assert_eq!(history.items.len(), 1);
+        let json = serde_json::to_value(&history.items[0]).expect("serialize to json");
+
+        let output = json
+            .get("output")
+            .expect("output field")
+            .as_array()
+            .expect("array output");
+
+        // Expect: t1 (full), t2 (full), image, t3 (truncated), summary mentioning 2 omitted.
+        assert_eq!(output.len(), 5);
+
+        let first = output[0].as_object().expect("first obj");
+        assert_eq!(first.get("type").unwrap(), "input_text");
+        let first_text = first.get("text").unwrap().as_str().unwrap();
+        assert_eq!(first_text.len(), t1_len);
+
+        let second = output[1].as_object().expect("second obj");
+        assert_eq!(second.get("type").unwrap(), "input_text");
+        let second_text = second.get("text").unwrap().as_str().unwrap();
+        assert_eq!(second_text.len(), t2_len);
+
+        assert_eq!(
+            output[2],
+            serde_json::json!({"type": "input_image", "image_url": "img:mid"})
+        );
+
+        let fourth = output[3].as_object().expect("fourth obj");
+        assert_eq!(fourth.get("type").unwrap(), "input_text");
+        let fourth_text = fourth.get("text").unwrap().as_str().unwrap();
+        assert_eq!(fourth_text.len(), remaining_after_t1_t2);
+
+        let summary = output[4].as_object().expect("summary obj");
+        assert_eq!(summary.get("type").unwrap(), "input_text");
+        let summary_text = summary.get("text").unwrap().as_str().unwrap();
+        assert!(summary_text.contains("omitted 2 text items"));
     }
 
     //TODO(aibrahim): run CI in release mode.
