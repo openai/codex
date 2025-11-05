@@ -18,7 +18,7 @@ mod codex_delegate;
 mod command_safety;
 pub mod config;
 pub mod config_loader;
-mod conversation_history;
+mod context_manager;
 pub mod custom_prompts;
 mod environment_context;
 pub mod error;
