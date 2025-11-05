@@ -191,8 +191,6 @@ async fn run_command_under_sandbox(
             )
             .await?
         }
-        #[cfg(not(target_os = "macos"))]
-        SandboxType::Seatbelt => unreachable!("Seatbelt sandbox is only available on macOS"),
         SandboxType::Landlock => {
             #[expect(clippy::expect_used)]
             let codex_linux_sandbox_exe = config
