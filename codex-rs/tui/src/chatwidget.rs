@@ -1742,7 +1742,7 @@ impl ChatWidget {
                 name: "Keep current model".to_string(),
                 description: None,
                 selected_description: None,
-                is_current: true,
+                is_current: false,
                 actions: keep_actions,
                 dismiss_on_select: true,
                 ..Default::default()
