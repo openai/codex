@@ -53,7 +53,7 @@ pub fn prefix_lines(
                 subsequent_prefix.clone()
             });
             spans.extend(l.spans);
-            Line::from(spans)
+            Line::from(spans).style(l.style)
         })
         .collect()
 }

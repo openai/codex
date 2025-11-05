@@ -1,12 +1,12 @@
 use assert_cmd::Command as AssertCommand;
+use assert_cmd::cargo::cargo_bin;
 use codex_core::RolloutRecorder;
 use codex_core::protocol::GitInfo;
-use core_test_support::non_sandbox_test;
+use core_test_support::fs_wait;
+use core_test_support::skip_if_no_network;
 use std::time::Duration;
-use std::time::Instant;
 use tempfile::TempDir;
 use uuid::Uuid;
-use walkdir::WalkDir;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -21,7 +21,7 @@ use wiremock::matchers::path;
 /// 4. Ensures the response is received exactly once and contains "hi"
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_mode_stream_cli() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     let server = MockServer::start().await;
     let sse = concat!(
@@ -45,13 +45,9 @@ async fn chat_mode_stream_cli() {
         "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"chat\" }}",
         server.uri()
     );
-    let mut cmd = AssertCommand::new("cargo");
-    cmd.arg("run")
-        .arg("-p")
-        .arg("codex-cli")
-        .arg("--quiet")
-        .arg("--")
-        .arg("exec")
+    let bin = cargo_bin("codex");
+    let mut cmd = AssertCommand::new(bin);
+    cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
         .arg(&provider_override)
@@ -76,9 +72,17 @@ async fn chat_mode_stream_cli() {
     server.verify().await;
 
     // Verify a new session rollout was created and is discoverable via list_conversations
-    let page = RolloutRecorder::list_conversations(home.path(), 10, None)
-        .await
-        .expect("list conversations");
+    let provider_filter = vec!["mock".to_string()];
+    let page = RolloutRecorder::list_conversations(
+        home.path(),
+        10,
+        None,
+        &[],
+        Some(provider_filter.as_slice()),
+        "mock",
+    )
+    .await
+    .expect("list conversations");
     assert!(
         !page.items.is_empty(),
         "expected at least one session to be listed"
@@ -97,7 +101,7 @@ async fn chat_mode_stream_cli() {
 /// received by a mock OpenAI Responses endpoint.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_cli_applies_experimental_instructions_file() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     // Start mock server which will capture the request and return a minimal
     // SSE stream for a single turn.
@@ -106,16 +110,12 @@ async fn exec_cli_applies_experimental_instructions_file() {
         "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
     );
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_raw(sse, "text/event-stream"),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
+    let resp_mock = core_test_support::responses::mount_sse_once_match(
+        &server,
+        path("/v1/responses"),
+        sse.to_string(),
+    )
+    .await;
 
     // Create a temporary instructions file with a unique marker we can assert
     // appears in the outbound request payload.
@@ -133,13 +133,9 @@ async fn exec_cli_applies_experimental_instructions_file() {
     );
 
     let home = TempDir::new().unwrap();
-    let mut cmd = AssertCommand::new("cargo");
-    cmd.arg("run")
-        .arg("-p")
-        .arg("codex-cli")
-        .arg("--quiet")
-        .arg("--")
-        .arg("exec")
+    let bin = cargo_bin("codex");
+    let mut cmd = AssertCommand::new(bin);
+    cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
         .arg(&provider_override)
@@ -164,8 +160,8 @@ async fn exec_cli_applies_experimental_instructions_file() {
 
     // Inspect the captured request and verify our custom base instructions were
     // included in the `instructions` field.
-    let request = &server.received_requests().await.unwrap()[0];
-    let body = request.body_json::<serde_json::Value>().unwrap();
+    let request = resp_mock.single_request();
+    let body = request.body_json();
     let instructions = body
         .get("instructions")
         .and_then(|v| v.as_str())
@@ -185,19 +181,15 @@ async fn exec_cli_applies_experimental_instructions_file() {
 /// 4. Ensures the fixture content is correctly streamed through the CLI
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_api_stream_cli() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cli_responses_fixture.sse");
 
     let home = TempDir::new().unwrap();
-    let mut cmd = AssertCommand::new("cargo");
-    cmd.arg("run")
-        .arg("-p")
-        .arg("codex-cli")
-        .arg("--quiet")
-        .arg("--")
-        .arg("exec")
+    let bin = cargo_bin("codex");
+    let mut cmd = AssertCommand::new(bin);
+    cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-C")
         .arg(env!("CARGO_MANIFEST_DIR"))
@@ -215,12 +207,12 @@ async fn responses_api_stream_cli() {
 
 /// End-to-end: create a session (writes rollout), verify the file, then resume and confirm append.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn integration_creates_and_checks_session_file() {
+async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     // Honor sandbox network restrictions for CI parity with the other tests.
-    non_sandbox_test!();
+    skip_if_no_network!(Ok(()));
 
     // 1. Temp home so we read/write isolated session files.
-    let home = TempDir::new().unwrap();
+    let home = TempDir::new()?;
 
     // 2. Unique marker we'll look for in the session log.
     let marker = format!("integration-test-{}", Uuid::new_v4());
@@ -230,15 +222,10 @@ async fn integration_creates_and_checks_session_file() {
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cli_responses_fixture.sse");
 
-    // 4. Run the codex CLI through cargo (ensures the right bin is built) and invoke `exec`,
-    //    which is what records a session.
-    let mut cmd = AssertCommand::new("cargo");
-    cmd.arg("run")
-        .arg("-p")
-        .arg("codex-cli")
-        .arg("--quiet")
-        .arg("--")
-        .arg("exec")
+    // 4. Run the codex CLI and invoke `exec`, which is what records a session.
+    let bin = cargo_bin("codex");
+    let mut cmd = AssertCommand::new(bin);
+    cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-C")
         .arg(env!("CARGO_MANIFEST_DIR"))
@@ -258,63 +245,20 @@ async fn integration_creates_and_checks_session_file() {
 
     // Wait for sessions dir to appear.
     let sessions_dir = home.path().join("sessions");
-    let dir_deadline = Instant::now() + Duration::from_secs(5);
-    while !sessions_dir.exists() && Instant::now() < dir_deadline {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert!(sessions_dir.exists(), "sessions directory never appeared");
+    fs_wait::wait_for_path_exists(&sessions_dir, Duration::from_secs(5)).await?;
 
     // Find the session file that contains `marker`.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut matching_path: Option<std::path::PathBuf> = None;
-    while Instant::now() < deadline && matching_path.is_none() {
-        for entry in WalkDir::new(&sessions_dir) {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            if !entry.file_name().to_string_lossy().ends_with(".jsonl") {
-                continue;
-            }
-            let path = entry.path();
-            let Ok(content) = std::fs::read_to_string(path) else {
-                continue;
-            };
-            let mut lines = content.lines();
-            if lines.next().is_none() {
-                continue;
-            }
-            for line in lines {
-                if line.trim().is_empty() {
-                    continue;
-                }
-                let item: serde_json::Value = match serde_json::from_str(line) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                if item.get("type").and_then(|t| t.as_str()) == Some("response_item")
-                    && let Some(payload) = item.get("payload")
-                    && payload.get("type").and_then(|t| t.as_str()) == Some("message")
-                    && let Some(c) = payload.get("content")
-                    && c.to_string().contains(&marker)
-                {
-                    matching_path = Some(path.to_path_buf());
-                    break;
-                }
-            }
+    let marker_clone = marker.clone();
+    let path = fs_wait::wait_for_matching_file(&sessions_dir, Duration::from_secs(10), move |p| {
+        if p.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+            return false;
         }
-        if matching_path.is_none() {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-
-    let path = match matching_path {
-        Some(p) => p,
-        None => panic!("No session file containing the marker was found"),
-    };
+        let Ok(content) = std::fs::read_to_string(p) else {
+            return false;
+        };
+        content.contains(&marker_clone)
+    })
+    .await?;
 
     // Basic sanity checks on location and metadata.
     let rel = match path.strip_prefix(&sessions_dir) {
@@ -400,13 +344,9 @@ async fn integration_creates_and_checks_session_file() {
     // Second run: resume should update the existing file.
     let marker2 = format!("integration-resume-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
-    let mut cmd2 = AssertCommand::new("cargo");
-    cmd2.arg("run")
-        .arg("-p")
-        .arg("codex-cli")
-        .arg("--quiet")
-        .arg("--")
-        .arg("exec")
+    let bin2 = cargo_bin("codex");
+    let mut cmd2 = AssertCommand::new(bin2);
+    cmd2.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-C")
         .arg(env!("CARGO_MANIFEST_DIR"))
@@ -422,42 +362,25 @@ async fn integration_creates_and_checks_session_file() {
     assert!(output2.status.success(), "resume codex-cli run failed");
 
     // Find the new session file containing the resumed marker.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut resumed_path: Option<std::path::PathBuf> = None;
-    while Instant::now() < deadline && resumed_path.is_none() {
-        for entry in WalkDir::new(&sessions_dir) {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            if !entry.file_type().is_file() {
-                continue;
+    let marker2_clone = marker2.clone();
+    let resumed_path =
+        fs_wait::wait_for_matching_file(&sessions_dir, Duration::from_secs(10), move |p| {
+            if p.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+                return false;
             }
-            if !entry.file_name().to_string_lossy().ends_with(".jsonl") {
-                continue;
-            }
-            let p = entry.path();
-            let Ok(c) = std::fs::read_to_string(p) else {
-                continue;
-            };
-            if c.contains(&marker2) {
-                resumed_path = Some(p.to_path_buf());
-                break;
-            }
-        }
-        if resumed_path.is_none() {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
+            std::fs::read_to_string(p)
+                .map(|content| content.contains(&marker2_clone))
+                .unwrap_or(false)
+        })
+        .await?;
 
-    let resumed_path = resumed_path.expect("No resumed session file found containing the marker2");
     // Resume should write to the existing log file.
     assert_eq!(
         resumed_path, path,
         "resume should create a new session file"
     );
 
-    let resumed_content = std::fs::read_to_string(&resumed_path).unwrap();
+    let resumed_content = std::fs::read_to_string(&resumed_path)?;
     assert!(
         resumed_content.contains(&marker),
         "resumed file missing original marker"
@@ -466,6 +389,7 @@ async fn integration_creates_and_checks_session_file() {
         resumed_content.contains(&marker2),
         "resumed file missing resumed marker"
     );
+    Ok(())
 }
 
 /// Integration test to verify git info is collected and recorded in session files.
