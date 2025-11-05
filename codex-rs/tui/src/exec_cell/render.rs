@@ -345,7 +345,13 @@ impl ExecCell {
             Some(false) => "•".red().bold(),
             None => spinner(call.start_time),
         };
-        let title = if self.is_active() { "Running" } else { "Ran" };
+        let title = if self.is_active() {
+            "Running"
+        } else if call.is_user_shell_command {
+            "You Ran:"
+        } else {
+            "Ran:"
+        };
 
         let mut header_line =
             Line::from(vec![bullet.clone(), " ".into(), title.bold(), " ".into()]);
