@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::conversation_history::format_output_for_model_body;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
@@ -193,9 +192,8 @@ fn format_response(response: &UnifiedExecResponse) -> String {
         sections.push(format!("Original token count: {original_token_count}"));
     }
 
-    let formatted_output: String = format_output_for_model_body(&response.output);
     sections.push("Output:".to_string());
-    sections.push(formatted_output);
+    sections.push(response.output.clone());
 
     sections.join("\n")
 }

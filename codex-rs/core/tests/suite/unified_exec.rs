@@ -1358,11 +1358,6 @@ PY
     let large_output = outputs.get(call_id).expect("missing large output summary");
 
     assert!(
-        large_output.output.starts_with("Total output lines:"),
-        "expected formatted summary for large output, got {:?}",
-        large_output.output
-    );
-    assert!(
         large_output.output.contains("[... omitted"),
         "expected omission marker in formatted output, got {:?}",
         large_output.output
