@@ -104,6 +104,17 @@ pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItem>) {
         })
         .collect();
 
+    let local_shell_call_ids: HashSet<String> = items
+        .iter()
+        .filter_map(|i| match i {
+            ResponseItem::LocalShellCall {
+                call_id: Some(call_id),
+                ..
+            } => Some(call_id.clone()),
+            _ => None,
+        })
+        .collect();
+
     let custom_tool_call_ids: HashSet<String> = items
         .iter()
         .filter_map(|i| match i {
@@ -113,7 +124,9 @@ pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItem>) {
         .collect();
 
     items.retain(|item| match item {
-        ResponseItem::FunctionCallOutput { call_id, .. } => function_call_ids.contains(call_id),
+        ResponseItem::FunctionCallOutput { call_id, .. } => {
+            function_call_ids.contains(call_id) || local_shell_call_ids.contains(call_id)
+        }
         ResponseItem::CustomToolCallOutput { call_id, .. } => {
             custom_tool_call_ids.contains(call_id)
         }

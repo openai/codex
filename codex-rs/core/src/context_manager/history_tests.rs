@@ -205,6 +205,35 @@ fn remove_first_item_handles_custom_tool_pair() {
 }
 
 #[test]
+fn normalization_retains_local_shell_outputs() {
+    let items = vec![
+        ResponseItem::LocalShellCall {
+            id: None,
+            call_id: Some("shell-1".to_string()),
+            status: LocalShellStatus::Completed,
+            action: LocalShellAction::Exec(LocalShellExecAction {
+                command: vec!["echo".to_string(), "hi".to_string()],
+                timeout_ms: None,
+                working_directory: None,
+                env: None,
+                user: None,
+            }),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "shell-1".to_string(),
+            output: FunctionCallOutputPayload {
+                content: "ok".to_string(),
+                ..Default::default()
+            },
+        },
+    ];
+
+    let mut history = create_history_with_items(items.clone());
+    let normalized = history.get_history();
+    assert_eq!(normalized, items);
+}
+
+#[test]
 fn record_items_truncates_function_call_output_content() {
     let mut history = ContextManager::new();
     let long_line = "a very long line to trigger truncation\n";
