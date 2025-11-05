@@ -6,7 +6,6 @@
 //! - Documentation completeness
 //! - Best practices adherence
 
-use anyhow::Context;
 use anyhow::Result;
 use serde::Deserialize;
 use serde::Serialize;
@@ -80,7 +79,7 @@ impl CommitQualityAnalyzer {
     /// Analyze commit quality using AI
     pub async fn analyze_commit(
         &self,
-        repo_path: &str,
+        _repo_path: &str,
         commit_sha: &str,
     ) -> Result<CommitQualityScore> {
         // TODO: Integrate with Codex API for AI analysis
@@ -93,13 +92,13 @@ impl CommitQualityAnalyzer {
     /// Analyze multiple commits in batch
     pub async fn analyze_commits_batch(
         &self,
-        repo_path: &str,
+        _repo_path: &str,
         commit_shas: &[String],
     ) -> Result<Vec<CommitQualityScore>> {
         let mut scores = Vec::new();
 
         for sha in commit_shas {
-            let score = self.analyze_commit(repo_path, sha).await?;
+            let score = self.analyze_commit(_repo_path, sha).await?;
             scores.push(score);
         }
 

@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use git2::{Repository, Commit, Oid};
+use git2::{Commit, Oid, Repository};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -109,8 +109,7 @@ pub async fn run_git_analyze_command(cli: GitAnalyzeCli) -> Result<()> {
 }
 
 fn analyze_commits(repo_path: &PathBuf, limit: usize) -> Result<()> {
-    let repo = Repository::open(repo_path)
-        .context("Failed to open Git repository")?;
+    let repo = Repository::open(repo_path).context("Failed to open Git repository")?;
 
     let mut revwalk = repo.revwalk()?;
     revwalk.push_head()?;
@@ -174,8 +173,7 @@ fn analyze_commits(repo_path: &PathBuf, limit: usize) -> Result<()> {
 }
 
 fn analyze_heatmap(repo_path: &PathBuf, limit: usize) -> Result<()> {
-    let repo = Repository::open(repo_path)
-        .context("Failed to open Git repository")?;
+    let repo = Repository::open(repo_path).context("Failed to open Git repository")?;
 
     let mut revwalk = repo.revwalk()?;
     revwalk.push_head()?;
@@ -196,11 +194,7 @@ fn analyze_heatmap(repo_path: &PathBuf, limit: usize) -> Result<()> {
         }
 
         let parent = commit.parent(0)?;
-        let diff = repo.diff_tree_to_tree(
-            Some(&parent.tree()?),
-            Some(&commit.tree()?),
-            None,
-        )?;
+        let diff = repo.diff_tree_to_tree(Some(&parent.tree()?), Some(&commit.tree()?), None)?;
 
         let author_email = commit.author().email().unwrap_or("unknown").to_string();
         let timestamp = chrono::DateTime::from_timestamp(commit.time().seconds(), 0)
@@ -234,7 +228,11 @@ fn analyze_heatmap(repo_path: &PathBuf, limit: usize) -> Result<()> {
     }
 
     // Convert to FileHeat with normalized heat levels
-    let max_changes = file_stats.values().map(|s| s.change_count).max().unwrap_or(1);
+    let max_changes = file_stats
+        .values()
+        .map(|s| s.change_count)
+        .max()
+        .unwrap_or(1);
     let mut heatmap: Vec<FileHeat> = file_stats
         .into_iter()
         .map(|(path, stats)| FileHeat {
@@ -262,8 +260,7 @@ fn analyze_heatmap(repo_path: &PathBuf, limit: usize) -> Result<()> {
 }
 
 fn analyze_branches(repo_path: &PathBuf) -> Result<()> {
-    let repo = Repository::open(repo_path)
-        .context("Failed to open Git repository")?;
+    let repo = Repository::open(repo_path).context("Failed to open Git repository")?;
 
     let branches = repo.branches(None)?;
     let mut branch_nodes: Vec<BranchNode> = Vec::new();
@@ -332,7 +329,9 @@ fn get_branch_name(repo: &Repository, _commit: &Commit) -> Option<String> {
 
 fn get_branch_position(branch: &str, positions: &mut HashMap<String, f32>) -> f32 {
     let len = positions.len();
-    *positions.entry(branch.to_string()).or_insert(len as f32 * 10.0)
+    *positions
+        .entry(branch.to_string())
+        .or_insert(len as f32 * 10.0)
 }
 
 fn calculate_depth(commit: &Commit, depth_map: &mut HashMap<Oid, f32>) -> f32 {
@@ -364,9 +363,9 @@ fn calculate_depth(commit: &Commit, depth_map: &mut HashMap<Oid, f32>) -> f32 {
 
 fn generate_author_color(email: &str) -> String {
     // Hash email to generate consistent hue
-    let hash = email.bytes().fold(0u32, |acc, b| {
-        acc.wrapping_mul(31).wrapping_add(b as u32)
-    });
+    let hash = email
+        .bytes()
+        .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
     let hue = (hash % 360) as f32;
     format!("hsl({}, 70%, 60%)", hue)
 }
@@ -395,4 +394,3 @@ fn count_merge_commits(repo: &Repository, start_commit: &Commit, limit: usize) -
 #[cfg(test)]
 #[path = "git_commands_test.rs"]
 mod git_commands_test;
-

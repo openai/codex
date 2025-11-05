@@ -36,7 +36,7 @@ pub struct KernelDriverStatus {
 }
 
 /// Kernel driver integration bridge
-/// 
+///
 /// This module provides integration with Windows AI kernel driver
 /// Currently returns simulated data - actual driver integration requires:
 /// 1. codex_win_api FFI wrapper implementation
@@ -50,32 +50,34 @@ impl KernelBridge {
     pub fn new() -> Result<Self> {
         // Check if kernel driver is available
         // In real implementation: call codex_win_api::AiDriver::new()
-        
+
         #[cfg(target_os = "windows")]
         {
             // Attempt to connect to driver
             let driver_available = Self::check_driver_availability();
             info!("Kernel driver availability: {}", driver_available);
-            
+
             Ok(Self { driver_available })
         }
-        
+
         #[cfg(not(target_os = "windows"))]
         {
             warn!("Kernel driver is only available on Windows");
-            Ok(Self { driver_available: false })
+            Ok(Self {
+                driver_available: false,
+            })
         }
     }
-    
+
     #[cfg(target_os = "windows")]
     fn check_driver_availability() -> bool {
         // Check if ai_driver.sys is loaded
         // In real implementation: query Service Control Manager
-        
+
         // For now, return false (driver not implemented yet)
         false
     }
-    
+
     pub fn get_status(&self) -> Result<KernelDriverStatus> {
         if !self.driver_available {
             return Ok(KernelDriverStatus {
@@ -86,7 +88,7 @@ impl KernelBridge {
                 scheduler_stats: None,
             });
         }
-        
+
         // In real implementation, call driver APIs
         // For now, return simulated data
         Ok(KernelDriverStatus {
@@ -97,18 +99,18 @@ impl KernelBridge {
             scheduler_stats: Some(self.get_simulated_scheduler_stats()?),
         })
     }
-    
+
     fn get_simulated_gpu_status(&self) -> Result<GpuStatus> {
         // Simulate GPU status
         // In real implementation: call AiDriver::get_gpu_status()
         Ok(GpuStatus {
             utilization: 45.2,
-            memory_used: 4 * 1024 * 1024 * 1024, // 4GB
+            memory_used: 4 * 1024 * 1024 * 1024,   // 4GB
             memory_total: 10 * 1024 * 1024 * 1024, // 10GB (RTX 3080)
             temperature: 62.5,
         })
     }
-    
+
     fn get_simulated_memory_pool(&self) -> Result<MemoryPoolStatus> {
         // Simulate memory pool status
         // In real implementation: call AiDriver::get_memory_pool_status()
@@ -120,7 +122,7 @@ impl KernelBridge {
             fragmentation_ratio: 0.12,
         })
     }
-    
+
     fn get_simulated_scheduler_stats(&self) -> Result<SchedulerStats> {
         // Simulate scheduler stats
         // In real implementation: call AiDriver::get_scheduler_stats()
@@ -130,38 +132,38 @@ impl KernelBridge {
             average_latency_ms: 2.3,
         })
     }
-    
+
     pub fn optimize_process(&self, pid: u32) -> Result<()> {
         if !self.driver_available {
             return Err(anyhow::anyhow!("Kernel driver not available"));
         }
-        
+
         info!("Optimizing process {} for AI workload", pid);
-        
+
         // In real implementation: call AiDriver::set_process_priority()
         // For now, just log
         Ok(())
     }
-    
+
     pub fn allocate_pinned_memory(&self, size: usize) -> Result<u64> {
         if !self.driver_available {
             return Err(anyhow::anyhow!("Kernel driver not available"));
         }
-        
+
         info!("Allocating {} bytes of pinned memory", size);
-        
+
         // In real implementation: call AiDriver::alloc_pinned()
         // Return simulated address
         Ok(0x7FFE0000)
     }
-    
+
     pub fn free_pinned_memory(&self, address: u64) -> Result<()> {
         if !self.driver_available {
             return Err(anyhow::anyhow!("Kernel driver not available"));
         }
-        
+
         info!("Freeing pinned memory at 0x{:X}", address);
-        
+
         // In real implementation: call AiDriver::free_pinned()
         Ok(())
     }
@@ -184,12 +186,15 @@ pub async fn kernel_optimize_process(pid: u32) -> Result<(), String> {
 #[tauri::command]
 pub async fn kernel_allocate_memory(size: usize) -> Result<u64, String> {
     let bridge = KernelBridge::new().map_err(|e| e.to_string())?;
-    bridge.allocate_pinned_memory(size).map_err(|e| e.to_string())
+    bridge
+        .allocate_pinned_memory(size)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn kernel_free_memory(address: u64) -> Result<(), String> {
     let bridge = KernelBridge::new().map_err(|e| e.to_string())?;
-    bridge.free_pinned_memory(address).map_err(|e| e.to_string())
+    bridge
+        .free_pinned_memory(address)
+        .map_err(|e| e.to_string())
 }
-

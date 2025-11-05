@@ -33,6 +33,7 @@ use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_rmcp_client::RmcpClient;
@@ -63,6 +64,12 @@ pub struct AgentRuntime {
     codex_binary_path: Option<PathBuf>,
     /// サブエージェント間の協調ストア
     collaboration_store: Arc<CollaborationStore>,
+    /// Reasoning effort設定
+    reasoning_effort: ReasoningEffort,
+    /// Reasoning summary設定
+    reasoning_summary: ReasoningSummary,
+    /// Verbosity設定
+    verbosity: Verbosity,
 }
 
 impl AgentRuntime {
@@ -75,6 +82,9 @@ impl AgentRuntime {
         otel_manager: OtelEventManager,
         provider: ModelProviderInfo,
         conversation_id: ConversationId,
+        reasoning_effort: ReasoningEffort,
+        reasoning_summary: ReasoningSummary,
+        verbosity: Verbosity,
     ) -> Self {
         let loader = Arc::new(RwLock::new(AgentLoader::new(&workspace_dir)));
         let budgeter = Arc::new(TokenBudgeter::new(total_budget));
@@ -91,6 +101,9 @@ impl AgentRuntime {
             conversation_id,
             codex_binary_path: None,
             collaboration_store: Arc::new(CollaborationStore::new()),
+            reasoning_effort,
+            reasoning_summary,
+            verbosity,
         }
     }
 
@@ -409,6 +422,9 @@ Only output the JSON, no explanation."#;
             conversation_id: self.conversation_id,
             codex_binary_path: self.codex_binary_path.clone(),
             collaboration_store: self.collaboration_store.clone(),
+            reasoning_effort: self.reasoning_effort,
+            reasoning_summary: self.reasoning_summary,
+            verbosity: self.verbosity,
         }
     }
 
@@ -888,6 +904,9 @@ artifacts:
             otel_manager,
             provider,
             conversation_id,
+            ReasoningEffort::default(),
+            ReasoningSummary::default(),
+            Verbosity::default(),
         );
 
         let mut inputs = HashMap::new();
@@ -962,6 +981,9 @@ artifacts:
             otel_manager,
             provider,
             conversation_id,
+            ReasoningEffort::default(),
+            ReasoningSummary::default(),
+            Verbosity::default(),
         );
         let agents = runtime.list_agents().await.unwrap();
 

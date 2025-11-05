@@ -8,8 +8,8 @@ pub mod git_commands;
 pub mod lock_cmd;
 pub mod login;
 pub mod mcp_cmd;
-pub mod parallel_delegate_cmd;
 pub mod pair_program_cmd;
+pub mod parallel_delegate_cmd;
 pub mod research_cmd;
 pub mod webhook_cmd;
 

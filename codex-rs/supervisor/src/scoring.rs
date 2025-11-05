@@ -2,7 +2,6 @@
 ///
 /// Provides comprehensive quality assessment including tests, linting,
 /// performance, change risk, and readability metrics.
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 // use std::collections::HashMap;
@@ -51,11 +50,11 @@ pub struct ScoringWeights {
 impl Default for ScoringWeights {
     fn default() -> Self {
         Self {
-            test_weight: 0.30,      // 30% - tests are critical
-            coverage_weight: 0.15,   // 15% - coverage improvement
-            lint_weight: 0.20,       // 20% - code quality
+            test_weight: 0.30,        // 30% - tests are critical
+            coverage_weight: 0.15,    // 15% - coverage improvement
+            lint_weight: 0.20,        // 20% - code quality
             performance_weight: 0.15, // 15% - performance
-            risk_weight: 0.10,       // 10% - risk assessment
+            risk_weight: 0.10,        // 10% - risk assessment
             readability_weight: 0.10, // 10% - code readability
         }
     }
@@ -190,7 +189,7 @@ mod tests {
         };
         let weights = ScoringWeights::default();
         let score = calculate_score(&metrics, &weights);
-        
+
         // Should be high score (close to 1.0)
         assert!(score > 0.85, "Score should be high: {}", score);
     }
@@ -207,7 +206,7 @@ mod tests {
         };
         let weights = ScoringWeights::default();
         let score = calculate_score(&metrics, &weights);
-        
+
         // Should be low score
         assert!(score < 0.6, "Score should be low: {}", score);
     }
@@ -215,30 +214,39 @@ mod tests {
     #[test]
     fn test_rank_solutions() {
         let solutions = vec![
-            ("agent1".to_string(), ScoringMetrics {
-                test_pass_rate: 1.0,
-                coverage_delta: 0.1,
-                lint_score: 0.9,
-                performance_delta: 0.0,
-                change_risk: 0.2,
-                readability: 0.9,
-            }),
-            ("agent2".to_string(), ScoringMetrics {
-                test_pass_rate: 0.8,
-                coverage_delta: 0.0,
-                lint_score: 0.7,
-                performance_delta: 0.1,
-                change_risk: 0.5,
-                readability: 0.7,
-            }),
-            ("agent3".to_string(), ScoringMetrics {
-                test_pass_rate: 1.0,
-                coverage_delta: 0.3,
-                lint_score: 1.0,
-                performance_delta: -0.2,
-                change_risk: 0.1,
-                readability: 1.0,
-            }),
+            (
+                "agent1".to_string(),
+                ScoringMetrics {
+                    test_pass_rate: 1.0,
+                    coverage_delta: 0.1,
+                    lint_score: 0.9,
+                    performance_delta: 0.0,
+                    change_risk: 0.2,
+                    readability: 0.9,
+                },
+            ),
+            (
+                "agent2".to_string(),
+                ScoringMetrics {
+                    test_pass_rate: 0.8,
+                    coverage_delta: 0.0,
+                    lint_score: 0.7,
+                    performance_delta: 0.1,
+                    change_risk: 0.5,
+                    readability: 0.7,
+                },
+            ),
+            (
+                "agent3".to_string(),
+                ScoringMetrics {
+                    test_pass_rate: 1.0,
+                    coverage_delta: 0.3,
+                    lint_score: 1.0,
+                    performance_delta: -0.2,
+                    change_risk: 0.1,
+                    readability: 1.0,
+                },
+            ),
         ];
 
         let weights = ScoringWeights::default();
@@ -256,14 +264,17 @@ mod tests {
     fn test_select_best_solution() {
         let solutions = vec![
             ("mediocre".to_string(), ScoringMetrics::default()),
-            ("best".to_string(), ScoringMetrics {
-                test_pass_rate: 1.0,
-                coverage_delta: 0.5,
-                lint_score: 1.0,
-                performance_delta: -0.3,
-                change_risk: 0.1,
-                readability: 1.0,
-            }),
+            (
+                "best".to_string(),
+                ScoringMetrics {
+                    test_pass_rate: 1.0,
+                    coverage_delta: 0.5,
+                    lint_score: 1.0,
+                    performance_delta: -0.3,
+                    change_risk: 0.1,
+                    readability: 1.0,
+                },
+            ),
         ];
 
         let weights = ScoringWeights::default();
@@ -275,4 +286,3 @@ mod tests {
         assert_eq!(name, "best");
     }
 }
-

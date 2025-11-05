@@ -15,7 +15,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Global telemetry instance (lazy-initialized)
-static TELEMETRY: once_cell::sync::OnceCell<Arc<TelemetryCollector>> = once_cell::sync::OnceCell::new();
+static TELEMETRY: once_cell::sync::OnceCell<Arc<TelemetryCollector>> =
+    once_cell::sync::OnceCell::new();
 
 /// Initialize telemetry with default configuration
 pub fn init() -> Result<()> {
@@ -24,7 +25,7 @@ pub fn init() -> Result<()> {
         .unwrap_or_default()
         .join(".codex")
         .join("telemetry");
-    
+
     init_with_config(config, storage_dir)
 }
 
@@ -32,17 +33,17 @@ pub fn init() -> Result<()> {
 pub fn init_with_config(config: CollectorConfig, storage_dir: PathBuf) -> Result<()> {
     let storage = Arc::new(TelemetryStorage::new(storage_dir)?);
     let collector = Arc::new(TelemetryCollector::new(config, storage));
-    
+
     // Start background task
     let collector_clone = Arc::clone(&collector);
     tokio::spawn(async move {
         collector_clone.start().await;
     });
-    
-    TELEMETRY.set(collector).map_err(|_| {
-        anyhow::anyhow!("Telemetry already initialized")
-    })?;
-    
+
+    TELEMETRY
+        .set(collector)
+        .map_err(|_| anyhow::anyhow!("Telemetry already initialized"))?;
+
     Ok(())
 }
 
@@ -74,10 +75,9 @@ mod tests {
     fn test_init() {
         let temp_dir = tempfile::tempdir().unwrap();
         let config = CollectorConfig::default();
-        
+
         init_with_config(config, temp_dir.path().to_path_buf()).unwrap();
-        
+
         assert!(instance().is_some());
     }
 }
-

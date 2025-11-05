@@ -13,16 +13,16 @@ use tracing::{debug, info, warn};
 pub struct FileChange {
     /// File path
     pub path: String,
-    
+
     /// Change type
     pub change_type: ChangeType,
-    
+
     /// Content before change (for rollback)
     pub before_content: Option<String>,
-    
+
     /// Content after change
     pub after_content: Option<String>,
-    
+
     /// Timestamp
     pub timestamp: DateTime<Utc>,
 }
@@ -41,34 +41,34 @@ pub enum ChangeType {
 pub struct ExecutionLog {
     /// Execution ID
     pub execution_id: String,
-    
+
     /// Blueprint ID
     pub blueprint_id: String,
-    
+
     /// File changes
     pub file_changes: Vec<FileChange>,
-    
+
     /// Git commit hash before execution
     pub git_commit_before: Option<String>,
-    
+
     /// Git commit hash after execution
     pub git_commit_after: Option<String>,
-    
+
     /// Start time
     pub started_at: DateTime<Utc>,
-    
+
     /// End time
     pub completed_at: Option<DateTime<Utc>>,
-    
+
     /// Success flag
     pub success: bool,
-    
+
     /// Error message (if failed)
     pub error: Option<String>,
-    
+
     /// Rollback status
     pub rolled_back: bool,
-    
+
     /// Rollback timestamp
     pub rolled_back_at: Option<DateTime<Utc>>,
 }
@@ -90,19 +90,19 @@ impl ExecutionLog {
             rolled_back_at: None,
         }
     }
-    
+
     /// Add file change
     pub fn add_file_change(&mut self, change: FileChange) {
         self.file_changes.push(change);
     }
-    
+
     /// Mark as completed
     pub fn complete(&mut self, success: bool, error: Option<String>) {
         self.completed_at = Some(Utc::now());
         self.success = success;
         self.error = error;
     }
-    
+
     /// Mark as rolled back
     pub fn mark_rolled_back(&mut self) {
         self.rolled_back = true;
@@ -119,56 +119,53 @@ pub struct ExecutionLogManager {
 impl ExecutionLogManager {
     /// Create a new execution log manager
     pub fn new(log_dir: PathBuf) -> Result<Self> {
-        std::fs::create_dir_all(&log_dir)
-            .context("Failed to create execution log directory")?;
-        
+        std::fs::create_dir_all(&log_dir).context("Failed to create execution log directory")?;
+
         Ok(Self { log_dir })
     }
-    
+
     /// Save execution log
     pub fn save(&self, log: &ExecutionLog) -> Result<()> {
         let log_file = self.log_dir.join(format!("{}.json", log.execution_id));
-        
-        let json = serde_json::to_string_pretty(log)
-            .context("Failed to serialize execution log")?;
-        
-        std::fs::write(&log_file, json)
-            .context("Failed to write execution log")?;
-        
+
+        let json =
+            serde_json::to_string_pretty(log).context("Failed to serialize execution log")?;
+
+        std::fs::write(&log_file, json).context("Failed to write execution log")?;
+
         info!("Saved execution log: {}", log_file.display());
-        
+
         Ok(())
     }
-    
+
     /// Load execution log
     pub fn load(&self, execution_id: &str) -> Result<ExecutionLog> {
         let log_file = self.log_dir.join(format!("{}.json", execution_id));
-        
+
         if !log_file.exists() {
             anyhow::bail!("Execution log not found: {}", execution_id);
         }
-        
-        let json = std::fs::read_to_string(&log_file)
-            .context("Failed to read execution log")?;
-        
-        let log: ExecutionLog = serde_json::from_str(&json)
-            .context("Failed to deserialize execution log")?;
-        
+
+        let json = std::fs::read_to_string(&log_file).context("Failed to read execution log")?;
+
+        let log: ExecutionLog =
+            serde_json::from_str(&json).context("Failed to deserialize execution log")?;
+
         Ok(log)
     }
-    
+
     /// List all execution logs
     pub fn list(&self) -> Result<Vec<ExecutionLog>> {
         let mut logs = Vec::new();
-        
+
         if !self.log_dir.exists() {
             return Ok(logs);
         }
-        
+
         for entry in std::fs::read_dir(&self.log_dir)? {
             let entry = entry?;
             let path = entry.path();
-            
+
             if path.extension().and_then(|s| s.to_str()) == Some("json") {
                 if let Ok(json) = std::fs::read_to_string(&path) {
                     if let Ok(log) = serde_json::from_str::<ExecutionLog>(&json) {
@@ -177,23 +174,23 @@ impl ExecutionLogManager {
                 }
             }
         }
-        
+
         // Sort by start time (newest first)
         logs.sort_by(|a, b| b.started_at.cmp(&a.started_at));
-        
+
         Ok(logs)
     }
-    
+
     /// Rollback an execution
     pub fn rollback(&self, execution_id: &str) -> Result<()> {
         let mut log = self.load(execution_id)?;
-        
+
         if log.rolled_back {
             anyhow::bail!("Execution {} has already been rolled back", execution_id);
         }
-        
+
         info!("Rolling back execution: {}", execution_id);
-        
+
         // Rollback file changes in reverse order
         for change in log.file_changes.iter().rev() {
             match self.rollback_file_change(change) {
@@ -201,24 +198,23 @@ impl ExecutionLogManager {
                 Err(e) => warn!("Failed to rollback {}: {}", change.path, e),
             }
         }
-        
+
         // Mark as rolled back
         log.mark_rolled_back();
         self.save(&log)?;
-        
+
         info!("Rollback complete for execution: {}", execution_id);
-        
+
         Ok(())
     }
-    
+
     /// Rollback a single file change
     fn rollback_file_change(&self, change: &FileChange) -> Result<()> {
         match change.change_type {
             ChangeType::Created => {
                 // Delete the file
                 if std::path::Path::new(&change.path).exists() {
-                    std::fs::remove_file(&change.path)
-                        .context("Failed to delete created file")?;
+                    std::fs::remove_file(&change.path).context("Failed to delete created file")?;
                 }
             }
             ChangeType::Modified => {
@@ -236,29 +232,31 @@ impl ExecutionLogManager {
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Get execution statistics
     pub fn get_statistics(&self) -> Result<ExecutionStatistics> {
         let logs = self.list()?;
-        
+
         let total_executions = logs.len();
         let successful_executions = logs.iter().filter(|l| l.success).count();
-        let failed_executions = logs.iter().filter(|l| !l.success && l.completed_at.is_some()).count();
+        let failed_executions = logs
+            .iter()
+            .filter(|l| !l.success && l.completed_at.is_some())
+            .count();
         let rolled_back_executions = logs.iter().filter(|l| l.rolled_back).count();
-        
+
         let avg_duration_secs = logs
             .iter()
             .filter_map(|l| {
-                l.completed_at.map(|completed| {
-                    (completed - l.started_at).num_seconds() as f64
-                })
+                l.completed_at
+                    .map(|completed| (completed - l.started_at).num_seconds() as f64)
             })
             .sum::<f64>()
             / total_executions.max(1) as f64;
-        
+
         Ok(ExecutionStatistics {
             total_executions,
             successful_executions,
@@ -282,7 +280,7 @@ pub struct ExecutionStatistics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_execution_log_creation() {
         let log = ExecutionLog::new("test-exec-1".to_string(), "bp-1".to_string());
@@ -290,11 +288,11 @@ mod tests {
         assert_eq!(log.blueprint_id, "bp-1");
         assert!(!log.rolled_back);
     }
-    
+
     #[test]
     fn test_file_change_addition() {
         let mut log = ExecutionLog::new("test-exec-1".to_string(), "bp-1".to_string());
-        
+
         log.add_file_change(FileChange {
             path: "test.rs".to_string(),
             change_type: ChangeType::Created,
@@ -302,13 +300,7 @@ mod tests {
             after_content: Some("fn main() {}".to_string()),
             timestamp: Utc::now(),
         });
-        
+
         assert_eq!(log.file_changes.len(), 1);
     }
 }
-
-
-
-
-
-

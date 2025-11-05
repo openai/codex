@@ -1,14 +1,64 @@
 import { BrowserRouter as Router, Routes, Route, Link } from "react-router-dom";
-import { useEffect } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { writeText, readText } from "@tauri-apps/api/clipboard";
 import Dashboard from "./pages/Dashboard";
 import Settings from "./pages/Settings";
 import Blueprints from "./pages/Blueprints";
 import GitVR from "./pages/GitVR";
 import Orchestration from "./pages/Orchestration";
+import { CyberpunkBackground } from "./components/CyberpunkBackground";
 import "./App.css";
+import "./styles/cyberpunk-theme.css";
 
 function App() {
+  const [selectedText, setSelectedText] = useState<string>("");
+  const [notification, setNotification] = useState<string>("");
+  
+  // Clipboard operations
+  const handleCopy = useCallback(async (text?: string) => {
+    try {
+      const textToCopy = text || selectedText || window.getSelection()?.toString() || "";
+      if (textToCopy) {
+        await writeText(textToCopy);
+        setNotification("📋 Copied to clipboard");
+        setTimeout(() => setNotification(""), 2000);
+      }
+    } catch (error) {
+      console.error("Failed to copy:", error);
+    }
+  }, [selectedText]);
+  
+  const handlePaste = useCallback(async () => {
+    try {
+      const text = await readText();
+      return text || "";
+    } catch (error) {
+      console.error("Failed to paste:", error);
+      return "";
+    }
+  }, []);
+  
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
+      // Ctrl+C / Cmd+C - Copy
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+        const selection = window.getSelection()?.toString();
+        if (selection) {
+          e.preventDefault();
+          await handleCopy(selection);
+        }
+      }
+      
+      // Ctrl+V / Cmd+V - Paste (handled by individual components)
+      // Can be extended per component as needed
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleCopy]);
+  
   useEffect(() => {
     // Listen for navigation events from tray
     const unlisten = listen<string>("navigate", (event) => {
@@ -23,11 +73,17 @@ function App() {
 
   return (
     <Router>
-      <div className="app-container">
+      <CyberpunkBackground />
+      {notification && (
+        <div className="cyberpunk-notification">
+          {notification}
+        </div>
+      )}
+      <div className="app-container cyberpunk-container">
         <nav className="sidebar">
           <div className="logo">
             <h2>Codex AI</h2>
-            <p className="version">v1.4.0</p>
+            <p className="version">v1.5.0</p>
           </div>
           
           <div className="nav-links">
@@ -41,7 +97,7 @@ function App() {
               🎭 Orchestration
             </Link>
             <Link to="/blueprints" className="nav-link">
-              📋 Blueprints
+              📋 Plans
             </Link>
             <Link to="/settings" className="nav-link">
               ⚙️ Settings

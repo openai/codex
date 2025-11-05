@@ -1,22 +1,22 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod tray;
-mod watcher;
-mod db;
 mod autostart;
-mod events;
 mod codex_bridge;
-mod shortcuts;
-mod updater;
-mod kernel_bridge;
 mod commit_quality;
+mod db;
+mod events;
+mod kernel_bridge;
 mod orchestration;
+mod shortcuts;
+mod tray;
+mod updater;
+mod watcher;
 
-use tauri::State;
-use tracing::{info, error};
 use std::sync::Arc;
+use tauri::State;
 use tokio::sync::RwLock;
+use tracing::{error, info};
 
 // Application state
 #[derive(Clone)]
@@ -39,7 +39,7 @@ async fn greet(name: &str) -> Result<String, String> {
 #[tauri::command]
 async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     let watcher_running = *state.watcher_running.read().await;
-    
+
     Ok(serde_json::json!({
         "core_status": "running",
         "watcher_status": if watcher_running { "running" } else { "stopped" },
@@ -54,23 +54,23 @@ async fn start_file_watcher(
     workspace_path: String,
 ) -> Result<(), String> {
     let mut watcher_running = state.watcher_running.write().await;
-    
+
     if *watcher_running {
         return Err("Watcher is already running".to_string());
     }
-    
+
     info!("Starting file watcher for: {}", workspace_path);
-    
+
     // Start watcher in background
     let state_clone = state.inner().clone();
     let app_clone = app.clone();
-    
+
     tokio::spawn(async move {
         if let Err(e) = watcher::start_watcher(&workspace_path, state_clone, app_clone).await {
             error!("File watcher error: {}", e);
         }
     });
-    
+
     *watcher_running = true;
     Ok(())
 }
@@ -129,16 +129,16 @@ async fn main() {
         .setup(|app| {
             // Setup system tray
             tray::create_tray(app.handle())?;
-            
+
             // Setup global shortcuts
             shortcuts::setup_shortcuts(app.handle())?;
-            
+
             // Check for updates (async)
             let app_handle = app.handle().clone();
             tokio::spawn(async move {
                 updater::check_for_updates(&app_handle).await;
             });
-            
+
             info!("Application initialized successfully");
             Ok(())
         })
@@ -175,4 +175,3 @@ async fn main() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-

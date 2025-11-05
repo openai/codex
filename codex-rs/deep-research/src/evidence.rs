@@ -2,7 +2,6 @@
 ///
 /// Provides standardized Evidence structure for tracking sources,
 /// quotes, confidence scores, and reproducibility logging.
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
@@ -151,19 +150,22 @@ impl ResearchLog {
     /// Get evidence sorted by confidence (descending)
     pub fn evidence_by_confidence(&self) -> Vec<&Evidence> {
         let mut sorted: Vec<&Evidence> = self.sources.iter().collect();
-        sorted.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.sort_by(|a, b| {
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         sorted
     }
 
     /// Get evidence sorted by date (most recent first)
     pub fn evidence_by_date(&self) -> Vec<&Evidence> {
-        let mut dated: Vec<&Evidence> = self.sources.iter()
+        let mut dated: Vec<&Evidence> = self
+            .sources
+            .iter()
             .filter(|e| e.published.is_some())
             .collect();
-        dated.sort_by(|a, b| {
-            b.published.as_ref()
-                .cmp(&a.published.as_ref())
-        });
+        dated.sort_by(|a, b| b.published.as_ref().cmp(&a.published.as_ref()));
         dated
     }
 
@@ -194,7 +196,7 @@ impl CitationBuilder {
     /// Add evidence and get citation number
     pub fn add_evidence(&mut self, evidence: Evidence) -> usize {
         let key = format!("{}:{}", evidence.url, evidence.quote);
-        
+
         if let Some(&existing_id) = self.citation_map.get(&key) {
             return existing_id;
         }
@@ -214,7 +216,7 @@ impl CitationBuilder {
     /// Generate citation list (markdown format)
     pub fn generate_citations(&self) -> String {
         let mut output = String::from("\n\n## References\n\n");
-        
+
         for (idx, evidence) in self.evidence_list.iter().enumerate() {
             let citation_num = idx + 1;
             let published = evidence.published.as_deref().unwrap_or("n.d.");
@@ -257,7 +259,8 @@ mod tests {
             "https://rust-lang.github.io/async-book/",
             "Async Rust is fundamentally different from sync Rust",
             0.95,
-        ).with_published_date("2024");
+        )
+        .with_published_date("2024");
 
         assert_eq!(evidence.title, "Rust Async Book");
         assert_eq!(evidence.confidence, 0.95);
@@ -285,19 +288,9 @@ mod tests {
     #[test]
     fn test_citation_builder() {
         let mut builder = CitationBuilder::new();
-        
-        let evidence1 = Evidence::new(
-            "Source 1",
-            "https://example.com/1",
-            "Quote 1",
-            0.9,
-        );
-        let evidence2 = Evidence::new(
-            "Source 2",
-            "https://example.com/2",
-            "Quote 2",
-            0.8,
-        );
+
+        let evidence1 = Evidence::new("Source 1", "https://example.com/1", "Quote 1", 0.9);
+        let evidence2 = Evidence::new("Source 2", "https://example.com/2", "Quote 2", 0.8);
 
         let citation1 = builder.cite(evidence1.clone());
         let citation2 = builder.cite(evidence2);
@@ -315,7 +308,7 @@ mod tests {
     #[test]
     fn test_evidence_sorting() {
         let mut log = ResearchLog::new("test", "focused");
-        
+
         log.add_evidence(Evidence::new("Low", "https://a.com", "text", 0.5));
         log.add_evidence(Evidence::new("High", "https://b.com", "text", 0.9));
         log.add_evidence(Evidence::new("Med", "https://c.com", "text", 0.7));
@@ -329,4 +322,3 @@ mod tests {
         assert_eq!(filtered.len(), 2);
     }
 }
-

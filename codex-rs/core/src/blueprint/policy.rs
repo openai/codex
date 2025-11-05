@@ -13,7 +13,7 @@ use thiserror::Error;
 pub enum PermissionTier {
     /// Safe operations (read workspace, compute, lint/test dry-runs)
     Safe,
-    
+
     /// Privileged operations requiring approval
     /// (network calls, package install, destructive git ops)
     Privileged,
@@ -25,16 +25,16 @@ pub enum PermissionTier {
 pub enum PrivilegedOperation {
     /// Network call (research, webhooks)
     Network,
-    
+
     /// Package installation
     Install,
-    
+
     /// Destructive git operation (force push, hard reset)
     GitDestructive,
-    
+
     /// File write outside workspace
     FileWriteExternal,
-    
+
     /// Execute arbitrary shell command
     ShellExec,
 }
@@ -44,22 +44,22 @@ pub enum PrivilegedOperation {
 pub struct BlueprintPolicy {
     /// Whether to require approval for network operations
     pub network_requires_approval: bool,
-    
+
     /// Whether to require approval for package installation
     pub install_requires_approval: bool,
-    
+
     /// Whether to require approval for destructive git ops
     pub git_destructive_requires_approval: bool,
-    
+
     /// Whether research requires approval
     pub research_requires_approval: bool,
-    
+
     /// Whether webhooks require approval
     pub webhook_requires_approval: bool,
-    
+
     /// Allowed domains for network operations (empty = all allowed if approved)
     pub allowed_domains: Vec<String>,
-    
+
     /// Role required for approvals
     pub approval_role: ApprovalRole,
 }
@@ -84,13 +84,13 @@ impl Default for BlueprintPolicy {
 pub enum ApprovalRole {
     /// Any user can approve
     User,
-    
+
     /// Reviewer role required
     Reviewer,
-    
+
     /// Maintainer role required
     Maintainer,
-    
+
     /// Admin role required
     Admin,
 }
@@ -100,16 +100,16 @@ pub enum ApprovalRole {
 pub enum PolicyError {
     #[error("Operation {operation:?} requires approval")]
     ApprovalRequired { operation: PrivilegedOperation },
-    
+
     #[error("Insufficient permissions: {role:?} required, but user has {user_role:?}")]
     InsufficientRole {
         role: ApprovalRole,
         user_role: ApprovalRole,
     },
-    
+
     #[error("Domain {domain} not in allowed list")]
     DomainNotAllowed { domain: String },
-    
+
     #[error("Operation {operation:?} not allowed in current mode")]
     OperationNotAllowed { operation: PrivilegedOperation },
 }
@@ -124,7 +124,7 @@ impl PolicyEnforcer {
     pub fn new(policy: BlueprintPolicy) -> Self {
         Self { policy }
     }
-    
+
     /// Check if an operation requires approval
     pub fn requires_approval(&self, operation: PrivilegedOperation) -> bool {
         match operation {
@@ -132,14 +132,14 @@ impl PolicyEnforcer {
             PrivilegedOperation::Install => self.policy.install_requires_approval,
             PrivilegedOperation::GitDestructive => self.policy.git_destructive_requires_approval,
             PrivilegedOperation::FileWriteExternal => true, // Always require approval
-            PrivilegedOperation::ShellExec => true, // Always require approval
+            PrivilegedOperation::ShellExec => true,         // Always require approval
         }
     }
-    
+
     /// Check if a user has sufficient role for approval
     pub fn can_approve(&self, user_role: ApprovalRole) -> bool {
         let required = self.policy.approval_role;
-        
+
         // Check role hierarchy: User < Reviewer < Maintainer < Admin
         let user_level = match user_role {
             ApprovalRole::User => 0,
@@ -147,29 +147,30 @@ impl PolicyEnforcer {
             ApprovalRole::Maintainer => 2,
             ApprovalRole::Admin => 3,
         };
-        
+
         let required_level = match required {
             ApprovalRole::User => 0,
             ApprovalRole::Reviewer => 1,
             ApprovalRole::Maintainer => 2,
             ApprovalRole::Admin => 3,
         };
-        
+
         user_level >= required_level
     }
-    
+
     /// Check if a domain is allowed for network operations
     pub fn is_domain_allowed(&self, domain: &str) -> bool {
         // If allowed_domains is empty, all domains are allowed (after approval)
         if self.policy.allowed_domains.is_empty() {
             return true;
         }
-        
-        self.policy.allowed_domains.iter().any(|allowed| {
-            domain == allowed || domain.ends_with(&format!(".{}", allowed))
-        })
+
+        self.policy
+            .allowed_domains
+            .iter()
+            .any(|allowed| domain == allowed || domain.ends_with(&format!(".{}", allowed)))
     }
-    
+
     /// Enforce policy for an operation
     pub fn enforce(
         &self,
@@ -191,7 +192,7 @@ impl PolicyEnforcer {
                 return Err(PolicyError::ApprovalRequired { operation });
             }
         }
-        
+
         // Check domain if network operation
         if operation == PrivilegedOperation::Network {
             if let Some(d) = domain {
@@ -202,7 +203,7 @@ impl PolicyEnforcer {
                 }
             }
         }
-        
+
         Ok(())
     }
 }
@@ -228,7 +229,7 @@ mod tests {
     #[test]
     fn test_role_hierarchy() {
         let enforcer = PolicyEnforcer::default();
-        
+
         assert!(enforcer.can_approve(ApprovalRole::Admin));
         assert!(enforcer.can_approve(ApprovalRole::Maintainer));
         assert!(!enforcer.can_approve(ApprovalRole::Reviewer));
@@ -239,9 +240,9 @@ mod tests {
     fn test_domain_allowlist() {
         let mut policy = BlueprintPolicy::default();
         policy.allowed_domains = vec!["example.com".to_string()];
-        
+
         let enforcer = PolicyEnforcer::new(policy);
-        
+
         assert!(enforcer.is_domain_allowed("example.com"));
         assert!(enforcer.is_domain_allowed("api.example.com"));
         assert!(!enforcer.is_domain_allowed("evil.com"));
@@ -251,22 +252,18 @@ mod tests {
     fn test_empty_allowlist_allows_all() {
         let policy = BlueprintPolicy::default(); // Empty allowed_domains
         let enforcer = PolicyEnforcer::new(policy);
-        
+
         assert!(enforcer.is_domain_allowed("any-domain.com"));
     }
 
     #[test]
     fn test_enforce_requires_approval() {
         let enforcer = PolicyEnforcer::default();
-        
+
         // Network operation without approval should fail
-        let result = enforcer.enforce(
-            PrivilegedOperation::Network,
-            None,
-            Some("example.com"),
-        );
+        let result = enforcer.enforce(PrivilegedOperation::Network, None, Some("example.com"));
         assert!(result.is_err());
-        
+
         // Network operation with sufficient role should succeed
         let result = enforcer.enforce(
             PrivilegedOperation::Network,
@@ -279,7 +276,7 @@ mod tests {
     #[test]
     fn test_enforce_insufficient_role() {
         let enforcer = PolicyEnforcer::default();
-        
+
         // User role insufficient for network operation
         let result = enforcer.enforce(
             PrivilegedOperation::Network,
@@ -289,4 +286,3 @@ mod tests {
         assert!(matches!(result, Err(PolicyError::InsufficientRole { .. })));
     }
 }
-

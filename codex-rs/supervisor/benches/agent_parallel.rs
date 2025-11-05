@@ -13,11 +13,11 @@ use codex_supervisor::MergeStrategy;
 use codex_supervisor::SubAgent;
 use codex_supervisor::TaskExecutionResult;
 use codex_supervisor::TaskType;
+use criterion::BenchmarkId;
+use criterion::Criterion;
 use criterion::black_box;
 use criterion::criterion_group;
 use criterion::criterion_main;
-use criterion::BenchmarkId;
-use criterion::Criterion;
 use std::time::Duration;
 use tokio::runtime::Runtime;
 

@@ -1,5 +1,5 @@
 //! Git worktree manager for competition-style development
-//! 
+//!
 //! Creates isolated worktrees for each AI agent to work independently,
 //! then merges the best result back to the main branch.
 
@@ -96,7 +96,12 @@ impl WorktreeManager {
         if worktree_path.exists() {
             let output = Command::new("git")
                 .current_dir(&self.repo_path)
-                .args(["worktree", "remove", worktree_path.to_str().unwrap(), "--force"])
+                .args([
+                    "worktree",
+                    "remove",
+                    worktree_path.to_str().unwrap(),
+                    "--force",
+                ])
                 .output()
                 .context("Failed to remove worktree")?;
 
@@ -135,10 +140,7 @@ impl WorktreeManager {
             let branch = lines[1].trim_start_matches("branch ");
 
             // Only include our managed worktrees
-            if let Some(name) = Path::new(path)
-                .file_name()
-                .and_then(|n| n.to_str())
-            {
+            if let Some(name) = Path::new(path).file_name().and_then(|n| n.to_str()) {
                 if path.contains(".codex-worktrees") {
                     let agent = name.split('_').next().unwrap_or("unknown").to_string();
 
@@ -195,4 +197,3 @@ impl WorktreeManager {
         Ok(())
     }
 }
-

@@ -2,34 +2,30 @@
 //!
 //! Measures performance of Git parsing and 3D coordinate calculation
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use std::path::PathBuf;
 
 fn benchmark_commit_parsing(c: &mut Criterion) {
     let mut group = c.benchmark_group("git_analysis");
-    
+
     for size in [100, 1000, 10000].iter() {
-        group.bench_with_input(
-            BenchmarkId::new("commits", size),
-            size,
-            |b, &size| {
-                b.iter(|| {
-                    // Simulate commit parsing
-                    let mut commits = Vec::with_capacity(size);
-                    for i in 0..size {
-                        commits.push(black_box((
-                            format!("sha-{}", i),
-                            i as f32,
-                            i as f32,
-                            i as f32,
-                        )));
-                    }
-                    commits
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("commits", size), size, |b, &size| {
+            b.iter(|| {
+                // Simulate commit parsing
+                let mut commits = Vec::with_capacity(size);
+                for i in 0..size {
+                    commits.push(black_box((
+                        format!("sha-{}", i),
+                        i as f32,
+                        i as f32,
+                        i as f32,
+                    )));
+                }
+                commits
+            });
+        });
     }
-    
+
     group.finish();
 }
 
@@ -50,10 +46,8 @@ fn benchmark_coordinate_calculation(c: &mut Criterion) {
 
 fn benchmark_color_generation(c: &mut Criterion) {
     c.bench_function("author_color_generation", |b| {
-        let emails: Vec<String> = (0..100)
-            .map(|i| format!("user{}@example.com", i))
-            .collect();
-        
+        let emails: Vec<String> = (0..100).map(|i| format!("user{}@example.com", i)).collect();
+
         b.iter(|| {
             for email in &emails {
                 let hash = email.bytes().fold(0u32, |acc, byte| {

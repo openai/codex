@@ -18,8 +18,8 @@ fn test_codex_executor_creation() {
 
 #[test]
 fn test_codex_executor_with_custom_config() {
-    use codex_core::config::Config;
     use codex_core::AuthManager;
+    use codex_core::config::Config;
     use std::path::PathBuf;
     use std::sync::Arc;
 

@@ -2,14 +2,15 @@
  * AI Driver NVAPI Bridge
  * NVIDIA GPU API Integration (placeholder)
  * 
+ * Version: 0.3.0 - Best Practices Edition
+ * FIXED: Consistent function signatures, proper initialization
+ * 
  * In production, link against nvapi64.lib
  * Download: https://developer.nvidia.com/nvapi
  */
 
-/* Include NT kernel headers, if available. In user-mode builds, comment out or replace as needed. */
-#ifdef _KERNEL_MODE
 #include <ntddk.h>
-#endif
+#include <ntstrsafe.h>
 
 /* NVAPI Types (simplified/placeholder) */
 typedef int NvAPI_Status;
@@ -42,29 +43,48 @@ InitializeNvapi(VOID)
         return STATUS_SUCCESS;
     }
     
-    KdPrint(("AI Driver: NVAPI initialization (placeholder)\n"));
+    KdPrint(("AI Driver: NVAPI initialization (placeholder mode)\n"));
     
     /* TODO: Actual NVAPI initialization
      * Option 1: Load nvapi64.dll from user mode helper service
      * Option 2: Use DirectX 12 Compute for GPU stats
-     * Option 3: Query NVIDIA kernel driver directly
+     * Option 3: Query NVIDIA kernel driver directly via IOCTLs
      */
     
     /* Simulated: Assume 1 GPU */
     g_GpuCount = 1;
     g_NvapiInitialized = TRUE;
     
-    KdPrint(("AI Driver: Found %lu GPU(s)\n", g_GpuCount));
+    KdPrint(("AI Driver: NVAPI initialized - Found %lu GPU(s)\n", g_GpuCount));
     
     return STATUS_SUCCESS;
 }
 
 /*
- * Get GPU Utilization
+ * Cleanup NVAPI
+ */
+VOID
+CleanupNvapi(VOID)
+{
+    if (g_NvapiInitialized) {
+        KdPrint(("AI Driver: NVAPI cleanup\n"));
+        g_NvapiInitialized = FALSE;
+        g_GpuCount = 0;
+        RtlZeroMemory(g_GpuHandles, sizeof(g_GpuHandles));
+    }
+}
+
+/* NOTE: The following functions are not called directly by ai_driver.c
+ * They are placeholders for future NVAPI integration
+ * Real GPU stats are obtained through gpu_integration.c
+ */
+
+/*
+ * Get GPU Utilization (Placeholder)
  * Returns percentage 0-100
  */
 FLOAT
-GetGpuUtilization(VOID)
+GetGpuUtilizationPlaceholder(VOID)
 {
     if (!g_NvapiInitialized) {
         InitializeNvapi();
@@ -85,10 +105,10 @@ GetGpuUtilization(VOID)
 }
 
 /*
- * Get GPU Memory Usage
+ * Get GPU Memory Usage (Placeholder)
  */
 NTSTATUS
-GetGpuMemoryInfo(
+GetGpuMemoryInfoPlaceholder(
     PULONG64 Used,
     PULONG64 Total
 )
@@ -113,10 +133,10 @@ GetGpuMemoryInfo(
 }
 
 /*
- * Get GPU Temperature
+ * Get GPU Temperature (Placeholder)
  */
 FLOAT
-GetGpuTemperature(VOID)
+GetGpuTemperaturePlaceholder(VOID)
 {
     if (!g_NvapiInitialized) {
         InitializeNvapi();
@@ -135,17 +155,3 @@ GetGpuTemperature(VOID)
     
     return lastTemp;
 }
-
-/*
- * Cleanup NVAPI
- */
-VOID
-CleanupNvapi(VOID)
-{
-    if (g_NvapiInitialized) {
-        KdPrint(("AI Driver: NVAPI cleanup\n"));
-        g_NvapiInitialized = FALSE;
-        g_GpuCount = 0;
-    }
-}
-

@@ -1,5 +1,4 @@
 /// Windows Named Pipe transport implementation
-
 use super::{Connection, Transport, TransportInfo};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -16,9 +15,9 @@ impl NamedPipeTransport {
     /// Create a new Named Pipe transport
     pub async fn new(_codex_dir: &Path) -> Result<Self> {
         let pipe_name = PIPE_NAME.to_string();
-        
+
         tracing::info!("Named Pipe transport using {}", pipe_name);
-        
+
         Ok(Self { pipe_name })
     }
 }
@@ -74,7 +73,7 @@ mod tests {
         std::fs::create_dir_all(&codex_dir).unwrap();
 
         let transport = NamedPipeTransport::new(&codex_dir).await.unwrap();
-        
+
         match transport.info() {
             TransportInfo::NamedPipe { pipe_name } => {
                 assert!(pipe_name.contains("codex-orchestrator"));
@@ -83,4 +82,3 @@ mod tests {
         }
     }
 }
-

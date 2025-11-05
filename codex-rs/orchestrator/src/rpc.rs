@@ -511,4 +511,3 @@ pub const EVENT_BLUEPRINT_UPDATED: &str = "blueprint.updated";
 pub const EVENT_BLUEPRINT_APPROVED: &str = "blueprint.approved";
 pub const EVENT_BLUEPRINT_REJECTED: &str = "blueprint.rejected";
 pub const EVENT_BLUEPRINT_EXPORTED: &str = "blueprint.exported";
-

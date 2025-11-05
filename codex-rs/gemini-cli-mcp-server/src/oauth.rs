@@ -26,9 +26,7 @@ impl Default for OAuthConfig {
             auth_url: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
             token_url: "https://oauth2.googleapis.com/token".to_string(),
             redirect_uri: "http://localhost:8080/oauth/callback".to_string(),
-            scopes: vec![
-                "https://www.googleapis.com/auth/generative-language".to_string(),
-            ],
+            scopes: vec!["https://www.googleapis.com/auth/generative-language".to_string()],
             token_cache_path: dirs::home_dir()
                 .unwrap_or_default()
                 .join(".codex")
@@ -185,11 +183,7 @@ impl OAuthManager {
     }
 
     /// Exchange authorization code for access token (with PKCE verifier)
-    pub async fn exchange_code(
-        &mut self,
-        code: &str,
-        pkce_verifier: &str,
-    ) -> Result<OAuthToken> {
+    pub async fn exchange_code(&mut self, code: &str, pkce_verifier: &str) -> Result<OAuthToken> {
         tracing::info!("🔄 Exchanging authorization code for access token");
 
         // Note: In real implementation, you would use reqwest or similar HTTP client
@@ -352,7 +346,10 @@ mod tests {
     #[test]
     fn test_oauth_config_default() {
         let config = OAuthConfig::default();
-        assert_eq!(config.auth_url, "https://accounts.google.com/o/oauth2/v2/auth");
+        assert_eq!(
+            config.auth_url,
+            "https://accounts.google.com/o/oauth2/v2/auth"
+        );
         assert_eq!(config.token_url, "https://oauth2.googleapis.com/token");
         assert!(!config.scopes.is_empty());
     }
@@ -362,13 +359,12 @@ mod tests {
         let config = OAuthConfig::default();
         let manager = OAuthManager::new(config);
         let pkce = PKCEChallenge::generate().unwrap();
-        
+
         let url = manager.get_authorization_url(&pkce);
-        
+
         assert!(url.contains("client_id="));
         assert!(url.contains("redirect_uri="));
         assert!(url.contains("code_challenge="));
         assert!(url.contains("code_challenge_method=S256"));
     }
 }
-

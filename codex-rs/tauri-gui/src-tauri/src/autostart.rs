@@ -10,9 +10,9 @@ pub fn set_autostart(enabled: bool) -> Result<()> {
     } else {
         info!("Autostart disable requested");
     }
-    
+
     // Placeholder for v1.2.0 - focus on VR/AR features
     warn!("Autostart functionality will be fully implemented in v1.3.0");
-    
+
     Ok(())
 }

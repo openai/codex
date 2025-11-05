@@ -43,8 +43,7 @@ impl Worktree {
 
         // Create worktree path
         let worktree_dir = repo_root.join(".codex").join("worktrees");
-        std::fs::create_dir_all(&worktree_dir)
-            .context("Failed to create worktrees directory")?;
+        std::fs::create_dir_all(&worktree_dir).context("Failed to create worktrees directory")?;
 
         let worktree_name = format!("{}-{}", config.worktree_prefix, config.instance_id);
         let worktree_path = worktree_dir.join(&worktree_name);
@@ -72,7 +71,12 @@ impl Worktree {
 
         if !output.status.success() {
             return Err(GitToolingError::GitCommandFailed {
-                command: format!("git worktree add -b {} {} {}", branch, worktree_path.display(), base_commit),
+                command: format!(
+                    "git worktree add -b {} {} {}",
+                    branch,
+                    worktree_path.display(),
+                    base_commit
+                ),
                 stderr: String::from_utf8_lossy(&output.stderr).to_string(),
             }
             .into());
@@ -301,7 +305,11 @@ fn parse_worktree_list(output: &str) -> Result<Vec<WorktreeInfo>> {
         if line.starts_with("worktree ") {
             // Save previous worktree
             if let Some((path, commit, branch)) = current_worktree.take() {
-                worktrees.push(WorktreeInfo { path, commit, branch });
+                worktrees.push(WorktreeInfo {
+                    path,
+                    commit,
+                    branch,
+                });
             }
 
             // Start new worktree
@@ -322,7 +330,11 @@ fn parse_worktree_list(output: &str) -> Result<Vec<WorktreeInfo>> {
 
     // Save last worktree
     if let Some((path, commit, branch)) = current_worktree {
-        worktrees.push(WorktreeInfo { path, commit, branch });
+        worktrees.push(WorktreeInfo {
+            path,
+            commit,
+            branch,
+        });
     }
 
     Ok(worktrees)
@@ -374,10 +386,7 @@ branch refs/heads/codex-agent/xyz
         assert_eq!(worktrees.len(), 2);
         assert_eq!(worktrees[0].path, PathBuf::from("/repo"));
         assert_eq!(worktrees[0].commit, "abc123");
-        assert_eq!(
-            worktrees[0].branch.as_deref(),
-            Some("refs/heads/main")
-        );
+        assert_eq!(worktrees[0].branch.as_deref(), Some("refs/heads/main"));
         assert_eq!(
             worktrees[1].path,
             PathBuf::from("/repo/.codex/worktrees/codex-agent-xyz")
@@ -389,4 +398,3 @@ branch refs/heads/codex-agent/xyz
         );
     }
 }
-

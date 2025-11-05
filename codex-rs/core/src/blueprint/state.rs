@@ -13,16 +13,16 @@ use thiserror::Error;
 pub enum BlueprintState {
     /// Blueprint is inactive/not started
     Inactive,
-    
+
     /// Blueprint is being drafted
     Drafting,
-    
+
     /// Blueprint is pending approval
     Pending {
         /// Timestamp when moved to pending
         pending_since: DateTime<Utc>,
     },
-    
+
     /// Blueprint has been approved for execution
     Approved {
         /// Who approved it
@@ -30,7 +30,7 @@ pub enum BlueprintState {
         /// When it was approved
         approved_at: DateTime<Utc>,
     },
-    
+
     /// Blueprint was rejected
     Rejected {
         /// Reason for rejection
@@ -40,7 +40,7 @@ pub enum BlueprintState {
         /// When it was rejected
         rejected_at: DateTime<Utc>,
     },
-    
+
     /// Blueprint was superseded by a new version
     Superseded {
         /// ID of the new blueprint
@@ -48,7 +48,7 @@ pub enum BlueprintState {
         /// When it was superseded
         superseded_at: DateTime<Utc>,
     },
-    
+
     /// Blueprint is currently executing
     Executing {
         /// Execution ID
@@ -56,7 +56,7 @@ pub enum BlueprintState {
         /// When execution started
         started_at: DateTime<Utc>,
     },
-    
+
     /// Blueprint execution completed successfully
     Completed {
         /// Execution ID
@@ -64,7 +64,7 @@ pub enum BlueprintState {
         /// When execution completed
         completed_at: DateTime<Utc>,
     },
-    
+
     /// Blueprint execution failed
     Failed {
         /// Execution ID
@@ -87,13 +87,13 @@ impl Default for BlueprintState {
 pub enum StateTransitionError {
     #[error("Invalid state transition from {from} to {to}")]
     InvalidTransition { from: String, to: String },
-    
+
     #[error("Blueprint must be in {required} state, but is in {actual}")]
     InvalidState { required: String, actual: String },
-    
+
     #[error("Approval required but not provided")]
     ApprovalRequired,
-    
+
     #[error("Rejection reason required but not provided")]
     ReasonRequired,
 }
@@ -103,35 +103,38 @@ impl BlueprintState {
     pub fn can_execute(&self) -> bool {
         matches!(self, Self::Approved { .. })
     }
-    
+
     /// Check if state is executing
     pub fn is_executing(&self) -> bool {
         matches!(self, Self::Executing { .. })
     }
-    
+
     /// Check if state is completed
     pub fn is_completed(&self) -> bool {
         matches!(self, Self::Completed { .. })
     }
-    
+
     /// Check if state is failed
     pub fn is_failed(&self) -> bool {
         matches!(self, Self::Failed { .. })
     }
-    
+
     /// Check if state allows modifications
     pub fn can_modify(&self) -> bool {
         matches!(self, Self::Inactive | Self::Drafting)
     }
-    
+
     /// Check if state is terminal (no further transitions)
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            Self::Rejected { .. } | Self::Superseded { .. } | Self::Completed { .. } | Self::Failed { .. }
+            Self::Rejected { .. }
+                | Self::Superseded { .. }
+                | Self::Completed { .. }
+                | Self::Failed { .. }
         )
     }
-    
+
     /// Get human-readable state name
     pub fn name(&self) -> &'static str {
         match self {
@@ -146,7 +149,7 @@ impl BlueprintState {
             Self::Failed { .. } => "failed",
         }
     }
-    
+
     /// Transition to Drafting state
     pub fn start_drafting(self) -> Result<Self, StateTransitionError> {
         match self {
@@ -157,7 +160,7 @@ impl BlueprintState {
             }),
         }
     }
-    
+
     /// Transition to Pending state
     pub fn submit_for_approval(self) -> Result<Self, StateTransitionError> {
         match self {
@@ -170,7 +173,7 @@ impl BlueprintState {
             }),
         }
     }
-    
+
     /// Transition to Approved state
     pub fn approve(self, approver: String) -> Result<Self, StateTransitionError> {
         match self {
@@ -184,7 +187,7 @@ impl BlueprintState {
             }),
         }
     }
-    
+
     /// Transition to Rejected state
     pub fn reject(
         self,
@@ -194,7 +197,7 @@ impl BlueprintState {
         if reason.is_empty() {
             return Err(StateTransitionError::ReasonRequired);
         }
-        
+
         match self {
             Self::Pending { .. } | Self::Drafting => Ok(Self::Rejected {
                 reason,
@@ -207,7 +210,7 @@ impl BlueprintState {
             }),
         }
     }
-    
+
     /// Transition to Superseded state
     pub fn supersede(self, new_id: String) -> Result<Self, StateTransitionError> {
         // Can supersede from any non-terminal state
@@ -217,13 +220,13 @@ impl BlueprintState {
                 to: "superseded".to_string(),
             });
         }
-        
+
         Ok(Self::Superseded {
             new_id,
             superseded_at: Utc::now(),
         })
     }
-    
+
     /// Return to Drafting state (e.g., after rejection)
     pub fn back_to_drafting(self) -> Result<Self, StateTransitionError> {
         match self {
@@ -234,7 +237,7 @@ impl BlueprintState {
             }),
         }
     }
-    
+
     /// Transition to Executing state
     pub fn start_execution(self, execution_id: String) -> Result<Self, StateTransitionError> {
         match self {
@@ -248,7 +251,7 @@ impl BlueprintState {
             }),
         }
     }
-    
+
     /// Transition to Completed state
     pub fn complete_execution(self) -> Result<Self, StateTransitionError> {
         match self {
@@ -262,7 +265,7 @@ impl BlueprintState {
             }),
         }
     }
-    
+
     /// Transition to Failed state
     pub fn fail_execution(self, error: String) -> Result<Self, StateTransitionError> {
         match self {
@@ -295,35 +298,34 @@ mod tests {
         let state = BlueprintState::Inactive;
         let state = state.start_drafting().unwrap();
         assert!(matches!(state, BlueprintState::Drafting));
-        
+
         // Drafting -> Pending
         let state = state.submit_for_approval().unwrap();
         assert!(matches!(state, BlueprintState::Pending { .. }));
-        
+
         // Pending -> Approved
         let state = state.approve("user1".to_string()).unwrap();
         assert!(matches!(state, BlueprintState::Approved { .. }));
         assert!(state.can_execute());
     }
-    
+
     #[test]
     fn test_rejection_flow() {
         let state = BlueprintState::Drafting;
         let state = state.submit_for_approval().unwrap();
-        
+
         // Pending -> Rejected
-        let state = state.reject(
-            "Not ready yet".to_string(),
-            Some("reviewer".to_string()),
-        ).unwrap();
+        let state = state
+            .reject("Not ready yet".to_string(), Some("reviewer".to_string()))
+            .unwrap();
         assert!(matches!(state, BlueprintState::Rejected { .. }));
         assert!(state.is_terminal());
-        
+
         // Rejected -> Drafting (rework)
         let state = state.back_to_drafting().unwrap();
         assert!(matches!(state, BlueprintState::Drafting));
     }
-    
+
     #[test]
     fn test_supersede() {
         let state = BlueprintState::Drafting;
@@ -331,13 +333,13 @@ mod tests {
         assert!(matches!(state, BlueprintState::Superseded { .. }));
         assert!(state.is_terminal());
     }
-    
+
     #[test]
     fn test_invalid_transitions() {
         // Can't approve from Drafting
         let state = BlueprintState::Drafting;
         assert!(state.approve("user".to_string()).is_err());
-        
+
         // Can't modify approved blueprint
         let state = BlueprintState::Approved {
             approved_by: "user".to_string(),
@@ -345,18 +347,17 @@ mod tests {
         };
         assert!(!state.can_modify());
     }
-    
+
     #[test]
     fn test_rejection_requires_reason() {
         let state = BlueprintState::Pending {
             pending_since: Utc::now(),
         };
-        
+
         // Empty reason should fail
         assert!(state.clone().reject("".to_string(), None).is_err());
-        
+
         // Valid reason should succeed
         assert!(state.reject("Valid reason".to_string(), None).is_ok());
     }
 }
-

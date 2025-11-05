@@ -1,8 +1,9 @@
-use anyhow::anyhow;
-use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::anyhow;
+use anyhow::bail;
 use codex_common::CliConfigOverrides;
+use codex_core::AuthManager;
 use codex_core::agents::AgentLoader;
 use codex_core::agents::AgentResult;
 use codex_core::agents::AgentRuntime;
@@ -12,7 +13,6 @@ use codex_core::auth::OPENAI_API_KEY_ENV_VAR;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::terminal;
-use codex_core::AuthManager;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use serde::Serialize;
@@ -109,6 +109,9 @@ pub async fn run_delegate_command(
         otel_manager,
         config.model_provider.clone(),
         conversation_id,
+        config.model_reasoning_effort,
+        config.model_reasoning_summary,
+        config.model_verbosity.unwrap_or_default(),
     );
 
     let resolved_scope = scope.map(|path| {

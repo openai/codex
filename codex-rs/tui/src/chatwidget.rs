@@ -7,6 +7,7 @@ use codex_core::config::Config;
 use codex_core::config::types::Notifications;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
+use codex_core::natural_language_parser::NaturalLanguageParser;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -1878,9 +1879,10 @@ impl ChatWidget {
             use ratatui::text::Span;
 
             let mut header = ColumnRenderable::new();
-            header.push(Line::from(vec![
-                Span::styled("Codex forced your settings back to Read Only on this Windows machine.", ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::BOLD))
-            ]));
+            header.push(Line::from(vec![Span::styled(
+                "Codex forced your settings back to Read Only on this Windows machine.",
+                ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+            )]));
             header.push(Line::from(vec![
                 Span::styled("To re-enable Auto mode, run Codex inside Windows Subsystem for Linux (WSL) or enable Full Access manually.", ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM))
             ]));
@@ -2036,10 +2038,13 @@ impl ChatWidget {
         use ratatui::text::Span;
 
         let mut header = ColumnRenderable::new();
-        header.push(Line::from(vec![
-            Span::styled("Auto mode requires Windows Subsystem for Linux (WSL2).", ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::BOLD))
-        ]));
-        header.push(Line::from(vec![Span::raw("Run Codex inside WSL to enable sandboxed commands.")]));
+        header.push(Line::from(vec![Span::styled(
+            "Auto mode requires Windows Subsystem for Linux (WSL2).",
+            ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+        )]));
+        header.push(Line::from(vec![Span::raw(
+            "Run Codex inside WSL to enable sandboxed commands.",
+        )]));
         header.push(Line::from(vec![Span::raw("")]));
         header.push(Paragraph::new(WSL_INSTRUCTIONS).wrap(Wrap { trim: false }));
 
@@ -2352,7 +2357,25 @@ impl ChatWidget {
         if text.is_empty() {
             return;
         }
-        self.submit_user_message(text.into());
+
+        // Natural language preprocessing: convert to slash command if matched
+        let processed_text = if !text.starts_with('/') {
+            let parser = NaturalLanguageParser::new();
+            if let Some((command, remaining)) = parser.parse_to_slash_command(&text) {
+                // Convert natural language to slash command
+                if remaining.is_empty() {
+                    format!("/{command}")
+                } else {
+                    format!("/{command} {remaining}")
+                }
+            } else {
+                text
+            }
+        } else {
+            text
+        };
+
+        self.submit_user_message(processed_text.into());
     }
 
     pub(crate) fn token_usage(&self) -> TokenUsage {

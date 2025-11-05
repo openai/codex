@@ -1,6 +1,6 @@
 {
   "name": "codex-tauri",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "type": "module",
   "description": "Codex AI-Native OS Resident GUI Client",
   "scripts": {
@@ -14,10 +14,12 @@
   "dependencies": {
     "@react-three/drei": "^9.92.0",
     "@react-three/fiber": "^8.15.0",
+    "@react-three/postprocessing": "^2.16.0",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-notification": "^2.0.0",
     "@tauri-apps/plugin-shell": "^2.0.0",
     "png-to-ico": "^3.0.1",
+    "postprocessing": "^6.35.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.20.0",

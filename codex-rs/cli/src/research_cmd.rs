@@ -1,6 +1,5 @@
 use anyhow::Context;
 use anyhow::Result;
-use codex_deep_research::provider::ResearchProvider;
 use codex_deep_research::DeepResearcher;
 use codex_deep_research::DeepResearcherConfig;
 use codex_deep_research::GeminiSearchProvider;
@@ -9,6 +8,7 @@ use codex_deep_research::ResearchPlanner;
 use codex_deep_research::ResearchStrategy;
 use codex_deep_research::SearchBackend;
 use codex_deep_research::WebSearchProvider;
+use codex_deep_research::provider::ResearchProvider;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -54,7 +54,9 @@ pub async fn run_research_command(
             if let Some(url) = mcp_url.as_deref() {
                 println!("   ℹ️ Requested MCP server: {url}");
             }
-            println!("   ℹ️ MCP-backed Gemini integration is not fully configured; falling back to direct CLI execution.");
+            println!(
+                "   ℹ️ MCP-backed Gemini integration is not fully configured; falling back to direct CLI execution."
+            );
         } else {
             println!("🤖 Using Gemini CLI with Google Search (Grounding)");
         }

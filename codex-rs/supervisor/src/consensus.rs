@@ -2,8 +2,9 @@
 ///
 /// Provides voting, scoring aggregation, and automatic best solution selection
 /// with detailed decision logging.
-
-use crate::scoring::{DecisionLog, ScoringMetrics, ScoringWeights, calculate_score, rank_solutions};
+use crate::scoring::{
+    DecisionLog, ScoringMetrics, ScoringWeights, calculate_score, rank_solutions,
+};
 // use crate::types::TaskResult;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -78,18 +79,10 @@ impl ConsensusBuilder {
         votes: Vec<AgentVote>,
     ) -> Result<ConsensusResult> {
         let selection = match self.strategy {
-            ConsensusStrategy::HighestScore => {
-                self.select_by_highest_score(solutions)?
-            }
-            ConsensusStrategy::MajorityVote => {
-                self.select_by_majority_vote(&votes, solutions)?
-            }
-            ConsensusStrategy::WeightedVote => {
-                self.select_by_weighted_vote(&votes, solutions)?
-            }
-            ConsensusStrategy::Unanimous => {
-                self.select_by_unanimous(&votes, solutions)?
-            }
+            ConsensusStrategy::HighestScore => self.select_by_highest_score(solutions)?,
+            ConsensusStrategy::MajorityVote => self.select_by_majority_vote(&votes, solutions)?,
+            ConsensusStrategy::WeightedVote => self.select_by_weighted_vote(&votes, solutions)?,
+            ConsensusStrategy::Unanimous => self.select_by_unanimous(&votes, solutions)?,
         };
 
         let (idx, winner, score) = selection;
@@ -161,7 +154,9 @@ impl ConsensusBuilder {
         // Count votes for each solution
         let mut vote_counts: HashMap<String, usize> = HashMap::new();
         for vote in votes {
-            *vote_counts.entry(vote.preferred_solution.clone()).or_insert(0) += 1;
+            *vote_counts
+                .entry(vote.preferred_solution.clone())
+                .or_insert(0) += 1;
         }
 
         // Find solution with most votes
@@ -194,9 +189,15 @@ impl ConsensusBuilder {
         // Weight votes by agent reliability and confidence
         let mut weighted_scores: HashMap<String, f64> = HashMap::new();
         for vote in votes {
-            let agent_reliability = self.agent_reliability.get(&vote.agent_name).copied().unwrap_or(1.0);
+            let agent_reliability = self
+                .agent_reliability
+                .get(&vote.agent_name)
+                .copied()
+                .unwrap_or(1.0);
             let weight = agent_reliability * vote.confidence;
-            *weighted_scores.entry(vote.preferred_solution.clone()).or_insert(0.0) += weight;
+            *weighted_scores
+                .entry(vote.preferred_solution.clone())
+                .or_insert(0.0) += weight;
         }
 
         // Find solution with highest weighted score
@@ -259,26 +260,34 @@ mod tests {
     #[test]
     fn test_highest_score_consensus() {
         let solutions = vec![
-            ("agent1".to_string(), ScoringMetrics {
-                test_pass_rate: 0.8,
-                coverage_delta: 0.0,
-                lint_score: 0.7,
-                performance_delta: 0.0,
-                change_risk: 0.3,
-                readability: 0.8,
-            }),
-            ("agent2".to_string(), ScoringMetrics {
-                test_pass_rate: 1.0,
-                coverage_delta: 0.2,
-                lint_score: 1.0,
-                performance_delta: -0.1,
-                change_risk: 0.1,
-                readability: 1.0,
-            }),
+            (
+                "agent1".to_string(),
+                ScoringMetrics {
+                    test_pass_rate: 0.8,
+                    coverage_delta: 0.0,
+                    lint_score: 0.7,
+                    performance_delta: 0.0,
+                    change_risk: 0.3,
+                    readability: 0.8,
+                },
+            ),
+            (
+                "agent2".to_string(),
+                ScoringMetrics {
+                    test_pass_rate: 1.0,
+                    coverage_delta: 0.2,
+                    lint_score: 1.0,
+                    performance_delta: -0.1,
+                    change_risk: 0.1,
+                    readability: 1.0,
+                },
+            ),
         ];
 
         let builder = ConsensusBuilder::new(ConsensusStrategy::HighestScore);
-        let result = builder.build_consensus("test goal", &solutions, vec![]).unwrap();
+        let result = builder
+            .build_consensus("test goal", &solutions, vec![])
+            .unwrap();
 
         assert_eq!(result.selected_solution, "agent2");
         assert!(result.final_score > 0.8);
@@ -313,7 +322,9 @@ mod tests {
         ];
 
         let builder = ConsensusBuilder::new(ConsensusStrategy::MajorityVote);
-        let result = builder.build_consensus("test goal", &solutions, votes).unwrap();
+        let result = builder
+            .build_consensus("test goal", &solutions, votes)
+            .unwrap();
 
         assert_eq!(result.selected_solution, "agent1");
     }
@@ -346,10 +357,11 @@ mod tests {
 
         let builder = ConsensusBuilder::new(ConsensusStrategy::WeightedVote)
             .with_agent_reliability(reliability);
-        let result = builder.build_consensus("test goal", &solutions, votes).unwrap();
+        let result = builder
+            .build_consensus("test goal", &solutions, votes)
+            .unwrap();
 
         // Expert vote should win due to higher reliability
         assert_eq!(result.selected_solution, "agent2");
     }
 }
-

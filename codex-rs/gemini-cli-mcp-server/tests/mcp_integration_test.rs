@@ -5,8 +5,8 @@
 //! - JSON-RPC初期化テスト
 //! - ツールリスト取得テスト
 
-use serde_json::json;
 use serde_json::Value;
+use serde_json::json;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;

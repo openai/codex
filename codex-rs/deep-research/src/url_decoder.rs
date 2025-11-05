@@ -59,8 +59,7 @@ mod tests {
     #[test]
     fn test_remove_rut_parameter() {
         // 実際のDuckDuckGo URLパターン（&rut=がプレーンな&で付く場合）
-        let redirect_url =
-            "//duckduckgo.com/l/?uddg=https%3A%2F%2Fmedium.com%2F%40author%2Farticle&rut=99373327ff715cdd";
+        let redirect_url = "//duckduckgo.com/l/?uddg=https%3A%2F%2Fmedium.com%2F%40author%2Farticle&rut=99373327ff715cdd";
         let decoded = decode_duckduckgo_url(redirect_url);
         assert_eq!(decoded, "https://medium.com/@author/article");
     }
@@ -68,8 +67,7 @@ mod tests {
     #[test]
     fn test_multiple_parameters() {
         // 複数のパラメータがある場合
-        let redirect_url =
-            "//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage%3Fid%3D123&rut=abc&other=xyz";
+        let redirect_url = "//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage%3Fid%3D123&rut=abc&other=xyz";
         let decoded = decode_duckduckgo_url(redirect_url);
         // 最初の&で分割されるので、&rut=以降は全て削除される
         assert_eq!(decoded, "https://example.com/page?id=123");

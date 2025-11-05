@@ -7,10 +7,14 @@
  * - AI task detection
  * - Non-paged memory pool
  * - DirectX/CUDA integration
+ * 
+ * Version: 0.3.0 - Best Practices Edition
+ * Date: 2025-11-05
  */
 
 #include <ntddk.h>
 #include <wdf.h>
+#include <ntstrsafe.h>
 
 #define AI_DRIVER_TAG 'iAcD'  // 'DcAi' reversed
 #define AI_MEMORY_POOL_SIZE (256 * 1024 * 1024)  // 256MB
@@ -23,6 +27,7 @@ typedef struct _AI_DRIVER_GLOBALS {
     KSPIN_LOCK PoolLock;
     LONG AiTaskCount;
     LONG GpuUtilization;
+    BOOLEAN Initialized;
 } AI_DRIVER_GLOBALS, *PAI_DRIVER_GLOBALS;
 
 static AI_DRIVER_GLOBALS g_Globals = { 0 };
@@ -38,6 +43,7 @@ extern VOID AiDriverEvtIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
     size_t OutputBufferLength, size_t InputBufferLength, ULONG IoControlCode);
 extern VOID InitializePinnedMemory(VOID);
 extern VOID CleanupPinnedMemory(VOID);
+extern VOID InitializeGpuStats(VOID);
 extern NTSTATUS InitializeNvapi(VOID);
 extern VOID CleanupNvapi(VOID);
 extern NTSTATUS InitializeDx12(VOID);
@@ -45,26 +51,31 @@ extern VOID CleanupDx12(VOID);
 
 /*
  * Check if process is AI-related
+ * 
+ * FIXED: PsGetProcessImageFileName returns PCHAR (ANSI), not PUNICODE_STRING
  */
 _Use_decl_annotations_
 BOOLEAN IsAiProcess(PEPROCESS Process)
 {
-    PUNICODE_STRING processName;
+    PCHAR processName;
     
     if (!Process) {
         return FALSE;
     }
     
-    processName = (PUNICODE_STRING)PsGetProcessImageFileName(Process);
+    /* Get process image filename (ANSI string, not Unicode) */
+    processName = (PCHAR)PsGetProcessImageFileName(Process);
     if (!processName) {
         return FALSE;
     }
     
-    /* Check for AI-related process names */
-    if (wcsstr(processName->Buffer, L"python") ||
-        wcsstr(processName->Buffer, L"codex") ||
-        wcsstr(processName->Buffer, L"ai") ||
-        wcsstr(processName->Buffer, L"ml")) {
+    /* Check for AI-related process names using ANSI string functions */
+    if (strstr(processName, "python") ||
+        strstr(processName, "codex") ||
+        strstr(processName, "ai") ||
+        strstr(processName, "ml") ||
+        strstr(processName, "pytorch") ||
+        strstr(processName, "tensorflow")) {
         return TRUE;
     }
     
@@ -93,6 +104,7 @@ NTSTATUS BoostAiThreadPriority(PETHREAD Thread)
 
 /*
  * Allocate non-paged memory for AI workloads
+ * FIXED: Use NonPagedPoolNx instead of deprecated NonPagedPool (Windows 8+)
  */
 _Use_decl_annotations_
 PVOID AiAllocateNonPagedMemory(SIZE_T Size)
@@ -104,16 +116,19 @@ PVOID AiAllocateNonPagedMemory(SIZE_T Size)
         return NULL;
     }
     
+    /* Use NonPagedPoolNx (NX = No Execute) for security */
     buffer = ExAllocatePoolWithTag(
-        NonPagedPool,
+        NonPagedPoolNx,  // FIXED: NonPagedPool is deprecated
         Size,
         AI_DRIVER_TAG
     );
     
     if (buffer) {
-        KdPrint(("AI Driver: Allocated %zu bytes of non-paged memory\n", Size));
+        /* Zero the buffer for security */
+        RtlZeroMemory(buffer, Size);
+        KdPrint(("AI Driver: Allocated %zu bytes of non-paged memory at 0x%p\n", Size, buffer));
     } else {
-        KdPrint(("AI Driver: Failed to allocate memory\n"));
+        KdPrint(("AI Driver: Failed to allocate %zu bytes\n", Size));
     }
     
     return buffer;
@@ -127,12 +142,13 @@ VOID AiFreeNonPagedMemory(PVOID Buffer)
 {
     if (Buffer) {
         ExFreePoolWithTag(Buffer, AI_DRIVER_TAG);
-        KdPrint(("AI Driver: Freed memory\n"));
+        KdPrint(("AI Driver: Freed memory at 0x%p\n", Buffer));
     }
 }
 
 /*
  * Device add callback
+ * FIXED: Proper error handling with resource cleanup
  */
 _Use_decl_annotations_
 NTSTATUS AiDriverDeviceAdd(
@@ -147,6 +163,8 @@ NTSTATUS AiDriverDeviceAdd(
     WDFQUEUE queue;
     
     UNREFERENCED_PARAMETER(Driver);
+    
+    KdPrint(("AI Driver: Adding device\n"));
     
     WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
     attributes.EvtCleanupCallback = AiDriverCleanup;
@@ -164,6 +182,7 @@ NTSTATUS AiDriverDeviceAdd(
     status = WdfIoQueueCreate(device, &queueConfig, WDF_NO_OBJECT_ATTRIBUTES, &queue);
     if (!NT_SUCCESS(status)) {
         KdPrint(("AI Driver: WdfIoQueueCreate failed: 0x%08X\n", status));
+        /* FIXED: Device will be automatically cleaned up by WDF */
         return status;
     }
     
@@ -174,13 +193,16 @@ NTSTATUS AiDriverDeviceAdd(
 
 /*
  * Cleanup callback
+ * Called when device is being removed
  */
 _Use_decl_annotations_
 VOID AiDriverCleanup(WDFOBJECT Object)
 {
     UNREFERENCED_PARAMETER(Object);
     
-    /* Cleanup all subsystems */
+    KdPrint(("AI Driver: Starting cleanup\n"));
+    
+    /* Cleanup all subsystems in reverse order */
     CleanupPinnedMemory();
     CleanupNvapi();
     CleanupDx12();
@@ -191,11 +213,14 @@ VOID AiDriverCleanup(WDFOBJECT Object)
         g_Globals.MemoryPool = NULL;
     }
     
+    g_Globals.Initialized = FALSE;
+    
     KdPrint(("AI Driver: Cleanup completed\n"));
 }
 
 /*
  * Driver Entry Point
+ * FIXED: Better error handling and cleanup on failure
  */
 _Use_decl_annotations_
 NTSTATUS DriverEntry(
@@ -206,24 +231,38 @@ NTSTATUS DriverEntry(
     NTSTATUS status;
     WDF_DRIVER_CONFIG config;
     
+    KdPrint(("========================================\n"));
     KdPrint(("AI Driver: Initializing...\n"));
+    KdPrint(("Version: 0.3.0 (Best Practices Edition)\n"));
+    KdPrint(("Build: %s %s\n", __DATE__, __TIME__));
+    KdPrint(("========================================\n"));
     
     /* Initialize globals */
     RtlZeroMemory(&g_Globals, sizeof(AI_DRIVER_GLOBALS));
     KeInitializeSpinLock(&g_Globals.PoolLock);
     g_Globals.AiTaskCount = 0;
     g_Globals.GpuUtilization = 0;
+    g_Globals.Initialized = FALSE;
     
-    /* Initialize subsystems */
+    /* Initialize subsystems (non-fatal errors are acceptable) */
     InitializePinnedMemory();
-    InitializeNvapi();
-    InitializeDx12();
+    InitializeGpuStats();
     
-    /* Allocate memory pool */
+    status = InitializeNvapi();
+    if (!NT_SUCCESS(status)) {
+        KdPrint(("AI Driver: NVAPI initialization failed (non-fatal): 0x%08X\n", status));
+    }
+    
+    status = InitializeDx12();
+    if (!NT_SUCCESS(status)) {
+        KdPrint(("AI Driver: DX12 initialization failed (non-fatal): 0x%08X\n", status));
+    }
+    
+    /* Allocate memory pool (non-fatal if fails) */
     g_Globals.MemoryPool = AiAllocateNonPagedMemory(AI_MEMORY_POOL_SIZE);
     if (!g_Globals.MemoryPool) {
-        KdPrint(("AI Driver: Failed to allocate memory pool\n"));
-        /* Continue without pool - not fatal */
+        KdPrint(("AI Driver: Failed to allocate memory pool (continuing without pool)\n"));
+        g_Globals.PoolSize = 0;
     } else {
         g_Globals.PoolSize = AI_MEMORY_POOL_SIZE;
         KdPrint(("AI Driver: Memory pool allocated: %zu MB\n",
@@ -243,14 +282,24 @@ NTSTATUS DriverEntry(
     
     if (!NT_SUCCESS(status)) {
         KdPrint(("AI Driver: WdfDriverCreate failed: 0x%08X\n", status));
+        
+        /* FIXED: Cleanup on failure */
         if (g_Globals.MemoryPool) {
             AiFreeNonPagedMemory(g_Globals.MemoryPool);
+            g_Globals.MemoryPool = NULL;
         }
+        CleanupDx12();
+        CleanupNvapi();
+        CleanupPinnedMemory();
+        
         return status;
     }
     
+    g_Globals.Initialized = TRUE;
+    
+    KdPrint(("========================================\n"));
     KdPrint(("AI Driver: Initialized successfully\n"));
+    KdPrint(("========================================\n"));
     
     return STATUS_SUCCESS;
 }
-

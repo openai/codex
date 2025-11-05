@@ -2,7 +2,6 @@
 ///
 /// Provides `codex lock status` and `codex lock remove` for managing
 /// repository-level locks.
-
 use anyhow::Result;
 use clap::Parser;
 use codex_common::CliConfigOverrides;
@@ -88,13 +87,13 @@ fn handle_status(lock: RepositoryLock) -> Result<()> {
             println!("  Started at: {} (Unix timestamp)", metadata.started_at);
             if let Some(expires_at) = metadata.expires_at {
                 println!("  Expires at: {} (Unix timestamp)", expires_at);
-                
+
                 use std::time::{SystemTime, UNIX_EPOCH};
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs();
-                
+
                 if now < expires_at {
                     let remaining = expires_at - now;
                     println!("  Time remaining: {} seconds", remaining);
@@ -124,7 +123,7 @@ fn handle_remove(lock: RepositoryLock, force: bool) -> Result<()> {
         }
 
         lock.release()?;
-        
+
         if force {
             println!("🗑️  Force removed lock (was held by PID {})", metadata.pid);
         } else {
@@ -140,7 +139,7 @@ fn handle_remove(lock: RepositoryLock, force: bool) -> Result<()> {
 /// Find repository root by searching for .git directory
 fn find_repo_root(start: &Path) -> Result<PathBuf> {
     let mut current = start;
-    
+
     loop {
         let git_dir = current.join(".git");
         if git_dir.exists() {
@@ -149,9 +148,11 @@ fn find_repo_root(start: &Path) -> Result<PathBuf> {
 
         match current.parent() {
             Some(parent) => current = parent,
-            None => return Err(anyhow::anyhow!(
-                "Not in a git repository (no .git directory found)"
-            )),
+            None => {
+                return Err(anyhow::anyhow!(
+                    "Not in a git repository (no .git directory found)"
+                ));
+            }
         }
     }
 }

@@ -90,9 +90,9 @@ impl OrchestratedEdit {
                     return Ok(OrchestratedEditResult {
                         success: false,
                         new_sha: current_sha.clone(),
-                    error: Some(format!(
-                        "Edit conflict: expected SHA {expected_sha} but found {current_sha}"
-                    )),
+                        error: Some(format!(
+                            "Edit conflict: expected SHA {expected_sha} but found {current_sha}"
+                        )),
                     });
                 }
             } else {
@@ -102,7 +102,8 @@ impl OrchestratedEdit {
                         success: false,
                         new_sha: compute_sha256(""),
                         error: Some(
-                            "Edit conflict: file does not exist but preimage SHA provided".to_string()
+                            "Edit conflict: file does not exist but preimage SHA provided"
+                                .to_string(),
                         ),
                     });
                 }
@@ -253,11 +254,7 @@ pub struct OrchestratedPatch {
 
 impl OrchestratedPatch {
     /// Create a new orchestrated patch
-    pub fn new(
-        repo_root: impl Into<PathBuf>,
-        patch: String,
-        base_commit: String,
-    ) -> Self {
+    pub fn new(repo_root: impl Into<PathBuf>, patch: String, base_commit: String) -> Self {
         Self {
             repo_root: repo_root.into(),
             patch,
@@ -293,11 +290,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let repo_root = temp_dir.path().to_path_buf();
 
-        let edit = OrchestratedEdit::new(
-            &repo_root,
-            "test.txt",
-            "Hello, world!".to_string(),
-        );
+        let edit = OrchestratedEdit::new(&repo_root, "test.txt", "Hello, world!".to_string());
 
         let result = edit.execute().unwrap();
         assert!(result.success);
@@ -324,12 +317,8 @@ mod tests {
         let initial_sha = compute_sha256("Initial content");
 
         // Edit with correct preimage
-        let edit = OrchestratedEdit::new(
-            &repo_root,
-            "test.txt",
-            "Updated content".to_string(),
-        )
-        .with_preimage_sha(&initial_sha);
+        let edit = OrchestratedEdit::new(&repo_root, "test.txt", "Updated content".to_string())
+            .with_preimage_sha(&initial_sha);
 
         let result = edit.execute().unwrap();
         assert!(result.success);
@@ -350,12 +339,8 @@ mod tests {
 
         // Edit with wrong preimage (conflict)
         let wrong_sha = compute_sha256("Wrong content");
-        let edit = OrchestratedEdit::new(
-            &repo_root,
-            "test.txt",
-            "Updated content".to_string(),
-        )
-        .with_preimage_sha(wrong_sha);
+        let edit = OrchestratedEdit::new(&repo_root, "test.txt", "Updated content".to_string())
+            .with_preimage_sha(wrong_sha);
 
         let result = edit.execute().unwrap();
         assert!(!result.success);
@@ -386,4 +371,3 @@ mod tests {
         assert!(repo_root.join("dir/file3.txt").exists());
     }
 }
-

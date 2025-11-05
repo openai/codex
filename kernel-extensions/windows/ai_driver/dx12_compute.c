@@ -2,10 +2,14 @@
  * AI Driver DirectX 12 Compute Integration
  * GPU Statistics via DirectX 12
  * 
+ * Version: 0.3.0 - Best Practices Edition
+ * FIXED: Consistent function signatures, proper initialization
+ * 
  * Alternative to NVAPI for cross-vendor GPU support
  */
 
 #include <ntddk.h>
+#include <ntstrsafe.h>
 
 /* DirectX 12 Adapter Info (simplified) */
 typedef struct _DX12_ADAPTER_INFO {
@@ -28,15 +32,17 @@ static DX12_ADAPTER_INFO g_AdapterInfo = { 0 };
 NTSTATUS
 InitializeDx12(VOID)
 {
+    NTSTATUS status;
+    
     if (g_Dx12Initialized) {
         return STATUS_SUCCESS;
     }
     
-    KdPrint(("AI Driver: DirectX 12 initialization (placeholder)\n"));
+    KdPrint(("AI Driver: DirectX 12 initialization (placeholder mode)\n"));
     
     /* TODO: Query DXGK for adapter information
      * Option 1: Use D3DKMTOpenAdapterFromLuid
-     * Option 2: Query DXGK driver directly
+     * Option 2: Query DXGK driver directly via IOCTLs
      * Option 3: Use WMI/ETW for GPU stats
      */
     
@@ -44,11 +50,17 @@ InitializeDx12(VOID)
     g_AdapterInfo.DedicatedVideoMemory = 10ULL * 1024 * 1024 * 1024;  // 10GB
     g_AdapterInfo.DedicatedSystemMemory = 0;
     g_AdapterInfo.SharedSystemMemory = 16ULL * 1024 * 1024 * 1024;  // 16GB
-    RtlStringCbCopyW(
+    
+    status = RtlStringCbCopyW(
         g_AdapterInfo.Description,
         sizeof(g_AdapterInfo.Description),
         L"NVIDIA GeForce RTX 3080"
     );
+    
+    if (!NT_SUCCESS(status)) {
+        KdPrint(("AI Driver: Failed to copy adapter description: 0x%08X\n", status));
+        /* Non-fatal, continue */
+    }
     
     g_Dx12Initialized = TRUE;
     
@@ -60,10 +72,27 @@ InitializeDx12(VOID)
 }
 
 /*
- * Get DirectX 12 Adapter Info
+ * Cleanup DirectX 12
+ */
+VOID
+CleanupDx12(VOID)
+{
+    if (g_Dx12Initialized) {
+        KdPrint(("AI Driver: DX12 cleanup\n"));
+        g_Dx12Initialized = FALSE;
+        RtlZeroMemory(&g_AdapterInfo, sizeof(DX12_ADAPTER_INFO));
+    }
+}
+
+/* NOTE: The following functions are placeholders for future DX12 integration
+ * Real GPU stats are obtained through gpu_integration.c
+ */
+
+/*
+ * Get DirectX 12 Adapter Info (Placeholder)
  */
 NTSTATUS
-GetDx12AdapterInfo(
+GetDx12AdapterInfoPlaceholder(
     PDX12_ADAPTER_INFO AdapterInfo
 )
 {
@@ -81,10 +110,10 @@ GetDx12AdapterInfo(
 }
 
 /*
- * Query GPU Memory Usage via DXGK
+ * Query GPU Memory Usage via DXGK (Placeholder)
  */
 NTSTATUS
-QueryGpuMemoryUsage(
+QueryGpuMemoryUsagePlaceholder(
     PULONG64 UsedMemory,
     PULONG64 TotalMemory
 )
@@ -109,11 +138,11 @@ QueryGpuMemoryUsage(
 }
 
 /*
- * Optimize VR Rendering
+ * Optimize VR Rendering (Placeholder)
  * Sets GPU to high-performance mode for VR workloads
  */
 NTSTATUS
-OptimizeForVrRendering(
+OptimizeForVrRenderingPlaceholder(
     BOOLEAN Enable
 )
 {
@@ -141,11 +170,11 @@ OptimizeForVrRendering(
 }
 
 /*
- * Get VR Frame Timing Statistics
+ * Get VR Frame Timing Statistics (Placeholder)
  * Measures Motion-to-Photon latency
  */
 NTSTATUS
-GetVrFrameTiming(
+GetVrFrameTimingPlaceholder(
     PFLOAT MotionToPhotonMs,
     PFLOAT FrameTimeMs
 )
@@ -166,17 +195,3 @@ GetVrFrameTiming(
     
     return STATUS_SUCCESS;
 }
-
-/*
- * Cleanup DirectX 12
- */
-VOID
-CleanupDx12(VOID)
-{
-    if (g_Dx12Initialized) {
-        KdPrint(("AI Driver: DX12 cleanup\n"));
-        g_Dx12Initialized = FALSE;
-        RtlZeroMemory(&g_AdapterInfo, sizeof(DX12_ADAPTER_INFO));
-    }
-}
-

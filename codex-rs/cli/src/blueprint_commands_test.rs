@@ -14,7 +14,7 @@ mod tests {
         assert_eq!(parse_bool_flag("no").unwrap(), false);
         assert_eq!(parse_bool_flag("1").unwrap(), true);
         assert_eq!(parse_bool_flag("0").unwrap(), false);
-        
+
         // Invalid values should error
         assert!(parse_bool_flag("maybe").is_err());
     }
@@ -33,13 +33,13 @@ mod tests {
             parse_execution_mode("competition").unwrap(),
             codex_core::blueprint::ExecutionMode::Competition
         );
-        
+
         // Case insensitive
         assert_eq!(
             parse_execution_mode("SINGLE").unwrap(),
             codex_core::blueprint::ExecutionMode::Single
         );
-        
+
         // Invalid values should error
         assert!(parse_execution_mode("invalid").is_err());
     }

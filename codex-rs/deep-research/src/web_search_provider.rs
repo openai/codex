@@ -705,8 +705,6 @@ impl WebSearchProvider {
                 ),
                 relevance_score: 0.92,
             },
-                    
-                
             SearchResult {
                 title: format!("{query} - Stack Overflow"),
                 url: format!(

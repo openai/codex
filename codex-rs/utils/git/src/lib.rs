@@ -16,20 +16,20 @@ pub use apply::extract_paths_from_patch;
 pub use apply::parse_git_apply_output;
 pub use apply::stage_paths;
 pub use errors::GitToolingError;
+pub use ghost_commits::CreateGhostCommitOptions;
 pub use ghost_commits::create_ghost_commit;
 pub use ghost_commits::restore_ghost_commit;
 pub use ghost_commits::restore_to_commit;
-pub use ghost_commits::CreateGhostCommitOptions;
 pub use orchestrated_edit::{
-    compute_sha256, BatchEdit, EditConflict, OrchestratedEdit, OrchestratedEditResult,
-    OrchestratedPatch,
+    BatchEdit, EditConflict, OrchestratedEdit, OrchestratedEditResult, OrchestratedPatch,
+    compute_sha256,
 };
 pub use platform::create_symlink;
-pub use worktree::{MergeResult, Worktree, WorktreeConfig, WorktreeInfo};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
+pub use worktree::{MergeResult, Worktree, WorktreeConfig, WorktreeInfo};
 
 type CommitID = String;
 

@@ -180,11 +180,15 @@ pub async fn run_natural_language_agent(
                 .await
             }
             WebhookServiceKind::Github => {
-                println!("ℹ️ GitHub webhooks require an endpoint and JSON payload. Use `codex webhook github --endpoint <path> --data '<json>'` for full control.");
+                println!(
+                    "ℹ️ GitHub webhooks require an endpoint and JSON payload. Use `codex webhook github --endpoint <path> --data '<json>'` for full control."
+                );
                 Ok(())
             }
             WebhookServiceKind::Custom => {
-                println!("ℹ️ Custom webhooks require a URL and payload. Use `codex webhook custom --url <URL> --data '<json>'` to send a request.");
+                println!(
+                    "ℹ️ Custom webhooks require a URL and payload. Use `codex webhook custom --url <URL> --data '<json>'` to send a request."
+                );
                 Ok(())
             }
         },

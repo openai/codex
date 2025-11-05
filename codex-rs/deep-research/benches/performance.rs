@@ -5,11 +5,11 @@ use codex_deep_research::DeepResearcher;
 use codex_deep_research::DeepResearcherConfig;
 use codex_deep_research::MockProvider;
 use codex_deep_research::ResearchStrategy;
+use criterion::BenchmarkId;
+use criterion::Criterion;
 use criterion::black_box;
 use criterion::criterion_group;
 use criterion::criterion_main;
-use criterion::BenchmarkId;
-use criterion::Criterion;
 use std::sync::Arc;
 use std::time::Duration;
 

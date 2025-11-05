@@ -1,7 +1,7 @@
 use tauri::{
-    menu::{Menu, MenuItem},
-    tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState},
     AppHandle, Manager, Runtime,
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 use tracing::info;
 
@@ -112,4 +112,3 @@ pub fn update_tray_status<R: Runtime>(
     // This can be implemented with app state if needed
     Ok(())
 }
-

@@ -1,5 +1,5 @@
 //! Parallel AI execution orchestration
-//! 
+//!
 //! Executes multiple AI agents (Codex, GeminiCLI, Claudecode) in parallel
 //! for competition-style development with worktree isolation.
 
@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use super::resource_manager::{ResourceGuard, ResourceManager};
 use super::worktree_manager::{WorktreeInfo, WorktreeManager};
+use codex_protocol::config_types::{ReasoningEffort, ReasoningSummary, Verbosity};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
@@ -26,11 +27,29 @@ pub enum AgentType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReasoningConfig {
+    pub effort: ReasoningEffort,
+    pub summary: ReasoningSummary,
+    pub verbosity: Verbosity,
+}
+
+impl Default for ReasoningConfig {
+    fn default() -> Self {
+        Self {
+            effort: ReasoningEffort::default(),
+            summary: ReasoningSummary::default(),
+            verbosity: Verbosity::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentTask {
     pub agent: AgentType,
     pub prompt: String,
     pub worktree_path: Option<String>,
     pub timeout_seconds: Option<u64>,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +83,7 @@ pub struct ParallelOrchestrator {
     resource_manager: Arc<ResourceManager>,
     repo_path: PathBuf,
     worktree_cleanup: Arc<RwLock<Vec<WorktreeInfo>>>,
+    reasoning_config: ReasoningConfig,
 }
 
 impl ParallelOrchestrator {
@@ -77,14 +97,17 @@ impl ParallelOrchestrator {
             resource_manager: Arc::new(ResourceManager::new()),
             repo_path: repo_path.into(),
             worktree_cleanup: Arc::new(RwLock::new(Vec::new())),
+            reasoning_config: ReasoningConfig::default(),
         }
     }
 
+    pub fn with_reasoning_config(mut self, config: ReasoningConfig) -> Self {
+        self.reasoning_config = config;
+        self
+    }
+
     /// Execute multiple AI agents in parallel
-    pub async fn execute_parallel(
-        &self,
-        tasks: Vec<AgentTask>,
-    ) -> Result<Vec<AgentResult>> {
+    pub async fn execute_parallel(&self, tasks: Vec<AgentTask>) -> Result<Vec<AgentResult>> {
         let mut handles: Vec<JoinHandle<AgentResult>> = Vec::new();
         let mut guards: Vec<ResourceGuard> = Vec::new();
 
@@ -97,11 +120,11 @@ impl ParallelOrchestrator {
         // Create worktrees for each agent task
         let worktree_manager = WorktreeManager::new(&self.repo_path)?;
         let mut worktrees: Vec<WorktreeInfo> = Vec::new();
-        
+
         for task in &tasks {
             let task_id = Uuid::new_v4().to_string();
             let agent_name = format!("{:?}", task.agent).to_lowercase();
-            
+
             match worktree_manager.create_worktree(&agent_name, &task_id) {
                 Ok(worktree) => {
                     worktrees.push(worktree);
@@ -142,10 +165,9 @@ impl ParallelOrchestrator {
 
             let states = Arc::clone(&self.agent_states);
             let worktree = worktrees.get(i).cloned();
-            
-            let handle = tokio::spawn(async move {
-                Self::execute_agent(states, task, worktree).await
-            });
+
+            let handle =
+                tokio::spawn(async move { Self::execute_agent(states, task, worktree).await });
 
             handles.push(handle);
         }
@@ -241,40 +263,37 @@ impl ParallelOrchestrator {
         worktree: Option<WorktreeInfo>,
     ) -> Result<String> {
         Self::update_progress(Arc::clone(&states), task.agent, 10.0, "Starting Codex").await;
-        
+
         let default_path = PathBuf::from(".");
         let working_dir = worktree.as_ref().map(|w| &w.path).unwrap_or(&default_path);
-        
+
         Self::update_progress(Arc::clone(&states), task.agent, 30.0, "Executing command").await;
-        
+
         let mut cmd = Command::new("codex");
         cmd.arg("exec")
             .arg(&task.prompt)
             .current_dir(working_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        
+
         // Apply timeout if specified
         let output = if let Some(timeout_secs) = task.timeout_seconds {
-            tokio::time::timeout(
-                tokio::time::Duration::from_secs(timeout_secs),
-                cmd.output(),
-            )
-            .await
-            .context("Codex execution timed out")?
+            tokio::time::timeout(tokio::time::Duration::from_secs(timeout_secs), cmd.output())
+                .await
+                .context("Codex execution timed out")?
         } else {
             cmd.output().await
         }
         .context("Failed to execute codex command")?;
-        
+
         Self::update_progress(Arc::clone(&states), task.agent, 80.0, "Processing output").await;
-        
+
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            
+
             Self::update_progress(Arc::clone(&states), task.agent, 100.0, "Completed").await;
-            
+
             Ok(if !stdout.is_empty() {
                 stdout
             } else if !stderr.is_empty() {
@@ -294,46 +313,43 @@ impl ParallelOrchestrator {
         worktree: Option<WorktreeInfo>,
     ) -> Result<String> {
         Self::update_progress(Arc::clone(&states), task.agent, 10.0, "Starting GeminiCLI").await;
-        
+
         let default_path = PathBuf::from(".");
         let working_dir = worktree.as_ref().map(|w| &w.path).unwrap_or(&default_path);
-        
+
         Self::update_progress(Arc::clone(&states), task.agent, 30.0, "Executing command").await;
-        
+
         // Try gemini-cli first, fall back to gemini
         let gemini_cmd = if which::which("gemini-cli").is_ok() {
             "gemini-cli"
         } else {
             "gemini"
         };
-        
+
         let mut cmd = Command::new(gemini_cmd);
         cmd.arg(&task.prompt)
             .current_dir(working_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        
+
         // Apply timeout if specified
         let output = if let Some(timeout_secs) = task.timeout_seconds {
-            tokio::time::timeout(
-                tokio::time::Duration::from_secs(timeout_secs),
-                cmd.output(),
-            )
-            .await
-            .context("GeminiCLI execution timed out")?
+            tokio::time::timeout(tokio::time::Duration::from_secs(timeout_secs), cmd.output())
+                .await
+                .context("GeminiCLI execution timed out")?
         } else {
             cmd.output().await
         }
         .context("Failed to execute gemini command")?;
-        
+
         Self::update_progress(Arc::clone(&states), task.agent, 80.0, "Processing output").await;
-        
+
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            
+
             Self::update_progress(Arc::clone(&states), task.agent, 100.0, "Completed").await;
-            
+
             Ok(if !stdout.is_empty() {
                 stdout
             } else if !stderr.is_empty() {
@@ -353,46 +369,43 @@ impl ParallelOrchestrator {
         worktree: Option<WorktreeInfo>,
     ) -> Result<String> {
         Self::update_progress(Arc::clone(&states), task.agent, 10.0, "Starting Claudecode").await;
-        
+
         let default_path = PathBuf::from(".");
         let working_dir = worktree.as_ref().map(|w| &w.path).unwrap_or(&default_path);
-        
+
         Self::update_progress(Arc::clone(&states), task.agent, 30.0, "Executing command").await;
-        
+
         // Try claudecode first, fall back to claude
         let claude_cmd = if which::which("claudecode").is_ok() {
             "claudecode"
         } else {
             "claude"
         };
-        
+
         let mut cmd = Command::new(claude_cmd);
         cmd.arg(&task.prompt)
             .current_dir(working_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        
+
         // Apply timeout if specified
         let output = if let Some(timeout_secs) = task.timeout_seconds {
-            tokio::time::timeout(
-                tokio::time::Duration::from_secs(timeout_secs),
-                cmd.output(),
-            )
-            .await
-            .context("Claudecode execution timed out")?
+            tokio::time::timeout(tokio::time::Duration::from_secs(timeout_secs), cmd.output())
+                .await
+                .context("Claudecode execution timed out")?
         } else {
             cmd.output().await
         }
         .context("Failed to execute claude command")?;
-        
+
         Self::update_progress(Arc::clone(&states), task.agent, 80.0, "Processing output").await;
-        
+
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            
+
             Self::update_progress(Arc::clone(&states), task.agent, 100.0, "Completed").await;
-            
+
             Ok(if !stdout.is_empty() {
                 stdout
             } else if !stderr.is_empty() {
@@ -437,19 +450,19 @@ impl ParallelOrchestrator {
     /// Cleanup all worktrees
     async fn cleanup_worktrees(&self) -> Result<()> {
         let worktrees = self.worktree_cleanup.read().await;
-        
+
         if worktrees.is_empty() {
             return Ok(());
         }
-        
+
         let worktree_manager = WorktreeManager::new(&self.repo_path)?;
-        
+
         for worktree in worktrees.iter() {
             if let Err(e) = worktree_manager.remove_worktree(&worktree.name) {
                 tracing::warn!("Failed to cleanup worktree {}: {}", worktree.name, e);
             }
         }
-        
+
         Ok(())
     }
 }
@@ -459,10 +472,10 @@ impl Drop for ParallelOrchestrator {
         // Spawn a task to cleanup worktrees
         let worktree_cleanup = Arc::clone(&self.worktree_cleanup);
         let repo_path = self.repo_path.clone();
-        
+
         tokio::spawn(async move {
             let worktrees = worktree_cleanup.read().await;
-            
+
             if !worktrees.is_empty() {
                 if let Ok(manager) = WorktreeManager::new(&repo_path) {
                     for worktree in worktrees.iter() {
@@ -507,4 +520,3 @@ pub struct ComparisonResult {
     pub fastest_agent: Option<AgentType>,
     pub fastest_time: Option<f64>,
 }
-

@@ -78,7 +78,7 @@ impl GeminiAuthProvider {
         if let Ok(key) = std::env::var("GEMINI_API_KEY") {
             return Ok(key);
         }
-        
+
         if let Ok(key) = std::env::var("GOOGLE_AI_STUDIO_API_KEY") {
             return Ok(key);
         }
@@ -98,11 +98,17 @@ impl GeminiAuthProvider {
         let client_id = std::env::var("GOOGLE_OAUTH_CLIENT_ID")
             .map_err(|_| anyhow!("GOOGLE_OAUTH_CLIENT_ID not set"))?;
 
-        let project = self.config.project.clone()
+        let project = self
+            .config
+            .project
+            .clone()
             .or_else(|| std::env::var("GCP_PROJECT_ID").ok())
             .ok_or_else(|| anyhow!("GCP project ID required for OAuth"))?;
 
-        let region = self.config.region.clone()
+        let region = self
+            .config
+            .region
+            .clone()
             .or_else(|| std::env::var("VERTEX_REGION").ok())
             .unwrap_or_else(|| "us-central1".to_string());
 
@@ -154,8 +160,8 @@ pub fn load_gemini_config(_codex_home: &Path) -> GeminiAuthConfig {
     let mut config = GeminiAuthConfig::default();
 
     // Override from environment
-    if std::env::var("GEMINI_API_KEY").is_ok() 
-        || std::env::var("GOOGLE_AI_STUDIO_API_KEY").is_ok() {
+    if std::env::var("GEMINI_API_KEY").is_ok() || std::env::var("GOOGLE_AI_STUDIO_API_KEY").is_ok()
+    {
         config.mode = CredentialSource::ApiKey;
     }
 
@@ -182,7 +188,7 @@ mod tests {
     fn test_auth_method_selection() {
         let config = GeminiAuthConfig::default();
         let provider = GeminiAuthProvider::new(config);
-        
+
         // Should default to API key mode
         assert_eq!(provider.get_auth_method(), AuthMethod::ApiKey);
     }

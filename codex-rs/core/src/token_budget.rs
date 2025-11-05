@@ -10,7 +10,9 @@ use std::sync::{Arc, RwLock};
 
 /// Helper to convert lock poisoned errors
 fn lock_poisoned_err<T>(_: T) -> anyhow::Error {
-    anyhow!("Token budget tracker lock is poisoned, indicating a panic occurred while holding the lock. This typically requires restarting the process.")
+    anyhow!(
+        "Token budget tracker lock is poisoned, indicating a panic occurred while holding the lock. This typically requires restarting the process."
+    )
 }
 
 /// Token usage entry for an agent
@@ -182,14 +184,16 @@ impl TokenBudgetTracker {
         if inner.config.total_budget == 0 {
             Ok(None) // Unlimited
         } else {
-            Ok(Some(inner.config.total_budget.saturating_sub(inner.total_used)))
+            Ok(Some(
+                inner.config.total_budget.saturating_sub(inner.total_used),
+            ))
         }
     }
 
     /// Get budget status summary
     pub fn get_status(&self) -> Result<BudgetStatus> {
         let inner = self.inner.read().map_err(lock_poisoned_err)?;
-        
+
         let usage_percentage = if inner.config.total_budget > 0 {
             Some((inner.total_used as f64 / inner.config.total_budget as f64) * 100.0)
         } else {
@@ -241,13 +245,10 @@ mod tests {
     #[test]
     fn test_basic_tracking() {
         let tracker = TokenBudgetTracker::with_defaults();
-        
-        tracker.report_usage(
-            "agent1".to_string(),
-            "gpt-4".to_string(),
-            100,
-            50,
-        ).unwrap();
+
+        tracker
+            .report_usage("agent1".to_string(), "gpt-4".to_string(), 100, 50)
+            .unwrap();
 
         assert_eq!(tracker.get_total_used().unwrap(), 150);
         assert_eq!(tracker.get_agent_usage("agent1").unwrap(), 150);
@@ -263,20 +264,12 @@ mod tests {
         let tracker = TokenBudgetTracker::new(config);
 
         // Should succeed
-        tracker.report_usage(
-            "agent1".to_string(),
-            "gpt-4".to_string(),
-            40,
-            10,
-        ).unwrap();
+        tracker
+            .report_usage("agent1".to_string(), "gpt-4".to_string(), 40, 10)
+            .unwrap();
 
         // Should fail (would exceed budget)
-        let result = tracker.report_usage(
-            "agent2".to_string(),
-            "gpt-4".to_string(),
-            60,
-            0,
-        );
+        let result = tracker.report_usage("agent2".to_string(), "gpt-4".to_string(), 60, 0);
         assert!(result.is_err());
     }
 
@@ -293,33 +286,22 @@ mod tests {
         let tracker = TokenBudgetTracker::new(config);
 
         // Should succeed
-        tracker.report_usage(
-            "agent1".to_string(),
-            "gpt-4".to_string(),
-            40,
-            10,
-        ).unwrap();
+        tracker
+            .report_usage("agent1".to_string(), "gpt-4".to_string(), 40, 10)
+            .unwrap();
 
         // Should fail (would exceed agent limit)
-        let result = tracker.report_usage(
-            "agent1".to_string(),
-            "gpt-4".to_string(),
-            60,
-            0,
-        );
+        let result = tracker.report_usage("agent1".to_string(), "gpt-4".to_string(), 60, 0);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_reset() {
         let tracker = TokenBudgetTracker::with_defaults();
-        
-        tracker.report_usage(
-            "agent1".to_string(),
-            "gpt-4".to_string(),
-            100,
-            50,
-        ).unwrap();
+
+        tracker
+            .report_usage("agent1".to_string(), "gpt-4".to_string(), 100, 50)
+            .unwrap();
 
         tracker.reset().unwrap();
         assert_eq!(tracker.get_total_used().unwrap(), 0);

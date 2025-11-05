@@ -4,9 +4,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use codex_core::blueprint::{
-    BlueprintState, ExecutionMode, BlueprintBlock,
-};
+use codex_core::blueprint::{BlueprintBlock, BlueprintState, ExecutionMode};
 use std::path::PathBuf;
 
 /// Blueprint Mode commands
@@ -117,12 +115,10 @@ fn parse_bool_flag(s: &str) -> Result<bool, String> {
 
 /// Run blueprint CLI command
 pub async fn run_blueprint_command(cli: BlueprintCli) -> Result<()> {
-    let home_dir = dirs::home_dir()
-        .context("Failed to get home directory")?;
+    let home_dir = dirs::home_dir().context("Failed to get home directory")?;
     let blueprint_dir = home_dir.join(".codex").join("blueprints");
-    
-    std::fs::create_dir_all(&blueprint_dir)
-        .context("Failed to create blueprints directory")?;
+
+    std::fs::create_dir_all(&blueprint_dir).context("Failed to create blueprints directory")?;
 
     match cli.command {
         BlueprintCommand::Toggle { enabled } => {
@@ -174,7 +170,7 @@ pub async fn run_blueprint_command(cli: BlueprintCli) -> Result<()> {
 
 fn toggle_blueprint_mode(enabled: bool, blueprint_dir: &PathBuf) -> Result<()> {
     let state_file = blueprint_dir.join("mode_state.json");
-    
+
     let state = serde_json::json!({
         "enabled": enabled,
         "timestamp": chrono::Utc::now().to_rfc3339(),
@@ -202,7 +198,11 @@ fn create_blueprint(
     blueprint_dir: &PathBuf,
 ) -> Result<()> {
     let now = chrono::Utc::now();
-    let id = format!("bp-{}-{}", now.format("%Y%m%d-%H%M%S"), slug::slugify(&title));
+    let id = format!(
+        "bp-{}-{}",
+        now.format("%Y%m%d-%H%M%S"),
+        slug::slugify(&title)
+    );
 
     let blueprint = BlueprintBlock {
         id: id.clone(),
@@ -231,16 +231,16 @@ fn create_blueprint(
     };
 
     let blueprint_file = blueprint_dir.join(format!("{}.json", id));
-    std::fs::write(
-        &blueprint_file,
-        serde_json::to_string_pretty(&blueprint)?,
-    )
-    .context("Failed to write blueprint")?;
+    std::fs::write(&blueprint_file, serde_json::to_string_pretty(&blueprint)?)
+        .context("Failed to write blueprint")?;
 
     println!("✅ Blueprint created: {}", id);
     println!("📋 Status: {:?}", blueprint.state);
     println!("🎯 Mode: {}", mode);
-    println!("💰 Budget: {} tokens, {} minutes", budget_tokens, budget_time);
+    println!(
+        "💰 Budget: {} tokens, {} minutes",
+        budget_tokens, budget_time
+    );
     println!();
     println!("Next steps:");
     println!("  1. Review: codex blueprint status {}", id);
@@ -251,8 +251,8 @@ fn create_blueprint(
 }
 
 fn list_blueprints(state_filter: Option<String>, blueprint_dir: &PathBuf) -> Result<()> {
-    let entries = std::fs::read_dir(blueprint_dir)
-        .context("Failed to read blueprints directory")?;
+    let entries =
+        std::fs::read_dir(blueprint_dir).context("Failed to read blueprints directory")?;
 
     let mut blueprints: Vec<BlueprintBlock> = Vec::new();
 
@@ -289,17 +289,17 @@ fn list_blueprints(state_filter: Option<String>, blueprint_dir: &PathBuf) -> Res
     println!();
 
     for bp in blueprints {
-    let status_icon = match bp.state {
-        BlueprintState::Inactive => "⚪",
-        BlueprintState::Drafting => "📝",
-        BlueprintState::Pending { .. } => "⏳",
-        BlueprintState::Approved { .. } => "✅",
-        BlueprintState::Rejected { .. } => "❌",
-        BlueprintState::Superseded { .. } => "🔄",
-        BlueprintState::Executing { .. } => "🚀",
-        BlueprintState::Completed { .. } => "🎉",
-        BlueprintState::Failed { .. } => "💥",
-    };
+        let status_icon = match bp.state {
+            BlueprintState::Inactive => "⚪",
+            BlueprintState::Drafting => "📝",
+            BlueprintState::Pending { .. } => "⏳",
+            BlueprintState::Approved { .. } => "✅",
+            BlueprintState::Rejected { .. } => "❌",
+            BlueprintState::Superseded { .. } => "🔄",
+            BlueprintState::Executing { .. } => "🚀",
+            BlueprintState::Completed { .. } => "🎉",
+            BlueprintState::Failed { .. } => "💥",
+        };
 
         println!(
             "{} {} | {} | {}",
@@ -308,8 +308,12 @@ fn list_blueprints(state_filter: Option<String>, blueprint_dir: &PathBuf) -> Res
             format!("{:?}", bp.state),
             bp.title
         );
-        println!("   Created: {} | Mode: {}", bp.created_at.format("%Y-%m-%d %H:%M"), bp.mode);
-        
+        println!(
+            "   Created: {} | Mode: {}",
+            bp.created_at.format("%Y-%m-%d %H:%M"),
+            bp.mode
+        );
+
         // Show approval/rejection info if available
         match &bp.state {
             BlueprintState::Approved { approved_by, .. } => {
@@ -320,7 +324,7 @@ fn list_blueprints(state_filter: Option<String>, blueprint_dir: &PathBuf) -> Res
             }
             _ => {}
         }
-        
+
         println!();
     }
 
@@ -337,14 +341,14 @@ fn approve_blueprint(blueprint_id: &str, blueprint_dir: &PathBuf) -> Result<()> 
     let content = std::fs::read_to_string(&blueprint_file)?;
     let mut blueprint: BlueprintBlock = serde_json::from_str(&content)?;
 
-    blueprint.state = blueprint.state.clone().approve("cli-user".to_string())
+    blueprint.state = blueprint
+        .state
+        .clone()
+        .approve("cli-user".to_string())
         .context("Failed to approve blueprint")?;
     blueprint.updated_at = chrono::Utc::now();
 
-    std::fs::write(
-        &blueprint_file,
-        serde_json::to_string_pretty(&blueprint)?,
-    )?;
+    std::fs::write(&blueprint_file, serde_json::to_string_pretty(&blueprint)?)?;
 
     println!("✅ Blueprint {} approved", blueprint_id);
     println!("🚀 Ready for execution");
@@ -364,14 +368,14 @@ fn reject_blueprint(blueprint_id: &str, reason: &str, blueprint_dir: &PathBuf) -
     let content = std::fs::read_to_string(&blueprint_file)?;
     let mut blueprint: BlueprintBlock = serde_json::from_str(&content)?;
 
-    blueprint.state = blueprint.state.clone().reject(reason.to_string(), Some("cli-user".to_string()))
+    blueprint.state = blueprint
+        .state
+        .clone()
+        .reject(reason.to_string(), Some("cli-user".to_string()))
         .context("Failed to reject blueprint")?;
     blueprint.updated_at = chrono::Utc::now();
 
-    std::fs::write(
-        &blueprint_file,
-        serde_json::to_string_pretty(&blueprint)?,
-    )?;
+    std::fs::write(&blueprint_file, serde_json::to_string_pretty(&blueprint)?)?;
 
     println!("❌ Blueprint {} rejected", blueprint_id);
     println!("📝 Reason: {}", reason);
@@ -396,8 +400,7 @@ fn export_blueprint(
     let content = std::fs::read_to_string(&blueprint_file)?;
     let blueprint: BlueprintBlock = serde_json::from_str(&content)?;
 
-    std::fs::create_dir_all(export_path)
-        .context("Failed to create export directory")?;
+    std::fs::create_dir_all(export_path).context("Failed to create export directory")?;
 
     let export_markdown = format == "md" || format == "both";
     let export_json = format == "json" || format == "both";
@@ -496,7 +499,12 @@ fn generate_markdown(bp: &BlueprintBlock) -> String {
         if bp.eval.tests.is_empty() {
             "None specified".to_string()
         } else {
-            bp.eval.tests.iter().map(|t| format!("- {}", t)).collect::<Vec<_>>().join("\n")
+            bp.eval
+                .tests
+                .iter()
+                .map(|t| format!("- {}", t))
+                .collect::<Vec<_>>()
+                .join("\n")
         },
         if bp.eval.metrics.is_empty() {
             "None specified".to_string()
@@ -539,35 +547,69 @@ fn get_blueprint_status(blueprint_id: &str, blueprint_dir: &PathBuf) -> Result<(
     println!("ID: {}", blueprint.id);
     println!("Status: {}", blueprint.state);
     println!("Mode: {}", blueprint.mode);
-    println!("Created: {}", blueprint.created_at.format("%Y-%m-%d %H:%M:%S"));
-    println!("Updated: {}", blueprint.updated_at.format("%Y-%m-%d %H:%M:%S"));
+    println!(
+        "Created: {}",
+        blueprint.created_at.format("%Y-%m-%d %H:%M:%S")
+    );
+    println!(
+        "Updated: {}",
+        blueprint.updated_at.format("%Y-%m-%d %H:%M:%S")
+    );
     println!();
     println!("Goal: {}", blueprint.goal);
     println!();
     println!("Budget:");
-    println!("  Tokens: {}", blueprint.budget.session_cap.unwrap_or(100000));
+    println!(
+        "  Tokens: {}",
+        blueprint.budget.session_cap.unwrap_or(100000)
+    );
     println!("  Time: {} minutes", blueprint.budget.cap_min.unwrap_or(30));
     println!();
 
     match &blueprint.state {
-        BlueprintState::Approved { approved_by, approved_at } => {
-            println!("Approved by: {} at {}", approved_by, approved_at.format("%Y-%m-%d %H:%M:%S"));
+        BlueprintState::Approved {
+            approved_by,
+            approved_at,
+        } => {
+            println!(
+                "Approved by: {} at {}",
+                approved_by,
+                approved_at.format("%Y-%m-%d %H:%M:%S")
+            );
         }
-        BlueprintState::Rejected { reason, rejected_by, rejected_at } => {
+        BlueprintState::Rejected {
+            reason,
+            rejected_by,
+            rejected_at,
+        } => {
             println!("Rejection reason: {}", reason);
             if let Some(by) = rejected_by {
-                println!("Rejected by: {} at {}", by, rejected_at.format("%Y-%m-%d %H:%M:%S"));
+                println!(
+                    "Rejected by: {} at {}",
+                    by,
+                    rejected_at.format("%Y-%m-%d %H:%M:%S")
+                );
             }
         }
-        BlueprintState::Executing { execution_id, started_at } => {
+        BlueprintState::Executing {
+            execution_id,
+            started_at,
+        } => {
             println!("Execution ID: {}", execution_id);
             println!("Started at: {}", started_at.format("%Y-%m-%d %H:%M:%S"));
         }
-        BlueprintState::Completed { execution_id, completed_at } => {
+        BlueprintState::Completed {
+            execution_id,
+            completed_at,
+        } => {
             println!("Execution ID: {}", execution_id);
             println!("Completed at: {}", completed_at.format("%Y-%m-%d %H:%M:%S"));
         }
-        BlueprintState::Failed { execution_id, error, failed_at } => {
+        BlueprintState::Failed {
+            execution_id,
+            error,
+            failed_at,
+        } => {
             println!("Execution ID: {}", execution_id);
             println!("Failed at: {}", failed_at.format("%Y-%m-%d %H:%M:%S"));
             println!("Error: {}", error);
@@ -584,7 +626,10 @@ fn parse_execution_mode(s: &str) -> Result<ExecutionMode, String> {
         "single" => Ok(ExecutionMode::Single),
         "orchestrated" => Ok(ExecutionMode::Orchestrated),
         "competition" => Ok(ExecutionMode::Competition),
-        _ => Err(format!("Invalid execution mode: {}. Valid values: single, orchestrated, competition", s)),
+        _ => Err(format!(
+            "Invalid execution mode: {}. Valid values: single, orchestrated, competition",
+            s
+        )),
     }
 }
 
@@ -592,7 +637,7 @@ async fn execute_blueprint(blueprint_id: &str, blueprint_dir: &PathBuf) -> Resul
     use codex_core::blueprint::{BlueprintExecutor, ExecutionEvent};
     use codex_core::orchestration::BlueprintOrchestrator;
     use std::sync::Arc;
-    
+
     let blueprint_file = blueprint_dir.join(format!("{}.json", blueprint_id));
 
     if !blueprint_file.exists() {
@@ -610,7 +655,7 @@ async fn execute_blueprint(blueprint_id: &str, blueprint_dir: &PathBuf) -> Resul
     // Note: This is a simplified execution for CLI
     // Full execution requires BlueprintOrchestrator which needs AgentRuntime
     // For now, we just update the state and show a message
-    
+
     if !blueprint.state.can_execute() {
         anyhow::bail!(
             "Blueprint is not approved. Current state: {}. Please approve it first with: codex blueprint approve {}",
@@ -624,13 +669,21 @@ async fn execute_blueprint(blueprint_id: &str, blueprint_dir: &PathBuf) -> Resul
     println!();
     println!("Simulated execution steps:");
     for (i, work_item) in blueprint.work_items.iter().enumerate() {
-        println!("  {}. {} (files: {})", i + 1, work_item.name, work_item.files_touched.join(", "));
+        println!(
+            "  {}. {} (files: {})",
+            i + 1,
+            work_item.name,
+            work_item.files_touched.join(", ")
+        );
     }
     println!();
     println!("🎉 Execution simulation complete");
     println!();
     println!("Next steps:");
-    println!("  1. Check execution logs: codex blueprint executions --blueprint-id {}", blueprint_id);
+    println!(
+        "  1. Check execution logs: codex blueprint executions --blueprint-id {}",
+        blueprint_id
+    );
     println!("  2. If needed, rollback: codex blueprint rollback <execution-id>");
 
     Ok(())
@@ -667,8 +720,8 @@ async fn list_executions(blueprint_id: Option<String>, blueprint_dir: &PathBuf) 
     println!("📋 Execution History");
     println!();
 
-    let entries = std::fs::read_dir(&executions_dir)
-        .context("Failed to read executions directory")?;
+    let entries =
+        std::fs::read_dir(&executions_dir).context("Failed to read executions directory")?;
 
     let mut count = 0;
     for entry in entries {
@@ -685,9 +738,18 @@ async fn list_executions(blueprint_id: Option<String>, blueprint_dir: &PathBuf) 
                     }
 
                     count += 1;
-                    let exec_id = result.get("execution_id").and_then(|v| v.as_str()).unwrap_or("unknown");
-                    let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let started = result.get("started_at").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    let exec_id = result
+                        .get("execution_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let success = result
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let started = result
+                        .get("started_at")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
 
                     let icon = if success { "✅" } else { "❌" };
                     println!("{} {}", icon, exec_id);

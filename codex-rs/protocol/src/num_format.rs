@@ -15,11 +15,14 @@ fn make_en_us_formatter() -> DecimalFormatter {
         // Fallback to root locale if en-US fails (should never happen)
         "und".parse().unwrap()
     });
-    DecimalFormatter::try_new(loc.into(), DecimalFormatterOptions::default())
-        .unwrap_or_else(|_| {
-            // Fallback to a minimal formatter
-            DecimalFormatter::try_new("und".parse::<Locale>().unwrap().into(), DecimalFormatterOptions::default()).unwrap()
-        })
+    DecimalFormatter::try_new(loc.into(), DecimalFormatterOptions::default()).unwrap_or_else(|_| {
+        // Fallback to a minimal formatter
+        DecimalFormatter::try_new(
+            "und".parse::<Locale>().unwrap().into(),
+            DecimalFormatterOptions::default(),
+        )
+        .unwrap()
+    })
 }
 
 fn formatter() -> Rc<DecimalFormatter> {

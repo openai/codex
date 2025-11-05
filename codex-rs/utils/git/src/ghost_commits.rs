@@ -7,6 +7,8 @@ use std::path::PathBuf;
 
 use tempfile::Builder;
 
+use crate::GhostCommit;
+use crate::GitToolingError;
 use crate::operations::apply_repo_prefix_to_force_include;
 use crate::operations::ensure_git_repository;
 use crate::operations::normalize_relative_path;
@@ -16,8 +18,6 @@ use crate::operations::resolve_repository_root;
 use crate::operations::run_git_for_status;
 use crate::operations::run_git_for_stdout;
 use crate::operations::run_git_for_stdout_all;
-use crate::GhostCommit;
-use crate::GitToolingError;
 
 /// Default commit message used for ghost commits when none is provided.
 const DEFAULT_COMMIT_MESSAGE: &str = "codex snapshot";

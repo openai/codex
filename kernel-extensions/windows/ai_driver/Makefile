@@ -13,6 +13,7 @@ DRIVERTYPE=WDM
 
 # Source files
 SOURCES=ai_driver.c \
+        ai_driver_ioctl.c \
         ioctl_handlers.c \
         gpu_integration.c \
         nvapi_bridge.c \

@@ -1,7 +1,6 @@
 /// HMAC-SHA256 authentication for orchestrator RPC
 ///
 /// Provides secure local authentication using shared secret stored in .codex/secret
-
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -25,16 +24,14 @@ impl HmacAuthenticator {
     /// Load or generate secret from .codex/secret
     pub fn new(codex_dir: &Path) -> Result<Self> {
         let secret_path = codex_dir.join(SECRET_FILENAME);
-        
+
         let secret = if secret_path.exists() {
-            fs::read(&secret_path)
-                .context("Failed to read secret file")?
+            fs::read(&secret_path).context("Failed to read secret file")?
         } else {
             // Generate new secret
             let secret = Self::generate_secret();
-            fs::write(&secret_path, &secret)
-                .context("Failed to write secret file")?;
-            
+            fs::write(&secret_path, &secret).context("Failed to write secret file")?;
+
             // Set restrictive permissions (Unix only)
             #[cfg(unix)]
             {
@@ -43,7 +40,7 @@ impl HmacAuthenticator {
                 perms.set_mode(0o600);
                 fs::set_permissions(&secret_path, perms)?;
             }
-            
+
             tracing::info!("Generated new orchestrator secret");
             secret
         };
@@ -64,7 +61,7 @@ impl HmacAuthenticator {
         hasher.update(&self.secret);
         hasher.update(message);
         hasher.update(&timestamp.to_le_bytes());
-        
+
         let result = hasher.finalize();
         base64::engine::general_purpose::STANDARD.encode(&result[..])
     }
@@ -76,7 +73,7 @@ impl HmacAuthenticator {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        
+
         let time_diff = if now > claimed_timestamp {
             now - claimed_timestamp
         } else {
@@ -115,9 +112,9 @@ impl AuthHeader {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        
+
         let signature = authenticator.sign(message, timestamp);
-        
+
         Self {
             timestamp,
             signature,
@@ -143,16 +140,16 @@ mod tests {
 
         // First creation should generate secret
         let auth1 = HmacAuthenticator::new(&codex_dir).unwrap();
-        
+
         // Second load should read same secret
         let auth2 = HmacAuthenticator::new(&codex_dir).unwrap();
-        
+
         let message = b"test message";
         let timestamp = 1234567890;
-        
+
         let sig1 = auth1.sign(message, timestamp);
         let sig2 = auth2.sign(message, timestamp);
-        
+
         assert_eq!(sig1, sig2, "Same secret should produce same signature");
     }
 
@@ -164,14 +161,14 @@ mod tests {
 
         let auth = HmacAuthenticator::new(&codex_dir).unwrap();
         let message = b"test message";
-        
+
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         let signature = auth.sign(message, timestamp);
-        
+
         // Should verify successfully
         auth.verify(message, &signature, timestamp).unwrap();
     }
@@ -185,9 +182,9 @@ mod tests {
         let auth = HmacAuthenticator::new(&codex_dir).unwrap();
         let message = b"test message";
         let timestamp = 1234567890;
-        
+
         let wrong_sig = "wrong_signature";
-        
+
         let result = auth.verify(message, wrong_sig, timestamp);
         assert!(result.is_err());
     }
@@ -200,10 +197,10 @@ mod tests {
 
         let auth = HmacAuthenticator::new(&codex_dir).unwrap();
         let message = b"test message";
-        
+
         let old_timestamp = 1000000; // Very old timestamp
         let signature = auth.sign(message, old_timestamp);
-        
+
         let result = auth.verify(message, &signature, old_timestamp);
         assert!(result.is_err(), "Should reject old timestamp");
     }
@@ -216,11 +213,10 @@ mod tests {
 
         let auth = HmacAuthenticator::new(&codex_dir).unwrap();
         let message = b"test message";
-        
+
         let header = AuthHeader::new(&auth, message);
-        
+
         // Should verify successfully
         header.verify(&auth, message).unwrap();
     }
 }
-

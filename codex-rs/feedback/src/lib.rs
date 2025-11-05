@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::anyhow;
 use codex_protocol::ConversationId;
 use tracing_subscriber::fmt::writer::MakeWriter;
 
@@ -180,6 +180,8 @@ impl CodexLogSnapshot {
         use std::str::FromStr;
         use std::sync::Arc;
 
+        use sentry::Client;
+        use sentry::ClientOptions;
         use sentry::protocol::Attachment;
         use sentry::protocol::Envelope;
         use sentry::protocol::EnvelopeItem;
@@ -187,8 +189,6 @@ impl CodexLogSnapshot {
         use sentry::protocol::Level;
         use sentry::transports::DefaultTransportFactory;
         use sentry::types::Dsn;
-        use sentry::Client;
-        use sentry::ClientOptions;
 
         // Build Sentry client
         let client = Client::from_config(ClientOptions {

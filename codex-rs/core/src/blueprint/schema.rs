@@ -140,58 +140,58 @@ pub struct ResearchBlock {
 pub struct BlueprintBlock {
     /// Unique blueprint ID (timestamp-based)
     pub id: String,
-    
+
     /// Blueprint title
     pub title: String,
-    
+
     /// High-level goal
     pub goal: String,
-    
+
     /// Assumptions made
     pub assumptions: Vec<String>,
-    
+
     /// Clarifying questions
     pub clarifying_questions: Vec<String>,
-    
+
     /// Approach description
     pub approach: String,
-    
+
     /// Execution mode
     pub mode: ExecutionMode,
-    
+
     /// Work items to complete
     pub work_items: Vec<WorkItem>,
-    
+
     /// Identified risks
     pub risks: Vec<Risk>,
-    
+
     /// Evaluation criteria
     pub eval: EvalCriteria,
-    
+
     /// Budget constraints
     pub budget: Budget,
-    
+
     /// Rollback plan
     pub rollback: String,
-    
+
     /// Artifact paths (generated files)
     pub artifacts: Vec<String>,
-    
+
     /// Optional research results
     pub research: Option<ResearchBlock>,
-    
+
     /// Current state
     pub state: super::state::BlueprintState,
-    
+
     /// Whether approval is required
     pub need_approval: bool,
-    
+
     /// Creation timestamp
     pub created_at: DateTime<Utc>,
-    
+
     /// Last updated timestamp
     pub updated_at: DateTime<Utc>,
-    
+
     /// User who created the blueprint
     pub created_by: Option<String>,
 }
@@ -200,9 +200,12 @@ impl BlueprintBlock {
     /// Create a new blueprint from a goal
     pub fn new(goal: String, title: String) -> Self {
         let now = Utc::now();
-        let id = format!("{}_{}", now.format("%Y-%m-%dT%H:%M:%SZ"), 
-                        title.to_lowercase().replace(' ', "-"));
-        
+        let id = format!(
+            "{}_{}",
+            now.format("%Y-%m-%dT%H:%M:%SZ"),
+            title.to_lowercase().replace(' ', "-")
+        );
+
         Self {
             id,
             title,
@@ -225,29 +228,29 @@ impl BlueprintBlock {
             created_by: None,
         }
     }
-    
+
     /// Update the timestamp
     pub fn touch(&mut self) {
         self.updated_at = Utc::now();
     }
-    
+
     /// Check if blueprint can be executed
     pub fn can_execute(&self) -> bool {
         matches!(self.state, super::state::BlueprintState::Approved { .. })
     }
-    
+
     /// Add a work item
     pub fn add_work_item(&mut self, item: WorkItem) {
         self.work_items.push(item);
         self.touch();
     }
-    
+
     /// Add a risk
     pub fn add_risk(&mut self, risk: Risk) {
         self.risks.push(risk);
         self.touch();
     }
-    
+
     /// Set research results
     pub fn set_research(&mut self, research: ResearchBlock) {
         self.research = Some(research);
@@ -261,24 +264,24 @@ mod tests {
 
     #[test]
     fn test_blueprint_creation() {
-        let bp = BlueprintBlock::new(
-            "Add telemetry".to_string(),
-            "feat-telemetry".to_string(),
-        );
-        
+        let bp = BlueprintBlock::new("Add telemetry".to_string(), "feat-telemetry".to_string());
+
         assert!(bp.id.contains("feat-telemetry"));
         assert_eq!(bp.goal, "Add telemetry");
-        assert!(matches!(bp.state, super::super::state::BlueprintState::Drafting));
+        assert!(matches!(
+            bp.state,
+            super::super::state::BlueprintState::Drafting
+        ));
         assert!(!bp.can_execute());
     }
-    
+
     #[test]
     fn test_execution_mode_display() {
         assert_eq!(ExecutionMode::Single.to_string(), "single");
         assert_eq!(ExecutionMode::Orchestrated.to_string(), "orchestrated");
         assert_eq!(ExecutionMode::Competition.to_string(), "competition");
     }
-    
+
     #[test]
     fn test_budget_defaults() {
         let budget = Budget::default();
@@ -286,4 +289,3 @@ mod tests {
         assert_eq!(budget.session_cap, Some(100000));
     }
 }
-

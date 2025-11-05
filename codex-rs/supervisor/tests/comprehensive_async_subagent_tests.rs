@@ -576,8 +576,10 @@ async fn test_error_handling_and_recovery() {
         .iter()
         .find(|n| n.notification_type == NotificationType::TaskFailed);
     assert!(failure_notification.is_some());
-    assert!(failure_notification
-        .unwrap()
-        .content
-        .contains("Unexpected error"));
+    assert!(
+        failure_notification
+            .unwrap()
+            .content
+            .contains("Unexpected error")
+    );
 }

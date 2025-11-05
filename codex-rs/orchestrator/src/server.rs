@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tokio::time::sleep;
 
 /// Idempotency cache entry
@@ -62,9 +62,7 @@ impl Default for OrchestratorConfig {
         Self {
             queue_capacity: 1024,
             transport_config: TransportConfig::default(),
-            codex_dir: dirs::home_dir()
-                .unwrap_or_default()
-                .join(".codex"),
+            codex_dir: dirs::home_dir().unwrap_or_default().join(".codex"),
             total_token_budget: 100_000,
             warning_threshold: 80_000,
             per_agent_limit: 20_000,
@@ -102,22 +100,18 @@ impl OrchestratorServer {
     /// Create a new orchestrator server
     pub async fn new(config: OrchestratorConfig) -> Result<Self> {
         // Create transport
-        let transport = crate::transport::create_transport(
-            config.transport_config.clone(),
-            &config.codex_dir,
-        )
-        .await
-        .context("Failed to create transport")?;
+        let transport =
+            crate::transport::create_transport(config.transport_config.clone(), &config.codex_dir)
+                .await
+                .context("Failed to create transport")?;
 
         // Load or create authentication manager
         let auth_manager = Arc::new(
-            AuthManager::new(&config.codex_dir)
-                .context("Failed to initialize auth manager")?,
+            AuthManager::new(&config.codex_dir).context("Failed to initialize auth manager")?,
         );
 
         // Create single-writer queue
-        let (write_queue_tx, write_queue_rx) =
-            mpsc::channel::<WriteRequest>(config.queue_capacity);
+        let (write_queue_tx, write_queue_rx) = mpsc::channel::<WriteRequest>(config.queue_capacity);
 
         let token_budget = Arc::new(RwLock::new(TokenBudget {
             total_budget: config.total_token_budget,
@@ -264,7 +258,9 @@ impl OrchestratorServer {
             // Check idempotency cache
             if let Some(idem_key) = &request.idem_key {
                 let cache = idempotency_cache.read().await;
-                if let Some(entry) = cache.get(idem_key) && entry.expires_at > SystemTime::now() {
+                if let Some(entry) = cache.get(idem_key)
+                    && entry.expires_at > SystemTime::now()
+                {
                     // Return cached response
                     let response_data = serde_json::to_vec(&entry.response)?;
                     conn.write_message(&response_data).await?;
@@ -414,7 +410,10 @@ impl OrchestratorServer {
 
                 RpcResponse {
                     id: request.id.clone(),
-                    result: Some(serde_json::to_value(AgentListResponse { agents: agent_list }).expect("AgentListResponse serialization failed")),
+                    result: Some(
+                        serde_json::to_value(AgentListResponse { agents: agent_list })
+                            .expect("AgentListResponse serialization failed"),
+                    ),
                     error: None,
                 }
             }
@@ -561,10 +560,8 @@ impl OrchestratorServer {
                     Ok(params) => {
                         let mut budget = token_budget.write().await;
                         budget.used += params.tokens_used;
-                        *budget
-                            .per_agent_usage
-                            .entry(params.agent_id)
-                            .or_insert(0) += params.tokens_used;
+                        *budget.per_agent_usage.entry(params.agent_id).or_insert(0) +=
+                            params.tokens_used;
 
                         let remaining = budget.total_budget.saturating_sub(budget.used);
 
@@ -773,9 +770,7 @@ impl OrchestratorServer {
     }
 
     /// Cleanup expired idempotency cache entries
-    async fn cleanup_idempotency_cache(
-        cache: &Arc<RwLock<HashMap<String, IdempotencyEntry>>>,
-    ) {
+    async fn cleanup_idempotency_cache(cache: &Arc<RwLock<HashMap<String, IdempotencyEntry>>>) {
         let mut cache = cache.write().await;
         let now = SystemTime::now();
         cache.retain(|_, entry| entry.expires_at > now);
@@ -838,14 +833,20 @@ mod tests {
 
         // Simulate usage
         budget.used += 50_000;
-        *budget.per_agent_usage.entry("agent-1".to_string()).or_insert(0) += 50_000;
+        *budget
+            .per_agent_usage
+            .entry("agent-1".to_string())
+            .or_insert(0) += 50_000;
 
         assert_eq!(budget.used, 50_000);
         assert_eq!(budget.per_agent_usage.get("agent-1"), Some(&50_000));
 
         // Add more usage
         budget.used += 30_000;
-        *budget.per_agent_usage.entry("agent-2".to_string()).or_insert(0) += 30_000;
+        *budget
+            .per_agent_usage
+            .entry("agent-2".to_string())
+            .or_insert(0) += 30_000;
 
         assert_eq!(budget.used, 80_000);
         assert_eq!(budget.per_agent_usage.get("agent-2"), Some(&30_000));
@@ -855,7 +856,7 @@ mod tests {
     #[tokio::test]
     async fn test_agent_info_tracking() {
         let mut agents = HashMap::new();
-        
+
         let agent1 = AgentInfo {
             agent_id: "agent-1".to_string(),
             agent_type: "code-reviewer".to_string(),
@@ -864,7 +865,7 @@ mod tests {
         };
 
         agents.insert("agent-1".to_string(), agent1.clone());
-        
+
         assert_eq!(agents.len(), 1);
         assert_eq!(agents.get("agent-1").unwrap().agent_id, "agent-1");
         assert_eq!(agents.get("agent-1").unwrap().status, "active");
@@ -932,7 +933,7 @@ mod tests {
     #[tokio::test]
     async fn test_task_queue_capacity() {
         let (tx, _rx) = async_channel::bounded(10);
-        
+
         // Queue should accept items up to capacity
         for i in 0..10 {
             let request = RpcRequest {
@@ -962,4 +963,3 @@ mod tests {
         assert_eq!(ERROR_CONFLICT, 409);
     }
 }
-

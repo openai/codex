@@ -15,10 +15,7 @@ pub enum GitToolingError {
         stderr: String,
     },
     #[error("git command `{command}` failed: {stderr}")]
-    GitCommandFailed {
-        command: String,
-        stderr: String,
-    },
+    GitCommandFailed { command: String, stderr: String },
     #[error("git command `{command}` produced non-UTF-8 output")]
     GitOutputUtf8 {
         command: String,

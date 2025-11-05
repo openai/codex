@@ -7,7 +7,7 @@ pub async fn analyze_commit_quality(
     commit_sha: String,
 ) -> Result<CommitQualityScore, String> {
     let analyzer = CommitQualityAnalyzer::new();
-    
+
     analyzer
         .analyze_commit(&repo_path, &commit_sha)
         .await
@@ -20,10 +20,9 @@ pub async fn analyze_commits_batch(
     commit_shas: Vec<String>,
 ) -> Result<Vec<CommitQualityScore>, String> {
     let analyzer = CommitQualityAnalyzer::new();
-    
+
     analyzer
         .analyze_commits_batch(&repo_path, &commit_shas)
         .await
         .map_err(|e| e.to_string())
 }
-

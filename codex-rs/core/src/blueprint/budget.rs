@@ -5,8 +5,8 @@
 use super::schema::Budget;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
@@ -23,19 +23,19 @@ pub struct BudgetTracker {
 pub struct BudgetUsage {
     /// Tokens used so far
     pub tokens_used: u64,
-    
+
     /// Elapsed time in seconds
     pub elapsed_secs: f64,
-    
+
     /// Token budget remaining
     pub tokens_remaining: Option<u64>,
-    
+
     /// Time budget remaining in seconds
     pub time_remaining_secs: Option<f64>,
-    
+
     /// Whether token budget is exceeded
     pub tokens_exceeded: bool,
-    
+
     /// Whether time budget is exceeded
     pub time_exceeded: bool,
 }
@@ -45,10 +45,10 @@ pub struct BudgetUsage {
 pub enum BudgetError {
     #[error("Token budget exceeded: used {used}, cap {cap}")]
     TokensExceeded { used: u64, cap: u64 },
-    
+
     #[error("Time budget exceeded: elapsed {elapsed:.1}min, cap {cap}min")]
     TimeExceeded { elapsed: f64, cap: f64 },
-    
+
     #[error("Step token budget exceeded: used {used}, cap {cap}")]
     StepTokensExceeded { used: u64, cap: u64 },
 }
@@ -62,11 +62,11 @@ impl BudgetTracker {
             start_time: Instant::now(),
         }
     }
-    
+
     /// Record tokens used in this step
     pub fn record_tokens(&self, tokens: u64) -> Result<()> {
         let total = self.tokens_used.fetch_add(tokens, Ordering::SeqCst) + tokens;
-        
+
         // Check step limit
         if let Some(max_step) = self.budget.max_step {
             if tokens > max_step {
@@ -77,7 +77,7 @@ impl BudgetTracker {
                 .into());
             }
         }
-        
+
         // Check session limit
         if let Some(session_cap) = self.budget.session_cap {
             if total > session_cap {
@@ -88,37 +88,37 @@ impl BudgetTracker {
                 .into());
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Get current budget usage
     pub fn usage(&self) -> BudgetUsage {
         let tokens_used = self.tokens_used.load(Ordering::SeqCst);
         let elapsed = self.start_time.elapsed();
         let elapsed_secs = elapsed.as_secs_f64();
         let elapsed_mins = elapsed_secs / 60.0;
-        
+
         let tokens_remaining = self
             .budget
             .session_cap
             .map(|cap| cap.saturating_sub(tokens_used));
-        
+
         let time_remaining_secs = self
             .budget
             .cap_min
             .map(|cap| (cap as f64 * 60.0) - elapsed_secs);
-        
+
         let tokens_exceeded = self
             .budget
             .session_cap
             .map_or(false, |cap| tokens_used > cap);
-        
+
         let time_exceeded = self
             .budget
             .cap_min
             .map_or(false, |cap| elapsed_mins > cap as f64);
-        
+
         BudgetUsage {
             tokens_used,
             elapsed_secs,
@@ -128,11 +128,11 @@ impl BudgetTracker {
             time_exceeded,
         }
     }
-    
+
     /// Check if execution should continue
     pub fn check(&self) -> Result<()> {
         let usage = self.usage();
-        
+
         if usage.tokens_exceeded {
             if let Some(cap) = self.budget.session_cap {
                 return Err(BudgetError::TokensExceeded {
@@ -142,7 +142,7 @@ impl BudgetTracker {
                 .into());
             }
         }
-        
+
         if usage.time_exceeded {
             if let Some(cap) = self.budget.cap_min {
                 return Err(BudgetError::TimeExceeded {
@@ -152,46 +152,43 @@ impl BudgetTracker {
                 .into());
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Get elapsed time
     pub fn elapsed(&self) -> Duration {
         self.start_time.elapsed()
     }
-    
+
     /// Get tokens used
     pub fn tokens_used(&self) -> u64 {
         self.tokens_used.load(Ordering::SeqCst)
     }
-    
+
     /// Check if within estimate
     pub fn within_estimate(&self) -> bool {
         let elapsed_mins = self.start_time.elapsed().as_secs_f64() / 60.0;
-        
+
         if let Some(estimate) = self.budget.estimate_min {
             elapsed_mins <= estimate as f64
         } else {
             true
         }
     }
-    
+
     /// Get budget utilization percentage (0.0-1.0+)
     pub fn utilization(&self) -> (Option<f64>, Option<f64>) {
         let tokens_used = self.tokens_used.load(Ordering::SeqCst);
         let elapsed_mins = self.start_time.elapsed().as_secs_f64() / 60.0;
-        
+
         let token_utilization = self
             .budget
             .session_cap
             .map(|cap| tokens_used as f64 / cap as f64);
-        
-        let time_utilization = self
-            .budget
-            .cap_min
-            .map(|cap| elapsed_mins / cap as f64);
-        
+
+        let time_utilization = self.budget.cap_min.map(|cap| elapsed_mins / cap as f64);
+
         (token_utilization, time_utilization)
     }
 }
@@ -199,23 +196,23 @@ impl BudgetTracker {
 /// Format budget usage for display
 pub fn format_usage(usage: &BudgetUsage) -> String {
     let mut parts = Vec::new();
-    
+
     parts.push(format!("Tokens: {}", usage.tokens_used));
     if let Some(remaining) = usage.tokens_remaining {
         parts.push(format!("({} remaining)", remaining));
     }
-    
+
     let elapsed_mins = usage.elapsed_secs / 60.0;
     parts.push(format!("Time: {:.1}min", elapsed_mins));
     if let Some(remaining_secs) = usage.time_remaining_secs {
         let remaining_mins = remaining_secs / 60.0;
         parts.push(format!("({:.1}min remaining)", remaining_mins));
     }
-    
+
     if usage.tokens_exceeded || usage.time_exceeded {
         parts.push("⚠️ BUDGET EXCEEDED".to_string());
     }
-    
+
     parts.join(" | ")
 }
 
@@ -233,16 +230,16 @@ mod tests {
             estimate_min: Some(10),
             cap_min: Some(20),
         };
-        
+
         let tracker = BudgetTracker::new(budget);
-        
+
         // Record tokens
         tracker.record_tokens(500).unwrap();
         assert_eq!(tracker.tokens_used(), 500);
-        
+
         tracker.record_tokens(300).unwrap();
         assert_eq!(tracker.tokens_used(), 800);
-        
+
         let usage = tracker.usage();
         assert_eq!(usage.tokens_used, 800);
         assert_eq!(usage.tokens_remaining, Some(4200));
@@ -257,12 +254,12 @@ mod tests {
             estimate_min: None,
             cap_min: None,
         };
-        
+
         let tracker = BudgetTracker::new(budget);
-        
+
         tracker.record_tokens(1000).unwrap();
         tracker.record_tokens(900).unwrap();
-        
+
         // Should exceed budget
         let result = tracker.record_tokens(200);
         assert!(result.is_err());
@@ -280,9 +277,9 @@ mod tests {
             estimate_min: None,
             cap_min: None,
         };
-        
+
         let tracker = BudgetTracker::new(budget);
-        
+
         // Single step exceeds limit
         let result = tracker.record_tokens(150);
         assert!(result.is_err());
@@ -296,12 +293,12 @@ mod tests {
             estimate_min: Some(1),
             cap_min: Some(2),
         };
-        
+
         let tracker = BudgetTracker::new(budget);
-        
+
         // Sleep a bit
         thread::sleep(StdDuration::from_millis(100));
-        
+
         let usage = tracker.usage();
         assert!(usage.elapsed_secs > 0.0);
         assert!(!usage.time_exceeded);
@@ -315,10 +312,10 @@ mod tests {
             estimate_min: None,
             cap_min: Some(10),
         };
-        
+
         let tracker = BudgetTracker::new(budget);
         tracker.record_tokens(500).unwrap();
-        
+
         let (token_util, time_util) = tracker.utilization();
         assert_eq!(token_util, Some(0.5));
         assert!(time_util.unwrap() < 1.0); // Should be well under time budget
@@ -334,11 +331,10 @@ mod tests {
             tokens_exceeded: false,
             time_exceeded: false,
         };
-        
+
         let formatted = format_usage(&usage);
         assert!(formatted.contains("1500"));
         assert!(formatted.contains("2.0min"));
         assert!(!formatted.contains("EXCEEDED"));
     }
 }
-

@@ -133,33 +133,35 @@ mod windows_impl {
         quoted
     }
 
-    unsafe fn setup_stdio_pipes() -> io::Result<PipeHandles> { unsafe {
-        let mut in_r: HANDLE = 0;
-        let mut in_w: HANDLE = 0;
-        let mut out_r: HANDLE = 0;
-        let mut out_w: HANDLE = 0;
-        let mut err_r: HANDLE = 0;
-        let mut err_w: HANDLE = 0;
-        if CreatePipe(&mut in_r, &mut in_w, ptr::null_mut(), 0) == 0 {
-            return Err(io::Error::from_raw_os_error(GetLastError() as i32));
+    unsafe fn setup_stdio_pipes() -> io::Result<PipeHandles> {
+        unsafe {
+            let mut in_r: HANDLE = 0;
+            let mut in_w: HANDLE = 0;
+            let mut out_r: HANDLE = 0;
+            let mut out_w: HANDLE = 0;
+            let mut err_r: HANDLE = 0;
+            let mut err_w: HANDLE = 0;
+            if CreatePipe(&mut in_r, &mut in_w, ptr::null_mut(), 0) == 0 {
+                return Err(io::Error::from_raw_os_error(GetLastError() as i32));
+            }
+            if CreatePipe(&mut out_r, &mut out_w, ptr::null_mut(), 0) == 0 {
+                return Err(io::Error::from_raw_os_error(GetLastError() as i32));
+            }
+            if CreatePipe(&mut err_r, &mut err_w, ptr::null_mut(), 0) == 0 {
+                return Err(io::Error::from_raw_os_error(GetLastError() as i32));
+            }
+            if SetHandleInformation(in_r, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
+                return Err(io::Error::from_raw_os_error(GetLastError() as i32));
+            }
+            if SetHandleInformation(out_w, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
+                return Err(io::Error::from_raw_os_error(GetLastError() as i32));
+            }
+            if SetHandleInformation(err_w, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
+                return Err(io::Error::from_raw_os_error(GetLastError() as i32));
+            }
+            Ok(((in_r, in_w), (out_r, out_w), (err_r, err_w)))
         }
-        if CreatePipe(&mut out_r, &mut out_w, ptr::null_mut(), 0) == 0 {
-            return Err(io::Error::from_raw_os_error(GetLastError() as i32));
-        }
-        if CreatePipe(&mut err_r, &mut err_w, ptr::null_mut(), 0) == 0 {
-            return Err(io::Error::from_raw_os_error(GetLastError() as i32));
-        }
-        if SetHandleInformation(in_r, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
-            return Err(io::Error::from_raw_os_error(GetLastError() as i32));
-        }
-        if SetHandleInformation(out_w, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
-            return Err(io::Error::from_raw_os_error(GetLastError() as i32));
-        }
-        if SetHandleInformation(err_w, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
-            return Err(io::Error::from_raw_os_error(GetLastError() as i32));
-        }
-        Ok(((in_r, in_w), (out_r, out_w), (err_r, err_w)))
-    }}
+    }
 
     pub struct CaptureResult {
         pub exit_code: i32,

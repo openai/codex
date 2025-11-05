@@ -45,11 +45,10 @@ impl RepositoryLock {
     /// Create a new lock manager for the given repository
     pub fn new<P: AsRef<Path>>(repo_root: P) -> Result<Self> {
         let codex_dir = repo_root.as_ref().join(".codex");
-        fs::create_dir_all(&codex_dir)
-            .context("Failed to create .codex directory")?;
-        
+        fs::create_dir_all(&codex_dir).context("Failed to create .codex directory")?;
+
         let lock_path = codex_dir.join(LOCK_FILENAME);
-        
+
         Ok(Self {
             lock_path,
             codex_dir,
@@ -76,7 +75,7 @@ impl RepositoryLock {
 
         let metadata = self.create_lock_metadata(ttl_secs)?;
         self.write_lock(&metadata)?;
-        
+
         Ok(metadata)
     }
 
@@ -89,7 +88,7 @@ impl RepositoryLock {
         // Verify we own the lock before releasing
         let existing = self.read_lock()?;
         let current_pid = process::id();
-        
+
         if existing.pid != current_pid {
             return Err(anyhow!(
                 "Cannot release lock owned by PID {} (current PID: {})",
@@ -98,9 +97,8 @@ impl RepositoryLock {
             ));
         }
 
-        fs::remove_file(&self.lock_path)
-            .context("Failed to remove lock file")?;
-        
+        fs::remove_file(&self.lock_path).context("Failed to remove lock file")?;
+
         Ok(())
     }
 
@@ -110,9 +108,8 @@ impl RepositoryLock {
             return Ok(());
         }
 
-        fs::remove_file(&self.lock_path)
-            .context("Failed to force remove lock file")?;
-        
+        fs::remove_file(&self.lock_path).context("Failed to force remove lock file")?;
+
         tracing::warn!("Lock forcibly removed");
         Ok(())
     }
@@ -139,19 +136,16 @@ impl RepositoryLock {
     // Private helper methods
 
     fn create_lock_metadata(&self, ttl_secs: Option<u64>) -> Result<LockMetadata> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_secs();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
-        let hostname = hostname::get()
-            .ok()
-            .and_then(|h| h.into_string().ok());
+        let hostname = hostname::get().ok().and_then(|h| h.into_string().ok());
 
         #[cfg(unix)]
         // SAFETY: libc::getuid() has no preconditions and cannot fail, so it is safe to call.
         let uid = Some(unsafe { libc::getuid() });
 
-        let repo_path = self.codex_dir
+        let repo_path = self
+            .codex_dir
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_string_lossy()
@@ -172,7 +166,7 @@ impl RepositoryLock {
 
     fn write_lock(&self, metadata: &LockMetadata) -> Result<()> {
         let json = serde_json::to_string_pretty(metadata)?;
-        
+
         #[cfg(unix)]
         {
             // Use O_EXCL for atomic creation on Unix
@@ -191,7 +185,7 @@ impl RepositoryLock {
                         .mode(0o600)
                         .open(&self.lock_path)
                 })?;
-            
+
             file.write_all(json.as_bytes())?;
             file.sync_all()?;
         }
@@ -203,7 +197,7 @@ impl RepositoryLock {
                 .create(true)
                 .truncate(true)
                 .open(&self.lock_path)?;
-            
+
             file.write_all(json.as_bytes())?;
             file.sync_all()?;
         }
@@ -215,10 +209,10 @@ impl RepositoryLock {
         let mut file = File::open(&self.lock_path)?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
-        
-        let metadata: LockMetadata = serde_json::from_str(&contents)
-            .context("Failed to parse lock file")?;
-        
+
+        let metadata: LockMetadata =
+            serde_json::from_str(&contents).context("Failed to parse lock file")?;
+
         Ok(metadata)
     }
 
@@ -234,7 +228,7 @@ impl RepositoryLock {
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            
+
             if now > expires_at {
                 return false;
             }

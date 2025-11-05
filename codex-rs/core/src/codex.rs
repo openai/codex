@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
+use crate::AuthManager;
 use crate::agents::AgentRuntime;
 use crate::async_subagent_integration::AsyncSubAgentIntegration;
-use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
@@ -600,10 +600,14 @@ impl Session {
             otel_event_manager.clone(),
             session_configuration.provider.clone(),
             conversation_id,
+            config.model_reasoning_effort.unwrap_or_default(),
+            config.model_reasoning_summary,
+            config.model_verbosity.unwrap_or_default(),
         ));
 
         // Initialize async subagent integration
-        let async_subagent_integration = Arc::new(AsyncSubAgentIntegration::new(agent_runtime.clone()));
+        let async_subagent_integration =
+            Arc::new(AsyncSubAgentIntegration::new(agent_runtime.clone()));
 
         let services = SessionServices {
             mcp_connection_manager,

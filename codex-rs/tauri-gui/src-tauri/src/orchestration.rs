@@ -5,7 +5,7 @@ use codex_core::orchestration::resource_manager::{ResourceCapacity, SystemStats}
 use codex_core::orchestration::worktree_manager::{WorktreeInfo, WorktreeManager};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{command, State};
+use tauri::{State, command};
 use tokio::sync::RwLock;
 
 pub struct OrchestrationState {
@@ -94,7 +94,7 @@ pub async fn get_resource_capacity(
 ) -> Result<ResourceCapacity, String> {
     let orchestrator = state.orchestration.orchestrator.read().await;
     let resource_manager = orchestrator.get_resource_manager();
-    
+
     Ok(resource_manager.get_capacity().await)
 }
 
@@ -104,10 +104,9 @@ pub async fn get_system_stats(
 ) -> Result<SystemStats, String> {
     let orchestrator = state.orchestration.orchestrator.read().await;
     let resource_manager = orchestrator.get_resource_manager();
-    
+
     resource_manager
         .get_system_stats()
         .await
         .map_err(|e| e.to_string())
 }
-

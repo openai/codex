@@ -18,8 +18,7 @@ pub use executor::{BlueprintExecutor, ExecutionEvent, ExecutionResult, TestResul
 pub use manager::{BlueprintManager, ManagerError};
 pub use persist::BlueprintPersister;
 pub use policy::{
-    ApprovalRole, BlueprintPolicy, PermissionTier, PolicyEnforcer, PolicyError,
-    PrivilegedOperation,
+    ApprovalRole, BlueprintPolicy, PermissionTier, PolicyEnforcer, PolicyError, PrivilegedOperation,
 };
 pub use research_integration::{ResearchApprovalDialog, ResearchIntegration, ResearchRequest};
 pub use schema::{
@@ -27,4 +26,3 @@ pub use schema::{
     WorkItem,
 };
 pub use state::{BlueprintState, StateTransitionError};
-

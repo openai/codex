@@ -2,16 +2,45 @@
 ///
 /// Tests the complete flow: delegate → execute → artifacts → report
 use codex_core::agents::AgentRuntime;
-/// End-to-End tests for Sub-Agent system
-///
-/// Tests the complete flow: delegate → execute → artifacts → report
 use codex_core::agents::AgentStatus;
+use codex_core::config::Config;
+use codex_core::AuthManager;
+use codex_otel::otel_event_manager::OtelEventManager;
+use codex_protocol::ConversationId;
+use codex_protocol::config_types::{ReasoningEffort, ReasoningSummary, Verbosity};
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::fs;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
+
+// Test helper to create AgentRuntime with minimal config
+fn create_test_runtime(workspace_dir: PathBuf, budget: usize) -> AgentRuntime {
+    let config = Arc::new(Config::load_from_disk_or_default().unwrap());
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        false,
+        config.cli_auth_credentials_store_mode,
+    );
+    let otel_manager = OtelEventManager::new_noop();
+    let conversation_id = ConversationId::new();
+    
+    AgentRuntime::new(
+        workspace_dir,
+        budget,
+        config.clone(),
+        Some(Arc::clone(&auth_manager)),
+        otel_manager,
+        config.model_provider.clone(),
+        conversation_id,
+        ReasoningEffort::default(),
+        ReasoningSummary::default(),
+        Verbosity::default(),
+    )
+}
 
 #[tokio::test]
 #[ignore] // E2E test - run with: cargo test --ignored
@@ -50,7 +79,7 @@ artifacts:
     fs::write(agents_dir.join("test-gen.yaml"), agent_yaml).unwrap();
 
     // Create runtime with budget
-    let runtime = AgentRuntime::new(temp_dir.path().to_path_buf(), 20000);
+    let runtime = create_test_runtime(temp_dir.path().to_path_buf(), 20000);
 
     // Delegate task
     let mut inputs = HashMap::new();
@@ -124,7 +153,7 @@ artifacts:
 
     fs::write(agents_dir.join("researcher.yaml"), agent_yaml).unwrap();
 
-    let runtime = AgentRuntime::new(temp_dir.path().to_path_buf(), 30000);
+    let runtime = create_test_runtime(temp_dir.path().to_path_buf(), 30000);
 
     // ⚡ Add 30 second timeout
     let result = timeout(
@@ -182,7 +211,7 @@ artifacts:
     fs::write(agents_dir.join("agent1.yaml"), agent1_yaml).unwrap();
     fs::write(agents_dir.join("agent2.yaml"), agent2_yaml).unwrap();
 
-    let runtime = AgentRuntime::new(temp_dir.path().to_path_buf(), 15000);
+    let runtime = create_test_runtime(temp_dir.path().to_path_buf(), 15000);
 
     // Execute agents in parallel with timeout
     let task1 = runtime.delegate("agent1", "Task 1", HashMap::new(), Some(5000), None);
@@ -227,7 +256,7 @@ artifacts:
     fs::write(agents_dir.join("budget-test.yaml"), agent_yaml).unwrap();
 
     // Very low total budget
-    let runtime = AgentRuntime::new(temp_dir.path().to_path_buf(), 500);
+    let runtime = create_test_runtime(temp_dir.path().to_path_buf(), 500);
 
     // ⚡ Add 30 second timeout
     let result = timeout(
