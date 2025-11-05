@@ -1956,10 +1956,7 @@ impl ChatWidget {
         for (k, v) in std::env::vars() {
             env_map.insert(k, v);
         }
-        match codex_windows_sandbox::preflight_audit_everyone_writable(
-            &self.config.cwd,
-            &env_map,
-        ) {
+        match codex_windows_sandbox::preflight_audit_everyone_writable(&self.config.cwd, &env_map) {
             Ok(()) => false,
             Err(_) => true,
         }
@@ -2030,17 +2027,13 @@ impl ChatWidget {
     }
 
     #[cfg(target_os = "windows")]
-    pub(crate) fn open_world_writable_warning_confirmation(
-        &mut self,
-        preset: ApprovalPreset,
-    ) {
+    pub(crate) fn open_world_writable_warning_confirmation(&mut self, preset: ApprovalPreset) {
         let approval = preset.approval;
         let sandbox = preset.sandbox;
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let title_line = Line::from("Auto mode has unprotected directories").bold();
         let info_line = Line::from(vec![
-            "Some important directories on this system are world-writable. "
-                .into(),
+            "Some important directories on this system are world-writable. ".into(),
             "The Windows sandbox cannot protect writes to these locations in Auto mode."
                 .fg(Color::Red),
         ]);
@@ -2083,9 +2076,7 @@ impl ChatWidget {
             },
             SelectionItem {
                 name: "Continue and don't warn again".to_string(),
-                description: Some(
-                    "Enable Auto mode and remember this choice".to_string(),
-                ),
+                description: Some("Enable Auto mode and remember this choice".to_string()),
                 actions: accept_and_remember_actions,
                 dismiss_on_select: true,
                 ..Default::default()

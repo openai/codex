@@ -197,9 +197,10 @@ impl App {
                         .is_err()
                     {
                         // Use the built-in Auto preset for labels and to drive actions, if present.
-                        if let Some(preset) = codex_common::approval_presets::builtin_approval_presets()
-                            .into_iter()
-                            .find(|p| p.id == "auto")
+                        if let Some(preset) =
+                            codex_common::approval_presets::builtin_approval_presets()
+                                .into_iter()
+                                .find(|p| p.id == "auto")
                         {
                             tx.send(AppEvent::OpenWorldWritableWarningConfirmation { preset });
                         }
@@ -489,11 +490,14 @@ impl App {
                             .is_err()
                             {
                                 // Use the built-in Auto preset to drive the confirmation, if present.
-                                if let Some(preset) = codex_common::approval_presets::builtin_approval_presets()
-                                    .into_iter()
-                                    .find(|p| p.id == "auto")
+                                if let Some(preset) =
+                                    codex_common::approval_presets::builtin_approval_presets()
+                                        .into_iter()
+                                        .find(|p| p.id == "auto")
                                 {
-                                    tx.send(AppEvent::OpenWorldWritableWarningConfirmation { preset });
+                                    tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
+                                        preset,
+                                    });
                                 }
                             }
                         });
