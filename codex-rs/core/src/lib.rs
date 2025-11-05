@@ -90,6 +90,7 @@ pub mod token_budget;
 mod tools;
 pub mod turn_diff_tracker;
 pub mod windows_ai_integration;
+pub mod hybrid_acceleration;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::INTERACTIVE_SESSION_SOURCES;
 pub use rollout::RolloutRecorder;

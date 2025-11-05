@@ -36,7 +36,6 @@ members = [
     "stdio-to-uds",
     "otel",
     "gui",
-    "tauri-gui/src-tauri",          # Tauri GUI with VR/AR support
     "tui",
     "utils/git",
     "utils/cache",
@@ -48,6 +47,7 @@ members = [
     "utils/tokenizer",
     "tauri-gui/src-tauri",          # Tauri GUI with VR/AR support
     "windows-ai",                   # Windows 11 AI API integration
+    "cuda-runtime",                 # CUDA GPU acceleration
 ]
 resolver = "2"
 

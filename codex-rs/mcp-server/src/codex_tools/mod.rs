@@ -11,6 +11,9 @@ mod grep;
 mod read_file;
 mod shell;
 
+#[cfg(feature = "cuda")]
+pub mod cuda;
+
 /// Codex MCP tool definitions for sub-agents
 #[derive(Debug, Clone)]
 pub struct CodexMcpTool {
@@ -27,13 +30,51 @@ impl CodexMcpTool {
 
     /// Get all tools (including write/shell)
     pub fn all_tools() -> Vec<Self> {
-        vec![
+        let mut tools = vec![
             Self::read_file(),
             Self::grep(),
             Self::codebase_search(),
             Self::apply_patch(),
             Self::shell(),
-        ]
+        ];
+        
+        #[cfg(feature = "cuda")]
+        {
+            tools.push(Self::cuda_execute());
+        }
+        
+        tools
+    }
+    
+    /// CUDA GPU acceleration tool
+    #[cfg(feature = "cuda")]
+    pub fn cuda_execute() -> Self {
+        use serde_json::json;
+        
+        Self {
+            name: "codex_cuda_execute".to_string(),
+            description: "Execute GPU-accelerated computation with CUDA".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": ["vec_add", "mat_mul", "custom"],
+                        "description": "CUDA operation type"
+                    },
+                    "input_data": {
+                        "type": "array",
+                        "items": { "type": "number" },
+                        "description": "Input data for computation"
+                    },
+                    "custom_code": {
+                        "type": "string",
+                        "description": "Custom CUDA kernel code (for 'custom' operation)"
+                    }
+                },
+                "required": ["operation", "input_data"]
+            }),
+        }
     }
 }
 

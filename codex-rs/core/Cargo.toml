@@ -107,7 +107,7 @@ uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 wildmatch = { workspace = true }
 codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
-codex_windows_ai = { package = "codex-windows-ai", path = "../windows-ai" }
+# codex_windows_ai = { package = "codex-windows-ai", path = "../windows-ai" }  # Experimental - disabled
 
 
 [target.'cfg(target_os = "linux")'.dependencies]

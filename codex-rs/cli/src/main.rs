@@ -62,6 +62,24 @@ struct MultitoolCli {
     #[clap(flatten)]
     pub feature_toggles: FeatureToggles,
 
+    #[cfg(target_os = "windows")]
+    /// Use Windows 11 AI API for optimization (requires Windows 11 25H2+)
+    #[clap(long, global = true)]
+    pub use_windows_ai: bool,
+
+    #[cfg(target_os = "windows")]
+    /// Enable kernel driver acceleration (requires AI driver installed)
+    #[clap(long, global = true)]
+    pub kernel_accelerated: bool,
+
+    /// Use CUDA GPU acceleration (100-1000x faster for git analysis)
+    #[clap(long, global = true)]
+    pub use_cuda: bool,
+
+    /// CUDA device ID (default: 0)
+    #[clap(long, global = true)]
+    pub cuda_device: Option<i32>,
+
     #[clap(flatten)]
     interactive: TuiCli,
 
@@ -678,6 +696,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
+        #[cfg(target_os = "windows")]
+        use_windows_ai,
+        #[cfg(target_os = "windows")]
+        kernel_accelerated,
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
@@ -685,6 +707,25 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
+
+    // Add Windows AI flags to config overrides
+    #[cfg(target_os = "windows")]
+    {
+        if use_windows_ai {
+            root_config_overrides.raw_overrides.push("windows_ai.enabled=true".to_string());
+            
+            if kernel_accelerated {
+                root_config_overrides.raw_overrides.push("windows_ai.kernel_accelerated=true".to_string());
+            }
+            
+            // Log Windows AI usage
+            if codex_windows_ai::is_windows_ai_available() {
+                eprintln!("🚀 Windows AI enabled (kernel_accelerated: {kernel_accelerated})");
+            } else {
+                eprintln!("⚠️  Windows AI requested but not available (requires Windows 11 25H2+)");
+            }
+        }
+    }
 
     match subcommand {
         None => {

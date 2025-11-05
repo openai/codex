@@ -1,0 +1,29 @@
+[package]
+authors = ["zapabob"]
+description = "CUDA Runtime integration for Codex - GPU acceleration for AI inference and git analysis"
+edition = "2024"
+license = "Apache-2.0"
+name = "codex-cuda-runtime"
+version = "0.1.0"
+
+[dependencies]
+# Rust-CUDA ecosystem (https://github.com/Rust-GPU/Rust-CUDA)
+cust = { version = "0.3", optional = true }
+
+# Workspace dependencies
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[features]
+cublas = ["cuda"] # cuBLAS support for matrix operations
+cuda = ["cust"]   # Enable CUDA support (requires CUDA Toolkit)
+cufft = ["cuda"]  # cuFFT support for FFT operations
+default = []
+
+[[bench]]
+harness = false
+name = "git_analysis_bench"

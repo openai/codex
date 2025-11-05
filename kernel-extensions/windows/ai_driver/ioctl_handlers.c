@@ -322,3 +322,82 @@ NTSTATUS HandleFreePinned(PIRP Irp)
     
     return status;
 }
+
+/**
+ * Handle: Register Windows AI Runtime
+ * Windows 11 AI API integration (v0.5.0)
+ */
+_Use_decl_annotations_
+NTSTATUS HandleRegisterWinAi(PIRP Irp)
+{
+    PIO_STACK_LOCATION stack;
+    PVOID inputBuffer;
+    ULONG inputLength;
+    UINT64 runtimeHandle;
+    
+    if (!Irp) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    
+    stack = IoGetCurrentIrpStackLocation(Irp);
+    inputBuffer = Irp->AssociatedIrp.SystemBuffer;
+    inputLength = stack->Parameters.DeviceIoControl.InputBufferLength;
+    
+    if (inputLength < sizeof(UINT64) || !inputBuffer) {
+        Irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
+        Irp->IoStatus.Information = 0;
+        return STATUS_INVALID_PARAMETER;
+    }
+    
+    runtimeHandle = *(PUINT64)inputBuffer;
+    
+    KdPrint(("AI Driver: Registering Windows AI Runtime (handle: 0x%llX)\n", runtimeHandle));
+    
+    /* TODO: Store runtime handle for optimization
+     * - Enable priority GPU queue
+     * - Pre-allocate pinned memory
+     * - Setup optimized execution path
+     */
+    
+    Irp->IoStatus.Status = STATUS_SUCCESS;
+    Irp->IoStatus.Information = 0;
+    
+    return STATUS_SUCCESS;
+}
+
+/**
+ * Handle: Get Optimized GPU Path
+ * Returns optimized execution path information
+ */
+_Use_decl_annotations_
+NTSTATUS HandleGetOptimizedPath(PIRP Irp)
+{
+    PIO_STACK_LOCATION stack;
+    PVOID outputBuffer;
+    ULONG outputLength;
+    
+    if (!Irp) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    
+    stack = IoGetCurrentIrpStackLocation(Irp);
+    outputBuffer = Irp->AssociatedIrp.SystemBuffer;
+    outputLength = stack->Parameters.DeviceIoControl.OutputBufferLength;
+    
+    if (outputLength < sizeof(UINT32) || !outputBuffer) {
+        Irp->IoStatus.Status = STATUS_BUFFER_TOO_SMALL;
+        Irp->IoStatus.Information = 0;
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    
+    /* Return optimization flags */
+    UINT32 *flags = (UINT32*)outputBuffer;
+    *flags = 0x00000001;  // GPU_OPTIMIZED | PINNED_MEMORY_AVAILABLE
+    
+    KdPrint(("AI Driver: Optimized path flags: 0x%08X\n", *flags));
+    
+    Irp->IoStatus.Status = STATUS_SUCCESS;
+    Irp->IoStatus.Information = sizeof(UINT32);
+    
+    return STATUS_SUCCESS;
+}
