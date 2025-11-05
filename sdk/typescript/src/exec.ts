@@ -22,7 +22,7 @@ export type CodexExecArgs = {
   skipGitRepoCheck?: boolean;
   // --output-schema
   outputSchemaFile?: string;
-  // -c model_reasoning_effort
+  // --config model_reasoning_effort
   modelReasoningEffort?: ModelReasoningEffort;
 };
 
