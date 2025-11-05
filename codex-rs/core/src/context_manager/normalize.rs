@@ -125,10 +125,23 @@ pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItem>) {
 
     items.retain(|item| match item {
         ResponseItem::FunctionCallOutput { call_id, .. } => {
-            function_call_ids.contains(call_id) || local_shell_call_ids.contains(call_id)
+            let has_match =
+                function_call_ids.contains(call_id) || local_shell_call_ids.contains(call_id);
+            if !has_match {
+                error_or_panic(format!(
+                    "Orphan function call output for call id: {call_id}"
+                ));
+            }
+            has_match
         }
         ResponseItem::CustomToolCallOutput { call_id, .. } => {
-            custom_tool_call_ids.contains(call_id)
+            let has_match = custom_tool_call_ids.contains(call_id);
+            if !has_match {
+                error_or_panic(format!(
+                    "Orphan custom tool call output for call id: {call_id}"
+                ));
+            }
+            has_match
         }
         _ => true,
     });
@@ -147,10 +160,15 @@ pub(crate) fn remove_corresponding_for(items: &mut Vec<ResponseItem>, item: &Res
             });
         }
         ResponseItem::FunctionCallOutput { call_id, .. } => {
-            remove_first_matching(
-                items,
-                |i| matches!(i, ResponseItem::FunctionCall { call_id: existing, .. } if existing == call_id),
-            );
+            if let Some(pos) = items.iter().position(|i| {
+                matches!(i, ResponseItem::FunctionCall { call_id: existing, .. } if existing == call_id)
+            }) {
+                items.remove(pos);
+            } else if let Some(pos) = items.iter().position(|i| {
+                matches!(i, ResponseItem::LocalShellCall { call_id: Some(existing), .. } if existing == call_id)
+            }) {
+                items.remove(pos);
+            }
         }
         ResponseItem::CustomToolCall { call_id, .. } => {
             remove_first_matching(items, |i| {
