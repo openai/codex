@@ -2,5 +2,5 @@
 source: tui/src/chatwidget/tests.rs
 expression: exec_blob
 ---
-• Ran sleep 1
+• Ran: sleep 1
   └ (no output)

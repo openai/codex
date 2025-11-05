@@ -2,9 +2,9 @@
 source: tui/src/history_cell.rs
 expression: rendered
 ---
-• Ran echo
-  │ this_is_a_very_long_si
-  │ ngle_token_that_will_w
+• Ran: echo
+  │ this_is_a_very_long_s
+  │ ingle_token_that_will
   │ … +2 lines
   └ error: first line on
     stderr
