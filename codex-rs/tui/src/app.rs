@@ -627,13 +627,12 @@ impl App {
         tx: AppEventSender,
     ) {
         tokio::task::spawn_blocking(move || {
-            if codex_windows_sandbox::preflight_audit_everyone_writable(&cwd, &env_map).is_err() {
-                if let Some(preset) = codex_common::approval_presets::builtin_approval_presets()
+            if codex_windows_sandbox::preflight_audit_everyone_writable(&cwd, &env_map).is_err()
+                && let Some(preset) = codex_common::approval_presets::builtin_approval_presets()
                     .into_iter()
                     .find(|p| p.id == "auto")
-                {
-                    tx.send(AppEvent::OpenWorldWritableWarningConfirmation { preset });
-                }
+            {
+                tx.send(AppEvent::OpenWorldWritableWarningConfirmation { preset });
             }
         });
     }
