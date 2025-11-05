@@ -1,0 +1,16 @@
+[package]
+edition = "2024"
+name = "codex-keyring-store"
+version = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+keyring = { workspace = true, features = [
+    "apple-native",
+    "crypto-rust",
+    "linux-native-async-persistent",
+    "windows-native",
+] }
+tracing = { workspace = true }

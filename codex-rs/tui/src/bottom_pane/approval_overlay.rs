@@ -20,7 +20,6 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::SandboxCommandAssessment;
-use codex_core::protocol::SandboxRiskCategory;
 use codex_core::protocol::SandboxRiskLevel;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -356,33 +355,9 @@ fn render_risk_lines(risk: &SandboxCommandAssessment) -> Vec<Line<'static>> {
         ]));
     }
 
-    let mut spans: Vec<Span<'static>> = vec!["Risk: ".into(), level_span];
-    if !risk.risk_categories.is_empty() {
-        spans.push(" (".into());
-        for (idx, category) in risk.risk_categories.iter().enumerate() {
-            if idx > 0 {
-                spans.push(", ".into());
-            }
-            spans.push(risk_category_label(*category).into());
-        }
-        spans.push(")".into());
-    }
-
-    lines.push(Line::from(spans));
+    lines.push(vec!["Risk: ".into(), level_span].into());
     lines.push(Line::from(""));
     lines
-}
-
-fn risk_category_label(category: SandboxRiskCategory) -> &'static str {
-    match category {
-        SandboxRiskCategory::DataDeletion => "data deletion",
-        SandboxRiskCategory::DataExfiltration => "data exfiltration",
-        SandboxRiskCategory::PrivilegeEscalation => "privilege escalation",
-        SandboxRiskCategory::SystemModification => "system modification",
-        SandboxRiskCategory::NetworkAccess => "network access",
-        SandboxRiskCategory::ResourceExhaustion => "resource exhaustion",
-        SandboxRiskCategory::Compliance => "compliance",
-    }
 }
 
 #[derive(Clone)]
