@@ -2156,6 +2156,7 @@ impl ChatWidget {
         self.config.notices.hide_world_writable_warning = Some(acknowledged);
     }
 
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn world_writable_warning_hidden(&self) -> bool {
         self.config
             .notices

@@ -461,7 +461,13 @@ impl App {
                 self.chat_widget.set_approval_policy(policy);
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
-                self.chat_widget.set_sandbox_policy(policy.clone());
+                #[cfg(target_os = "windows")]
+                let policy_is_workspace_write = matches!(
+                    policy,
+                    codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                );
+
+                self.chat_widget.set_sandbox_policy(policy);
 
                 // If sandbox policy becomes workspace-write, run the Windows world-writable scan.
                 #[cfg(target_os = "windows")]
@@ -473,10 +479,7 @@ impl App {
                     }
 
                     let should_check = codex_core::get_platform_sandbox().is_some()
-                        && matches!(
-                            policy,
-                            codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        )
+                        && policy_is_workspace_write
                         && !self.chat_widget.world_writable_warning_hidden();
                     if should_check {
                         use std::collections::HashMap;
