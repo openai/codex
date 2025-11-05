@@ -553,7 +553,7 @@ impl Session {
                 None
             } else {
                 Some(format!(
-                    "You can either enable it using the CLI with `--enable {canonical}` or through the config.toml file with `[features].{canonical}`"
+                    "Enable it with `--enable {canonical}` or `[features].{canonical}` in config.toml. See https://github.com/openai/codex/blob/main/docs/config.md#feature-flags for details."
                 ))
             };
             post_session_configured_events.push(Event {
@@ -1773,19 +1773,14 @@ pub(crate) async fn run_task(
             sess.clone_history().await.get_history_for_prompt()
         };
 
-        let turn_input_messages: Vec<String> = turn_input
+        let turn_input_messages = turn_input
             .iter()
-            .filter_map(|item| match item {
-                ResponseItem::Message { content, .. } => Some(content),
+            .filter_map(|item| match parse_turn_item(item) {
+                Some(TurnItem::UserMessage(user_message)) => Some(user_message),
                 _ => None,
             })
-            .flat_map(|content| {
-                content.iter().filter_map(|item| match item {
-                    ContentItem::OutputText { text } => Some(text.clone()),
-                    _ => None,
-                })
-            })
-            .collect();
+            .map(|user_message| user_message.message())
+            .collect::<Vec<String>>();
         match run_turn(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
