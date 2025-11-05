@@ -642,6 +642,7 @@ impl ChatWidget {
         &mut self,
         _ev: codex_core::protocol::UserCommandOutputDeltaEvent,
     ) {
+        // TODO: Handle streaming exec output if/when implemented
     }
 
     fn on_user_command_end(&mut self, ev: UserCommandEndEvent) {
