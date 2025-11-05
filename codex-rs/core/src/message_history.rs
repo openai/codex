@@ -104,7 +104,7 @@ pub(crate) async fn append_entry(
 
     // Open in append-only mode.
     let mut options = OpenOptions::new();
-    options.append(true).read(true).create(true);
+    options.append(true).read(true).write(true).create(true);
     #[cfg(unix)]
     {
         options.mode(0o600);
