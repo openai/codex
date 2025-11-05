@@ -171,3 +171,4 @@ Write-ColorOutput @"
 # ファイルをExplorerで開く
 explorer.exe "/select,$zipPath"
 
+
