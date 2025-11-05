@@ -82,6 +82,7 @@ pub async fn run_command_under_windows(
 }
 
 enum SandboxType {
+    #[cfg(target_os = "macos")]
     Seatbelt,
     Landlock,
     Windows,
