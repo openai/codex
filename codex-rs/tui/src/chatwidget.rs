@@ -132,7 +132,7 @@ struct RunningCommand {
     is_user_shell_command: bool,
 }
 
-const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
+const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [0.0, 90.0, 95.0];
 const NUDGE_MODEL_SLUG: &str = "gpt-5-codex";
 
 #[derive(Default)]
@@ -516,16 +516,8 @@ impl ChatWidget {
                     self.rate_limit_switch_prompt,
                     RateLimitSwitchPromptState::Shown
                 )
-                && let Some(preset) = self.lower_cost_preset()
             {
-                let task_running =
-                    self.stream_controller.is_some() || self.bottom_pane.status_widget().is_some();
-                if task_running {
-                    self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
-                } else {
-                    self.open_rate_limit_switch_prompt(preset);
-                    self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Shown;
-                }
+                self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
             }
 
             let display = crate::status::rate_limit_snapshot_display(&snapshot, Local::now());
