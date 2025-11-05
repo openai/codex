@@ -148,6 +148,13 @@ client_request_definitions! {
         response: v2::LoginAccountResponse,
     },
 
+    #[serde(rename = "account/login/cancel")]
+    #[ts(rename = "account/login/cancel")]
+    CancelLoginAccount {
+        params: v2::CancelLoginAccountParams,
+        response: v2::CancelLoginAccountResponse,
+    },
+
     #[serde(rename = "account/logout")]
     #[ts(rename = "account/logout")]
     LogoutAccount {
