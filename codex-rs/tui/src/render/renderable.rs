@@ -162,6 +162,8 @@ impl Renderable for ColumnRenderable<'_> {
             .sum()
     }
 
+    /// Returns the cursor position of the first child that has a cursor position, offset by the
+    /// child's position in the column.
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let mut y = area.y;
         for child in &self.children {
@@ -216,6 +218,10 @@ pub struct FlexRenderable<'a> {
     children: Vec<FlexChild<'a>>,
 }
 
+/// Lays out children in a column, with the ability to specify a flex factor for each child.
+///
+/// Children with flex factor > 0 will be allocated the remaining space after the non-flex children,
+/// proportional to the flex factor.
 impl<'a> FlexRenderable<'a> {
     pub fn new() -> Self {
         Self { children: vec![] }
@@ -228,12 +234,16 @@ impl<'a> FlexRenderable<'a> {
         });
     }
 
+    /// Loosely inspired by Flutter's Flex widget.
+    ///
+    /// Ref https://github.com/flutter/flutter/blob/3fd81edbf1e015221e143c92b2664f4371bdc04a/packages/flutter/lib/src/rendering/flex.dart#L1205-L1209
     fn allocate(&self, area: Rect) -> Vec<Rect> {
         let mut allocated_rects = Vec::with_capacity(self.children.len());
         let mut child_sizes = vec![0; self.children.len()];
         let mut allocated_size = 0;
         let mut total_flex = 0;
 
+        // 1. Allocate space to non-flex children.
         let max_size = area.height;
         let mut last_flex_child_idx = 0;
         for (i, FlexChild { flex, child }) in self.children.iter().enumerate() {
@@ -248,11 +258,14 @@ impl<'a> FlexRenderable<'a> {
             }
         }
         let free_space = max_size.saturating_sub(allocated_size);
+        // 2. Allocate space to flex children, proportional to their flex factor.
         let mut allocated_flex_space = 0;
         if total_flex > 0 {
             let space_per_flex = free_space / total_flex as u16;
             for (i, FlexChild { flex, child }) in self.children.iter().enumerate() {
                 if *flex > 0 {
+                    // Last flex child gets all the remaining space, to prevent a rounding error
+                    // from not allocating all the space.
                     let max_child_extent = if i == last_flex_child_idx {
                         free_space - allocated_flex_space
                     } else {
