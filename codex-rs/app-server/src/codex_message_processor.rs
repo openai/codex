@@ -955,12 +955,6 @@ impl CodexMessageProcessor {
                 let response = ThreadStartResponse {
                     thread: thread.clone(),
                 };
-                self.outgoing.send_response(request_id, response).await;
-
-                let notif = ThreadStartedNotification { thread };
-                self.outgoing
-                    .send_server_notification(ServerNotification::ThreadStarted(notif))
-                    .await;
 
                 // Auto-attach a conversation listener when starting a thread.
                 // Use the same behavior as the v1 API with experimental_raw_events=false.
@@ -974,6 +968,13 @@ impl CodexMessageProcessor {
                         err.message
                     );
                 }
+
+                self.outgoing.send_response(request_id, response).await;
+
+                let notif = ThreadStartedNotification { thread };
+                self.outgoing
+                    .send_server_notification(ServerNotification::ThreadStarted(notif))
+                    .await;
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -1153,13 +1154,6 @@ impl CodexMessageProcessor {
             .await
         {
             Ok(_) => {
-                let response = ThreadResumeResponse {
-                    thread: Thread {
-                        id: conversation_id.to_string(),
-                    },
-                };
-                self.outgoing.send_response(request_id, response).await;
-
                 // Auto-attach a conversation listener when resuming a thread.
                 if let Err(err) = self
                     .attach_conversation_listener(conversation_id, false)
@@ -1171,6 +1165,13 @@ impl CodexMessageProcessor {
                         err.message
                     );
                 }
+
+                let response = ThreadResumeResponse {
+                    thread: Thread {
+                        id: conversation_id.to_string(),
+                    },
+                };
+                self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
