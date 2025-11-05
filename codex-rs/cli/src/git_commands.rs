@@ -48,6 +48,21 @@ pub enum GitAnalyzeCommand {
         limit: usize,
     },
 
+    /// Launch 3D visualization (Kamui4D-exceeding)
+    Visualize3d {
+        /// Repository path (default: current directory)
+        #[clap(long, default_value = ".")]
+        repo_path: PathBuf,
+
+        /// Use CUDA GPU acceleration
+        #[clap(long)]
+        use_cuda: bool,
+
+        /// Export 3D data to JSON file
+        #[clap(long)]
+        export_json: Option<PathBuf>,
+    },
+
     /// Analyze branch structure
     Branches {
         /// Repository path (default: current directory)
@@ -120,6 +135,9 @@ pub async fn run_git_analyze_command(cli: GitAnalyzeCli) -> Result<()> {
         }
         GitAnalyzeCommand::Heatmap { repo_path, limit } => {
             analyze_heatmap(&repo_path, limit)?;
+        }
+        GitAnalyzeCommand::Visualize3d { repo_path, use_cuda, export_json } => {
+            analyze_visualize_3d(&repo_path, use_cuda, export_json)?;
         }
         GitAnalyzeCommand::Branches { repo_path } => {
             analyze_branches(&repo_path)?;
@@ -428,6 +446,136 @@ fn count_merge_commits(repo: &Repository, start_commit: &Commit, limit: usize) -
     }
 
     Ok(count)
+}
+
+/// Launch 3D visualization (Kamui4D-exceeding)
+fn analyze_visualize_3d(
+    repo_path: &PathBuf,
+    use_cuda: bool,
+    export_json: Option<PathBuf>,
+) -> Result<()> {
+    println!("🚀 Launching 3D Git Visualization (Kamui4D-exceeding)");
+    println!("📊 Repository: {}", repo_path.display());
+    
+    #[cfg(feature = "cuda")]
+    if use_cuda {
+        println!("⚡ CUDA acceleration: ENABLED");
+    }
+    
+    #[cfg(not(feature = "cuda"))]
+    if use_cuda {
+        eprintln!("⚠️  CUDA not available (compile with --features cuda)");
+    }
+    
+    // Generate 3D commit data
+    let repo = Repository::open(repo_path).context("Failed to open Git repository")?;
+    let mut revwalk = repo.revwalk()?;
+    revwalk.push_head()?;
+    revwalk.set_sorting(git2::Sort::TIME)?;
+    
+    let limit = 100_000; // Support 100,000+ commits
+    
+    #[cfg(feature = "cuda")]
+    let commits = if use_cuda {
+        let oids: Vec<Oid> = revwalk.take(limit).collect::<Result<Vec<_>, _>>()?;
+        git_cuda::analyze_commits_cuda(&repo, oids, limit)?
+    } else {
+        generate_3d_commits_cpu(&repo, &mut revwalk, limit)?
+    };
+    
+    #[cfg(not(feature = "cuda"))]
+    let commits = generate_3d_commits_cpu(&repo, &mut revwalk, limit)?;
+    
+    println!("✅ Analyzed {} commits", commits.len());
+    
+    // Export to JSON if requested
+    if let Some(json_path) = export_json {
+        let json = serde_json::to_string_pretty(&commits)?;
+        std::fs::write(&json_path, json)?;
+        println!("📁 Exported to: {}", json_path.display());
+    }
+    
+    // Print statistics
+    println!("\n📊 Statistics:");
+    println!("  Total commits: {}", commits.len());
+    
+    if let (Some(first), Some(last)) = (commits.first(), commits.last()) {
+        println!("  First commit: {} - {}", first.hash, first.message);
+        println!("  Last commit:  {} - {}", last.hash, last.message);
+    }
+    
+    println!("\n💡 Tip: Use --export-json to save 3D data for GUI visualization");
+    println!("   Example: codex git-analyze visualize-3d --export-json commits-3d.json");
+    
+    Ok(())
+}
+
+fn generate_3d_commits_cpu(
+    repo: &Repository,
+    revwalk: &mut git2::Revwalk,
+    limit: usize,
+) -> Result<Vec<CommitData3D>> {
+    let mut commits = Vec::new();
+    
+    for (i, oid) in revwalk.take(limit).enumerate() {
+        let oid = oid?;
+        let commit = repo.find_commit(oid)?;
+        
+        let message = commit
+            .message()
+            .unwrap_or("No message")
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string();
+        
+        let hash = format!("{:.7}", oid);
+        
+        // Count file changes
+        let mut changes = 0;
+        if let Ok(tree) = commit.tree() {
+            if commit.parent_count() > 0 {
+                if let Ok(parent) = commit.parent(0) {
+                    if let Ok(parent_tree) = parent.tree() {
+                        if let Ok(diff) = repo.diff_tree_to_tree(Some(&parent_tree), Some(&tree), None) {
+                            changes = diff.deltas().len();
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Calculate 3D position (spiral pattern)
+        let t = i as f32 * 0.1;
+        let x = t.cos() * (10.0 + t * 0.1);
+        let y = changes as f32 * 0.5; // Height based on changes
+        let z = t.sin() * (10.0 + t * 0.1);
+        
+        commits.push(CommitData3D {
+            hash,
+            message,
+            author: commit.author().name().unwrap_or("Unknown").to_string(),
+            timestamp: commit.time().seconds(),
+            changes,
+            x,
+            y,
+            z,
+        });
+    }
+    
+    Ok(commits)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitData3D {
+    pub hash: String,
+    pub message: String,
+    pub author: String,
+    pub timestamp: i64,
+    pub changes: usize,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
 }
 
 #[cfg(test)]

@@ -11,6 +11,11 @@ path = "src/main.rs"
 name = "codex_cli"
 path = "src/lib.rs"
 
+[features]
+default = []
+windows-ai = ["codex-core/windows-ai", "codex-windows-ai"]
+cuda = []
+
 [lints]
 workspace = true
 
@@ -25,6 +30,7 @@ codex-chatgpt = { workspace = true }
 codex-cloud-tasks = { path = "../cloud-tasks" }
 codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
+codex-windows-ai = { path = "../windows-ai", optional = true }
 codex-deep-research = { workspace = true }
 codex-exec = { workspace = true }
 codex-gemini-cli-mcp-server = { path = "../gemini-cli-mcp-server" }

@@ -719,10 +719,18 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             }
             
             // Log Windows AI usage
-            if codex_windows_ai::is_windows_ai_available() {
-                eprintln!("🚀 Windows AI enabled (kernel_accelerated: {kernel_accelerated})");
-            } else {
-                eprintln!("⚠️  Windows AI requested but not available (requires Windows 11 25H2+)");
+            #[cfg(feature = "windows-ai")]
+            {
+                if codex_windows_ai::is_windows_ai_available() {
+                    eprintln!("🚀 Windows AI enabled (kernel_accelerated: {kernel_accelerated})");
+                } else {
+                    eprintln!("⚠️  Windows AI requested but not available (requires Windows 11 25H2+)");
+                }
+            }
+            
+            #[cfg(not(feature = "windows-ai"))]
+            {
+                eprintln!("⚠️  Windows AI requested but not compiled (compile with --features windows-ai)");
             }
         }
     }

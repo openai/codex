@@ -2,6 +2,7 @@
 //!
 //! Coordinates Windows AI API and CUDA for maximum performance
 
+use anyhow::Context;
 use anyhow::Result;
 use tracing::debug;
 use tracing::info;
@@ -55,7 +56,7 @@ pub async fn execute_with_acceleration(
             Ok(format!("CPU execution: {prompt}"))
         }
 
-        #[cfg(all(target_os = "windows", feature = "windows-ai"))]
+        #[cfg(target_os = "windows")]
         AccelerationMode::WindowsAI => {
             use crate::windows_ai_integration::WindowsAiOptions;
             use crate::windows_ai_integration::execute_with_windows_ai;
@@ -76,9 +77,9 @@ pub async fn execute_with_acceleration(
             unreachable!("Hybrid should be resolved to specific mode")
         }
 
-        #[cfg(not(all(target_os = "windows", feature = "windows-ai")))]
+        #[cfg(not(target_os = "windows"))]
         AccelerationMode::WindowsAI => {
-            anyhow::bail!("Windows AI requires windows-ai feature and Windows OS")
+            anyhow::bail!("Windows AI is only available on Windows")
         }
 
         #[cfg(not(feature = "cuda"))]
@@ -92,7 +93,9 @@ pub async fn execute_with_acceleration(
 fn select_best_acceleration_mode() -> Result<AccelerationMode> {
     #[cfg(feature = "cuda")]
     {
-        if check_cuda() {
+        use codex_cuda_runtime::CudaRuntime;
+
+        if CudaRuntime::is_available() {
             info!("CUDA available, using CUDA acceleration");
             return Ok(AccelerationMode::CUDA);
         }
@@ -100,7 +103,9 @@ fn select_best_acceleration_mode() -> Result<AccelerationMode> {
 
     #[cfg(all(target_os = "windows", feature = "windows-ai"))]
     {
-        if check_windows_ai() {
+        use codex_windows_ai::WindowsAiRuntime;
+
+        if WindowsAiRuntime::is_available() {
             info!("Windows AI available, using Windows AI acceleration");
             return Ok(AccelerationMode::WindowsAI);
         }
@@ -112,12 +117,10 @@ fn select_best_acceleration_mode() -> Result<AccelerationMode> {
 
 /// Execute with CUDA
 #[cfg(feature = "cuda")]
-async fn execute_with_cuda(prompt: &str, options: &AccelerationOptions) -> Result<String> {
+async fn execute_with_cuda(prompt: &str, _options: &AccelerationOptions) -> Result<String> {
     use codex_cuda_runtime::CudaRuntime;
-    use anyhow::Context;
 
-    let device = options.cuda_device.unwrap_or(0) as usize;
-    let cuda = CudaRuntime::new(device).context("Failed to initialize CUDA")?;
+    let cuda = CudaRuntime::new(0).context("Failed to initialize CUDA")?;
 
     let device_info = cuda.get_device_info()?;
     info!("Executing with CUDA on {}", device_info.name);
@@ -137,8 +140,7 @@ pub fn get_acceleration_capabilities() -> AccelerationCapabilities {
 
 #[cfg(all(target_os = "windows", feature = "windows-ai"))]
 fn check_windows_ai() -> bool {
-    use codex_windows_ai::WindowsAiRuntime;
-    WindowsAiRuntime::is_available()
+    codex_windows_ai::WindowsAiRuntime::is_available()
 }
 
 #[cfg(not(all(target_os = "windows", feature = "windows-ai")))]
@@ -148,8 +150,7 @@ fn check_windows_ai() -> bool {
 
 #[cfg(feature = "cuda")]
 fn check_cuda() -> bool {
-    use codex_cuda_runtime::CudaRuntime;
-    CudaRuntime::is_available()
+    codex_cuda_runtime::CudaRuntime::is_available()
 }
 
 #[cfg(not(feature = "cuda"))]
