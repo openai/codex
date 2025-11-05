@@ -141,6 +141,7 @@ pub(crate) struct OutgoingError {
 
 #[cfg(test)]
 mod tests {
+    use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
     use codex_app_server_protocol::AccountUpdatedNotification;
     use codex_app_server_protocol::AuthMode;
     use codex_app_server_protocol::LoginChatGptCompleteNotification;
@@ -179,8 +180,8 @@ mod tests {
 
     #[test]
     fn verify_account_rate_limits_notification_serialization() {
-        let notification = ServerNotification::AccountRateLimitsUpdated(
-            codex_app_server_protocol::AccountRateLimitsUpdatedNotification {
+        let notification =
+            ServerNotification::AccountRateLimitsUpdated(AccountRateLimitsUpdatedNotification {
                 rate_limits: RateLimitSnapshot {
                     primary: Some(RateLimitWindow {
                         used_percent: 25,
@@ -189,8 +190,7 @@ mod tests {
                     }),
                     secondary: None,
                 },
-            },
-        );
+            });
 
         let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
         assert_eq!(

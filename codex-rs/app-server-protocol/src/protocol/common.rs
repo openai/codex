@@ -320,7 +320,7 @@ macro_rules! server_notification_definitions {
     (
         $(
             $(#[$variant_meta:meta])*
-            $variant:ident ( $payload:ty )
+            $variant:ident $(=> $wire:literal)? ( $payload:ty )
         ),* $(,)?
     ) => {
         /// Notification sent from the server to the client.
@@ -330,6 +330,7 @@ macro_rules! server_notification_definitions {
         pub enum ServerNotification {
             $(
                 $(#[$variant_meta])*
+                $(#[serde(rename = $wire)] #[ts(rename = $wire)] #[strum(serialize = $wire)])?
                 $variant($payload),
             )*
         }
@@ -360,7 +361,6 @@ macro_rules! server_notification_definitions {
         }
     };
 }
-
 /// Notifications sent from the client to the server.
 macro_rules! client_notification_definitions {
     (
@@ -470,55 +470,16 @@ pub struct FuzzyFileSearchResponse {
 
 server_notification_definitions! {
     /// NEW NOTIFICATIONS
-    #[serde(rename = "thread/started")]
-    #[ts(rename = "thread/started")]
-    #[strum(serialize = "thread/started")]
-    ThreadStarted(v2::ThreadStartedNotification),
-
-    #[serde(rename = "turn/started")]
-    #[ts(rename = "turn/started")]
-    #[strum(serialize = "turn/started")]
-    TurnStarted(v2::TurnStartedNotification),
-
-    #[serde(rename = "turn/completed")]
-    #[ts(rename = "turn/completed")]
-    #[strum(serialize = "turn/completed")]
-    TurnCompleted(v2::TurnCompletedNotification),
-
-    #[serde(rename = "item/started")]
-    #[ts(rename = "item/started")]
-    #[strum(serialize = "item/started")]
-    ItemStarted(v2::ItemStartedNotification),
-
-    #[serde(rename = "item/completed")]
-    #[ts(rename = "item/completed")]
-    #[strum(serialize = "item/completed")]
-    ItemCompleted(v2::ItemCompletedNotification),
-
-    #[serde(rename = "item/agentMessage/delta")]
-    #[ts(rename = "item/agentMessage/delta")]
-    #[strum(serialize = "item/agentMessage/delta")]
-    AgentMessageDelta(v2::AgentMessageDeltaNotification),
-
-    #[serde(rename = "item/commandExecution/outputDelta")]
-    #[ts(rename = "item/commandExecution/outputDelta")]
-    #[strum(serialize = "item/commandExecution/outputDelta")]
-    CommandExecutionOutputDelta(v2::CommandExecutionOutputDeltaNotification),
-
-    #[serde(rename = "item/mcpToolCall/progress")]
-    #[ts(rename = "item/mcpToolCall/progress")]
-    #[strum(serialize = "item/mcpToolCall/progress")]
-    McpToolCallProgress(v2::McpToolCallProgressNotification),
-
-    #[serde(rename = "account/updated")]
-    #[ts(rename = "account/updated")]
-    #[strum(serialize = "account/updated")]
-    AccountUpdated(v2::AccountUpdatedNotification),
-
-    #[serde(rename = "account/rateLimits/updated")]
-    #[ts(rename = "account/rateLimits/updated")]
-    #[strum(serialize = "account/rateLimits/updated")]
-    AccountRateLimitsUpdated(v2::AccountRateLimitsUpdatedNotification),
+    ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
+    TurnStarted => "turn/started" (v2::TurnStartedNotification),
+    TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
+    ItemStarted => "item/started" (v2::ItemStartedNotification),
+    ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
+    AgentMessageDelta => "item/agentMessage/delta" (v2::AgentMessageDeltaNotification),
+    CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
+    McpToolCallProgress => "item/mcpToolCall/progress" (v2::McpToolCallProgressNotification),
+    AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
+    AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
 
     /// DEPRECATED NOTIFICATIONS below
     AuthStatusChange(v1::AuthStatusChangeNotification),
