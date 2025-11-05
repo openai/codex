@@ -172,9 +172,6 @@ pub enum LoginAccountResponse {
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum CancelLoginAccountParams {
-    #[serde(rename = "apiKey")]
-    #[ts(rename = "apiKey")]
-    ApiKey,
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
     Chatgpt { login_id: String },

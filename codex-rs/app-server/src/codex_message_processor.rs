@@ -15,6 +15,9 @@ use codex_app_server_protocol::ArchiveConversationParams;
 use codex_app_server_protocol::ArchiveConversationResponse;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthStatusChangeNotification;
+use codex_app_server_protocol::CancelLoginAccountParams;
+use codex_app_server_protocol::CancelLoginAccountResponse;
+use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConversationSummary;
 use codex_app_server_protocol::ExecCommandApprovalParams;
@@ -670,10 +673,7 @@ impl CodexMessageProcessor {
         match self.cancel_login_chatgpt_common(login_id).await {
             Ok(()) => {
                 self.outgoing
-                    .send_response(
-                        request_id,
-                        codex_app_server_protocol::CancelLoginChatGptResponse {},
-                    )
+                    .send_response(request_id, CancelLoginChatGptResponse {})
                     .await;
             }
             Err(error) => {
@@ -682,46 +682,28 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn cancel_login_v2(
-        &mut self,
-        request_id: RequestId,
-        params: codex_app_server_protocol::CancelLoginAccountParams,
-    ) {
+    async fn cancel_login_v2(&mut self, request_id: RequestId, params: CancelLoginAccountParams) {
         match params {
-            codex_app_server_protocol::CancelLoginAccountParams::ApiKey => {
-                // No-op for API key method; nothing to cancel.
-                self.outgoing
-                    .send_response(
-                        request_id,
-                        codex_app_server_protocol::CancelLoginAccountResponse {},
-                    )
-                    .await;
-            }
-            codex_app_server_protocol::CancelLoginAccountParams::Chatgpt { login_id } => {
-                match Uuid::parse_str(&login_id) {
-                    Ok(uuid) => match self.cancel_login_chatgpt_common(uuid).await {
-                        Ok(()) => {
-                            self.outgoing
-                                .send_response(
-                                    request_id,
-                                    codex_app_server_protocol::CancelLoginAccountResponse {},
-                                )
-                                .await;
-                        }
-                        Err(error) => {
-                            self.outgoing.send_error(request_id, error).await;
-                        }
-                    },
-                    Err(_) => {
-                        let error = JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!("invalid login id: {login_id}"),
-                            data: None,
-                        };
+            CancelLoginAccountParams::Chatgpt { login_id } => match Uuid::parse_str(&login_id) {
+                Ok(uuid) => match self.cancel_login_chatgpt_common(uuid).await {
+                    Ok(()) => {
+                        self.outgoing
+                            .send_response(request_id, CancelLoginAccountResponse {})
+                            .await;
+                    }
+                    Err(error) => {
                         self.outgoing.send_error(request_id, error).await;
                     }
+                },
+                Err(_) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid login id: {login_id}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
                 }
-            }
+            },
         }
     }
 

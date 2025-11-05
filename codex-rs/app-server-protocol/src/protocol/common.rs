@@ -242,6 +242,7 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v1::LoginChatGptResponse,
     },
+    // DEPRECATED in favor of CancelLoginAccount
     CancelLoginChatGpt {
         params: v1::CancelLoginChatGptParams,
         response: v1::CancelLoginChatGptResponse,
