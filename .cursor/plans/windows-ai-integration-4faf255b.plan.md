@@ -1,265 +1,180 @@
-<!-- 4faf255b-c10d-4457-8fc6-18e7e40c9992 736eec3e-ff87-464f-86c1-e41027c4ce03 -->
-# CUDA完全統合 - CLI AI推論 × MCP × Git可視化GPU高速化
+<!-- f1b32a57-ba87-4227-8742-cf20de5a579c 200feb15-e3e8-4d4a-86f9-d9cae7c87914 -->
+# モック実装→本番実装移行計画
 
-## 概要
+## 対象モック実装
 
-CUDA Runtime APIを完全統合し、以下を実現：
+### 1. Git操作（src-tauri/src/main.rs）
 
-1. CLI AI推論のCUDA高速化（MCP経由）
-2. git解析のCUDA並列化（analyze_commits等）
-3. 3D/4D可視化のGPUレンダリング高速化
-4. Windows AI統合との共存
-5. 警告0・型エラー0保証
-
-## アーキテクチャ
-
-```
-Codex CLI
-  ├→ Windows AI API (既存統合)
-  └→ CUDA Runtime (新規)
-       ├→ MCP Tool (cuda_execute)
-       ├→ Git Analysis (並列化)
-       └→ Kernel Driver (Pinned Memory)
-           ↓
-         GPU (RTX 3080)
-```
-
-## 実装フェーズ
-
-### Phase 1: CUDA Runtimeクレート作成
-
-**新規クレート**: `codex-rs/cuda-runtime/`
-
-**依存**: `cuda-sys`, `cudarc` または自作FFI
+**現状**:
 
 ```rust
-// Cargo.toml
+#[tauri::command]
+async fn get_git_commits_3d(repo_path: String, limit: usize) -> Result<Vec<Commit3D>, String> {
+    // TODO: 実際のGit操作実装（git2クレート使用）
+    // 現在はモックデータを返す
+    for i in 0..limit.min(1000) { /* mock data */ }
+}
+```
+
+**本番実装**:
+
+- git2クレート使用
+- `codex-rs/cli/src/git_cuda.rs`のロジック流用
+- 実リポジトリから3D座標計算
+- エラーハンドリング強化
+
+### 2. CUDA解析（src-tauri/src/main.rs）
+
+**現状**:
+
+```rust
+#[tauri::command]
+async fn analyze_with_cuda(commits: Vec<Commit3D>) -> Result<Vec<Commit3D>, String> {
+    // TODO: CUDA並列解析実装
+    // 現在はそのまま返す
+    Ok(commits)
+}
+```
+
+**本番実装**:
+
+- `codex_cuda_runtime::CudaRuntime`直接使用
+- 並列座標計算・最適化
+- パフォーマンス統計収集
+
+### 3. CLI統合（src-tauri/src/main.rs）
+
+**現状**:
+
+```rust
+#[tauri::command]
+async fn execute_cli_command(cmd: String, args: Vec<String>) -> Result<String, String> {
+    // TODO: codex CLI統合実装
+    Ok(format!("Command executed: ..."))
+}
+```
+
+**本番実装**:
+
+- `std::process::Command`でcodex CLI起動
+- stdout/stderrキャプチャ
+- 非同期実行（tokio）
+- タイムアウト処理
+
+## 実装手順
+
+### Step 1: git2クレート依存追加
+
+**codex-rs/tauri-gui/src-tauri/Cargo.toml**:
+
+```toml
 [dependencies]
-cudarc = { version = "0.11", features = ["driver", "nvrtc"] }
-anyhow = { workspace = true }
-tracing = { workspace = true }
+git2 = { workspace = true }
+codex-cuda-runtime = { path = "../../../cuda-runtime", optional = true }
 
-// src/lib.rs
-pub struct CudaRuntime {
-    device: CudaDevice,
-    stream: CudaStream,
+[features]
+cuda = ["codex-cuda-runtime"]
+```
+
+### Step 2: Git解析モジュール作成
+
+**新規**: `codex-rs/tauri-gui/src-tauri/src/git_analyzer.rs`:
+
+```rust
+use git2::{Repository, Oid};
+use crate::Commit3D;
+
+pub struct GitAnalyzer {
+    repo: Repository,
 }
 
-impl CudaRuntime {
-    pub fn new() -> Result<Self>;
-    pub fn allocate_device_memory(&self, size: usize) -> Result<DevicePtr>;
-    pub fn copy_to_device(&self, src: &[u8], dst: DevicePtr) -> Result<()>;
-    pub fn launch_kernel(&self, kernel: &str, grid: Dim3, block: Dim3) -> Result<()>;
+impl GitAnalyzer {
+    pub fn new(repo_path: &str) -> Result<Self>;
+    pub fn get_commits_3d(&self, limit: usize) -> Result<Vec<Commit3D>>;
+    fn calculate_3d_position(/* ... */) -> (f64, f64, f64);
 }
 ```
 
-**ファイル**:
+CLIの`git_cuda.rs`ロジックを移植。
 
-- `codex-rs/cuda-runtime/Cargo.toml`
-- `codex-rs/cuda-runtime/src/lib.rs`
-- `codex-rs/cuda-runtime/src/device.rs`
-- `codex-rs/cuda-runtime/src/memory.rs`
-- `codex-rs/cuda-runtime/src/kernel.rs`
+### Step 3: main.rs本番実装
 
-### Phase 2: Git解析CUDA並列化
-
-**変更ファイル**: `codex-rs/cli/src/git_commands.rs`
-
-現在の実装（CPU順次処理）:
+**get_git_commits_3d()書き換え**:
 
 ```rust
-for (i, oid) in revwalk.enumerate() {
-    let commit = repo.find_commit(oid)?;
-    // ... 3D座標計算（遅い）
+#[tauri::command]
+async fn get_git_commits_3d(repo_path: String, limit: usize) -> Result<Vec<Commit3D>, String> {
+    use git_analyzer::GitAnalyzer;
+    
+    let analyzer = GitAnalyzer::new(&repo_path).map_err(|e| e.to_string())?;
+    analyzer.get_commits_3d(limit).map_err(|e| e.to_string())
 }
 ```
 
-CUDA並列化:
+**analyze_with_cuda()書き換え**:
 
 ```rust
-// コミット情報をGPUに転送
-let commit_data = prepare_commit_data(&commits);
-cuda.copy_to_device(&commit_data, gpu_buffer)?;
-
-// CUDA kernelで並列計算
-cuda.launch_kernel("calculate_3d_positions", grid, block)?;
-
-// 結果を取得
-cuda.copy_from_device(gpu_buffer, &mut results)?;
-```
-
-**新規ファイル**:
-
-- `codex-rs/cli/src/git_cuda.rs` - CUDA並列化実装
-- `codex-rs/cuda-runtime/kernels/git_analysis.cu` - CUDAカーネル
-
-### Phase 3: MCP経由CUDA公開
-
-**変更ファイル**: `codex-rs/mcp-server/src/`
-
-新しいMCP Tool追加:
-
-```rust
-// tools/cuda.rs
-pub async fn cuda_execute(
-    code: &str,
-    input_data: Vec<f32>,
-) -> Result<Vec<f32>> {
-    let cuda = CudaRuntime::new()?;
-    
-    // JITコンパイル
-    let kernel = cuda.compile_kernel(code)?;
-    
-    // 実行
-    let output = cuda.execute_kernel(&kernel, &input_data)?;
-    
-    Ok(output)
-}
-```
-
-**ファイル**:
-
-- `codex-rs/mcp-server/src/tools/cuda.rs`
-- `codex-rs/mcp-server/src/tools/mod.rs` (更新)
-
-### Phase 4: CLI統合
-
-**変更ファイル**: `codex-rs/cli/src/main.rs`
-
-CLI引数追加:
-
-```rust
-struct MultitoolCli {
-    // 既存フラグ
-    #[cfg(target_os = "windows")]
-    #[clap(long, global = true)]
-    pub use_windows_ai: bool,
-    
-    // 新規フラグ
-    #[clap(long, global = true)]
-    pub use_cuda: bool,
-    
-    #[clap(long, global = true)]
-    pub cuda_device: Option<i32>,
-}
-```
-
-### Phase 5: Windows AI × CUDA統合
-
-**新規ファイル**: `codex-rs/core/src/hybrid_acceleration.rs`
-
-両方のAPIを協調動作:
-
-```rust
-pub enum AccelerationMode {
-    WindowsAI,
-    CUDA,
-    Hybrid,  // 最速パスを自動選択
-}
-
-pub async fn execute_with_acceleration(
-    prompt: &str,
-    mode: AccelerationMode,
-) -> Result<String> {
-    match mode {
-        AccelerationMode::Hybrid => {
-            // Windows AI + CUDA両方使用
-            // タスクに応じて最適な方を選択
-        }
+#[tauri::command]
+async fn analyze_with_cuda(commits: Vec<Commit3D>) -> Result<Vec<Commit3D>, String> {
+    #[cfg(feature = "cuda")]
+    {
+        use codex_cuda_runtime::CudaRuntime;
+        let cuda = CudaRuntime::new(0).map_err(|e| e.to_string())?;
+        // CUDA並列計算実装
     }
 }
 ```
 
-### Phase 6: Kamui4D超えの最適化
-
-**変更ファイル**:
-
-- `codex-rs/cli/src/git_commands.rs` - CUDA並列化使用
-- `codex-rs/tauri-gui/src/components/git/SceneVR.tsx` - GPUレンダリング最適化
-
-**最適化ポイント**:
-
-1. コミット座標計算: CPU → CUDA（100-1000倍高速化）
-2. ヒートマップ生成: 順次 → 並列（50-100倍）
-3. 3Dレンダリング: InstancedMesh最適化
-
-### Phase 7: テスト・ベンチマーク
-
-**新規ファイル**:
-
-- `codex-rs/cuda-runtime/benches/git_analysis_bench.rs`
-- `codex-rs/cuda-runtime/tests/integration_test.rs`
-
-**ベンチマーク**:
+**execute_cli_command()書き換え**:
 
 ```rust
-#[bench]
-fn bench_git_analysis_cpu(b: &mut Bencher) {
-    // CPU実装: 10,000コミット解析
-}
-
-#[bench]
-fn bench_git_analysis_cuda(b: &mut Bencher) {
-    // CUDA実装: 同じデータ
-    // 期待: 100-1000倍高速
+#[tauri::command]
+async fn execute_cli_command(cmd: String, args: Vec<String>) -> Result<String, String> {
+    use tokio::process::Command;
+    
+    let output = Command::new("codex")
+        .arg(&cmd)
+        .args(&args)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    
+    String::from_utf8(output.stdout).map_err(|e| e.to_string())
 }
 ```
 
-### Phase 8: 型エラー・警告ゼロ保証
+### Step 4: GitVR.tsxフォールバック削除
 
-**チェックポイント**:
+**src/pages/GitVR.tsx**:
 
-1. `cargo check --all-features`
-2. `cargo clippy --all-features -- -D warnings`
-3. `cargo build --release`
+- `loadMockCommits()`は開発用に残す
+- 本番では常にTauri IPC使用
+- エラー時のみモックにフォールバック
 
-**修正対象**:
+## 主要ファイル
 
-- 未使用変数削除
-- 型変換の明示化
-- ライフタイム注釈
-- エラーハンドリング徹底
+**新規作成**:
 
-## 重要なファイル
+- `codex-rs/tauri-gui/src-tauri/src/git_analyzer.rs` (~300行)
 
-既存（活用）:
+**変更**:
 
-- `codex-rs/cli/src/git_commands.rs` (320行) - git解析
-- `codex-rs/mcp-server/` (2000行) - MCP実装
-- `codex-rs/windows-ai/` (655行) - Windows AI統合
-- `kernel-extensions/windows/ai_driver/` (2088行) - カーネルドライバー
+- `codex-rs/tauri-gui/src-tauri/Cargo.toml` - git2依存追加
+- `codex-rs/tauri-gui/src-tauri/src/main.rs` - 3関数を本番実装に置換
+- `codex-rs/tauri-gui/src-tauri/src/lib.rs` - git_analyzerモジュール追加
 
-新規作成:
+## 品質保証
 
-- `codex-rs/cuda-runtime/` - CUDA統合（推定800行）
-- `codex-rs/cli/src/git_cuda.rs` - git CUDA並列化（推定400行）
-- `codex-rs/mcp-server/src/tools/cuda.rs` - MCP CUDA tool（推定200行）
-- `codex-rs/core/src/hybrid_acceleration.rs` - ハイブリッド加速（推定300行）
-
-## 期待される効果
-
-- CLI AI推論: 10ms → 2-3ms (-70-80%)
-- git解析（10,000コミット）: 5秒 → 0.05秒 (100倍)
-- 3D可視化FPS: 30fps → 120fps (4倍)
-- Kamui4Dとの比較: 同等以上のパフォーマンス
-
-## 警告・エラーゼロの保証
-
-- Rust型システムによる静的保証
-- cudarc crateによる安全なFFI
-- エラーハンドリング100%
-- Clippy lint準拠
+- 型エラー0（git2型定義完備）
+- 警告0（clippy準拠）
+- エラーハンドリング完全
+- テスト追加（unit + integration）
 
 ### To-dos
 
-- [ ] CUDA Runtimeクレート作成（cudarc使用）
-- [ ] CUDA device初期化・メモリ管理実装
-- [ ] git解析CUDA並列化実装（git_cuda.rs）
-- [ ] CUDAカーネル実装（git_analysis.cu相当をRustで）
-- [ ] MCP CUDA tool実装（mcp-server統合）
-- [ ] ハイブリッド加速レイヤー実装（Windows AI × CUDA）
-- [ ] CLI統合（--use-cuda, --cuda-device引数）
-- [ ] 3D/4D可視化GPU最適化
-- [ ] テスト・ベンチマーク作成
-- [ ] 型エラー・警告ゼロ確認（clippy, check）
-- [ ] ドキュメント・実装ログ作成
+- [ ] Phase 1.1: Babylon.js依存関係追加（package.json更新、npm install）
+- [ ] Phase 1.2: BabylonGitScene.tsx実装（10万コミット対応、動的LOD、PBRマテリアル）
+- [ ] Phase 1.2: babylon-git-engine.ts実装（エンジン初期化、コミット読み込み、ノード選択）
+- [ ] Phase 1.3: babylon-optimizer.ts実装（GPU統計、動的品質調整、Virtual Desktop対応）
+- [ ] Phase 1: GitVR.tsxをBabylon.jsに統合、Three.js削除、型チェック・警告0確認
+- [ ] Phase 2.1: Tauri IPC拡張（execute_cli_command, get_git_commits_3d, analyze_with_cuda）
