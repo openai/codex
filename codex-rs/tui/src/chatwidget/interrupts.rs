@@ -7,6 +7,8 @@ use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::UserCommandBeginEvent;
+use codex_core::protocol::UserCommandEndEvent;
 
 use super::ChatWidget;
 
@@ -16,6 +18,8 @@ pub(crate) enum QueuedInterrupt {
     ApplyPatchApproval(String, ApplyPatchApprovalRequestEvent),
     ExecBegin(ExecCommandBeginEvent),
     ExecEnd(ExecCommandEndEvent),
+    UserCommandBegin(UserCommandBeginEvent),
+    UserCommandEnd(UserCommandEndEvent),
     McpBegin(McpToolCallBeginEvent),
     McpEnd(McpToolCallEndEvent),
     PatchEnd(PatchApplyEndEvent),
@@ -59,6 +63,14 @@ impl InterruptManager {
         self.queue.push_back(QueuedInterrupt::ExecEnd(ev));
     }
 
+    pub(crate) fn push_user_command_begin(&mut self, ev: UserCommandBeginEvent) {
+        self.queue.push_back(QueuedInterrupt::UserCommandBegin(ev));
+    }
+
+    pub(crate) fn push_user_command_end(&mut self, ev: UserCommandEndEvent) {
+        self.queue.push_back(QueuedInterrupt::UserCommandEnd(ev));
+    }
+
     pub(crate) fn push_mcp_begin(&mut self, ev: McpToolCallBeginEvent) {
         self.queue.push_back(QueuedInterrupt::McpBegin(ev));
     }
@@ -80,6 +92,8 @@ impl InterruptManager {
                 }
                 QueuedInterrupt::ExecBegin(ev) => chat.handle_exec_begin_now(ev),
                 QueuedInterrupt::ExecEnd(ev) => chat.handle_exec_end_now(ev),
+                QueuedInterrupt::UserCommandBegin(ev) => chat.handle_user_command_begin_now(ev),
+                QueuedInterrupt::UserCommandEnd(ev) => chat.handle_user_command_end_now(ev),
                 QueuedInterrupt::McpBegin(ev) => chat.handle_mcp_begin_now(ev),
                 QueuedInterrupt::McpEnd(ev) => chat.handle_mcp_end_now(ev),
                 QueuedInterrupt::PatchEnd(ev) => chat.handle_patch_apply_end_now(ev),
