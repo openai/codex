@@ -15,6 +15,13 @@ use uuid::Uuid;
 
 use crate::user_instructions::UserInstructions;
 
+fn is_user_shell_command_prefix(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    let lowered = trimmed.to_ascii_lowercase();
+    lowered.starts_with("<user_shell_command>")
+        || lowered.starts_with("<user_shell_command_output>")
+}
+
 fn is_session_prefix(text: &str) -> bool {
     let trimmed = text.trim_start();
     let lowered = trimmed.to_ascii_lowercase();
@@ -31,7 +38,7 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
     for content_item in message.iter() {
         match content_item {
             ContentItem::InputText { text } => {
-                if is_session_prefix(text) {
+                if is_session_prefix(text) || is_user_shell_command_prefix(text) {
                     return None;
                 }
                 content.push(UserInput::Text { text: text.clone() });
@@ -42,7 +49,7 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 });
             }
             ContentItem::OutputText { text } => {
-                if is_session_prefix(text) {
+                if is_session_prefix(text) || is_user_shell_command_prefix(text) {
                     return None;
                 }
                 warn!("Output text in user message: {}", text);
