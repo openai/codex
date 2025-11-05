@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use codex_core::config::Config;
 use codex_core::config::types::Notifications;
@@ -231,6 +232,14 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) feedback: codex_feedback::CodexFeedback,
 }
 
+#[derive(Default)]
+enum RateLimitSwitchPromptState {
+    #[default]
+    Idle,
+    Pending,
+    Shown,
+}
+
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -243,7 +252,7 @@ pub(crate) struct ChatWidget {
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
     rate_limit_warnings: RateLimitWarningState,
-    rate_limit_switch_prompt_pending: bool,
+    rate_limit_switch_prompt: RateLimitSwitchPromptState,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
@@ -503,14 +512,19 @@ impl ChatWidget {
 
             if !warnings.is_empty()
                 && self.config.model != NUDGE_MODEL_SLUG
+                && !matches!(
+                    self.rate_limit_switch_prompt,
+                    RateLimitSwitchPromptState::Shown
+                )
                 && let Some(preset) = self.lower_cost_preset()
             {
                 let task_running =
                     self.stream_controller.is_some() || self.bottom_pane.status_widget().is_some();
                 if task_running {
-                    self.rate_limit_switch_prompt_pending = true;
+                    self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
                 } else {
                     self.open_rate_limit_switch_prompt(preset);
+                    self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Shown;
                 }
             }
 
@@ -1019,7 +1033,7 @@ impl ChatWidget {
             token_info: None,
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
-            rate_limit_switch_prompt_pending: false,
+            rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -1086,7 +1100,7 @@ impl ChatWidget {
             token_info: None,
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
-            rate_limit_switch_prompt_pending: false,
+            rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -1694,16 +1708,22 @@ impl ChatWidget {
     }
 
     fn maybe_show_pending_rate_limit_prompt(&mut self) {
-        if !self.rate_limit_switch_prompt_pending {
+        if !matches!(
+            self.rate_limit_switch_prompt,
+            RateLimitSwitchPromptState::Pending
+        ) {
             return;
         }
-        self.rate_limit_switch_prompt_pending = false;
         if let Some(preset) = self.lower_cost_preset() {
             self.open_rate_limit_switch_prompt(preset);
+            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Shown;
+        } else {
+            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
         }
     }
 
     fn open_rate_limit_switch_prompt(&mut self, preset: ModelPreset) {
+        std::thread::sleep(Duration::from_millis(500));
         let switch_model = preset.model.to_string();
         let display_name = preset.display_name.to_string();
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
