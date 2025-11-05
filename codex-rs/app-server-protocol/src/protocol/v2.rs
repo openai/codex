@@ -150,16 +150,21 @@ pub enum LoginAccountParams {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
-pub struct LoginAccountResponse {
-    /// Only set if the login method is ChatGPT.
-    #[schemars(with = "String")]
-    pub login_id: Option<Uuid>,
-
-    /// URL the client should open in a browser to initiate the OAuth flow.
-    /// Only set if the login method is ChatGPT.
-    pub auth_url: Option<String>,
+pub enum LoginAccountResponse {
+    #[serde(rename = "apiKey")]
+    #[ts(rename = "apiKey")]
+    ApiKey {},
+    #[serde(rename = "chatgpt")]
+    #[ts(rename = "chatgpt")]
+    ChatGpt {
+        #[schemars(with = "String")]
+        login_id: Uuid,
+        /// URL the client should open in a browser to initiate the OAuth flow.
+        auth_url: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -610,4 +615,14 @@ impl From<CoreRateLimitWindow> for RateLimitWindow {
             resets_at: value.resets_at,
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountLoginCompletedNotification {
+    #[schemars(with = "Option<String>")]
+    pub login_id: Option<Uuid>,
+    pub success: bool,
+    pub error: Option<String>,
 }
