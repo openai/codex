@@ -47,13 +47,9 @@ struct VersionInfo {
     dismissed_version: Option<String>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
-struct ReleaseInfo {
-    tag_name: String,
-}
-
 const VERSION_FILENAME: &str = "version.json";
-const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
+const HOMEBREW_CASK_URL: &str =
+    "https://raw.githubusercontent.com/Homebrew/homebrew-cask/HEAD/Casks/c/codex.rb";
 
 fn version_filepath(config: &Config) -> PathBuf {
     config.codex_home.join(VERSION_FILENAME)
@@ -65,23 +61,19 @@ fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
 }
 
 async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
-    let ReleaseInfo {
-        tag_name: latest_tag_name,
-    } = create_client()
-        .get(LATEST_RELEASE_URL)
+    let cask_contents = create_client()
+        .get(HOMEBREW_CASK_URL)
         .send()
         .await?
         .error_for_status()?
-        .json::<ReleaseInfo>()
+        .text()
         .await?;
+    let latest_version = extract_version_from_cask(&cask_contents)?;
 
     // Preserve any previously dismissed version if present.
     let prev_info = read_version_info(version_file).ok();
     let info = VersionInfo {
-        latest_version: latest_tag_name
-            .strip_prefix("rust-v")
-            .ok_or_else(|| anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))?
-            .into(),
+        latest_version,
         last_checked_at: Utc::now(),
         dismissed_version: prev_info.and_then(|p| p.dismissed_version),
     };
@@ -92,6 +84,18 @@ async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
     }
     tokio::fs::write(version_file, json_line).await?;
     Ok(())
+}
+
+fn extract_version_from_cask(cask_contents: &str) -> anyhow::Result<String> {
+    cask_contents
+        .lines()
+        .find_map(|line| {
+            let line = line.trim();
+            line.strip_prefix("version \"")
+                .and_then(|rest| rest.strip_suffix('"'))
+                .map(ToString::to_string)
+        })
+        .ok_or_else(|| anyhow::anyhow!("Failed to find version in Homebrew cask file"))
 }
 
 fn is_newer(latest: &str, current: &str) -> Option<bool> {
@@ -190,6 +194,19 @@ impl UpdateAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_version_from_cask_contents() {
+        let cask = r#"
+            cask "codex" do
+              version "0.55.0"
+            end
+        "#;
+        assert_eq!(
+            extract_version_from_cask(cask).expect("failed to parse version"),
+            "0.55.0"
+        );
+    }
 
     #[test]
     fn prerelease_version_is_not_considered_newer() {
