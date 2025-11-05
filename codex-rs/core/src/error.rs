@@ -249,7 +249,7 @@ impl UnexpectedResponseError {
 
         let mut message = format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {})", self.status);
         if let Some(id) = &self.request_id {
-            message.push_str(&format!(". Request id: {id}"));
+            message.push_str(&format!(", request id: {id}"));
         }
 
         Some(message)
@@ -698,7 +698,7 @@ mod tests {
         let status = StatusCode::FORBIDDEN.to_string();
         assert_eq!(
             err.to_string(),
-            format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {status}). Request id: ray-id")
+            format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {status}), request id: ray-id")
         );
     }
 
