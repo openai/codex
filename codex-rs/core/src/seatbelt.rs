@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+#[cfg(target_os = "macos")]
+use std::ffi::CStr;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::process::Child;
@@ -124,7 +126,12 @@ pub(crate) fn create_seatbelt_command_args(
 )
 (allow sysctl-read
   (sysctl-name-regex #"^net.routetable")
-)"#
+)
+(allow file-write*
+  (subpath (param "DARWIN_USER_CACHE_DIR"))
+  (subpath (param "DARWIN_USER_TEMP_DIR"))
+)
+"#
     } else {
         ""
     };
@@ -135,15 +142,69 @@ pub(crate) fn create_seatbelt_command_args(
 
     let mut seatbelt_args: Vec<String> = vec!["-p".to_string(), full_policy];
     seatbelt_args.extend(extra_cli_args);
+    #[cfg(target_os = "macos")]
+    {
+        seatbelt_args.extend(
+            macos_dir_params()
+                .into_iter()
+                .map(|(key, value)| format!("-D{key}={value}")),
+        );
+    }
     seatbelt_args.push("--".to_string());
     seatbelt_args.extend(command);
     seatbelt_args
+}
+
+#[cfg(target_os = "macos")]
+fn macos_confstr_path(name: libc::c_int) -> Option<PathBuf> {
+    // Use PATH_MAX+1 to mirror the C++ implementation and avoid a second call.
+    let mut buf = vec![0_i8; (libc::PATH_MAX as usize) + 1];
+    let len = unsafe { libc::confstr(name, buf.as_mut_ptr(), buf.len()) };
+    if len == 0 {
+        return None;
+    }
+
+    // Safety: confstr guarantees NUL-termination when len > 0.
+    let cstr = unsafe { CStr::from_ptr(buf.as_ptr()) };
+    let s = cstr.to_str().ok()?;
+    let path = PathBuf::from(s);
+    path.canonicalize().ok().or(Some(path))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_dir_params() -> Vec<(String, String)> {
+    let mut params = Vec::new();
+
+    if let Some(p) = macos_confstr_path(libc::_CS_DARWIN_USER_CACHE_DIR) {
+        params.push((
+            "DARWIN_USER_CACHE_DIR".to_string(),
+            p.to_string_lossy().to_string(),
+        ));
+    }
+
+    if let Some(p) = macos_confstr_path(libc::_CS_DARWIN_USER_DIR) {
+        params.push((
+            "DARWIN_USER_DIR".to_string(),
+            p.to_string_lossy().to_string(),
+        ));
+    }
+
+    if let Some(p) = macos_confstr_path(libc::_CS_DARWIN_USER_TEMP_DIR) {
+        params.push((
+            "DARWIN_USER_TEMP_DIR".to_string(),
+            p.to_string_lossy().to_string(),
+        ));
+    }
+
+    params
 }
 
 #[cfg(test)]
 mod tests {
     use super::MACOS_SEATBELT_BASE_POLICY;
     use super::create_seatbelt_command_args;
+    #[cfg(target_os = "macos")]
+    use super::macos_dir_params;
     use crate::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::fs;
@@ -217,6 +278,15 @@ mod tests {
             ),
             format!("-DWRITABLE_ROOT_2={}", cwd.to_string_lossy()),
         ];
+
+        #[cfg(target_os = "macos")]
+        {
+            expected_args.extend(
+                macos_dir_params()
+                    .into_iter()
+                    .map(|(key, value)| format!("-D{key}={value}")),
+            );
+        }
 
         expected_args.extend(vec![
             "--".to_string(),
@@ -309,6 +379,15 @@ mod tests {
 
         if let Some(p) = tmpdir_env_var {
             expected_args.push(format!("-DWRITABLE_ROOT_2={p}"));
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            expected_args.extend(
+                macos_dir_params()
+                    .into_iter()
+                    .map(|(key, value)| format!("-D{key}={value}")),
+            );
         }
 
         expected_args.extend(vec![
