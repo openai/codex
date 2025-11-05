@@ -188,24 +188,10 @@ impl App {
                     .hide_world_writable_warning
                     .unwrap_or(false);
             if should_check {
-                use std::collections::HashMap;
                 let cwd = app.config.cwd.clone();
-                let env_map: HashMap<String, String> = std::env::vars().collect();
+                let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
-                tokio::task::spawn_blocking(move || {
-                    if codex_windows_sandbox::preflight_audit_everyone_writable(&cwd, &env_map)
-                        .is_err()
-                    {
-                        // Use the built-in Auto preset for labels and to drive actions, if present.
-                        if let Some(preset) =
-                            codex_common::approval_presets::builtin_approval_presets()
-                                .into_iter()
-                                .find(|p| p.id == "auto")
-                        {
-                            tx.send(AppEvent::OpenWorldWritableWarningConfirmation { preset });
-                        }
-                    }
-                });
+                Self::spawn_world_writable_scan(cwd, env_map, tx);
             }
         }
 
@@ -482,28 +468,11 @@ impl App {
                         && policy_is_workspace_write
                         && !self.chat_widget.world_writable_warning_hidden();
                     if should_check {
-                        use std::collections::HashMap;
                         let cwd = self.config.cwd.clone();
-                        let env_map: HashMap<String, String> = std::env::vars().collect();
+                        let env_map: std::collections::HashMap<String, String> =
+                            std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
-                        tokio::task::spawn_blocking(move || {
-                            if codex_windows_sandbox::preflight_audit_everyone_writable(
-                                &cwd, &env_map,
-                            )
-                            .is_err()
-                            {
-                                // Use the built-in Auto preset to drive the confirmation, if present.
-                                if let Some(preset) =
-                                    codex_common::approval_presets::builtin_approval_presets()
-                                        .into_iter()
-                                        .find(|p| p.id == "auto")
-                                {
-                                    tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
-                                        preset,
-                                    });
-                                }
-                            }
-                        });
+                        Self::spawn_world_writable_scan(cwd, env_map, tx);
                     }
                 }
             }
@@ -649,6 +618,24 @@ impl App {
                 // Ignore Release key events.
             }
         };
+    }
+
+    #[cfg(target_os = "windows")]
+    fn spawn_world_writable_scan(
+        cwd: PathBuf,
+        env_map: std::collections::HashMap<String, String>,
+        tx: AppEventSender,
+    ) {
+        tokio::task::spawn_blocking(move || {
+            if codex_windows_sandbox::preflight_audit_everyone_writable(&cwd, &env_map).is_err() {
+                if let Some(preset) = codex_common::approval_presets::builtin_approval_presets()
+                    .into_iter()
+                    .find(|p| p.id == "auto")
+                {
+                    tx.send(AppEvent::OpenWorldWritableWarningConfirmation { preset });
+                }
+            }
+        });
     }
 }
 
