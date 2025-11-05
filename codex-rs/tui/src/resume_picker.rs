@@ -930,12 +930,6 @@ fn human_time_ago(ts: DateTime<Utc>) -> String {
     }
 }
 
-fn format_created_label(row: &Row) -> String {
-    row.created_at
-        .map(human_time_ago)
-        .unwrap_or_else(|| "-".to_string())
-}
-
 fn format_updated_label(row: &Row) -> String {
     match (row.updated_at, row.created_at) {
         (Some(updated), _) => human_time_ago(updated),
