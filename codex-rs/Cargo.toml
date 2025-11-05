@@ -162,7 +162,7 @@ ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
 regex-lite = "0.1.7"
 reqwest = "0.12"
-rmcp = { version = "0.8.3", default-features = false }
+rmcp = { version = "0.8.4", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 sentry = "0.34.0"
@@ -256,7 +256,12 @@ unwrap_used = "deny"
 # cargo-shear cannot see the platform-specific openssl-sys usage, so we
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
-ignored = ["icu_provider", "openssl-sys", "codex-utils-readiness", "codex-utils-tokenizer"]
+ignored = [
+    "icu_provider",
+    "openssl-sys",
+    "codex-utils-readiness",
+    "codex-utils-tokenizer",
+]
 
 [profile.release]
 lto = "fat"
