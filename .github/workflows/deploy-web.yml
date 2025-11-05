@@ -1,0 +1,74 @@
+name: Deploy Prism Web to Vercel
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'prism-web/**'
+      - '.github/workflows/deploy-web.yml'
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - 'prism-web/**'
+
+env:
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: prism-web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ./prism-web
+        run: npm ci
+
+      - name: Type check
+        working-directory: ./prism-web
+        run: npm run type-check
+
+      - name: Lint
+        working-directory: ./prism-web
+        run: npm run lint
+
+      - name: Build
+        working-directory: ./prism-web
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: npm run build
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel Environment Information
+        working-directory: ./prism-web
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build Project Artifacts
+        working-directory: ./prism-web
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy Project Artifacts to Vercel
+        if: github.event_name == 'push'
+        working-directory: ./prism-web
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy Preview
+        if: github.event_name == 'pull_request'
+        working-directory: ./prism-web
+        run: vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }}

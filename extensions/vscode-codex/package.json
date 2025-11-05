@@ -1,0 +1,338 @@
+{
+  "name": "codex-assistant",
+  "displayName": "Codex AI Assistant",
+  "description": "Autonomous AI coding assistant with sub-agent orchestration and deep research",
+  "version": "0.57.0",
+  "publisher": "zapabob",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "Snippets",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "codex",
+    "assistant",
+    "orchestrator",
+    "research",
+    "mcp",
+    "cursor"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codex.startOrchestrator",
+        "title": "Codex: Start Orchestrator"
+      },
+      {
+        "command": "codex.stopOrchestrator",
+        "title": "Codex: Stop Orchestrator"
+      },
+      {
+        "command": "codex.showStatus",
+        "title": "Codex: Show Orchestrator Status"
+      },
+      {
+        "command": "codex.delegateTask",
+        "title": "Codex: Delegate Task to Agent"
+      },
+      {
+        "command": "codex.deepResearch",
+        "title": "Codex: Deep Research"
+      },
+      {
+        "command": "codex.reviewCode",
+        "title": "Codex: Review Selected Code"
+      },
+      {
+        "command": "codex.generateTests",
+        "title": "Codex: Generate Tests"
+      },
+      {
+        "command": "codex.securityAudit",
+        "title": "Codex: Security Audit"
+      },
+      {
+        "command": "codex.openWebUI",
+        "title": "Codex: Open Web GUI"
+      },
+      {
+        "command": "codex.blueprint.toggle",
+        "title": "Codex: Toggle Blueprint Mode"
+      },
+      {
+        "command": "codex.blueprint.create",
+        "title": "Codex: Create Blueprint"
+      },
+      {
+        "command": "codex.blueprint.approve",
+        "title": "Codex: Approve Blueprint"
+      },
+      {
+        "command": "codex.blueprint.reject",
+        "title": "Codex: Reject Blueprint"
+      },
+      {
+        "command": "codex.blueprint.export",
+        "title": "Codex: Export Blueprint"
+      },
+      {
+        "command": "codex.blueprint.setMode",
+        "title": "Codex: Set Execution Mode"
+      },
+      {
+        "command": "codex.blueprint.deepResearch",
+        "title": "Codex: Deep Research (Blueprint)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codex-sidebar",
+          "title": "Codex AI",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "codex-sidebar": [
+        {
+          "id": "codex.orchestratorStatus",
+          "name": "Orchestrator Status"
+        },
+        {
+          "id": "codex.activeAgents",
+          "name": "Active Agents"
+        },
+        {
+          "id": "codex.researchHistory",
+          "name": "Research History"
+        },
+        {
+          "id": "codex.mcpServers",
+          "name": "MCP Servers"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Codex AI Assistant",
+      "properties": {
+        "codex.orchestrator.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start Orchestrator on extension activation"
+        },
+        "codex.orchestrator.transport": {
+          "type": "string",
+          "enum": ["tcp", "uds", "named-pipe"],
+          "default": "tcp",
+          "description": "Transport protocol for Orchestrator RPC"
+        },
+        "codex.orchestrator.port": {
+          "type": "number",
+          "default": 9876,
+          "description": "TCP port for Orchestrator (tcp transport only)"
+        },
+        "codex.orchestrator.socket": {
+          "type": "string",
+          "default": "/tmp/codex-orchestrator.sock",
+          "description": "Socket path for Orchestrator (uds transport only)"
+        },
+        "codex.orchestrator.pipe": {
+          "type": "string",
+          "default": "\\\\.\\pipe\\codex-orchestrator",
+          "description": "Named pipe for Orchestrator (named-pipe transport only)"
+        },
+        "codex.gemini.authMethod": {
+          "type": "string",
+          "enum": ["api-key", "oauth"],
+          "default": "oauth",
+          "description": "Gemini authentication method"
+        },
+        "codex.research.maxDepth": {
+          "type": "number",
+          "default": 3,
+          "description": "Maximum research depth"
+        },
+        "codex.research.maxSources": {
+          "type": "number",
+          "default": 10,
+          "description": "Maximum number of research sources"
+        },
+        "codex.gui.autoOpen": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically open Web GUI on extension activation"
+        },
+        "codex.gui.port": {
+          "type": "number",
+          "default": 3000,
+          "description": "Web GUI port"
+        },
+        "codex.mcp.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically connect to MCP servers"
+        },
+        "codex.blueprint.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Blueprint Mode (read-only planning phase)"
+        },
+        "codex.blueprint.mode": {
+          "type": "string",
+          "enum": ["single", "orchestrated", "competition"],
+          "default": "orchestrated",
+          "description": "Default execution mode for blueprints"
+        },
+        "codex.blueprint.autoApprove": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically approve blueprints (NOT RECOMMENDED)"
+        },
+        "codex.blueprint.exportPath": {
+          "type": "string",
+          "default": "docs/blueprints",
+          "description": "Default export path for blueprint markdown files"
+        },
+        "codex.competition.numVariants": {
+          "type": "number",
+          "default": 2,
+          "minimum": 2,
+          "maximum": 5,
+          "description": "Number of variants to run in competition mode"
+        },
+        "codex.competition.weights.tests": {
+          "type": "number",
+          "default": 0.5,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Weight for test results in competition scoring"
+        },
+        "codex.competition.weights.performance": {
+          "type": "number",
+          "default": 0.3,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Weight for performance in competition scoring"
+        },
+        "codex.competition.weights.simplicity": {
+          "type": "number",
+          "default": 0.2,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Weight for code simplicity in competition scoring"
+        },
+        "codex.research.requireApproval": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require approval for deep research operations"
+        },
+        "codex.webhooks.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable webhook notifications"
+        },
+        "codex.webhooks.github.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable GitHub webhook integration"
+        },
+        "codex.webhooks.slack.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable Slack webhook integration"
+        },
+        "codex.telemetry.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable privacy-respecting telemetry collection"
+        },
+        "codex.compat.planAlias": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable /plan as alias for /blueprint (compatibility mode)"
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "codex.delegateTask",
+        "key": "ctrl+shift+d",
+        "mac": "cmd+shift+d",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "codex.deepResearch",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r"
+      },
+      {
+        "command": "codex.reviewCode",
+        "key": "ctrl+shift+c",
+        "mac": "cmd+shift+c",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "codex.blueprint.toggle",
+        "key": "shift+tab",
+        "when": "editorTextFocus"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "codex.reviewCode",
+          "when": "editorHasSelection",
+          "group": "codex@1"
+        },
+        {
+          "command": "codex.generateTests",
+          "group": "codex@2"
+        },
+        {
+          "command": "codex.securityAudit",
+          "group": "codex@3"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.15.0",
+    "@typescript-eslint/parser": "^6.15.0",
+    "@vscode/test-electron": "^2.3.8",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.3",
+    "@vscode/vsce": "^2.22.0"
+  },
+  "dependencies": {
+    "@zapabob/codex-protocol-client": "^0.55.0",
+    "ws": "^8.16.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zapabob/codex.git"
+  },
+  "license": "Apache-2.0"
+}
+
+

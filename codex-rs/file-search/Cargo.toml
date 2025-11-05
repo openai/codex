@@ -1,0 +1,21 @@
+[package]
+edition = "2024"
+name = "codex-file-search"
+version = { workspace = true }
+
+[[bin]]
+name = "codex-file-search"
+path = "src/main.rs"
+
+[lib]
+name = "codex_file_search"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+ignore = { workspace = true }
+nucleo-matcher = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }

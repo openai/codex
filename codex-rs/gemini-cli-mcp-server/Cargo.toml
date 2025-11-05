@@ -1,0 +1,30 @@
+[package]
+description = "MCP server that wraps Gemini CLI for Codex and Cursor IDE integration with OAuth 2.0 + PKCE"
+edition.workspace = true
+name = "codex-gemini-cli-mcp-server"
+version.workspace = true
+
+[lib]
+name = "codex_gemini_cli_mcp_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codex-gemini-mcp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+base64 = { workspace = true }
+dirs = { workspace = true }
+mcp-types = { path = "../mcp-types" }
+rand = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["full", "io-std"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+urlencoding = "2.1"
+
+[dev-dependencies]
+pretty_assertions.workspace = true

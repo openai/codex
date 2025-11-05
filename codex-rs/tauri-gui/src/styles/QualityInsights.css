@@ -1,0 +1,136 @@
+.quality-insights {
+  background: rgba(20, 20, 30, 0.95);
+  border-radius: 8px;
+  padding: 20px;
+  color: #fff;
+  max-width: 600px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.quality-insights.loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 200px;
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.quality-insights.error {
+  background: rgba(139, 0, 0, 0.2);
+  border: 1px solid #8b0000;
+}
+
+.quality-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.quality-header h3 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.quality-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.metric-card {
+  background: rgba(40, 40, 50, 0.5);
+  border-radius: 6px;
+  padding: 15px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.metric-icon {
+  font-size: 32px;
+}
+
+.metric-content {
+  flex: 1;
+}
+
+.metric-label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  margin-bottom: 8px;
+}
+
+.quality-insights-list,
+.quality-issues {
+  margin-top: 20px;
+}
+
+.quality-insights-list h4,
+.quality-issues h4 {
+  margin: 0 0 10px 0;
+  font-size: 16px;
+}
+
+.quality-insights-list ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.quality-insights-list li {
+  margin-bottom: 8px;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.issue-card {
+  background: rgba(40, 40, 50, 0.5);
+  border-left: 3px solid;
+  border-radius: 4px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.issue-header {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.issue-severity {
+  font-size: 10px;
+  font-weight: bold;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.issue-category {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+  text-transform: uppercase;
+}
+
+.issue-description {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.issue-location {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  font-family: monospace;
+}
+
+

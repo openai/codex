@@ -1,0 +1,32 @@
+[package]
+edition = "2024"
+name = "codex-linux-sandbox"
+version = { workspace = true }
+
+[[bin]]
+name = "codex-linux-sandbox"
+path = "src/main.rs"
+
+[lib]
+name = "codex_linux_sandbox"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+clap = { workspace = true, features = ["derive"] }
+codex-core = { workspace = true }
+landlock = { workspace = true }
+libc = { workspace = true }
+seccompiler = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }

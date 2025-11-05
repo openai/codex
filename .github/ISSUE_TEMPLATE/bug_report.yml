@@ -1,0 +1,82 @@
+name: 🐛 Bug Report
+description: Report a bug in Codex
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+        
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which component is affected?
+      options:
+        - Core (Rust)
+        - Kernel Extensions (Linux)
+        - Kernel Extensions (Windows)
+        - Repository Visualizer
+        - Desktop App
+        - VSCode Extension
+        - Documentation
+        - Other
+    validations:
+      required: true
+      
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of the bug
+      placeholder: What happened?
+    validations:
+      required: true
+      
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior
+      placeholder: |
+        1. Install module with...
+        2. Run command...
+        3. See error...
+    validations:
+      required: true
+      
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+      
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        examples:
+          - **OS**: Ubuntu 22.04
+          - **Kernel**: 5.15.0
+          - **Codex Version**: 1.0.0
+          - **GPU**: NVIDIA RTX 3080
+      value: |
+        - OS: 
+        - Kernel: 
+        - Codex Version: 
+        - GPU: 
+      render: markdown
+    validations:
+      required: true
+      
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs
+      description: Please copy and paste any relevant log output
+      render: shell
+

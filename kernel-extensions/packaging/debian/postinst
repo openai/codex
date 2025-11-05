@@ -1,0 +1,41 @@
+#!/bin/bash
+# Post-installation script
+
+set -e
+
+echo "🚀 Codex AI Kernel Modules - Post-installation"
+echo ""
+
+# DKMS add modules
+echo "Adding modules to DKMS..."
+dkms add -m codex-ai-kernel -v 0.2.0 || true
+
+# DKMS build
+echo "Building modules..."
+dkms build -m codex-ai-kernel -v 0.2.0 || true
+
+# DKMS install
+echo "Installing modules..."
+dkms install -m codex-ai-kernel -v 0.2.0 || true
+
+# Load modules
+echo "Loading modules..."
+modprobe ai_scheduler || true
+modprobe ai_mem || true
+modprobe ai_gpu || true
+
+# Check status
+echo ""
+echo "✅ Installation complete!"
+echo ""
+echo "Check module status:"
+echo "  lsmod | grep ai_"
+echo ""
+echo "View statistics:"
+echo "  cat /proc/ai_scheduler"
+echo "  cat /proc/ai_memory"
+echo "  cat /proc/ai_gpu"
+echo ""
+
+exit 0
+

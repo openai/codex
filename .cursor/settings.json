@@ -1,0 +1,80 @@
+{
+  "codex.subagents.enabled": true,
+  "codex.subagents.directory": ".codex/agents",
+  "codex.deepResearch.enabled": true,
+  "codex.mcp.enabled": true,
+  "codex.mcp.configPath": ".cursor/mcp.json",
+  
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": true,
+    "source.organizeImports": true
+  },
+  
+  "typescript.preferences.importModuleSpecifier": "relative",
+  "typescript.updateImportsOnFileMove.enabled": "always",
+  
+  "python.linting.enabled": true,
+  "python.linting.pylintEnabled": true,
+  "python.formatting.provider": "black",
+  "python.linting.mypyEnabled": true,
+  
+  "rust-analyzer.checkOnSave.command": "clippy",
+  "rust-analyzer.cargo.features": "all",
+  
+  "[csharp]": {
+    "editor.defaultFormatter": "ms-dotnettools.csharp"
+  },
+  
+  "codex.quickActions": [
+    {
+      "id": "codex.reviewFile",
+      "title": "Review Current File",
+      "command": "codex.delegate",
+      "args": ["code-reviewer", "--scope", "${file}"],
+      "keybinding": "Ctrl+Shift+R"
+    },
+    {
+      "id": "codex.deepResearch",
+      "title": "Deep Research",
+      "command": "codex.research",
+      "args": ["${selection}", "--depth", "3"],
+      "keybinding": "Ctrl+Shift+S"
+    },
+    {
+      "id": "codex.generateTests",
+      "title": "Generate Tests",
+      "command": "codex.delegate",
+      "args": ["test-gen", "--scope", "${file}"],
+      "keybinding": "Ctrl+Shift+T"
+    },
+    {
+      "id": "codex.securityAudit",
+      "title": "Security Audit",
+      "command": "codex.delegate",
+      "args": ["sec-audit", "--scope", "${workspaceFolder}"],
+      "keybinding": "Ctrl+Shift+A"
+    }
+  ],
+  
+  "codex.composer.suggestTools": true,
+  "codex.composer.autoContext": true,
+  "codex.composer.enableMCP": true,
+  
+  "codex.chat.enableAgents": true,
+  "codex.chat.suggestRelevantAgent": true,
+  
+  "files.associations": {
+    "*.yaml": "yaml",
+    ".cursorrules": "markdown",
+    "mcp.json": "jsonc"
+  },
+  
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/target": true,
+    "**/.codex/artifacts": true,
+    "**/rmcp-*": true
+  }
+}
+

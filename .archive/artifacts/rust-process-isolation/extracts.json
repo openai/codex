@@ -1,0 +1,74 @@
+{
+  "landlock_news_2025": {
+    "highlights": [
+      {
+        "text": "Linux 6.12 introduced Landlock scope flags to restrict abstract UNIX sockets and cross-domain signal delivery, tightening IPC for sandboxed processes.",
+        "confidence": 0.7,
+        "sources": [
+          "https://github.com/landlock-lsm/landlock-lsm.github.io/blob/main/news/5.md"
+        ]
+      },
+      {
+        "text": "Linux 6.15 added audit logging for Landlock denials plus new logging policy flags, enabling operators to debug sandbox escapes and tune policies.",
+        "confidence": 0.7,
+        "sources": [
+          "https://github.com/landlock-lsm/landlock-lsm.github.io/blob/main/news/5.md"
+        ]
+      },
+      {
+        "text": "The Rust landlock crate gained support for the latest ABI alongside guidance for new user-space adopters such as Nomad and GNOME tracker-extract.",
+        "confidence": 0.6,
+        "sources": [
+          "https://github.com/landlock-lsm/landlock-lsm.github.io/blob/main/news/5.md"
+        ]
+      }
+    ]
+  },
+  "youki_changelog_2025": {
+    "highlights": [
+      {
+        "text": "Youki v0.5.4 (July 2025) added exec CPU affinity controls and improved mount handling, strengthening container resource isolation on cgroups v2.",
+        "confidence": 0.6,
+        "sources": [
+          "https://raw.githubusercontent.com/youki-dev/youki/main/CHANGELOG.md"
+        ]
+      },
+      {
+        "text": "Recent releases fixed Wasm executor shutdown behavior and UID/GID mapping tests, showing active hardening of non-Linux guest workloads inside Youki.",
+        "confidence": 0.6,
+        "sources": [
+          "https://raw.githubusercontent.com/youki-dev/youki/main/CHANGELOG.md"
+        ]
+      }
+    ]
+  },
+  "wasmtime_releases": {
+    "highlights": [
+      {
+        "text": "Wasmtime 28.0.0 introduced a signals-based-traps feature flag and reduced guard regions, letting hosts choose trap enforcement while porting to new OSes.",
+        "confidence": 0.6,
+        "sources": [
+          "https://raw.githubusercontent.com/bytecodealliance/wasmtime/release-28.0.0/RELEASES.md"
+        ]
+      },
+      {
+        "text": "Wasmtime 31.0.0 (March 2025) continued stack-switching work and completed Winch SIMD support, improving multi-threaded sandbox scheduling and performance.",
+        "confidence": 0.6,
+        "sources": [
+          "https://raw.githubusercontent.com/bytecodealliance/wasmtime/release-31.0.0/RELEASES.md"
+        ]
+      }
+    ]
+  },
+  "firecracker_changelog": {
+    "highlights": [
+      {
+        "text": "Firecracker 1.13.0 (2024) added optional PCI device support and diff snapshots without dirty tracking, expanding microVM isolation scenarios while keeping lightweight security boundaries.",
+        "confidence": 0.5,
+        "sources": [
+          "https://raw.githubusercontent.com/firecracker-microvm/firecracker/main/CHANGELOG.md"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+2025-10-11 00:48:54,186 [INFO] ======================================================================
+2025-10-11 00:48:54,186 [INFO]   🚀 Codex Automatic Build & Install (Enhanced)
+2025-10-11 00:48:54,186 [INFO]   GPU-Optimized | Checkpoint System | Auto-Recovery
+2025-10-11 00:48:54,188 [INFO] ======================================================================
+2025-10-11 00:48:54,188 [INFO] 📋 Pre-build Checks:
+2025-10-11 00:48:54,362 [INFO] 🦀 Rust: cargo 1.87.0 (99624be96 2025-05-06)
+2025-10-11 00:48:54,363 [INFO] ✓ Disk space: 57.7 GB available
+2025-10-11 00:48:54,365 [INFO]   ℹ sccache not found (building without cache)
+2025-10-11 00:48:54,367 [INFO] ⚙️  Build Configuration:
+2025-10-11 00:48:54,367 [INFO]   - Session ID: 20251011_004854
+2025-10-11 00:48:54,367 [INFO]   - Parallel jobs: 12 (RTX3080 CPU cores)
+2025-10-11 00:48:54,367 [INFO]   - Target CPU: native
+2025-10-11 00:48:54,367 [INFO]   - Cache: disabled
+2025-10-11 00:48:54,367 [INFO]   - Log file: _docs/build-log-20251011_004854.log
+2025-10-11 00:48:54,398 [INFO] [1/6] Cleaning build artifacts...
+2025-10-11 00:48:56,729 [INFO]   ✓ Clean complete
+2025-10-11 00:48:56,732 [INFO] [2/6] Building Deep Research module (parallel: 12 jobs)...
+2025-10-11 00:51:39,936 [INFO]   ✓ Deep Research compiled in 163.2s
+2025-10-11 00:51:39,942 [INFO] [3/6] Building Core Binaries...
+2025-10-11 00:51:39,947 [INFO]   Building codex-tui (parallel: 12 jobs)...
+2025-10-11 01:02:07,702 [WARNING]   Retry 1/1...
+2025-10-11 01:03:49,608 [ERROR]   Failed after 2 attempts
+2025-10-11 01:03:49,609 [ERROR]   ❌ codex-tui build failed

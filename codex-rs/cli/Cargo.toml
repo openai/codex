@@ -1,0 +1,79 @@
+[package]
+edition = { workspace = true }
+name = "codex-cli"
+version = { workspace = true }
+
+[[bin]]
+name = "codex"
+path = "src/main.rs"
+
+[lib]
+name = "codex_cli"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+clap_complete = { workspace = true }
+codex-app-server = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+codex-arg0 = { workspace = true }
+codex-chatgpt = { workspace = true }
+codex-cloud-tasks = { path = "../cloud-tasks" }
+codex-common = { workspace = true, features = ["cli"] }
+codex-core = { workspace = true }
+codex-deep-research = { workspace = true }
+codex-exec = { workspace = true }
+codex-gemini-cli-mcp-server = { path = "../gemini-cli-mcp-server" }
+codex-login = { workspace = true }
+codex-otel = { workspace = true }
+codex-mcp-server = { workspace = true }
+codex-process-hardening = { workspace = true }
+codex-protocol = { workspace = true }
+codex-protocol-ts = { workspace = true }
+codex-responses-api-proxy = { workspace = true }
+codex-rmcp-client = { workspace = true }
+codex-supervisor = { workspace = true }
+codex-stdio-to-uds = { workspace = true }
+codex-tui = { workspace = true }
+ctor = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+git2 = { workspace = true }
+owo-colors = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+slug = "0.1"
+supports-color = { workspace = true }
+toml = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+assert_matches = { workspace = true }
+predicates = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+
+[build-dependencies]
+
+[[bench]]
+name = "git_analysis"
+harness = false
+path = "../benches/git_analysis.rs"
+
+[dependencies.criterion]
+version = "0.5"
+features = ["html_reports"]

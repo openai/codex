@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>SVG to PNG Converter</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: white;
+        }
+        #container {
+            width: 1200px;
+            height: 675px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        img {
+            max-width: 100%;
+            max-height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <img id="svgImage" />
+    </div>
+    <script>
+        // URLパラメータからSVGファイルパスを取得
+        const urlParams = new URLSearchParams(window.location.search);
+        const svgPath = urlParams.get('svg') || '../docs/codex-architecture-current.svg';
+        
+        // SVG読み込み
+        document.getElementById('svgImage').src = svgPath;
+        
+        // ページタイトル更新
+        document.title = `SVG: ${svgPath.split('/').pop()}`;
+        
+        // 開発者ツールでスクリーンショット撮影の案内
+        console.log('📸 To save as PNG:');
+        console.log('1. Press F12 to open DevTools');
+        console.log('2. Press Ctrl+Shift+P');
+        console.log('3. Type "screenshot" and select "Capture screenshot"');
+        console.log('4. Image will be saved as PNG');
+    </script>
+</body>
+</html>
+

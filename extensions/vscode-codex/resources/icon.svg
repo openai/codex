@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background Circle -->
+  <circle cx="64" cy="64" r="60" fill="#7b1fa2" opacity="0.9"/>
+  
+  <!-- AI Brain Symbol -->
+  <g fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round">
+    <!-- Brain outline -->
+    <path d="M 35 50 Q 30 45, 30 40 Q 30 30, 40 30 Q 45 30, 50 35 Q 55 30, 64 30 Q 73 30, 78 35 Q 83 30, 88 30 Q 98 30, 98 40 Q 98 45, 93 50" />
+    <path d="M 35 50 Q 32 60, 35 70 Q 38 80, 45 85 Q 52 90, 64 90 Q 76 90, 83 85 Q 90 80, 93 70 Q 96 60, 93 50" />
+    
+    <!-- Neural connections -->
+    <circle cx="45" cy="50" r="4" fill="#ffffff"/>
+    <circle cx="64" cy="45" r="4" fill="#ffffff"/>
+    <circle cx="83" cy="50" r="4" fill="#ffffff"/>
+    <circle cx="50" cy="65" r="4" fill="#ffffff"/>
+    <circle cx="78" cy="65" r="4" fill="#ffffff"/>
+    <circle cx="64" cy="75" r="4" fill="#ffffff"/>
+    
+    <line x1="45" y1="50" x2="64" y2="45" stroke-width="2"/>
+    <line x1="64" y1="45" x2="83" y2="50" stroke-width="2"/>
+    <line x1="45" y1="50" x2="50" y2="65" stroke-width="2"/>
+    <line x1="83" y1="50" x2="78" y2="65" stroke-width="2"/>
+    <line x1="50" y1="65" x2="64" y2="75" stroke-width="2"/>
+    <line x1="78" y1="65" x2="64" y2="75" stroke-width="2"/>
+  </g>
+  
+  <!-- Code brackets -->
+  <g fill="#ffffff" font-family="monospace" font-size="32" font-weight="bold">
+    <text x="38" y="110" opacity="0.8">&lt;/&gt;</text>
+  </g>
+  
+  <!-- Sparkle effect -->
+  <g fill="#ffeb3b" opacity="0.7">
+    <circle cx="25" cy="25" r="3"/>
+    <circle cx="103" cy="25" r="3"/>
+    <circle cx="25" cy="103" r="3"/>
+    <circle cx="103" cy="103" r="3"/>
+  </g>
+</svg>
+

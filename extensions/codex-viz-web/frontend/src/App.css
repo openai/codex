@@ -1,0 +1,13 @@
+.app {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+  overflow: hidden;
+  background: #0a0a0a;
+}
+
+canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+

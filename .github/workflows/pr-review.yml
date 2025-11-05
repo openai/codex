@@ -1,0 +1,164 @@
+# Copyright 2025 zapabob
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: PR Review with Codex
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  # Codex CLI version (latest stable)
+  CODEX_CLI_VERSION: latest
+
+jobs:
+  codex_review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      # GitHub App token generation (if using GitHub App)
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.CODE_REVIEW_APP_ID }}
+          private-key: ${{ secrets.CODE_REVIEW_APP_PRIVATE_KEY }}
+
+      # Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # Fetch full history for better context
+        env:
+          token: ${{ steps.app-token.outputs.token }}
+
+      # Install pnpm (faster than npm)
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      # Setup Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      # Install Codex CLI
+      - name: Install Codex CLI
+        run: |
+          pnpm add -g @openai/codex@${{ env.CODEX_CLI_VERSION }}
+
+      # Install Gemini CLI (for fallback)
+      - name: Install Gemini CLI
+        run: |
+          pnpm add -g @google/gemini-cli@0.1.17
+
+      # Run Codex PR Review
+      - name: Run Codex PR Review
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          # Set review guidelines
+          REVIEW_GUIDELINES="
+          Please review this pull request with the following guidelines:
+          1. Code quality and best practices
+          2. Security vulnerabilities
+          3. Performance implications
+          4. Documentation completeness
+          5. Test coverage
+          6. Adherence to coding standards
+
+          Focus on:
+          - Potential bugs or issues
+          - Code maintainability
+          - Security concerns
+          - Performance optimizations
+          - Missing tests or documentation
+
+          Provide constructive feedback with specific suggestions for improvement.
+          "
+
+          # Run Codex review with enhanced prompt
+          echo "Starting Codex PR Review..."
+          codex review --model gpt-4o --guidelines "$REVIEW_GUIDELINES" --output-format markdown
+
+      # Fallback to Gemini CLI if Codex fails
+      - name: Fallback to Gemini CLI Review
+        if: failure()
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          echo "Codex review failed, falling back to Gemini CLI..."
+          gemini -y -m "gemini-2.5-flash" -p "$(printf '%s' '${{ vars.AI_REVIEW_GUIDELINE_GEMINI }}')"
+
+      # Post review summary
+      - name: Post Review Summary
+        if: always()
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          echo "PR Review completed. Check the comments above for detailed feedback."
+
+  # Additional security review job
+  security_review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Install Codex CLI
+        run: |
+          pnpm add -g @openai/codex@${{ env.CODEX_CLI_VERSION }}
+
+      - name: Security-focused Review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          SECURITY_GUIDELINES="
+          Perform a security-focused code review:
+          1. Check for common vulnerabilities (SQL injection, XSS, CSRF)
+          2. Validate input sanitization
+          3. Review authentication and authorization logic
+          4. Check for hardcoded secrets or credentials
+          5. Validate error handling and logging
+          6. Review file upload and data processing security
+
+          Flag any potential security issues with high priority.
+          "
+
+          codex review --model gpt-4o --guidelines "$SECURITY_GUIDELINES" --output-format markdown --focus security

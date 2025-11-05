@@ -1,0 +1,21 @@
+TARGETNAME=ai_driver
+TARGETTYPE=DRIVER
+DRIVERTYPE=WDM
+
+SOURCES=ai_driver.c \
+        ioctl_handlers.c \
+        gpu_integration.c \
+        nvapi_bridge.c \
+        dx12_compute.c
+
+INCLUDES=$(DDK_INC_PATH);$(SDK_INC_PATH)
+
+TARGETLIBS=$(DDK_LIB_PATH)\wdf01000.lib \
+          $(SDK_LIB_PATH)\ntoskrnl.lib \
+          $(SDK_LIB_PATH)\hal.lib
+
+MSC_WARNING_LEVEL=/W4
+KMDF_VERSION_MAJOR=1
+KMDF_VERSION_MINOR=11
+
+_NT_TARGET_VERSION=$(_NT_TARGET_VERSION_WIN10)

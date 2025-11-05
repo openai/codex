@@ -1,0 +1,30 @@
+graph TB
+    subgraph "Tauri App"
+        MAIN[App.tsx]
+        DASH[Dashboard]
+        ORCH[Orchestration]
+        GIT[GitVR]
+        BLUE[Blueprints]
+    end
+    
+    subgraph "Rust Backend"
+        TAURI[Tauri Commands]
+        CORE[Codex Core]
+        DB[SQLite DB]
+    end
+    
+    MAIN --> DASH
+    MAIN --> ORCH
+    MAIN --> GIT
+    MAIN --> BLUE
+    
+    DASH --> TAURI
+    ORCH --> TAURI
+    
+    TAURI --> CORE
+    TAURI --> DB
+    
+    style MAIN fill:#61dafb
+    style ORCH fill:#f39c12
+    style TAURI fill:#ff6b6b
+

@@ -1,0 +1,636 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<!--[if IE 6]><html class="ie6" xmlns="http://www.w3.org/1999/xhtml"><![endif]-->
+<!--[if IE 7]><html class="lt-ie8 lt-ie9" xmlns="http://www.w3.org/1999/xhtml"><![endif]-->
+<!--[if IE 8]><html class="lt-ie9" xmlns="http://www.w3.org/1999/xhtml"><![endif]-->
+<!--[if gt IE 8]><!--><html xmlns="http://www.w3.org/1999/xhtml"><!--<![endif]-->
+<head>
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=1" />
+  <meta name="referrer" content="origin" />
+  <meta name="HandheldFriendly" content="true" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>Tokio async runtime at DuckDuckGo</title>
+  <link title="DuckDuckGo (HTML)" type="application/opensearchdescription+xml" rel="search" href="//duckduckgo.com/opensearch_html_v2.xml" />
+  <link href="//duckduckgo.com/favicon.ico" rel="shortcut icon" />
+  <link rel="icon" href="//duckduckgo.com/favicon.ico" type="image/x-icon" />
+  <link id="icon60" rel="apple-touch-icon" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_60x60.png?v=2"/>
+  <link id="icon76" rel="apple-touch-icon" sizes="76x76" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_76x76.png?v=2"/>
+  <link id="icon120" rel="apple-touch-icon" sizes="120x120" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_120x120.png?v=2"/>
+  <link id="icon152" rel="apple-touch-icon" sizes="152x152" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_152x152.png?v=2"/>
+  <link rel="image_src" href="//duckduckgo.com/assets/icons/meta/DDG-icon_256x256.png">
+  <link rel="stylesheet" media="handheld, all" href="//duckduckgo.com/dist/h.5cdd129b369a4236564b.css" type="text/css"/>
+</head>
+
+<body class="body--html">
+  <a name="top" id="top"></a>
+
+  <form action="/html/" method="post">
+    <input type="text" name="state_hidden" id="state_hidden" />
+  </form>
+
+  <div>
+    <div class="site-wrapper-border"></div>
+
+    <div id="header" class="header cw header--html">
+      <a title="DuckDuckGo" href="/html/" class="header__logo-wrap"></a>
+
+      <form name="x" class="header__form" action="/html/" method="post">
+        <div class="search search--header">
+          <input name="q" autocomplete="off" class="search__input" id="search_form_input_homepage" type="text" value="Tokio async runtime" />
+          <input name="b" id="search_button_homepage" class="search__button search__button--html" value="" title="Search" alt="Search" type="submit" />
+        </div>
+
+        
+        
+        
+        
+
+        <div class="frm__select">
+          <select name="kl">
+            
+              <option value="" >All Regions</option>
+            
+              <option value="ar-es" >Argentina</option>
+            
+              <option value="au-en" >Australia</option>
+            
+              <option value="at-de" >Austria</option>
+            
+              <option value="be-fr" >Belgium (fr)</option>
+            
+              <option value="be-nl" >Belgium (nl)</option>
+            
+              <option value="br-pt" >Brazil</option>
+            
+              <option value="bg-bg" >Bulgaria</option>
+            
+              <option value="ca-en" >Canada (en)</option>
+            
+              <option value="ca-fr" >Canada (fr)</option>
+            
+              <option value="ct-ca" >Catalonia</option>
+            
+              <option value="cl-es" >Chile</option>
+            
+              <option value="cn-zh" >China</option>
+            
+              <option value="co-es" >Colombia</option>
+            
+              <option value="hr-hr" >Croatia</option>
+            
+              <option value="cz-cs" >Czech Republic</option>
+            
+              <option value="dk-da" >Denmark</option>
+            
+              <option value="ee-et" >Estonia</option>
+            
+              <option value="fi-fi" >Finland</option>
+            
+              <option value="fr-fr" >France</option>
+            
+              <option value="de-de" >Germany</option>
+            
+              <option value="gr-el" >Greece</option>
+            
+              <option value="hk-tzh" >Hong Kong</option>
+            
+              <option value="hu-hu" >Hungary</option>
+            
+              <option value="is-is" >Iceland</option>
+            
+              <option value="in-en" >India (en)</option>
+            
+              <option value="id-en" >Indonesia (en)</option>
+            
+              <option value="ie-en" >Ireland</option>
+            
+              <option value="il-en" >Israel (en)</option>
+            
+              <option value="it-it" >Italy</option>
+            
+              <option value="jp-jp" >Japan</option>
+            
+              <option value="kr-kr" >Korea</option>
+            
+              <option value="lv-lv" >Latvia</option>
+            
+              <option value="lt-lt" >Lithuania</option>
+            
+              <option value="my-en" >Malaysia (en)</option>
+            
+              <option value="mx-es" >Mexico</option>
+            
+              <option value="nl-nl" >Netherlands</option>
+            
+              <option value="nz-en" >New Zealand</option>
+            
+              <option value="no-no" >Norway</option>
+            
+              <option value="pk-en" >Pakistan (en)</option>
+            
+              <option value="pe-es" >Peru</option>
+            
+              <option value="ph-en" >Philippines (en)</option>
+            
+              <option value="pl-pl" >Poland</option>
+            
+              <option value="pt-pt" >Portugal</option>
+            
+              <option value="ro-ro" >Romania</option>
+            
+              <option value="ru-ru" >Russia</option>
+            
+              <option value="xa-ar" >Saudi Arabia</option>
+            
+              <option value="sg-en" >Singapore</option>
+            
+              <option value="sk-sk" >Slovakia</option>
+            
+              <option value="sl-sl" >Slovenia</option>
+            
+              <option value="za-en" >South Africa</option>
+            
+              <option value="es-ca" >Spain (ca)</option>
+            
+              <option value="es-es" >Spain (es)</option>
+            
+              <option value="se-sv" >Sweden</option>
+            
+              <option value="ch-de" >Switzerland (de)</option>
+            
+              <option value="ch-fr" >Switzerland (fr)</option>
+            
+              <option value="tw-tzh" >Taiwan</option>
+            
+              <option value="th-en" >Thailand (en)</option>
+            
+              <option value="tr-tr" >Turkey</option>
+            
+              <option value="us-en" >US (English)</option>
+            
+              <option value="us-es" >US (Spanish)</option>
+            
+              <option value="ua-uk" >Ukraine</option>
+            
+              <option value="uk-en" >United Kingdom</option>
+            
+              <option value="vn-en" >Vietnam (en)</option>
+            
+          </select>
+        </div>
+
+        <div class="frm__select frm__select--last">
+          <select class="" name="df">
+            
+              <option value="" selected>Any Time</option>
+            
+              <option value="d" >Past Day</option>
+            
+              <option value="w" >Past Week</option>
+            
+              <option value="m" >Past Month</option>
+            
+              <option value="y" >Past Year</option>
+            
+          </select>
+        </div>
+      </form>
+    </div>
+
+    
+
+    
+      <!-- Web results are present -->
+      <div>
+        <div class="serp__results">
+          <div id="links" class="results">
+            
+
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ftokio.rs%2F&amp;rut=26f3aa0303030385b82697f12518b38a508b69d135f62b750674b9139bc4dba5">Tokio - An asynchronous Rust runtime</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ftokio.rs%2F&amp;rut=26f3aa0303030385b82697f12518b38a508b69d135f62b750674b9139bc4dba5">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/tokio.rs.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ftokio.rs%2F&amp;rut=26f3aa0303030385b82697f12518b38a508b69d135f62b750674b9139bc4dba5">
+                            tokio.rs
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ftokio.rs%2F&amp;rut=26f3aa0303030385b82697f12518b38a508b69d135f62b750674b9139bc4dba5"><b>Tokio</b> is a <b>runtime</b> for writing reliable asynchronous applications with Rust. It provides <b>async</b> I/O, networking, scheduling, timers, and more.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Ftokio%2Drs%2Ftokio&amp;rut=4bcab01b719f8b5df0330c2c6c7bf6f77ebec7eb1e94204afe5aeaacb550aa54">GitHub - tokio-rs/tokio: A runtime for writing reliable asynchronous ...</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Ftokio%2Drs%2Ftokio&amp;rut=4bcab01b719f8b5df0330c2c6c7bf6f77ebec7eb1e94204afe5aeaacb550aa54">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/github.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Ftokio%2Drs%2Ftokio&amp;rut=4bcab01b719f8b5df0330c2c6c7bf6f77ebec7eb1e94204afe5aeaacb550aa54">
+                            github.com/tokio-rs/tokio
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Ftokio%2Drs%2Ftokio&amp;rut=4bcab01b719f8b5df0330c2c6c7bf6f77ebec7eb1e94204afe5aeaacb550aa54">A <b>runtime</b> for writing reliable, asynchronous, and slim applications with the Rust programming language. It is: Fast: <b>Tokio&#x27;s</b> zero-cost abstractions give you bare-metal performance. Reliable: <b>Tokio</b> leverages Rust&#x27;s ownership, type system, and concurrency model to reduce bugs and ensure thread safety. Scalable: <b>Tokio</b> has a minimal footprint, and handles backpressure and cancellation naturally ...</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fmedium.com%2F%40aayush71727%2Finside%2Drusts%2Dtokio%2Dthe%2Dmost%2Dmisunderstood%2Dasync%2Druntime%2D1c52dd99623a&amp;rut=9d9e4c17d63937901e7cb58fd6bb35e8632557f469a028084da730d38372c718">Inside Rust&#x27;s Tokio: The Most Misunderstood Async Runtime</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fmedium.com%2F%40aayush71727%2Finside%2Drusts%2Dtokio%2Dthe%2Dmost%2Dmisunderstood%2Dasync%2Druntime%2D1c52dd99623a&amp;rut=9d9e4c17d63937901e7cb58fd6bb35e8632557f469a028084da730d38372c718">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/medium.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fmedium.com%2F%40aayush71727%2Finside%2Drusts%2Dtokio%2Dthe%2Dmost%2Dmisunderstood%2Dasync%2Druntime%2D1c52dd99623a&amp;rut=9d9e4c17d63937901e7cb58fd6bb35e8632557f469a028084da730d38372c718">
+                            medium.com/@aayush71727/inside-rusts-tokio-the-most-misunderstood-async-runtime-1c52dd99623a
+                          </a>
+                          
+                            <span>&nbsp; &nbsp; 2025-08-27T00:00:00.0000000</span>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fmedium.com%2F%40aayush71727%2Finside%2Drusts%2Dtokio%2Dthe%2Dmost%2Dmisunderstood%2Dasync%2Druntime%2D1c52dd99623a&amp;rut=9d9e4c17d63937901e7cb58fd6bb35e8632557f469a028084da730d38372c718">Here&#x27;s something you might not know: over 60% of the most popular Rust projects on GitHub that rely on asynchronous programming use <b>Tokio</b> under the hood. Despite its dominance, developers ...</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Finfobytes.guru%2Farticles%2Frust%2Dasync%2Druntime%2Dcomparison.html&amp;rut=ff82a7d1f00ce2f7eea7a72916b232abae6d16965904856e592a3ef0c1d0336a">Comparing Rust Async Runtimes: Tokio vs. async-std</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Finfobytes.guru%2Farticles%2Frust%2Dasync%2Druntime%2Dcomparison.html&amp;rut=ff82a7d1f00ce2f7eea7a72916b232abae6d16965904856e592a3ef0c1d0336a">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/infobytes.guru.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Finfobytes.guru%2Farticles%2Frust%2Dasync%2Druntime%2Dcomparison.html&amp;rut=ff82a7d1f00ce2f7eea7a72916b232abae6d16965904856e592a3ef0c1d0336a">
+                            infobytes.guru/articles/rust-async-runtime-comparison.html
+                          </a>
+                          
+                            <span>&nbsp; &nbsp; 2025-04-20T00:00:00.0000000</span>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Finfobytes.guru%2Farticles%2Frust%2Dasync%2Druntime%2Dcomparison.html&amp;rut=ff82a7d1f00ce2f7eea7a72916b232abae6d16965904856e592a3ef0c1d0336a">Explore the differences between Rust&#x27;s major <b>async</b> <b>runtimes</b>, <b>Tokio</b> and <b>async</b>-std. Compare their design philosophies, schedulers, features, ecosystem impact, and current status to help you choose.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F79571546%2Fhow%2Dto%2Drun%2Dasync%2Dfunction%2Din%2Dsync%2Din%2Dtokio%2Druntime&amp;rut=b13b3c8acfc5bbc1790fd86860b5a4ec7b30e917845e8274682c2597315ba712">How to run async function in sync in tokio runtime?</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F79571546%2Fhow%2Dto%2Drun%2Dasync%2Dfunction%2Din%2Dsync%2Din%2Dtokio%2Druntime&amp;rut=b13b3c8acfc5bbc1790fd86860b5a4ec7b30e917845e8274682c2597315ba712">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/stackoverflow.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F79571546%2Fhow%2Dto%2Drun%2Dasync%2Dfunction%2Din%2Dsync%2Din%2Dtokio%2Druntime&amp;rut=b13b3c8acfc5bbc1790fd86860b5a4ec7b30e917845e8274682c2597315ba712">
+                            stackoverflow.com/questions/79571546/how-to-run-async-function-in-sync-in-tokio-runtime
+                          </a>
+                          
+                            <span>&nbsp; &nbsp; 2025-04-13T00:00:00.0000000</span>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F79571546%2Fhow%2Dto%2Drun%2Dasync%2Dfunction%2Din%2Dsync%2Din%2Dtokio%2Druntime&amp;rut=b13b3c8acfc5bbc1790fd86860b5a4ec7b30e917845e8274682c2597315ba712">Cannot start a <b>runtime</b> from within a <b>runtime</b>. This happens because a function (like block_on) attempted to block the current thread while the thread is being used to drive asynchronous tasks. #[tokio::main] <b>async</b> fn main() { let database_service = DatabaseService::init(); } pub struct DatabaseService { pub connection: DatabaseConnection, }</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ftokio.rs%2Ftokio%2Ftutorial%2Fasync&amp;rut=6a64d2ac118bec7d49a5f74cf5dff63d80d6f5abcde9adb8d6c27b486cc551fa">Async in depth | Tokio - An asynchronous Rust runtime</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ftokio.rs%2Ftokio%2Ftutorial%2Fasync&amp;rut=6a64d2ac118bec7d49a5f74cf5dff63d80d6f5abcde9adb8d6c27b486cc551fa">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/tokio.rs.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ftokio.rs%2Ftokio%2Ftutorial%2Fasync&amp;rut=6a64d2ac118bec7d49a5f74cf5dff63d80d6f5abcde9adb8d6c27b486cc551fa">
+                            tokio.rs/tokio/tutorial/async
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ftokio.rs%2Ftokio%2Ftutorial%2Fasync&amp;rut=6a64d2ac118bec7d49a5f74cf5dff63d80d6f5abcde9adb8d6c27b486cc551fa"><b>Tokio</b> is a <b>runtime</b> for writing reliable asynchronous applications with Rust. It provides <b>async</b> I/O, networking, scheduling, timers, and more.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fmedium.com%2F%40contactomyna%2Fasynchronous%2Dprogramming%2Dand%2Dthe%2Dtokio%2Druntime%2Da%2Dbeginners%2Dguide%2D1a96cf89c82e&amp;rut=61a7c64f1855f700d2dac2eb123ae0e47035ca2af0e7a4f9d4959659ef92f436">Asynchronous Programming and the Tokio Runtime: A Beginner&#x27;s Guide</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fmedium.com%2F%40contactomyna%2Fasynchronous%2Dprogramming%2Dand%2Dthe%2Dtokio%2Druntime%2Da%2Dbeginners%2Dguide%2D1a96cf89c82e&amp;rut=61a7c64f1855f700d2dac2eb123ae0e47035ca2af0e7a4f9d4959659ef92f436">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/medium.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fmedium.com%2F%40contactomyna%2Fasynchronous%2Dprogramming%2Dand%2Dthe%2Dtokio%2Druntime%2Da%2Dbeginners%2Dguide%2D1a96cf89c82e&amp;rut=61a7c64f1855f700d2dac2eb123ae0e47035ca2af0e7a4f9d4959659ef92f436">
+                            medium.com/@contactomyna/asynchronous-programming-and-the-tokio-runtime-a-beginners-guide-1a96cf89c82e
+                          </a>
+                          
+                            <span>&nbsp; &nbsp; 2024-08-26T00:00:00.0000000</span>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fmedium.com%2F%40contactomyna%2Fasynchronous%2Dprogramming%2Dand%2Dthe%2Dtokio%2Druntime%2Da%2Dbeginners%2Dguide%2D1a96cf89c82e&amp;rut=61a7c64f1855f700d2dac2eb123ae0e47035ca2af0e7a4f9d4959659ef92f436">The <b>Tokio</b> <b>Runtime</b> Architecture When you run a <b>Tokio</b> application, the <b>runtime</b> creates one or more event loops (also known as workers or processors) to handle the execution of asynchronous tasks. By ...</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ftowardsdev.com%2F%25EF%25B8%258F%2Dinside%2Dtokio%2Dthe%2Dasync%2Druntime%2Dthat%2Doutsmarts%2Dyour%2Dcpu%2De99ad2a6c653&amp;rut=508943372a66d2c3b62def9ea0cc181e0f5ba7bf333eb7b6eb0b0eb52c6487d0">⚙️ Inside Tokio: The Async Runtime That Outsmarts Your CPU</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ftowardsdev.com%2F%25EF%25B8%258F%2Dinside%2Dtokio%2Dthe%2Dasync%2Druntime%2Dthat%2Doutsmarts%2Dyour%2Dcpu%2De99ad2a6c653&amp;rut=508943372a66d2c3b62def9ea0cc181e0f5ba7bf333eb7b6eb0b0eb52c6487d0">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/towardsdev.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ftowardsdev.com%2F%25EF%25B8%258F%2Dinside%2Dtokio%2Dthe%2Dasync%2Druntime%2Dthat%2Doutsmarts%2Dyour%2Dcpu%2De99ad2a6c653&amp;rut=508943372a66d2c3b62def9ea0cc181e0f5ba7bf333eb7b6eb0b0eb52c6487d0">
+                            towardsdev.com/️-inside-tokio-the-async-runtime-that-outsmarts-your-cpu-e99ad2a6c653
+                          </a>
+                          
+                            <span>&nbsp; &nbsp; 2025-06-28T00:00:00.0000000</span>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ftowardsdev.com%2F%25EF%25B8%258F%2Dinside%2Dtokio%2Dthe%2Dasync%2Druntime%2Dthat%2Doutsmarts%2Dyour%2Dcpu%2De99ad2a6c653&amp;rut=508943372a66d2c3b62def9ea0cc181e0f5ba7bf333eb7b6eb0b0eb52c6487d0">⚙️ Inside <b>Tokio</b>: The <b>Async</b> <b>Runtime</b> That Outsmarts Your CPU &quot;You wrote tokio::spawn (<b>async</b> { ... }) and walked away. But deep inside your machine, an orchestra of state machines, schedulers, and …</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.rs%2Ftokio%2Flatest%2Ftokio%2F&amp;rut=3efbd8816da6622d540751d466c96324affaf4573b75a2d546a7c0d129f213a4">tokio - Rust - Docs.rs</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.rs%2Ftokio%2Flatest%2Ftokio%2F&amp;rut=3efbd8816da6622d540751d466c96324affaf4573b75a2d546a7c0d129f213a4">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/docs.rs.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.rs%2Ftokio%2Flatest%2Ftokio%2F&amp;rut=3efbd8816da6622d540751d466c96324affaf4573b75a2d546a7c0d129f213a4">
+                            docs.rs/tokio/latest/tokio/
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.rs%2Ftokio%2Flatest%2Ftokio%2F&amp;rut=3efbd8816da6622d540751d466c96324affaf4573b75a2d546a7c0d129f213a4">A <b>runtime</b> for writing reliable network applications without compromising speed. <b>Tokio</b> is an event-driven, non-blocking I/O platform for writing asynchronous applications with the Rust programming language. At a high level, it provides a few major components: Tools for working with asynchronous tasks, including synchronization primitives and channels and timeouts, sleeps, and intervals. APIs ...</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F61292425%2Fhow%2Dto%2Drun%2Dan%2Dasynchronous%2Dtask%2Dfrom%2Da%2Dnon%2Dmain%2Dthread%2Din%2Dtokio&amp;rut=609ff0f4c4c3db9a635d7179cf8dc17c26a3e0de25b2ff1b76ab83096d49ed05">How to run an asynchronous task from a non-main thread in Tokio?</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F61292425%2Fhow%2Dto%2Drun%2Dan%2Dasynchronous%2Dtask%2Dfrom%2Da%2Dnon%2Dmain%2Dthread%2Din%2Dtokio&amp;rut=609ff0f4c4c3db9a635d7179cf8dc17c26a3e0de25b2ff1b76ab83096d49ed05">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/stackoverflow.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F61292425%2Fhow%2Dto%2Drun%2Dan%2Dasynchronous%2Dtask%2Dfrom%2Da%2Dnon%2Dmain%2Dthread%2Din%2Dtokio&amp;rut=609ff0f4c4c3db9a635d7179cf8dc17c26a3e0de25b2ff1b76ab83096d49ed05">
+                            stackoverflow.com/questions/61292425/how-to-run-an-asynchronous-task-from-a-non-main-thread-in-tokio
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F61292425%2Fhow%2Dto%2Drun%2Dan%2Dasynchronous%2Dtask%2Dfrom%2Da%2Dnon%2Dmain%2Dthread%2Din%2Dtokio&amp;rut=609ff0f4c4c3db9a635d7179cf8dc17c26a3e0de25b2ff1b76ab83096d49ed05">27 The key piece is that you need to get a <b>Tokio</b> Handle. This is a reference to a <b>Runtime</b> and it allows you to spawn asynchronous tasks from outside of the <b>runtime</b>.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+
+            
+              
+              
+                <div class="nav-link">
+                  <form action="/html/" method="post">
+                    <input type="submit" class='btn btn--alt' value="Next" />
+                    <input type="hidden" name="q" value="Tokio async runtime" />
+                    <input type="hidden" name="s" value="10" />
+                    <input type="hidden" name="nextParams" value="" />
+                    <input type="hidden" name="v" value="l" />
+                    <input type="hidden" name="o" value="json" />
+                    <input type="hidden" name="dc" value="11" />
+                    <input type="hidden" name="api" value="d.js" />
+                    <input type="hidden" name="vqd" value="4-85297609135053645118584051661673309070" />
+
+                    
+                    
+                    
+                      <input name="kl" value="wt-wt" type="hidden" />
+                    
+                    
+                    
+                    
+                  </form>
+                </div>
+              
+            
+
+            <div class="feedback-btn">
+              <a rel="nofollow" href="//duckduckgo.com/feedback.html" target="_new">Feedback</a>
+            </div>
+            <div class="clear"></div>
+          </div>
+        </div>
+      </div> <!-- links wrapper //-->
+    
+  </div>
+
+  <div id="bottom_spacing2"></div>
+
+  
+    <img src="//duckduckgo.com/t/sl_h"/>
+  
+</body>
+</html>

@@ -1,0 +1,23 @@
+[package]
+name = "codex-ai-kernel-integration"
+version = "0.2.0"
+edition = "2024"
+authors = ["zapabob"]
+license = "Apache-2.0"
+description = "Codex integration with AI kernel extensions"
+
+[dependencies]
+# No dependencies for lightweight integration
+
+[dev-dependencies]
+# None
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[[bin]]
+name = "kernel-stats"
+path = "src/bin/stats.rs"
+

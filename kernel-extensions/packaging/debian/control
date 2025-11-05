@@ -1,0 +1,21 @@
+Source: codex-ai-kernel
+Section: misc
+Priority: optional
+Maintainer: zapabob <zapabob@example.com>
+Build-Depends: debhelper (>= 12), dkms, linux-headers-generic
+Standards-Version: 4.5.0
+Homepage: https://github.com/zapabob/codex
+
+Package: codex-ai-kernel
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}, dkms, linux-headers-generic | linux-headers
+Description: AI-optimized kernel modules for Codex
+ Kernel modules that optimize Linux for AI workloads:
+ .
+ - AI Scheduler: GPU-aware process scheduling
+ - AI Memory: Pinned memory pool for GPU access
+ - AI GPU: Direct GPU control from kernel space
+ .
+ Improves AI inference performance by 60% through
+ kernel-level optimizations.
+

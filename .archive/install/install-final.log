@@ -1,0 +1,136 @@
+﻿cargo :   Installing codex-cli v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\cli)
+    + CategoryInfo          : NotSpecified: (  Installing co...n\codex-rs\cli):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Updating git repository `https://github.com/nornagon/ratatui`
+    Updating crates.io index
+     Locking 605 packages to latest compatible versions
+      Adding askama v0.12.1 (available: v0.14.0)
+      Adding axum v0.7.9 (available: v0.8.6)
+      Adding core-foundation v0.9.4 (available: v0.10.1)
+      Adding crossterm v0.28.1 (available: v0.29.0)
+      Adding ctor v0.5.0 (available: v0.6.0)
+      Adding matchit v0.8.4 (available: v0.8.6)
+      Adding opentelemetry v0.30.0 (available: v0.31.0)
+      Adding opentelemetry-appender-tracing v0.30.1 (available: v0.31.1)
+      Adding opentelemetry-otlp v0.30.0 (available: v0.31.0)
+      Adding opentelemetry-semantic-conventions v0.30.0 (available: v0.31.0)
+      Adding opentelemetry_sdk v0.30.0 (available: v0.31.0)
+      Adding pulldown-cmark v0.10.3 (available: v0.13.0)
+      Adding schemars v0.8.22 (available: v1.0.4)
+      Adding scraper v0.18.1 (available: v0.24.0)
+      Adding tonic v0.13.1 (available: v0.14.2)
+      Adding unicode-width v0.2.1 (available: v0.2.2)
+      Adding which v6.0.3 (available: v8.0.0)
+warning: unused import: `tokio::sync::RwLock`
+ --> core\src\audit_log\logger.rs:7:5
+  |
+7 | use tokio::sync::RwLock;
+  |     ^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::process::Command as ProcessCommand`
+ --> core\src\hooks.rs:6:5
+  |
+6 | use std::process::Command as ProcessCommand;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `anyhow::Context`
+ --> core\src\integrations\github.rs:4:5
+  |
+4 | use anyhow::Context;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused variable: `deadline`
+   --> core\src\agents\runtime.rs:548:9
+    |
+548 |         deadline: Option<u64>,
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_deadline`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `context`
+    --> core\src\codex.rs:1803:38
+     |
+1803 |             Op::ExecuteHook { event, context } => {
+     |                                      ^^^^^^^ help: try ignoring the field: `context: _`
+
+warning: unused variable: `comment`
+  --> core\src\integrations\github.rs:51:60
+   |
+51 |     pub async fn add_review_comment(&self, pr_number: u64, comment: ReviewComment) -> Result<()> {
+   |                                                            ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_comment`
+
+warning: unused variable: `blocks`
+  --> core\src\integrations\slack.rs:59:9
+   |
+59 |         blocks: Option<Vec<SlackBlock>>,
+   |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_blocks`
+
+warning: unused variable: `url`
+   --> core\src\agents\permission_checker.rs:195:29
+    |
+195 |                 if let Some(url) = parameters.get("search_term").and_then(|v| v.as_str()) {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_url`
+
+warning: fields `token` and `base_url` are never read
+  --> core\src\integrations\github.rs:18:5
+   |
+16 | pub struct GitHubIntegration {
+   |            ----------------- fields in this struct
+17 |     /// GitHub token
+18 |     token: Option<String>,
+   |     ^^^^^
+...
+22 |     base_url: String,
+   |     ^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `default_channel` is never read
+  --> core\src\integrations\slack.rs:21:5
+   |
+15 | pub struct SlackIntegration {
+   |            ---------------- field in this struct
+...
+21 |     default_channel: String,
+   |     ^^^^^^^^^^^^^^^
+
+warning: field `deep_web_search` is never read
+  --> core\src\tools\spec.rs:29:9
+   |
+24 | pub(crate) struct ToolsConfig {
+   |                   ----------- field in this struct
+...
+29 |     pub deep_web_search: bool,
+   |         ^^^^^^^^^^^^^^^
+   |
+   = note: `ToolsConfig` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `agent_runtime` is never read
+  --> core\src\state\service.rs:21:16
+   |
+12 | pub(crate) struct SessionServices {
+   |                   --------------- field in this struct
+...
+21 |     pub(crate) agent_runtime: Arc<AgentRuntime>,
+   |                ^^^^^^^^^^^^^
+
+warning: `codex-core` (lib) generated 12 warnings (run `cargo fix --lib -p codex-core` to apply 3 suggestions)
+warning: unused import: `serde::Deserialize`
+ --> mcp-server\src\codex_tools.rs:5:5
+  |
+5 | use serde::Deserialize;
+  |     ^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `serde::Serialize`
+ --> mcp-server\src\codex_tools.rs:6:5
+  |
+6 | use serde::Serialize;
+  |     ^^^^^^^^^^^^^^^^
+
+warning: `codex-mcp-server` (lib) generated 2 warnings (run `cargo fix --lib -p codex-mcp-server` to apply 2 suggestions)
+   Compiling codex-cli v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\cli)

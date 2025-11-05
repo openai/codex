@@ -1,0 +1,26 @@
+[
+  {
+    "claim": "Landlock signal scoping prevents sandboxed threads from communicating within the same process.",
+    "status": "refuted",
+    "evidence": [
+      "https://github.com/landlock-lsm/landlock-lsm.github.io/blob/main/news/5.md"
+    ],
+    "notes": "Newsletter #5 documents a fix allowing same-process threads to signal each other while keeping cross-domain signals blocked, clarifying the boundary." 
+  },
+  {
+    "claim": "Wasmtime trap handling still requires host signal handlers on every platform.",
+    "status": "refuted",
+    "evidence": [
+      "https://raw.githubusercontent.com/bytecodealliance/wasmtime/release-28.0.0/RELEASES.md"
+    ],
+    "notes": "Wasmtime 28.0.0 added a `signals-based-traps` feature flag to disable host signal dependencies when targeting platforms without signal support." 
+  },
+  {
+    "claim": "Youki has not addressed UID/GID mapping or Wasm termination issues in 2025 releases.",
+    "status": "refuted",
+    "evidence": [
+      "https://raw.githubusercontent.com/youki-dev/youki/main/CHANGELOG.md"
+    ],
+    "notes": "Recent changelog entries cite UID/GID mapping tests and Wasm executor cleanup fixes, showing active maintenance in those areas." 
+  }
+]

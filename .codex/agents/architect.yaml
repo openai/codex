@@ -1,0 +1,49 @@
+name: "architect"
+goal: "Analyze system architecture, design patterns, module boundaries, and scalability. Provide high-level design recommendations and architectural decision records (ADR)."
+tools:
+  mcp:
+    # Codex専用MCPツール
+    - codex_read_file
+    - codex_grep
+    - codex_codebase_search
+    # 汎用MCPツール
+    - grep
+    - read_file
+    - codebase_search
+  fs:
+    read: true
+    write:
+      - "./artifacts"
+      - "./architecture-docs"
+      - "./adrs"
+  net:
+    allow:
+      - "https://docs.rs/*"
+      - "https://doc.rust-lang.org/*"
+      - "https://developer.mozilla.org/*"
+      - "https://martinfowler.com/*"
+      - "https://c4model.com/*"
+  shell:
+    exec:
+      - cargo
+      - npm
+      - tree
+      - cloc
+policies:
+  context:
+    max_tokens: 60000
+    retention: "job"
+  secrets:
+    redact: true
+success_criteria:
+  - "Identify architectural patterns and anti-patterns"
+  - "Evaluate module cohesion and coupling"
+  - "Assess scalability and performance bottlenecks"
+  - "Recommend design improvements with trade-offs"
+  - "Generate Architecture Decision Records (ADR)"
+  - "Create system architecture diagrams (C4/UML)"
+artifacts:
+  - "artifacts/architecture-analysis.md"
+  - "architecture-docs/system-overview.md"
+  - "adrs/*.md"
+

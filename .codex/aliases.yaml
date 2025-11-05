@@ -1,0 +1,26 @@
+# Codex Agent Aliases
+# Claudecode風のショートカット定義
+
+aliases:
+  # コードレビュー系
+  "@cr": "code-reviewer"
+  "@ts": "ts-reviewer"
+  "@py": "python-reviewer"
+  "@unity": "unity-reviewer"
+  
+  # セキュリティ & テスト
+  "@sec": "sec-audit"
+  "@tg": "test-gen"
+  
+  # リサーチ
+  "@res": "researcher"
+  "@mcp": "codex-mcp-researcher"
+
+# ショートカットコマンドマッピング
+shortcuts:
+  review: "code-reviewer"
+  audit: "sec-audit"
+  test: "test-gen"
+  ask: "researcher"
+  research: "researcher"
+

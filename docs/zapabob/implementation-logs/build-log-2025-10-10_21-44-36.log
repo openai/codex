@@ -1,0 +1,43 @@
+2025-10-10 21:44:36,187 [INFO] ==================================================
+2025-10-10 21:44:36,189 [INFO]   Codex Automatic Build & Install
+2025-10-10 21:44:36,191 [INFO]   Parallel Build Optimized (RTX3080)
+2025-10-10 21:44:36,193 [INFO] ==================================================
+2025-10-10 21:44:36,197 [INFO]   [INFO] sccache not found (building without cache)
+2025-10-10 21:44:36,197 [INFO] Build Settings:
+2025-10-10 21:44:36,199 [INFO]   - Parallel jobs: 12 (RTX3080 CPU cores)
+2025-10-10 21:44:36,199 [INFO]   - Target CPU: native
+2025-10-10 21:44:36,199 [INFO]   - Cache: disabled
+2025-10-10 21:44:36,249 [INFO] [1/6] Cleaning build artifacts...
+2025-10-10 21:44:43,199 [INFO]   [OK] Clean complete
+2025-10-10 21:44:43,201 [INFO] [2/6] Building Deep Research module (GPU-optimized)...
+2025-10-10 21:47:19,928 [WARNING]   [WARN] Build time: 156.7s, output:     Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling proc-macro2 v1.0.95
+   Compilin
+2025-10-10 21:47:19,935 [INFO] [3/6] Building Core Binaries...
+2025-10-10 21:47:19,947 [INFO]   Building codex-tui (parallel: 12 jobs)...
+2025-10-10 21:52:24,174 [WARNING]   [WARN] codex-tui build time: 304.2s
+2025-10-10 21:52:24,174 [INFO]   Building codex-mcp-server (parallel: 12 jobs)...
+2025-10-10 21:54:41,874 [WARNING]   [WARN] codex-mcp-server build time: 137.7s
+2025-10-10 21:54:41,875 [INFO] [4/6] Verifying Binaries...
+2025-10-10 21:54:41,876 [INFO]   [OK] Found 0 binaries:
+2025-10-10 21:54:41,876 [INFO] [5/6] Installing Globally...
+2025-10-10 21:54:41,879 [INFO]   [OK] Installed: index.js
+2025-10-10 21:54:41,880 [INFO]   [OK] Installed: web-search.js
+2025-10-10 21:54:41,889 [INFO]   [OK] Installed 7 agents
+2025-10-10 21:54:41,890 [INFO]   Installation: C:\Users\downl\.codex\bin
+2025-10-10 21:54:41,890 [INFO]   Total files: 2
+2025-10-10 21:54:41,890 [INFO] [6/6] Git Commit & Push...
+2025-10-10 21:54:42,228 [INFO]   [OK] Committed
+2025-10-10 21:54:44,630 [INFO]   [OK] Pushed to GitHub
+2025-10-10 21:54:44,631 [INFO] ==================================================
+2025-10-10 21:54:44,631 [INFO]   Installation Complete!
+2025-10-10 21:54:44,631 [INFO] ==================================================
+2025-10-10 21:54:44,631 [INFO] Installed to: C:\Users\downl\.codex\bin
+2025-10-10 21:54:44,631 [INFO] Files: 2 binaries + 7 agents
+2025-10-10 21:54:44,631 [INFO] Log saved: _docs/build-log-2025-10-10_21-44-36.log
+2025-10-10 21:54:44,632 [INFO] Quick Test:
+2025-10-10 21:54:44,632 [INFO]   cd "C:\Users\downl\.codex\bin"
+2025-10-10 21:54:44,632 [INFO]   .\codex-tui.exe --version
+2025-10-10 21:54:44,632 [INFO] Status: Production Ready ✓

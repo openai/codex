@@ -1,0 +1,29 @@
+{
+  "name": "prism-mcp-server",
+  "version": "1.2.0",
+  "description": "MCP Server for Prism - Claude Code Integration",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "inspector": "node --inspect dist/index.js"
+  },
+  "keywords": ["mcp", "claude", "prism", "ai", "code-intelligence"],
+  "author": "zapabob",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.5.0",
+    "@supabase/supabase-js": "^2.39.0",
+    "openai": "^4.20.1",
+    "@anthropic-ai/sdk": "^0.9.1",
+    "simple-git": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "typescript": "^5.3.3"
+  }
+}
+
+

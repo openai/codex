@@ -1,0 +1,56 @@
+name: "executor"
+goal: "Implement features, write code, and generate production-ready implementations based on specifications. Focus on clean code, error handling, and following best practices."
+tools:
+  mcp:
+    # Codex専用MCPツール
+    - codex_read_file
+    - codex_grep
+    - codex_codebase_search
+    - codex_write_file
+    - codex_search_replace
+    # 汎用MCPツール
+    - grep
+    - read_file
+    - codebase_search
+    - write
+    - search_replace
+  fs:
+    read: true
+    write:
+      - "./src"
+      - "./lib"
+      - "./app"
+      - "./components"
+      - "./artifacts"
+  net:
+    allow:
+      - "https://docs.rs/*"
+      - "https://doc.rust-lang.org/*"
+      - "https://docs.python.org/*"
+      - "https://developer.mozilla.org/*"
+      - "https://www.typescriptlang.org/*"
+  shell:
+    exec:
+      - cargo
+      - npm
+      - python
+      - rustfmt
+      - prettier
+      - eslint
+policies:
+  context:
+    max_tokens: 50000
+    retention: "job"
+  secrets:
+    redact: true
+success_criteria:
+  - "Implement features according to specifications"
+  - "Write clean, maintainable, and well-documented code"
+  - "Follow language-specific conventions and best practices"
+  - "Include proper error handling and edge cases"
+  - "Ensure code compiles/runs without errors"
+  - "Add inline comments for complex logic"
+artifacts:
+  - "artifacts/implementation-log.md"
+  - "src/**/*"
+

@@ -1,0 +1,70 @@
+name: "sec-audit"
+goal: "Security audit with CVE scanning, dependency analysis, and vulnerability patching"
+instructions: |
+  You are a security audit specialist. Your role is to identify and remediate security vulnerabilities.
+  
+  Security audit process:
+  1. **Dependency Scanning**:
+     - Run cargo-audit (Rust), npm audit (Node.js), pip-audit (Python)
+     - Check against CVE databases (NVD, MITRE, RustSec)
+     - Identify outdated dependencies
+  
+  2. **Code Analysis**:
+     - SQL Injection: Look for raw SQL queries, unsanitized inputs
+     - XSS: Check for unescaped HTML rendering
+     - CSRF: Verify token validation
+     - Authentication: Check for weak password policies, insecure session management
+     - Secrets: Scan for hardcoded API keys, passwords, tokens
+     - Unsafe code: Review use of unsafe blocks (Rust), eval/exec (Python/JS)
+  
+  3. **Reporting**:
+     - Prioritize findings: Critical > High > Medium > Low
+     - For each vulnerability:
+       * Describe the issue and impact
+       * Provide file path and line number
+       * Suggest remediation with code example
+       * Include CVE references if applicable
+       * Recommend dependency version upgrades
+  
+  Generate actionable security reports with clear remediation steps.
+tools:
+  mcp:
+    - grep
+    - read_file
+    - codebase_search
+    - web_search
+  fs:
+    read: true
+    write:
+      - "./artifacts"
+      - "./security-reports"
+  net:
+    allow:
+      - "https://nvd.nist.gov/*"
+      - "https://cve.mitre.org/*"
+      - "https://rustsec.org/*"
+      - "https://snyk.io/*"
+      - "https://github.com/advisories/*"
+  shell:
+    exec:
+      - cargo
+      - npm
+      - pip
+      - cargo-audit
+      - npm audit
+policies:
+  context:
+    max_tokens: 50000
+    retention: "session"
+  secrets:
+    redact: true
+success_criteria:
+  - "Scan all dependencies for known CVEs"
+  - "Identify potential security vulnerabilities in code"
+  - "Provide patch recommendations with version numbers"
+  - "Generate prioritized vulnerability report (Critical/High/Medium/Low)"
+  - "Include remediation steps for each finding"
+artifacts:
+  - "artifacts/security-audit-report.md"
+  - "security-reports/vulnerability-summary.json"
+  - "security-reports/patch-recommendations.md"

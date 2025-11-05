@@ -1,0 +1,42 @@
+# zapabob独自ファイル・ディレクトリリスト
+# これらのファイルはupstream同期時に保護される
+
+# zapabob独自ディレクトリ
+zapabob/
+_docs/
+
+# zapabob独自設定ファイル
+.zapabob-files
+CHANGELOG.md
+CONTRIBUTING.md
+
+# zapabob独自スクリプト
+scripts/setup-pr-review.ps1
+scripts/setup-pr-review.sh
+scripts/README.md
+
+# zapabob独自ワークフロー
+.github/workflows/pr-review.yml
+.github/workflows/pr-review-gemini.yml
+
+# zapabob独自Codexモジュール
+codex-rs/gemini-cli-mcp-server/
+
+# zapabob独自音声通知
+.codex/marisa_owattaze.wav
+
+# zapabob独自MCP設定（保護対象）
+config.toml
+.cursor/mcp.json
+
+# zapabob独自実装ログ
+_docs/2025-10-23_*.md
+_docs/GitHub_PR_Review_設定ガイド.md
+_docs/MCP設定ファイル同期管理ガイド.md
+_docs/公式リポジトリとの整合性管理.md
+
+# zapabob独自README拡張（日英併記、アーキテクチャ図）
+README.md
+
+# Apache 2.0ライセンス統一
+LICENSE

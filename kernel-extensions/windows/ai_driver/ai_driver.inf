@@ -1,0 +1,59 @@
+;
+; AI Driver Installation Information file
+; Copyright (C) 2025 zapabob
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=System
+ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%ManufacturerName%
+CatalogFile=ai_driver.cat
+DriverVer=11/02/2025,0.2.0.0
+PnpLockdown=1
+
+[DestinationDirs]
+DefaultDestDir = 12
+AI_Driver_Device_CoInstaller_CopyFiles = 11
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+ai_driver.sys  = 1,,
+
+[Manufacturer]
+%ManufacturerName%=Standard,NT$ARCH$
+
+[Standard.NT$ARCH$]
+%AI_Driver.DeviceDesc%=AI_Driver_Device, Root\AI_Driver
+
+[AI_Driver_Device.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+ai_driver.sys
+
+[AI_Driver_Device.NT.Services]
+AddService = AI_Driver,%SPSVCINST_ASSOCSERVICE%, AI_Driver_Service_Inst
+
+[AI_Driver_Service_Inst]
+DisplayName    = %AI_Driver.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\ai_driver.sys
+
+[AI_Driver_Device.NT.Wdf]
+KmdfService =  AI_Driver, AI_Driver_wdfsect
+
+[AI_Driver_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+SPSVCINST_ASSOCSERVICE= 0x00000002
+ManufacturerName="zapabob"
+DiskName = "AI Driver Installation Disk"
+AI_Driver.DeviceDesc = "Codex AI-Native OS Driver"
+AI_Driver.SVCDESC = "Codex AI Driver Service"
+

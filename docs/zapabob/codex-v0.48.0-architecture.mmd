@@ -1,0 +1,115 @@
+graph TB
+    subgraph "User Interface Layer"
+        CLI["🖥️ CLI<br/>(codex agent 'task')"]
+        NL["🗣️ Natural Language<br/>Interpreter"]
+        TUI["📟 TUI<br/>(Interactive Mode)"]
+    end
+
+    subgraph "Orchestration Core"
+        INTERP["🧠 AgentInterpreter<br/>(Pattern Matching)"]
+        ANALYZER["📊 TaskAnalyzer<br/>(Complexity Scoring)"]
+        ORCH["🎯 AutoOrchestrator<br/>(Execution Planning)"]
+        CONFLICT["🔒 ConflictResolver<br/>(FileEditTracker)"]
+        ERROR["🔄 ErrorHandler<br/>(Retry + Backoff)"]
+    end
+
+    subgraph "Agent Runtime"
+        RUNTIME["⚙️ AgentRuntime<br/>(Execution Engine)"]
+        COLLAB["🤝 CollaborationStore<br/>(Shared Context)"]
+        BUDGET["💰 Budgeter<br/>(Token Management)"]
+    end
+
+    subgraph "Specialized Agents"
+        CODE["👨‍💻 code-reviewer"]
+        SEC["🛡️ sec-audit"]
+        TEST["🧪 test-gen"]
+        RESEARCH["🔍 researcher"]
+        TS["📘 ts-reviewer"]
+        PY["🐍 python-reviewer"]
+        UNITY["🎮 unity-reviewer"]
+    end
+
+    subgraph "External Integrations"
+        WEBHOOK["🔗 WebhookClient"]
+        GITHUB["🐙 GitHub API<br/>(PR/Issues)"]
+        SLACK["💬 Slack Webhooks"]
+        CUSTOM["🌐 Custom APIs"]
+    end
+
+    subgraph "MCP Server"
+        MCP["🔌 MCP Server<br/>(Tool Provider)"]
+        TOOLS["🛠️ MCP Tools<br/>(codex-webhook,<br/>codex-auto-orchestrate,<br/>etc.)"]
+    end
+
+    %% User flow
+    CLI --> INTERP
+    TUI --> INTERP
+    NL --> INTERP
+
+    %% Orchestration flow
+    INTERP -->|"Parse Intent"| ANALYZER
+    ANALYZER -->|"Score Complexity"| ORCH
+    ORCH -->|"Plan Execution"| RUNTIME
+
+    %% Runtime coordination
+    RUNTIME --> CONFLICT
+    RUNTIME --> ERROR
+    RUNTIME --> COLLAB
+    RUNTIME --> BUDGET
+
+    %% Agent dispatch
+    RUNTIME --> CODE
+    RUNTIME --> SEC
+    RUNTIME --> TEST
+    RUNTIME --> RESEARCH
+    RUNTIME --> TS
+    RUNTIME --> PY
+    RUNTIME --> UNITY
+
+    %% Conflict management
+    CONFLICT -->|"Lock/Merge"| COLLAB
+    ERROR -->|"Retry Logic"| RUNTIME
+
+    %% External integrations
+    RUNTIME --> WEBHOOK
+    WEBHOOK --> GITHUB
+    WEBHOOK --> SLACK
+    WEBHOOK --> CUSTOM
+
+    %% MCP integration
+    MCP --> TOOLS
+    TOOLS --> ORCH
+    TOOLS --> WEBHOOK
+
+    %% Styling
+    classDef userLayer fill:#4A90E2,stroke:#2E5C8A,color:#fff
+    classDef orchLayer fill:#50C878,stroke:#2E7D4E,color:#fff
+    classDef runtimeLayer fill:#FFB347,stroke:#CC8A3A,color:#fff
+    classDef agentLayer fill:#9B59B6,stroke:#6C3483,color:#fff
+    classDef externalLayer fill:#E74C3C,stroke:#A93226,color:#fff
+    classDef mcpLayer fill:#F39C12,stroke:#B8740B,color:#fff
+
+    class CLI,NL,TUI userLayer
+    class INTERP,ANALYZER,ORCH,CONFLICT,ERROR orchLayer
+    class RUNTIME,COLLAB,BUDGET runtimeLayer
+    class CODE,SEC,TEST,RESEARCH,TS,PY,UNITY agentLayer
+    class WEBHOOK,GITHUB,SLACK,CUSTOM externalLayer
+    class MCP,TOOLS mcpLayer
+
+    %% Legend
+    subgraph "Legend"
+        L1["🔵 User Interface"]
+        L2["🟢 Orchestration"]
+        L3["🟠 Runtime"]
+        L4["🟣 Agents"]
+        L5["🔴 External"]
+        L6["🟡 MCP"]
+    end
+
+    class L1 userLayer
+    class L2 orchLayer
+    class L3 runtimeLayer
+    class L4 agentLayer
+    class L5 externalLayer
+    class L6 mcpLayer
+

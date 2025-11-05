@@ -1,0 +1,22 @@
+2025-10-10 21:35:55,525 [INFO] ==================================================
+2025-10-10 21:35:55,525 [INFO]   Codex Automatic Build & Install
+2025-10-10 21:35:55,526 [INFO]   Parallel Build Optimized (RTX3080)
+2025-10-10 21:35:55,526 [INFO] ==================================================
+2025-10-10 21:35:55,528 [INFO]   [INFO] sccache not found (building without cache)
+2025-10-10 21:35:55,528 [INFO] Build Settings:
+2025-10-10 21:35:55,528 [INFO]   - Parallel jobs: 12 (RTX3080 CPU cores)
+2025-10-10 21:35:55,529 [INFO]   - Target CPU: native
+2025-10-10 21:35:55,529 [INFO]   - Cache: disabled
+2025-10-10 21:35:55,549 [INFO] [1/6] Cleaning build artifacts...
+2025-10-10 21:35:57,350 [INFO]   [OK] Clean complete
+2025-10-10 21:35:57,351 [INFO] [2/6] Building Deep Research module (GPU-optimized)...
+2025-10-10 21:36:49,081 [WARNING]   [WARN] Build time: 51.7s, output:    Compiling proc-macro2 v1.0.95
+   Compiling unicode-ident v1.0.18
+   Compiling windows_x86_64_msvc v0.52.6
+   Compiling smallvec v1.15.1
+   Compiling autocfg v1.5.0
+   Compiling stable_deref_trait v
+2025-10-10 21:36:49,082 [INFO] [3/6] Building Core Binaries...
+2025-10-10 21:36:49,082 [INFO]   Building codex-tui (parallel: 12 jobs)...
+2025-10-10 21:40:20,576 [WARNING]   [WARN] codex-tui build time: 211.5s
+2025-10-10 21:40:20,576 [INFO]   Building codex-mcp-server (parallel: 12 jobs)...

@@ -1,0 +1,59 @@
+# Codex Ultra Minimal Configuration - MCPサーバーなし
+# 作成日: 2025-10-25
+# 目的: 超高速起動・安定動作・web検索機能のみ
+
+# ==================== モデル設定 ====================
+model = "gpt-5-codex"
+
+# 🔍 Web検索機能を有効化（モデル組み込み検索）
+enable_web_search = true
+
+# ==================== 機能フラグ ====================
+[features]
+# Web検索機能（モデル組み込み）
+web_search = true
+
+# ==================== OpenAI Provider ====================
+[model_providers.openai]
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+name = "OpenAI (Chat Completions API)"
+requires_openai_auth = true
+wire_api = "chat"
+# 🔍 Web検索機能を有効化
+enable_web_search = true
+web_search_grounding = true
+
+# ==================== セキュリティ ====================
+[sandbox]
+default_mode = "read-only"
+
+[approval]
+policy = "on-request"
+
+# ==================== サブエージェント ====================
+[subagents]
+enabled = true
+inherit_model = true
+max_parallel = 4
+token_budget = 40000
+
+# ==================== フック機能 ====================
+[hooks]
+on_session_end = "powershell -ExecutionPolicy Bypass -File C:\\Users\\downl\\Desktop\\codex\\zapabob\\scripts\\play-completion-sound.ps1"
+on_subagent_complete = "powershell -ExecutionPolicy Bypass -File C:\\Users\\downl\\Desktop\\codex\\zapabob\\scripts\\play-completion-sound.ps1"
+on_task_complete = "powershell -ExecutionPolicy Bypass -File C:\\Users\\downl\\Desktop\\codex\\zapabob\\scripts\\play-completion-sound.ps1"
+
+# ==================== 監査ログ ====================
+[audit]
+enabled = true
+format = "json"
+include_mcp_calls = false
+include_tool_args = true
+log_dir = "~/.codex/audit-logs"
+
+# ==================== パフォーマンス ====================
+# 超最小構成:
+# - MCPサーバー: 0個
+# - 起動時間: < 1秒
+# - Web検索: モデルネイティブ機能のみ

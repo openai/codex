@@ -1,0 +1,63 @@
+{
+  "buildkite_monorepo_ci": {
+    "highlights": [
+      {
+        "text": "Selective builds generated at runtime reduce CI cost by running jobs only for paths touched in the commit, a pattern Buildkite highlights as essential for large monorepos.",
+        "confidence": 0.6,
+        "sources": [
+          "https://www.buildkite.com/blog/monorepo-ci-best-practices"
+        ]
+      },
+      {
+        "text": "Merge queues test pull requests against the future state of main, preventing flaky reruns and keeping the primary branch green when thousands of PRs land daily.",
+        "confidence": 0.6,
+        "sources": [
+          "https://www.buildkite.com/blog/monorepo-ci-best-practices"
+        ]
+      },
+      {
+        "text": "Dynamic pipelines allow Buildkite users to materialize jobs based on commit contents, scaling to tens of thousands of agents and matching monorepo surface area.",
+        "confidence": 0.5,
+        "sources": [
+          "https://www.buildkite.com/blog/monorepo-ci-best-practices"
+        ]
+      }
+    ]
+  },
+  "turbo_remote_caching": {
+    "highlights": [
+      {
+        "text": "Turborepo accelerates CI by sharing build artifacts through remote caching; enabling it requires TURBO_TOKEN and TURBO_TEAM secrets so runs reuse previous outputs across providers.",
+        "confidence": 0.6,
+        "sources": [
+          "https://github.com/vercel/turbo/blob/main/docs/site/content/docs/guides/ci-vendors/index.mdx"
+        ]
+      },
+      {
+        "text": "General setup guidance: clone the monorepo, install dependencies, then execute tasks via `turbo`, letting caches avoid redundant work on every CI job.",
+        "confidence": 0.6,
+        "sources": [
+          "https://github.com/vercel/turbo/blob/main/docs/site/content/docs/guides/ci-vendors/index.mdx"
+        ]
+      }
+    ]
+  },
+  "bazel_remote_execution": {
+    "highlights": [
+      {
+        "text": "Bazel remote caching is positioned as a "cheap" way to boost build and test performance, aiming for simple configuration and minimal build modifications.",
+        "confidence": 0.5,
+        "sources": [
+          "https://github.com/bazelbuild/bazel-website/blob/master/roadmaps/2019/remote-execution.md"
+        ]
+      },
+      {
+        "text": "Roadmap goals include parallel uploads and HTTP/2 transports so remote caches reduce latency, plus auto-fallback to local builds when networks degrade.",
+        "confidence": 0.5,
+        "sources": [
+          "https://github.com/bazelbuild/bazel-website/blob/master/roadmaps/2019/remote-execution.md"
+        ]
+      }
+    ]
+  }
+}

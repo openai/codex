@@ -1,0 +1,15 @@
+2025-10-10 21:28:58,046 [INFO] ==================================================
+2025-10-10 21:28:58,046 [INFO]   Codex Automatic Build & Install
+2025-10-10 21:28:58,046 [INFO] ==================================================
+2025-10-10 21:28:58,080 [INFO] [1/6] Cleaning build artifacts...
+2025-10-10 21:28:59,135 [INFO]   [OK] Clean complete
+2025-10-10 21:28:59,139 [INFO] [2/6] Building Deep Research module...
+2025-10-10 21:29:48,622 [WARNING]   [WARN] Build output:    Compiling proc-macro2 v1.0.95
+   Compiling unicode-ident v1.0.18
+   Compiling windows_x86_64_msvc v0.52.6
+   Compiling smallvec v1.15.1
+   Compiling stable_deref_trait v1.2.0
+   Compiling autocfg v
+2025-10-10 21:29:48,622 [INFO] [3/6] Building Core Binaries...
+2025-10-10 21:29:48,623 [INFO]   Building codex-tui...
+2025-10-10 21:32:08,548 [WARNING]   [WARN] codex-tui may have issues

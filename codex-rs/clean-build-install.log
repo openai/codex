@@ -1,0 +1,5109 @@
+﻿[2025-10-23 17:39:58] Workspace validated: C:\Users\downl\Desktop\codex-main\codex-main\codex-rs
+[2025-10-23 17:39:58] Running cargo clean
+[2025-10-23 17:39:58] cargo :      Removed 15056 files, 4.7GiB total
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:108 文字:5
++     cargo clean 2>&1 | Out-String | ForEach-Object { Log $_ }
++     ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (     Removed 15056 files, 4.7GiB total:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+[2025-10-23 17:39:58] Running just fmt
+[2025-10-23 17:39:58] just : cargo fmt -- --config imports_granularity=Item
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:124 文字:5
++     just fmt 2>&1 | Out-String | ForEach-Object { Log $_ }
++     ~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (cargo fmt -- --...ranularity=Item:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error: Recipe `fmt` could not be run because just could not find the shell: program not found
+
+[2025-10-23 17:39:58] Running cargo build --release -p codex-cli
+[2025-10-23 17:39:58] cargo :    Compiling proc-macro2 v1.0.101
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:137 文字:16
++ $BuildOutput = cargo build --release -p codex-cli 2>&1 | Out-String
++                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling proc-macro2 v1.0.101:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling unicode-ident v1.0.20
+   Compiling quote v1.0.41
+   Compiling cfg-if v1.0.4
+   Compiling memchr v2.7.6
+   Compiling windows-link v0.2.1
+   Compiling smallvec v1.15.1
+   Compiling itoa v1.0.15
+   Compiling pin-project-lite v0.2.16
+   Compiling serde_core v1.0.228
+   Compiling log v0.4.28
+   Compiling once_cell v1.21.3
+   Compiling windows-sys v0.61.2
+   Compiling windows_x86_64_msvc v0.53.1
+   Compiling equivalent v1.0.2
+   Compiling futures-core v0.3.31
+   Compiling hashbrown v0.16.0
+   Compiling parking_lot_core v0.9.12
+   Compiling windows_x86_64_msvc v0.52.6
+   Compiling scopeguard v1.2.0
+   Compiling serde v1.0.228
+   Compiling zerocopy v0.8.27
+   Compiling lock_api v0.4.14
+   Compiling bytes v1.10.1
+   Compiling indexmap v2.12.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling tracing-core v0.1.34
+   Compiling ryu v1.0.20
+   Compiling futures-sink v0.3.31
+   Compiling futures-io v0.3.31
+   Compiling futures-channel v0.3.31
+   Compiling futures-task v0.3.31
+   Compiling slab v0.4.11
+   Compiling serde_json v1.0.145
+   Compiling pin-utils v0.1.0
+   Compiling writeable v0.6.1
+   Compiling getrandom v0.3.4
+   Compiling percent-encoding v2.3.2
+   Compiling find-msvc-tools v0.1.4
+   Compiling shlex v1.3.0
+   Compiling windows-link v0.1.3
+   Compiling windows-targets v0.52.6
+   Compiling litemap v0.8.0
+   Compiling windows-targets v0.53.5
+   Compiling fnv v1.0.7
+   Compiling cc v1.2.41
+   Compiling getrandom v0.2.16
+   Compiling parking_lot v0.12.5
+   Compiling windows-sys v0.59.0
+   Compiling windows-strings v0.4.2
+   Compiling http v1.3.1
+   Compiling windows-sys v0.60.2
+   Compiling windows-result v0.3.4
+   Compiling syn v2.0.107
+   Compiling icu_normalizer_data v2.0.0
+   Compiling icu_properties_data v2.0.1
+   Compiling base64 v0.22.1
+   Compiling tower-service v0.3.3
+   Compiling libc v0.2.177
+   Compiling http-body v1.0.1
+   Compiling mio v1.0.4
+   Compiling aho-corasick v1.1.3
+   Compiling regex-syntax v0.8.8
+   Compiling serde_derive v1.0.228
+   Compiling synstructure v0.13.2
+   Compiling tracing-attributes v0.1.30
+   Compiling zerovec-derive v0.11.1
+   Compiling displaydoc v0.2.5
+   Compiling socket2 v0.6.1
+   Compiling tokio-macros v2.6.0
+   Compiling zerofrom-derive v0.1.6
+   Compiling yoke-derive v0.8.0
+   Compiling futures-macro v0.3.31
+   Compiling strsim v0.11.1
+   Compiling tokio v1.48.0
+   Compiling futures-util v0.3.31
+   Compiling ident_case v1.0.1
+   Compiling bitflags v2.10.0
+   Compiling httparse v1.10.1
+   Compiling regex-automata v0.4.13
+   Compiling tracing v0.1.41
+   Compiling form_urlencoded v1.2.2
+   Compiling atomic-waker v1.1.2
+   Compiling try-lock v0.2.5
+   Compiling httpdate v1.0.3
+   Compiling thiserror v2.0.17
+   Compiling mime v0.3.17
+   Compiling utf8_iter v1.0.4
+   Compiling want v0.3.1
+   Compiling zerofrom v0.1.6
+   Compiling ppv-lite86 v0.2.21
+   Compiling thiserror-impl v2.0.17
+   Compiling http-body-util v0.1.3
+   Compiling windows-registry v0.5.3
+   Compiling sync_wrapper v1.0.2
+   Compiling yoke v0.8.0
+   Compiling ipnet v2.11.0
+   Compiling tower-layer v0.3.3
+   Compiling zeroize v1.8.2
+   Compiling rand_core v0.6.4
+   Compiling ring v0.17.14
+   Compiling zerovec v0.11.4
+   Compiling zerotrie v0.2.2
+   Compiling anyhow v1.0.100
+   Compiling heck v0.5.0
+   Compiling rand_chacha v0.3.1
+   Compiling rustls-pki-types v1.12.0
+   Compiling thiserror v1.0.69
+   Compiling rand v0.8.5
+   Compiling thiserror-impl v1.0.69
+   Compiling schannel v0.1.28
+   Compiling version_check v0.9.5
+   Compiling untrusted v0.9.0
+   Compiling native-tls v0.2.14
+   Compiling autocfg v1.5.0
+   Compiling rustls v0.23.34
+   Compiling darling_core v0.21.3
+   Compiling num-traits v0.2.19
+   Compiling tinystr v0.8.1
+   Compiling potential_utf v0.1.3
+   Compiling unicase v2.8.1
+   Compiling subtle v2.6.1
+   Compiling icu_collections v2.0.0
+   Compiling uuid v1.18.1
+   Compiling mime_guess v2.0.5
+   Compiling darling_macro v0.21.3
+   Compiling serde_derive_internals v0.29.1
+   Compiling icu_locale_core v2.0.0
+   Compiling siphasher v1.0.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling rustversion v1.0.22
+   Compiling phf_shared v0.11.3
+   Compiling rustls-native-certs v0.8.2
+   Compiling darling v0.21.3
+   Compiling webpki-roots v1.0.3
+   Compiling utf8parse v0.2.2
+   Compiling iri-string v0.7.8
+   Compiling siphasher v0.3.11
+   Compiling typenum v1.19.0
+   Compiling once_cell_polyfill v1.70.2
+   Compiling anstyle v1.0.13
+   Compiling anstyle-parse v0.2.7
+   Compiling phf_shared v0.10.0
+   Compiling winapi-util v0.1.11
+   Compiling anstyle-wincon v3.0.10
+   Compiling phf_generator v0.11.3
+   Compiling serde_urlencoded v0.7.1
+   Compiling generic-array v0.14.9
+   Compiling anstyle-query v1.1.4
+   Compiling rustls-webpki v0.103.7
+   Compiling encoding_rs v0.8.35
+   Compiling icu_locale_data v2.0.0
+   Compiling dyn-clone v1.0.20
+   Compiling time-core v0.1.6
+   Compiling hex v0.4.3
+   Compiling num-conv v0.1.0
+   Compiling paste v1.0.15
+   Compiling powerfmt v0.2.0
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling colorchoice v1.0.4
+   Compiling time-macros v0.2.24
+   Compiling deranged v0.5.4
+   Compiling anstream v0.6.21
+   Compiling termcolor v1.4.1
+   Compiling phf_generator v0.10.0
+   Compiling futures-executor v0.3.31
+   Compiling regex v1.12.2
+   Compiling async-trait v0.1.89
+   Compiling icu_decimal_data v2.0.0
+   Compiling icu_provider v2.0.0
+   Compiling schemars v0.8.22
+   Compiling ts-rs-macros v11.1.0
+   Compiling phf_codegen v0.10.0
+   Compiling time v0.3.44
+   Compiling serde_with_macros v3.15.1
+   Compiling schemars_derive v0.8.22
+   Compiling icu_properties v2.0.1
+   Compiling icu_normalizer v2.0.0
+   Compiling rand_core v0.9.3
+   Compiling windows-implement v0.60.2
+   Compiling windows-interface v0.59.3
+   Compiling windows-sys v0.52.0
+   Compiling rand_chacha v0.9.0
+   Compiling icu_locale v2.0.0
+   Compiling serde_with v3.15.1
+   Compiling fixed_decimal v0.7.0
+   Compiling windows-core v0.61.2
+   Compiling ts-rs v11.1.0
+   Compiling terminal_size v0.4.3
+   Compiling clap_lex v0.7.6
+   Compiling new_debug_unreachable v1.0.6
+   Compiling unicode-width v0.2.1
+   Compiling clap_builder v4.5.50
+   Compiling rand v0.9.2
+   Compiling crypto-common v0.1.6
+   Compiling block-buffer v0.10.4
+   Compiling strum_macros v0.27.2
+   Compiling clap_derive v4.5.49
+   Compiling syn v1.0.109
+   Compiling idna_adapter v1.2.1
+   Compiling strum v0.27.2
+   Compiling either v1.15.0
+   Compiling sys-locale v0.3.2
+   Compiling idna v1.1.0
+   Compiling tokio-util v0.7.16
+   Compiling tokio-native-tls v0.3.1
+   Compiling url v2.5.7
+   Compiling tokio-rustls v0.26.4
+   Compiling tokio-stream v0.1.17
+   Compiling h2 v0.4.12
+   Compiling tower v0.5.2
+   Compiling icu_decimal v2.0.0
+   Compiling itertools v0.14.0
+   Compiling digest v0.10.7
+   Compiling string_cache_codegen v0.5.4
+   Compiling chrono v0.4.42
+   Compiling opentelemetry v0.30.0
+   Compiling tower-http v0.6.6
+   Compiling windows-threading v0.1.0
+   Compiling precomputed-hash v0.1.1
+   Compiling cpufeatures v0.2.17
+   Compiling unicode-segmentation v1.12.0
+   Compiling byteorder v1.5.0
+   Compiling mac v0.1.1
+   Compiling ref-cast v1.0.25
+   Compiling windows-future v0.2.1
+   Compiling markup5ever v0.11.0
+   Compiling prost-derive v0.13.5
+   Compiling phf v0.10.1
+   Compiling hyper v1.7.0
+   Compiling futf v0.1.5
+   Compiling windows-collections v0.2.0
+   Compiling windows-numerics v0.2.0
+   Compiling futures v0.3.31
+   Compiling mcp-types v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\mcp-types)
+   Compiling phf_macros v0.11.3
+   Compiling axum-core v0.5.5
+   Compiling pin-project-internal v1.1.10
+   Compiling clap v4.5.50
+   Compiling ref-cast-impl v1.0.25
+   Compiling hyper-util v0.1.17
+   Compiling utf-8 v0.7.6
+   Compiling minimal-lexical v0.2.1
+   Compiling matchit v0.8.4
+   Compiling dtoa v1.0.10
+   Compiling nom v7.1.3
+   Compiling axum v0.8.6
+   Compiling same-file v1.0.6
+   Compiling tendril v0.4.3
+   Compiling hyper-tls v0.6.0
+   Compiling hyper-rustls v0.27.7
+   Compiling dtoa-short v0.3.5
+   Compiling hyper-timeout v0.5.2
+   Compiling html5ever v0.26.0
+   Compiling reqwest v0.12.24
+   Compiling phf v0.11.3
+   Compiling prost v0.13.5
+   Compiling windows v0.61.3
+   Compiling string_cache v0.8.9
+   Compiling sha2 v0.10.9
+   Compiling socket2 v0.5.10
+   Compiling tree-sitter v0.25.10
+   Compiling pin-project v1.1.10
+   Compiling selectors v0.25.0
+   Compiling schemars_derive v1.0.4
+   Compiling ahash v0.8.12
+   Compiling cssparser-macros v0.6.1
+   Compiling serde_path_to_error v0.1.20
+   Compiling ascii v1.1.0
+   Compiling option-ext v0.2.0
+   Compiling tree-sitter-language v0.1.5
+   Compiling chunked_transfer v1.5.0
+   Compiling libm v0.2.15
+   Compiling winnow v0.7.13
+   Compiling dirs-sys v0.5.0
+   Compiling tonic v0.13.1
+   Compiling cssparser v0.31.2
+   Compiling tiny_http v0.12.0
+   Compiling toml_parser v1.0.4
+   Compiling oauth2 v5.0.0
+   Compiling process-wrap v8.2.1
+   Compiling walkdir v2.5.0
+   Compiling fxhash v0.2.1
+   Compiling schemars v1.0.4
+   Compiling opentelemetry_sdk v0.30.0
+   Compiling getopts v0.2.24
+   Compiling os_info v3.12.0
+   Compiling axum-core v0.4.5
+   Compiling rmcp-macros v0.8.3
+   Compiling concurrent-queue v2.5.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling sse-stream v0.2.1
+   Compiling derive_more v0.99.20
+   Compiling tree-sitter-bash v0.25.0
+   Compiling toml_datetime v0.7.3
+   Compiling servo_arc v0.3.0
+   Compiling bstr v1.12.0
+   Compiling lazy_static v1.5.0
+   Compiling parking v2.2.1
+   Compiling streaming-iterator v0.1.9
+   Compiling fastrand v2.3.0
+   Compiling toml_writer v1.0.4
+   Compiling matchit v0.7.3
+   Compiling event-listener v5.4.1
+   Compiling tempfile v3.23.0
+   Compiling globset v0.4.18
+   Compiling basic-toml v0.1.10
+   Compiling crossbeam-deque v0.8.6
+   Compiling askama_parser v0.2.1
+   Compiling axum v0.7.9
+   Compiling dirs v6.0.0
+   Compiling opentelemetry-http v0.30.0
+   Compiling keyring v3.6.3
+   Compiling webbrowser v1.0.6
+   Compiling serde_spanned v1.0.3
+   Compiling rmcp v0.8.3
+   Compiling env_filter v0.1.4
+   Compiling ego-tree v0.6.3
+   Compiling urlencoding v2.1.3
+   Compiling toml v0.9.8
+   Compiling env_logger v0.11.8
+   Compiling humansize v2.1.3
+   Compiling scraper v0.18.1
+   Compiling askama_derive v0.12.5
+   Compiling ignore v0.4.24
+   Compiling event-listener-strategy v0.5.4
+   Compiling eventsource-stream v0.2.3
+   Compiling nucleo-matcher v0.3.1
+   Compiling test-log-macros v0.2.18
+   Compiling home v0.5.11
+   Compiling nu-ansi-term v0.50.3
+   Compiling unsafe-libyaml v0.2.11
+   Compiling askama_escape v0.10.3
+   Compiling similar v2.7.0
+   Compiling opentelemetry-semantic-conventions v0.30.0
+   Compiling winsafe v0.0.19
+   Compiling hashbrown v0.14.5
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling codex-file-search v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\file-search)
+   Compiling test-log v0.2.18
+   Compiling async-channel v2.5.0
+   Compiling dashmap v6.1.0
+   Compiling toml_edit v0.23.7
+   Compiling sha1 v0.10.6
+   Compiling codex-async-utils v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\async-utils)
+   Compiling codex-utils-string v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\string)
+   Compiling wildmatch v2.5.0
+   Compiling opentelemetry-proto v0.30.0
+   Compiling dunce v1.0.5
+   Compiling askama v0.12.1
+   Compiling regex-lite v0.1.8
+   Compiling which v6.0.3
+   Compiling env-flags v0.1.1
+   Compiling winapi v0.3.9
+   Compiling sharded-slab v0.1.7
+   Compiling matchers v0.2.0
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.9
+   Compiling debugid v0.8.0
+   Compiling darling_core v0.20.11
+   Compiling simd-adler32 v0.3.7
+   Compiling tracing-subscriber v0.3.20
+   Compiling semver v1.0.27
+   Compiling sentry-types v0.34.0
+   Compiling crc32fast v1.5.0
+   Compiling rustc-demangle v0.1.26
+   Compiling rustc_version v0.4.1
+   Compiling findshlibs v0.10.2
+   Compiling darling_macro v0.20.11
+   Compiling sentry-core v0.34.0
+   Compiling backtrace v0.3.76
+   Compiling adler2 v2.0.1
+   Compiling foldhash v0.1.5
+   Compiling allocator-api2 v0.2.21
+   Compiling instability v0.3.9
+   Compiling owo-colors v4.2.3
+   Compiling darling v0.20.11
+   Compiling miniz_oxide v0.8.9
+   Compiling hashbrown v0.15.5
+   Compiling sentry-contexts v0.34.0
+   Compiling codex-protocol v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol)
+   Compiling crossterm_winapi v0.9.1
+   Compiling itertools v0.13.0
+   Compiling strum_macros v0.26.4
+   Compiling castaway v0.2.4
+   Compiling static_assertions v1.1.0
+   Compiling dotenvy v0.15.7
+   Compiling codex-linux-sandbox v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\linux-sandbox
+)
+   Compiling num_cpus v1.17.0
+   Compiling unicode-width v0.1.14
+   Compiling codex-apply-patch v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\apply-patch)
+   Compiling indoc v2.0.7
+   Compiling deadpool-runtime v0.1.4
+   Compiling compact_str v0.8.1
+   Compiling lru v0.12.5
+   Compiling crossterm v0.28.1
+   Compiling unicode-truncate v1.1.0
+   Compiling deadpool v0.12.3
+   Compiling flate2 v1.1.4
+   Compiling sentry-backtrace v0.34.0
+   Compiling fdeflate v0.3.7
+   Compiling pxfm v0.1.25
+   Compiling assert-json-diff v2.0.2
+   Compiling async-stream-impl v0.3.6
+   Compiling hostname v0.4.1
+   Compiling zune-core v0.4.12
+   Compiling cassowary v0.3.0
+   Compiling color-spantrace v0.3.0
+   Compiling eyre v0.6.12
+   Compiling zune-jpeg v0.4.21
+   Compiling wiremock v0.6.5
+   Compiling moxcms v0.7.7
+   Compiling strum v0.26.3
+   Compiling png v0.18.0
+   Compiling opentelemetry-otlp v0.30.0
+   Compiling sentry-panic v0.34.0
+   Compiling async-stream v0.3.6
+   Compiling sentry-debug-images v0.34.0
+   Compiling tracing-error v0.2.1
+   Compiling opentelemetry-appender-tracing v0.30.1
+   Compiling codex-backend-openapi-models v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\code
+x-backend-openapi-models)
+   Compiling ratatui v0.29.0 (https://github.com/nornagon/ratatui?branch=nornagon-v0.29.0-patch#9b2ad129)
+   Compiling indenter v0.3.4
+   Compiling byteorder-lite v0.1.0
+   Compiling error-code v3.3.2
+   Compiling pulldown-cmark v0.10.3
+   Compiling bytemuck v1.24.0
+   Compiling simdutf8 v0.1.5
+   Compiling is_ci v1.2.0
+   Compiling clipboard-win v5.4.1
+   Compiling image v0.25.8
+   Compiling sentry v0.34.0
+   Compiling supports-color v3.0.2
+   Compiling diffy v0.4.2
+   Compiling codex-git-apply v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-apply)
+   Compiling crossbeam-channel v0.5.15
+   Compiling smawk v0.3.2
+   Compiling pulldown-cmark-escape v0.10.1
+   Compiling unicode-linebreak v0.1.5
+   Compiling dtor-proc-macro v0.0.6
+   Compiling tracing-appender v0.2.3
+   Compiling arboard v3.6.1
+   Compiling color-eyre v0.6.5
+   Compiling textwrap v0.16.2
+   Compiling tree-sitter-highlight v0.25.10
+   Compiling codex-utils-json-to-toml v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\js
+on-to-toml)
+   Compiling codex-git-tooling v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-tooling)
+   Compiling pathdiff v0.2.3
+   Compiling ctor-proc-macro v0.0.6
+   Compiling codex-process-hardening v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\process-h
+ardening)
+   Compiling dtor v0.1.0
+   Compiling clap_complete v4.5.59
+   Compiling ctor v0.5.0
+   Compiling codex-responses-api-proxy v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\respons
+es-api-proxy)
+   Compiling ansi-to-tui v7.0.0
+   Compiling codex-ansi-escape v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\ansi-escape)
+   Compiling codex-app-server-protocol v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\app-ser
+ver-protocol)
+   Compiling codex-feedback v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\feedback)
+   Compiling codex-rmcp-client v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\rmcp-client)
+   Compiling codex-deep-research v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\deep-research
+)
+warning: field `api_key` is never read
+  --> deep-research\src\mcp_search_provider.rs:23:5
+   |
+19 | pub struct McpSearchProvider {
+   |            ----------------- field in this struct
+...
+23 |     api_key: Option<String>,
+   |     ^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `codex-deep-research` (lib) generated 1 warning
+   Compiling codex-otel v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\otel)
+   Compiling codex-protocol-ts v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol-ts)
+   Compiling codex-core v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\core)
+warning: ignoring -C extra-filename flag due to -o flag
+
+error[E0432]: unresolved import `crate::exec_command`
+ --> core\src\state\service.rs:7:12
+  |
+7 | use crate::exec_command::ExecSessionManager;
+  |            ^^^^^^^^^^^^ could not find `exec_command` in the crate root
+
+error[E0432]: unresolved import `crate::executor`
+ --> core\src\state\service.rs:8:12
+  |
+8 | use crate::executor::Executor;
+  |            ^^^^^^^^
+  |            |
+  |            unresolved import
+  |            help: a similar path exists: `futures::executor`
+
+error[E0432]: unresolved import `codex_mcp_client`
+  --> core\src\agents\runtime.rs:32:5
+   |
+32 | use codex_mcp_client::McpClient;
+   |     ^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `codex_mcp_client`
+   |
+help: there is a crate or module with a similar name
+   |
+32 | use codex_rmcp_client::McpClient;
+   |           +
+
+error[E0432]: unresolved import `codex_utils_pty`
+  --> core\src\unified_exec\session.rs:18:5
+   |
+18 | use codex_utils_pty::ExecCommandSession;
+   |     ^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `codex_utils_pty`
+   |
+help: there is a crate or module with a similar name
+   |
+18 - use codex_utils_pty::ExecCommandSession;
+18 + use codex_utils_string::ExecCommandSession;
+   |
+
+error[E0432]: unresolved import `codex_utils_pty`
+  --> core\src\unified_exec\session.rs:19:5
+   |
+19 | use codex_utils_pty::SpawnedPty;
+   |     ^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `codex_utils_pty`
+   |
+help: there is a crate or module with a similar name
+   |
+19 - use codex_utils_pty::SpawnedPty;
+19 + use codex_utils_string::SpawnedPty;
+   |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolEmitter`
+  --> core\src\tools\mod.rs:94:13
+   |
+94 |             ToolEmitter::apply_patch(
+   |             ^^^^^^^^^^^ use of undeclared type `ToolEmitter`
+   |
+help: consider importing this enum
+   |
+12 + use crate::tools::events::ToolEmitter;
+   |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolEmitter`
+   --> core\src\tools\mod.rs:101:13
+    |
+101 |             ToolEmitter::shell(params.command.clone(), params.cwd.clone()),
+    |             ^^^^^^^^^^^ use of undeclared type `ToolEmitter`
+    |
+help: consider importing this enum
+    |
+ 12 + use crate::tools::events::ToolEmitter;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolEventCtx`
+   --> core\src\tools\mod.rs:106:21
+    |
+106 |     let event_ctx = ToolEventCtx::new(sess.as_ref(), turn_context.as_ref(), &call_id, diff_opt);
+    |                     ^^^^^^^^^^^^ use of undeclared type `ToolEventCtx`
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::events::ToolEventCtx;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolEventStage`
+   --> core\src\tools\mod.rs:107:35
+    |
+107 |     event_emitter.emit(event_ctx, ToolEventStage::Begin).await;
+    |                                   ^^^^^^^^^^^^^^ use of undeclared type `ToolEventStage`
+    |
+help: consider importing this enum
+    |
+ 12 + use crate::tools::events::ToolEventStage;
+    |
+
+error[E0422]: cannot find struct, variant or union type `ApplyPatchRequest` in this scope
+   --> core\src\tools\mod.rs:113:19
+    |
+113 |         let req = ApplyPatchRequest {
+    |                   ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolOrchestrator`
+   --> core\src\tools\mod.rs:121:32
+    |
+121 |         let mut orchestrator = ToolOrchestrator::new();
+    |                                ^^^^^^^^^^^^^^^^ use of undeclared type `ToolOrchestrator`
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::orchestrator::ToolOrchestrator;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ApplyPatchRuntime`
+   --> core\src\tools\mod.rs:122:27
+    |
+122 |         let mut runtime = ApplyPatchRuntime::new();
+    |                           ^^^^^^^^^^^^^^^^^ use of undeclared type `ApplyPatchRuntime`
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
+    |
+
+error[E0422]: cannot find struct, variant or union type `ToolCtx` in this scope
+   --> core\src\tools\mod.rs:123:24
+    |
+123 |         let tool_ctx = ToolCtx {
+    |                        ^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::sandboxing::ToolCtx;
+    |
+
+error[E0422]: cannot find struct, variant or union type `ShellRequest` in this scope
+   --> core\src\tools\mod.rs:143:19
+    |
+143 |         let req = ShellRequest {
+    |                   ^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::runtimes::shell::ShellRequest;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolOrchestrator`
+   --> core\src\tools\mod.rs:152:32
+    |
+152 |         let mut orchestrator = ToolOrchestrator::new();
+    |                                ^^^^^^^^^^^^^^^^ use of undeclared type `ToolOrchestrator`
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::orchestrator::ToolOrchestrator;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ShellRuntime`
+   --> core\src\tools\mod.rs:153:27
+    |
+153 |         let mut runtime = ShellRuntime::new();
+    |                           ^^^^^^^^^^^^ use of undeclared type `ShellRuntime`
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::runtimes::shell::ShellRuntime;
+    |
+
+error[E0422]: cannot find struct, variant or union type `ToolCtx` in this scope
+   --> core\src\tools\mod.rs:154:24
+    |
+154 |         let tool_ctx = ToolCtx {
+    |                        ^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::sandboxing::ToolCtx;
+    |
+
+error[E0412]: cannot find type `ToolEmitter` in this scope
+   --> core\src\tools\mod.rs:176:21
+    |
+176 |     event_emitter: &ToolEmitter,
+    |                     ^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+ 12 + use crate::tools::events::ToolEmitter;
+    |
+
+error[E0412]: cannot find type `ToolEventCtx` in this scope
+   --> core\src\tools\mod.rs:177:16
+    |
+177 |     event_ctx: ToolEventCtx<'_>,
+    |                ^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::events::ToolEventCtx;
+    |
+
+error[E0412]: cannot find type `ToolError` in this scope
+   --> core\src\tools\mod.rs:178:37
+    |
+178 |     out: Result<ExecToolCallOutput, ToolError>,
+    |                                     ^^^^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+ 12 + use crate::tools::sandboxing::ToolError;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolEventStage`
+   --> core\src\tools\mod.rs:185:21
+    |
+185 |             event = ToolEventStage::Success(output);
+    |                     ^^^^^^^^^^^^^^ use of undeclared type `ToolEventStage`
+    |
+help: consider importing this enum
+    |
+ 12 + use crate::tools::events::ToolEventStage;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolError`
+   --> core\src\tools\mod.rs:192:13
+    |
+192 |         Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output })))
+    |             ^^^^^^^^^ use of undeclared type `ToolError`
+    |
+help: consider importing this enum
+    |
+ 12 + use crate::tools::sandboxing::ToolError;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolError`
+   --> core\src\tools\mod.rs:193:15
+    |
+193 |         | Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
+    |               ^^^^^^^^^ use of undeclared type `ToolError`
+    |
+help: consider importing this enum
+    |
+ 12 + use crate::tools::sandboxing::ToolError;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolEventStage`
+   --> core\src\tools\mod.rs:195:21
+    |
+195 |             event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
+    |                     ^^^^^^^^^^^^^^ use of undeclared type `ToolEventStage`
+    |
+help: consider importing this enum
+    |
+ 12 + use crate::tools::events::ToolEventStage;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolEventFailure`
+   --> core\src\tools\mod.rs:195:45
+    |
+195 |             event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
+    |                                             ^^^^^^^^^^^^^^^^ use of undeclared type `ToolEventFailure`
+    |
+help: consider importing this enum
+    |
+ 12 + use crate::tools::events::ToolEventFailure;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolError`
+   --> core\src\tools\mod.rs:198:13
+    |
+198 |         Err(ToolError::Codex(err)) => {
+    |             ^^^^^^^^^ use of undeclared type `ToolError`
+    |
+help: consider importing this enum
+    |
+ 12 + use crate::tools::sandboxing::ToolError;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolEventStage`
+   --> core\src\tools\mod.rs:201:21
+    |
+201 |             event = ToolEventStage::Failure(ToolEventFailure::Message(message));
+    |                     ^^^^^^^^^^^^^^ use of undeclared type `ToolEventStage`
+    |
+help: consider importing this enum
+    |
+ 12 + use crate::tools::events::ToolEventStage;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolEventFailure`
+   --> core\src\tools\mod.rs:201:45
+    |
+201 |             event = ToolEventStage::Failure(ToolEventFailure::Message(message));
+    |                                             ^^^^^^^^^^^^^^^^ use of undeclared type `ToolEventFailure`
+    |
+help: consider importing this enum
+    |
+ 12 + use crate::tools::events::ToolEventFailure;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolError`
+   --> core\src\tools\mod.rs:206:13
+    |
+206 |         Err(ToolError::Rejected(msg)) | Err(ToolError::SandboxDenied(msg)) => {
+    |             ^^^^^^^^^ use of undeclared type `ToolError`
+    |
+help: consider importing this enum
+    |
+ 12 + use crate::tools::sandboxing::ToolError;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolError`
+   --> core\src\tools\mod.rs:206:45
+    |
+206 |         Err(ToolError::Rejected(msg)) | Err(ToolError::SandboxDenied(msg)) => {
+    |                                             ^^^^^^^^^ use of undeclared type `ToolError`
+    |
+help: consider importing this enum
+    |
+ 12 + use crate::tools::sandboxing::ToolError;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolEventStage`
+   --> core\src\tools\mod.rs:215:21
+    |
+215 |             event = ToolEventStage::Failure(ToolEventFailure::Message(normalized));
+    |                     ^^^^^^^^^^^^^^ use of undeclared type `ToolEventStage`
+    |
+help: consider importing this enum
+    |
+ 12 + use crate::tools::events::ToolEventStage;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolEventFailure`
+   --> core\src\tools\mod.rs:215:45
+    |
+215 |             event = ToolEventStage::Failure(ToolEventFailure::Message(normalized));
+    |                                             ^^^^^^^^^^^^^^^^ use of undeclared type `ToolEventFailure`
+    |
+help: consider importing this enum
+    |
+ 12 + use crate::tools::events::ToolEventFailure;
+    |
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `codex_utils_pty`
+   --> core\src\unified_exec\session_manager.rs:178:13
+    |
+178 |             codex_utils_pty::spawn_pty_process(program, args, env.cwd.as_path(), &env.env)
+    |             ^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `codex_utils_pty`
+    |
+help: there is a crate or module with a similar name
+    |
+178 -             codex_utils_pty::spawn_pty_process(program, args, env.cwd.as_path(), &env.env)
+178 +             codex_utils_string::spawn_pty_process(program, args, env.cwd.as_path(), &env.env)
+    |
+
+Some errors have detailed explanations: E0412, E0422, E0432, E0433.
+For more information about an error, try `rustc --explain E0412`.
+warning: `codex-core` (lib) generated 1 warning
+error: could not compile `codex-core` (lib) due to 33 previous errors; 1 warning emitted
+warning: build failed, waiting for other jobs to finish...
+
+[2025-10-23 17:48:38] Workspace validated: C:\Users\downl\Desktop\codex-main\codex-main\codex-rs
+[2025-10-23 17:48:38] Running cargo clean
+[2025-10-23 17:48:38] cargo :      Removed 7519 files, 2.3GiB total
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:108 文字:5
++     cargo clean 2>&1 | Out-String | ForEach-Object { Log $_ }
++     ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (     Removed 7519 files, 2.3GiB total:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+[2025-10-23 17:48:38] Running just fmt
+[2025-10-23 17:48:38] just : cargo fmt -- --config imports_granularity=Item
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:124 文字:5
++     just fmt 2>&1 | Out-String | ForEach-Object { Log $_ }
++     ~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (cargo fmt -- --...ranularity=Item:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error: Recipe `fmt` could not be run because just could not find the shell: program not found
+
+[2025-10-23 17:48:38] Running cargo build --release -p codex-cli
+[2025-10-23 17:48:38] cargo :     Updating crates.io index
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:137 文字:16
++ $BuildOutput = cargo build --release -p codex-cli 2>&1 | Out-String
++                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Updating crates.io index:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+     Locking 7 packages to latest compatible versions
+      Adding downcast-rs v1.2.1
+      Adding filedescriptor v0.8.3
+      Adding portable-pty v0.9.0
+      Adding serial2 v0.2.33
+      Adding shared_library v0.1.9
+      Adding shell-words v1.1.0
+      Adding winreg v0.10.1
+   Compiling proc-macro2 v1.0.101
+   Compiling quote v1.0.41
+   Compiling unicode-ident v1.0.20
+   Compiling cfg-if v1.0.4
+   Compiling memchr v2.7.6
+   Compiling windows-link v0.2.1
+   Compiling smallvec v1.15.1
+   Compiling itoa v1.0.15
+   Compiling pin-project-lite v0.2.16
+   Compiling log v0.4.28
+   Compiling serde_core v1.0.228
+   Compiling once_cell v1.21.3
+   Compiling windows-sys v0.61.2
+   Compiling windows_x86_64_msvc v0.53.1
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.16.0
+   Compiling futures-core v0.3.31
+   Compiling parking_lot_core v0.9.12
+   Compiling scopeguard v1.2.0
+   Compiling windows_x86_64_msvc v0.52.6
+   Compiling serde v1.0.228
+   Compiling zerocopy v0.8.27
+   Compiling bytes v1.10.1
+   Compiling lock_api v0.4.14
+   Compiling indexmap v2.12.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling tracing-core v0.1.34
+   Compiling ryu v1.0.20
+   Compiling futures-sink v0.3.31
+   Compiling futures-task v0.3.31
+   Compiling futures-channel v0.3.31
+   Compiling pin-utils v0.1.0
+   Compiling slab v0.4.11
+   Compiling serde_json v1.0.145
+   Compiling futures-io v0.3.31
+   Compiling find-msvc-tools v0.1.4
+   Compiling getrandom v0.3.4
+   Compiling percent-encoding v2.3.2
+   Compiling writeable v0.6.1
+   Compiling shlex v1.3.0
+   Compiling windows-link v0.1.3
+   Compiling windows-targets v0.53.5
+   Compiling litemap v0.8.0
+   Compiling windows-targets v0.52.6
+   Compiling libc v0.2.177
+   Compiling fnv v1.0.7
+   Compiling parking_lot v0.12.5
+   Compiling cc v1.2.41
+   Compiling windows-sys v0.60.2
+   Compiling windows-result v0.3.4
+   Compiling windows-sys v0.59.0
+   Compiling http v1.3.1
+   Compiling windows-strings v0.4.2
+   Compiling syn v2.0.107
+   Compiling getrandom v0.2.16
+   Compiling bitflags v2.10.0
+   Compiling icu_properties_data v2.0.1
+   Compiling icu_normalizer_data v2.0.0
+   Compiling tower-service v0.3.3
+   Compiling http-body v1.0.1
+   Compiling base64 v0.22.1
+   Compiling mio v1.0.4
+   Compiling serde_derive v1.0.228
+   Compiling synstructure v0.13.2
+   Compiling tracing-attributes v0.1.30
+   Compiling socket2 v0.6.1
+   Compiling tokio-macros v2.6.0
+   Compiling zerovec-derive v0.11.1
+   Compiling displaydoc v0.2.5
+   Compiling futures-macro v0.3.31
+   Compiling zerofrom-derive v0.1.6
+   Compiling yoke-derive v0.8.0
+   Compiling aho-corasick v1.1.3
+   Compiling tokio v1.48.0
+   Compiling futures-util v0.3.31
+   Compiling regex-syntax v0.8.8
+   Compiling httparse v1.10.1
+   Compiling strsim v0.11.1
+   Compiling ident_case v1.0.1
+   Compiling form_urlencoded v1.2.2
+   Compiling atomic-waker v1.1.2
+   Compiling utf8_iter v1.0.4
+   Compiling mime v0.3.17
+   Compiling httpdate v1.0.3
+   Compiling thiserror v2.0.17
+   Compiling tracing v0.1.41
+   Compiling regex-automata v0.4.13
+   Compiling try-lock v0.2.5
+   Compiling ppv-lite86 v0.2.21
+   Compiling http-body-util v0.1.3
+   Compiling thiserror-impl v2.0.17
+   Compiling want v0.3.1
+   Compiling anyhow v1.0.100
+   Compiling thiserror v1.0.69
+   Compiling zerofrom v0.1.6
+   Compiling thiserror-impl v1.0.69
+   Compiling windows-registry v0.5.3
+   Compiling sync_wrapper v1.0.2
+   Compiling yoke v0.8.0
+   Compiling ipnet v2.11.0
+   Compiling tower-layer v0.3.3
+   Compiling zeroize v1.8.2
+   Compiling rand_core v0.6.4
+   Compiling ring v0.17.14
+   Compiling zerovec v0.11.4
+   Compiling zerotrie v0.2.2
+   Compiling heck v0.5.0
+   Compiling rustls-pki-types v1.12.0
+   Compiling rand_chacha v0.3.1
+   Compiling schannel v0.1.28
+   Compiling winapi v0.3.9
+   Compiling untrusted v0.9.0
+   Compiling rand v0.8.5
+   Compiling version_check v0.9.5
+   Compiling native-tls v0.2.14
+   Compiling rustls v0.23.34
+   Compiling autocfg v1.5.0
+   Compiling darling_core v0.21.3
+   Compiling num-traits v0.2.19
+   Compiling unicase v2.8.1
+   Compiling subtle v2.6.1
+   Compiling tinystr v0.8.1
+   Compiling potential_utf v0.1.3
+   Compiling uuid v1.18.1
+   Compiling icu_collections v2.0.0
+   Compiling mime_guess v2.0.5
+   Compiling darling_macro v0.21.3
+   Compiling serde_derive_internals v0.29.1
+   Compiling lazy_static v1.5.0
+   Compiling siphasher v1.0.1
+   Compiling rustversion v1.0.22
+   Compiling icu_locale_core v2.0.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling phf_shared v0.11.3
+   Compiling darling v0.21.3
+   Compiling rustls-native-certs v0.8.2
+   Compiling webpki-roots v1.0.3
+   Compiling siphasher v0.3.11
+   Compiling typenum v1.19.0
+   Compiling iri-string v0.7.8
+   Compiling utf8parse v0.2.2
+   Compiling once_cell_polyfill v1.70.2
+   Compiling anstyle v1.0.13
+   Compiling phf_shared v0.10.0
+   Compiling rustls-webpki v0.103.7
+   Compiling winapi-util v0.1.11
+   Compiling anstyle-parse v0.2.7
+   Compiling phf_generator v0.11.3
+   Compiling anstyle-wincon v3.0.10
+   Compiling serde_urlencoded v0.7.1
+   Compiling generic-array v0.14.9
+   Compiling anstyle-query v1.1.4
+   Compiling encoding_rs v0.8.35
+   Compiling hex v0.4.3
+   Compiling time-core v0.1.6
+   Compiling num-conv v0.1.0
+   Compiling paste v1.0.15
+   Compiling colorchoice v1.0.4
+   Compiling powerfmt v0.2.0
+   Compiling icu_locale_data v2.0.0
+   Compiling dyn-clone v1.0.20
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling deranged v0.5.4
+   Compiling time-macros v0.2.24
+   Compiling anstream v0.6.21
+   Compiling termcolor v1.4.1
+   Compiling phf_generator v0.10.0
+   Compiling futures-executor v0.3.31
+   Compiling regex v1.12.2
+   Compiling async-trait v0.1.89
+   Compiling schemars v0.8.22
+   Compiling icu_decimal_data v2.0.0
+   Compiling phf_codegen v0.10.0
+   Compiling ts-rs-macros v11.1.0
+   Compiling time v0.3.44
+   Compiling serde_with_macros v3.15.1
+   Compiling schemars_derive v0.8.22
+   Compiling rand_core v0.9.3
+   Compiling icu_provider v2.0.0
+   Compiling windows-interface v0.59.3
+   Compiling windows-implement v0.60.2
+   Compiling windows-sys v0.52.0
+   Compiling rand_chacha v0.9.0
+   Compiling fixed_decimal v0.7.0
+   Compiling icu_normalizer v2.0.0
+   Compiling icu_properties v2.0.1
+   Compiling icu_locale v2.0.0
+   Compiling windows-core v0.61.2
+   Compiling terminal_size v0.4.3
+   Compiling new_debug_unreachable v1.0.6
+   Compiling unicode-width v0.2.1
+   Compiling serde_with v3.15.1
+   Compiling clap_lex v0.7.6
+   Compiling rand v0.9.2
+   Compiling clap_builder v4.5.50
+   Compiling ts-rs v11.1.0
+   Compiling crypto-common v0.1.6
+   Compiling block-buffer v0.10.4
+   Compiling strum_macros v0.27.2
+   Compiling clap_derive v4.5.49
+   Compiling either v1.15.0
+   Compiling sys-locale v0.3.2
+   Compiling syn v1.0.109
+   Compiling strum v0.27.2
+   Compiling itertools v0.14.0
+   Compiling digest v0.10.7
+   Compiling string_cache_codegen v0.5.4
+   Compiling chrono v0.4.42
+   Compiling idna_adapter v1.2.1
+   Compiling icu_decimal v2.0.0
+   Compiling opentelemetry v0.30.0
+   Compiling idna v1.1.0
+   Compiling windows-threading v0.1.0
+   Compiling precomputed-hash v0.1.1
+   Compiling cpufeatures v0.2.17
+   Compiling url v2.5.7
+   Compiling ref-cast v1.0.25
+   Compiling unicode-segmentation v1.12.0
+   Compiling byteorder v1.5.0
+   Compiling mac v0.1.1
+   Compiling windows-future v0.2.1
+   Compiling markup5ever v0.11.0
+   Compiling futf v0.1.5
+   Compiling prost-derive v0.13.5
+   Compiling phf v0.10.1
+   Compiling windows-collections v0.2.0
+   Compiling windows-numerics v0.2.0
+   Compiling futures v0.3.31
+   Compiling clap v4.5.50
+   Compiling phf_macros v0.11.3
+   Compiling axum-core v0.5.5
+   Compiling pin-project-internal v1.1.10
+   Compiling ref-cast-impl v1.0.25
+   Compiling dtoa v1.0.10
+   Compiling matchit v0.8.4
+   Compiling cfg_aliases v0.1.1
+   Compiling minimal-lexical v0.2.1
+   Compiling utf-8 v0.7.6
+   Compiling nix v0.28.0
+   Compiling same-file v1.0.6
+   Compiling dtoa-short v0.3.5
+   Compiling nom v7.1.3
+   Compiling tendril v0.4.3
+   Compiling html5ever v0.26.0
+   Compiling windows v0.61.3
+   Compiling sha2 v0.10.9
+   Compiling phf v0.11.3
+   Compiling mcp-types v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\mcp-types)
+   Compiling string_cache v0.8.9
+   Compiling socket2 v0.5.10
+   Compiling tree-sitter v0.25.10
+   Compiling selectors v0.25.0
+   Compiling schemars_derive v1.0.4
+   Compiling ahash v0.8.12
+   Compiling cssparser-macros v0.6.1
+   Compiling serde_path_to_error v0.1.20
+   Compiling tree-sitter-language v0.1.5
+   Compiling prost v0.13.5
+   Compiling pin-project v1.1.10
+   Compiling ascii v1.1.0
+   Compiling winnow v0.7.13
+   Compiling tokio-util v0.7.16
+   Compiling tokio-native-tls v0.3.1
+   Compiling tokio-rustls v0.26.4
+   Compiling tokio-stream v0.1.17
+   Compiling libm v0.2.15
+   Compiling winreg v0.10.1
+   Compiling chunked_transfer v1.5.0
+   Compiling option-ext v0.2.0
+   Compiling toml_parser v1.0.4
+   Compiling h2 v0.4.12
+   Compiling tower v0.5.2
+   Compiling tiny_http v0.12.0
+   Compiling dirs-sys v0.5.0
+   Compiling opentelemetry_sdk v0.30.0
+   Compiling cssparser v0.31.2
+   Compiling tower-http v0.6.6
+   Compiling axum v0.8.6
+   Compiling process-wrap v8.2.1
+   Compiling hyper v1.7.0
+   Compiling schemars v1.0.4
+   Compiling walkdir v2.5.0
+   Compiling fxhash v0.2.1
+   Compiling getopts v0.2.24
+   Compiling os_info v3.12.0
+   Compiling axum-core v0.4.5
+   Compiling hyper-util v0.1.17
+   Compiling rmcp-macros v0.8.3
+   Compiling crossbeam-epoch v0.9.18
+   Compiling concurrent-queue v2.5.0
+   Compiling sse-stream v0.2.1
+   Compiling derive_more v0.99.20
+   Compiling tree-sitter-bash v0.25.0
+   Compiling toml_datetime v0.7.3
+   Compiling hyper-tls v0.6.0
+   Compiling hyper-rustls v0.27.7
+   Compiling hyper-timeout v0.5.2
+   Compiling servo_arc v0.3.0
+   Compiling reqwest v0.12.24
+   Compiling bstr v1.12.0
+   Compiling streaming-iterator v0.1.9
+   Compiling toml_writer v1.0.4
+   Compiling tonic v0.13.1
+   Compiling matchit v0.7.3
+   Compiling parking v2.2.1
+   Compiling fastrand v2.3.0
+   Compiling globset v0.4.18
+   Compiling oauth2 v5.0.0
+   Compiling opentelemetry-http v0.30.0
+   Compiling tempfile v3.23.0
+   Compiling event-listener v5.4.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling basic-toml v0.1.10
+   Compiling askama_parser v0.2.1
+   Compiling dirs v6.0.0
+   Compiling keyring v3.6.3
+   Compiling webbrowser v1.0.6
+   Compiling filedescriptor v0.8.3
+   Compiling serial2 v0.2.33
+   Compiling shared_library v0.1.9
+   Compiling serde_spanned v1.0.3
+   Compiling env_filter v0.1.4
+   Compiling ego-tree v0.6.3
+   Compiling bitflags v1.3.2
+   Compiling shell-words v1.1.0
+   Compiling urlencoding v2.1.3
+   Compiling downcast-rs v1.2.1
+   Compiling env_logger v0.11.8
+   Compiling toml v0.9.8
+   Compiling humansize v2.1.3
+   Compiling askama_derive v0.12.5
+   Compiling portable-pty v0.9.0
+   Compiling ignore v0.4.24
+   Compiling event-listener-strategy v0.5.4
+   Compiling axum v0.7.9
+   Compiling eventsource-stream v0.2.3
+   Compiling nucleo-matcher v0.3.1
+   Compiling test-log-macros v0.2.18
+   Compiling home v0.5.11
+   Compiling nu-ansi-term v0.50.3
+   Compiling opentelemetry-semantic-conventions v0.30.0
+   Compiling winsafe v0.0.19
+   Compiling hashbrown v0.14.5
+   Compiling unsafe-libyaml v0.2.11
+   Compiling scraper v0.18.1
+   Compiling similar v2.7.0
+   Compiling askama_escape v0.10.3
+   Compiling test-log v0.2.18
+   Compiling dashmap v6.1.0
+   Compiling codex-file-search v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\file-search)
+   Compiling codex-apply-patch v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\apply-patch)
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling codex-utils-pty v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\pty)
+   Compiling async-channel v2.5.0
+   Compiling toml_edit v0.23.7
+   Compiling codex-async-utils v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\async-utils)
+   Compiling sha1 v0.10.6
+   Compiling regex-lite v0.1.8
+   Compiling dunce v1.0.5
+   Compiling wildmatch v2.5.0
+   Compiling codex-utils-string v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\string)
+   Compiling env-flags v0.1.1
+   Compiling sharded-slab v0.1.7
+   Compiling matchers v0.2.0
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.9
+   Compiling debugid v0.8.0
+   Compiling darling_core v0.20.11
+   Compiling semver v1.0.27
+   Compiling crc32fast v1.5.0
+   Compiling simd-adler32 v0.3.7
+   Compiling tracing-subscriber v0.3.20
+   Compiling sentry-types v0.34.0
+   Compiling rustc-demangle v0.1.26
+   Compiling which v6.0.3
+   Compiling rmcp v0.8.3
+   Compiling rustc_version v0.4.1
+   Compiling backtrace v0.3.76
+   Compiling findshlibs v0.10.2
+   Compiling darling_macro v0.20.11
+   Compiling allocator-api2 v0.2.21
+   Compiling adler2 v2.0.1
+   Compiling owo-colors v4.2.3
+   Compiling foldhash v0.1.5
+   Compiling instability v0.3.9
+   Compiling sentry-core v0.34.0
+   Compiling askama v0.12.1
+   Compiling hashbrown v0.15.5
+   Compiling darling v0.20.11
+   Compiling miniz_oxide v0.8.9
+   Compiling sentry-contexts v0.34.0
+   Compiling itertools v0.13.0
+   Compiling strum_macros v0.26.4
+   Compiling castaway v0.2.4
+   Compiling crossterm_winapi v0.9.1
+   Compiling deadpool-runtime v0.1.4
+   Compiling codex-linux-sandbox v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\linux-sandbox
+)
+   Compiling num_cpus v1.17.0
+   Compiling unicode-width v0.1.14
+   Compiling static_assertions v1.1.0
+   Compiling dotenvy v0.15.7
+   Compiling indoc v2.0.7
+   Compiling crossterm v0.28.1
+   Compiling compact_str v0.8.1
+   Compiling deadpool v0.12.3
+   Compiling unicode-truncate v1.1.0
+   Compiling lru v0.12.5
+   Compiling flate2 v1.1.4
+   Compiling sentry-backtrace v0.34.0
+   Compiling fdeflate v0.3.7
+   Compiling pxfm v0.1.25
+   Compiling assert-json-diff v2.0.2
+   Compiling async-stream-impl v0.3.6
+   Compiling hostname v0.4.1
+   Compiling cassowary v0.3.0
+   Compiling zune-core v0.4.12
+   Compiling eyre v0.6.12
+   Compiling color-spantrace v0.3.0
+   Compiling zune-jpeg v0.4.21
+   Compiling wiremock v0.6.5
+   Compiling moxcms v0.7.7
+   Compiling async-stream v0.3.6
+   Compiling sentry-panic v0.34.0
+   Compiling png v0.18.0
+   Compiling sentry-debug-images v0.34.0
+   Compiling tracing-error v0.2.1
+   Compiling opentelemetry-appender-tracing v0.30.1
+   Compiling codex-backend-openapi-models v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\code
+x-backend-openapi-models)
+   Compiling byteorder-lite v0.1.0
+   Compiling bytemuck v1.24.0
+   Compiling is_ci v1.2.0
+   Compiling indenter v0.3.4
+   Compiling simdutf8 v0.1.5
+   Compiling error-code v3.3.2
+   Compiling strum v0.26.3
+   Compiling pulldown-cmark v0.10.3
+   Compiling image v0.25.8
+   Compiling supports-color v3.0.2
+   Compiling clipboard-win v5.4.1
+   Compiling sentry v0.34.0
+   Compiling diffy v0.4.2
+   Compiling codex-git-apply v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-apply)
+   Compiling crossbeam-channel v0.5.15
+   Compiling unicode-linebreak v0.1.5
+   Compiling ratatui v0.29.0 (https://github.com/nornagon/ratatui?branch=nornagon-v0.29.0-patch#9b2ad129)
+   Compiling dtor-proc-macro v0.0.6
+   Compiling pulldown-cmark-escape v0.10.1
+   Compiling smawk v0.3.2
+   Compiling color-eyre v0.6.5
+   Compiling tracing-appender v0.2.3
+   Compiling arboard v3.6.1
+   Compiling codex-utils-json-to-toml v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\js
+on-to-toml)
+   Compiling textwrap v0.16.2
+   Compiling tree-sitter-highlight v0.25.10
+   Compiling codex-git-tooling v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-tooling)
+   Compiling ctor-proc-macro v0.0.6
+   Compiling pathdiff v0.2.3
+   Compiling codex-process-hardening v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\process-h
+ardening)
+   Compiling dtor v0.1.0
+   Compiling clap_complete v4.5.59
+   Compiling ctor v0.5.0
+   Compiling codex-responses-api-proxy v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\respons
+es-api-proxy)
+   Compiling opentelemetry-proto v0.30.0
+   Compiling opentelemetry-otlp v0.30.0
+   Compiling ansi-to-tui v7.0.0
+   Compiling codex-ansi-escape v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\ansi-escape)
+   Compiling codex-protocol v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol)
+   Compiling codex-app-server-protocol v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\app-ser
+ver-protocol)
+   Compiling codex-feedback v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\feedback)
+   Compiling codex-rmcp-client v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\rmcp-client)
+   Compiling codex-deep-research v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\deep-research
+)
+warning: field `api_key` is never read
+  --> deep-research\src\mcp_search_provider.rs:23:5
+   |
+19 | pub struct McpSearchProvider {
+   |            ----------------- field in this struct
+...
+23 |     api_key: Option<String>,
+   |     ^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `codex-deep-research` (lib) generated 1 warning
+   Compiling codex-otel v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\otel)
+   Compiling codex-protocol-ts v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol-ts)
+   Compiling codex-core v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\core)
+warning: ignoring -C extra-filename flag due to -o flag
+
+error[E0432]: unresolved import `crate::exec_command`
+ --> core\src\state\service.rs:7:12
+  |
+7 | use crate::exec_command::ExecSessionManager;
+  |            ^^^^^^^^^^^^ could not find `exec_command` in the crate root
+
+error[E0432]: unresolved import `crate::executor`
+ --> core\src\state\service.rs:8:12
+  |
+8 | use crate::executor::Executor;
+  |            ^^^^^^^^
+  |            |
+  |            unresolved import
+  |            help: a similar path exists: `futures::executor`
+
+error[E0432]: unresolved import `codex_mcp_client`
+  --> core\src\agents\runtime.rs:32:5
+   |
+32 | use codex_mcp_client::McpClient;
+   |     ^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `codex_mcp_client`
+   |
+help: there is a crate or module with a similar name
+   |
+32 | use codex_rmcp_client::McpClient;
+   |           +
+
+error[E0422]: cannot find struct, variant or union type `ApplyPatchRequest` in this scope
+   --> core\src\tools\mod.rs:115:19
+    |
+115 |         let req = ApplyPatchRequest {
+    |                   ^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolOrchestrator`
+   --> core\src\tools\mod.rs:123:32
+    |
+123 |         let mut orchestrator = ToolOrchestrator::new();
+    |                                ^^^^^^^^^^^^^^^^ use of undeclared type `ToolOrchestrator`
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::orchestrator::ToolOrchestrator;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ApplyPatchRuntime`
+   --> core\src\tools\mod.rs:124:27
+    |
+124 |         let mut runtime = ApplyPatchRuntime::new();
+    |                           ^^^^^^^^^^^^^^^^^ use of undeclared type `ApplyPatchRuntime`
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
+    |
+
+error[E0422]: cannot find struct, variant or union type `ToolCtx` in this scope
+   --> core\src\tools\mod.rs:125:24
+    |
+125 |         let tool_ctx = ToolCtx {
+    |                        ^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::sandboxing::ToolCtx;
+    |
+
+error[E0422]: cannot find struct, variant or union type `ShellRequest` in this scope
+   --> core\src\tools\mod.rs:145:19
+    |
+145 |         let req = ShellRequest {
+    |                   ^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::runtimes::shell::ShellRequest;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ToolOrchestrator`
+   --> core\src\tools\mod.rs:154:32
+    |
+154 |         let mut orchestrator = ToolOrchestrator::new();
+    |                                ^^^^^^^^^^^^^^^^ use of undeclared type `ToolOrchestrator`
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::orchestrator::ToolOrchestrator;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `ShellRuntime`
+   --> core\src\tools\mod.rs:155:27
+    |
+155 |         let mut runtime = ShellRuntime::new();
+    |                           ^^^^^^^^^^^^ use of undeclared type `ShellRuntime`
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::runtimes::shell::ShellRuntime;
+    |
+
+error[E0422]: cannot find struct, variant or union type `ToolCtx` in this scope
+   --> core\src\tools\mod.rs:156:24
+    |
+156 |         let tool_ctx = ToolCtx {
+    |                        ^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+ 12 + use crate::tools::sandboxing::ToolCtx;
+    |
+
+Some errors have detailed explanations: E0422, E0432, E0433.
+For more information about an error, try `rustc --explain E0422`.
+warning: `codex-core` (lib) generated 1 warning
+error: could not compile `codex-core` (lib) due to 11 previous errors; 1 warning emitted
+warning: build failed, waiting for other jobs to finish...
+
+[2025-10-23 17:57:53] Workspace validated: C:\Users\downl\Desktop\codex-main\codex-main\codex-rs
+[2025-10-23 17:57:53] Running cargo clean
+[2025-10-23 17:57:53] cargo :      Removed 4508 files, 1.3GiB total
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:108 文字:5
++     cargo clean 2>&1 | Out-String | ForEach-Object { Log $_ }
++     ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (     Removed 4508 files, 1.3GiB total:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+[2025-10-23 17:57:53] Running just fmt
+[2025-10-23 17:57:53] just : cargo fmt -- --config imports_granularity=Item
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:124 文字:5
++     just fmt 2>&1 | Out-String | ForEach-Object { Log $_ }
++     ~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (cargo fmt -- --...ranularity=Item:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error: Recipe `fmt` could not be run because just could not find the shell: program not found
+
+[2025-10-23 17:57:53] Running cargo build --release -p codex-cli
+[2025-10-23 17:57:53] cargo :    Compiling proc-macro2 v1.0.101
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:137 文字:16
++ $BuildOutput = cargo build --release -p codex-cli 2>&1 | Out-String
++                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling proc-macro2 v1.0.101:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling unicode-ident v1.0.20
+   Compiling quote v1.0.41
+   Compiling cfg-if v1.0.4
+   Compiling memchr v2.7.6
+   Compiling windows-link v0.2.1
+   Compiling smallvec v1.15.1
+   Compiling itoa v1.0.15
+   Compiling pin-project-lite v0.2.16
+   Compiling log v0.4.28
+   Compiling serde_core v1.0.228
+   Compiling once_cell v1.21.3
+   Compiling windows_x86_64_msvc v0.53.1
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.16.0
+   Compiling futures-core v0.3.31
+   Compiling windows-sys v0.61.2
+   Compiling parking_lot_core v0.9.12
+   Compiling windows_x86_64_msvc v0.52.6
+   Compiling scopeguard v1.2.0
+   Compiling zerocopy v0.8.27
+   Compiling serde v1.0.228
+   Compiling lock_api v0.4.14
+   Compiling bytes v1.10.1
+   Compiling indexmap v2.12.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling tracing-core v0.1.34
+   Compiling ryu v1.0.20
+   Compiling futures-sink v0.3.31
+   Compiling slab v0.4.11
+   Compiling futures-channel v0.3.31
+   Compiling futures-io v0.3.31
+   Compiling pin-utils v0.1.0
+   Compiling serde_json v1.0.145
+   Compiling futures-task v0.3.31
+   Compiling find-msvc-tools v0.1.4
+   Compiling percent-encoding v2.3.2
+   Compiling writeable v0.6.1
+   Compiling shlex v1.3.0
+   Compiling getrandom v0.3.4
+   Compiling litemap v0.8.0
+   Compiling windows-link v0.1.3
+   Compiling windows-targets v0.52.6
+   Compiling libc v0.2.177
+   Compiling fnv v1.0.7
+   Compiling parking_lot v0.12.5
+   Compiling cc v1.2.41
+   Compiling getrandom v0.2.16
+   Compiling icu_normalizer_data v2.0.0
+   Compiling windows-targets v0.53.5
+   Compiling windows-sys v0.59.0
+   Compiling windows-result v0.3.4
+   Compiling http v1.3.1
+   Compiling windows-strings v0.4.2
+   Compiling bitflags v2.10.0
+   Compiling syn v2.0.107
+   Compiling icu_properties_data v2.0.1
+   Compiling windows-sys v0.60.2
+   Compiling tower-service v0.3.3
+   Compiling base64 v0.22.1
+   Compiling aho-corasick v1.1.3
+   Compiling http-body v1.0.1
+   Compiling mio v1.0.4
+   Compiling serde_derive v1.0.228
+   Compiling synstructure v0.13.2
+   Compiling tracing-attributes v0.1.30
+   Compiling tokio-macros v2.6.0
+   Compiling zerovec-derive v0.11.1
+   Compiling displaydoc v0.2.5
+   Compiling futures-macro v0.3.31
+   Compiling socket2 v0.6.1
+   Compiling zerofrom-derive v0.1.6
+   Compiling yoke-derive v0.8.0
+   Compiling httparse v1.10.1
+   Compiling strsim v0.11.1
+   Compiling ident_case v1.0.1
+   Compiling regex-syntax v0.8.8
+   Compiling tokio v1.48.0
+   Compiling form_urlencoded v1.2.2
+   Compiling atomic-waker v1.1.2
+   Compiling utf8_iter v1.0.4
+   Compiling futures-util v0.3.31
+   Compiling httpdate v1.0.3
+   Compiling thiserror v2.0.17
+   Compiling try-lock v0.2.5
+   Compiling regex-automata v0.4.13
+   Compiling mime v0.3.17
+   Compiling want v0.3.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling http-body-util v0.1.3
+   Compiling thiserror-impl v2.0.17
+   Compiling tracing v0.1.41
+   Compiling anyhow v1.0.100
+   Compiling thiserror v1.0.69
+   Compiling thiserror-impl v1.0.69
+   Compiling zerofrom v0.1.6
+   Compiling windows-registry v0.5.3
+   Compiling sync_wrapper v1.0.2
+   Compiling ipnet v2.11.0
+   Compiling zeroize v1.8.2
+   Compiling tower-layer v0.3.3
+   Compiling rand_core v0.6.4
+   Compiling yoke v0.8.0
+   Compiling ring v0.17.14
+   Compiling heck v0.5.0
+   Compiling rustls-pki-types v1.12.0
+   Compiling schannel v0.1.28
+   Compiling zerovec v0.11.4
+   Compiling zerotrie v0.2.2
+   Compiling version_check v0.9.5
+   Compiling rand_chacha v0.3.1
+   Compiling untrusted v0.9.0
+   Compiling winapi v0.3.9
+   Compiling native-tls v0.2.14
+   Compiling rand v0.8.5
+   Compiling rustls v0.23.34
+   Compiling autocfg v1.5.0
+   Compiling darling_core v0.21.3
+   Compiling num-traits v0.2.19
+   Compiling subtle v2.6.1
+   Compiling unicase v2.8.1
+   Compiling tinystr v0.8.1
+   Compiling potential_utf v0.1.3
+   Compiling mime_guess v2.0.5
+   Compiling icu_collections v2.0.0
+   Compiling darling_macro v0.21.3
+   Compiling serde_derive_internals v0.29.1
+   Compiling icu_locale_core v2.0.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling siphasher v1.0.1
+   Compiling rustversion v1.0.22
+   Compiling lazy_static v1.5.0
+   Compiling phf_shared v0.11.3
+   Compiling darling v0.21.3
+   Compiling rustls-native-certs v0.8.2
+   Compiling webpki-roots v1.0.3
+   Compiling iri-string v0.7.8
+   Compiling uuid v1.18.1
+   Compiling anstyle v1.0.13
+   Compiling siphasher v0.3.11
+   Compiling once_cell_polyfill v1.70.2
+   Compiling utf8parse v0.2.2
+   Compiling typenum v1.19.0
+   Compiling anstyle-wincon v3.0.10
+   Compiling phf_shared v0.10.0
+   Compiling serde_urlencoded v0.7.1
+   Compiling winapi-util v0.1.11
+   Compiling rustls-webpki v0.103.7
+   Compiling anstyle-parse v0.2.7
+   Compiling phf_generator v0.11.3
+   Compiling generic-array v0.14.9
+   Compiling anstyle-query v1.1.4
+   Compiling encoding_rs v0.8.35
+   Compiling hex v0.4.3
+   Compiling colorchoice v1.0.4
+   Compiling time-core v0.1.6
+   Compiling powerfmt v0.2.0
+   Compiling dyn-clone v1.0.20
+   Compiling paste v1.0.15
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling icu_locale_data v2.0.0
+   Compiling num-conv v0.1.0
+   Compiling anstream v0.6.21
+   Compiling deranged v0.5.4
+   Compiling termcolor v1.4.1
+   Compiling time-macros v0.2.24
+   Compiling phf_generator v0.10.0
+   Compiling futures-executor v0.3.31
+   Compiling regex v1.12.2
+   Compiling async-trait v0.1.89
+   Compiling icu_decimal_data v2.0.0
+   Compiling icu_provider v2.0.0
+   Compiling schemars v0.8.22
+   Compiling phf_codegen v0.10.0
+   Compiling ts-rs-macros v11.1.0
+   Compiling serde_with_macros v3.15.1
+   Compiling schemars_derive v0.8.22
+   Compiling rand_core v0.9.3
+   Compiling time v0.3.44
+   Compiling windows-interface v0.59.3
+   Compiling windows-implement v0.60.2
+   Compiling icu_properties v2.0.1
+   Compiling icu_normalizer v2.0.0
+   Compiling windows-sys v0.52.0
+   Compiling icu_locale v2.0.0
+   Compiling rand_chacha v0.9.0
+   Compiling windows-core v0.61.2
+   Compiling fixed_decimal v0.7.0
+   Compiling serde_with v3.15.1
+   Compiling terminal_size v0.4.3
+   Compiling new_debug_unreachable v1.0.6
+   Compiling unicode-width v0.2.1
+   Compiling clap_lex v0.7.6
+   Compiling ts-rs v11.1.0
+   Compiling clap_builder v4.5.50
+   Compiling rand v0.9.2
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.6
+   Compiling strum_macros v0.27.2
+   Compiling clap_derive v4.5.49
+   Compiling either v1.15.0
+   Compiling sys-locale v0.3.2
+   Compiling syn v1.0.109
+   Compiling strum v0.27.2
+   Compiling idna_adapter v1.2.1
+   Compiling itertools v0.14.0
+   Compiling idna v1.1.0
+   Compiling url v2.5.7
+   Compiling digest v0.10.7
+   Compiling string_cache_codegen v0.5.4
+   Compiling icu_decimal v2.0.0
+   Compiling chrono v0.4.42
+   Compiling opentelemetry v0.30.0
+   Compiling tokio-util v0.7.16
+   Compiling tokio-native-tls v0.3.1
+   Compiling tokio-rustls v0.26.4
+   Compiling h2 v0.4.12
+   Compiling tower v0.5.2
+   Compiling tokio-stream v0.1.17
+   Compiling windows-threading v0.1.0
+   Compiling mac v0.1.1
+   Compiling precomputed-hash v0.1.1
+   Compiling unicode-segmentation v1.12.0
+   Compiling byteorder v1.5.0
+   Compiling ref-cast v1.0.25
+   Compiling tower-http v0.6.6
+   Compiling cpufeatures v0.2.17
+   Compiling futf v0.1.5
+   Compiling windows-future v0.2.1
+   Compiling markup5ever v0.11.0
+   Compiling prost-derive v0.13.5
+   Compiling phf v0.10.1
+   Compiling windows-numerics v0.2.0
+   Compiling windows-collections v0.2.0
+   Compiling clap v4.5.50
+   Compiling hyper v1.7.0
+   Compiling futures v0.3.31
+   Compiling phf_macros v0.11.3
+   Compiling axum-core v0.5.5
+   Compiling pin-project-internal v1.1.10
+   Compiling ref-cast-impl v1.0.25
+   Compiling matchit v0.8.4
+   Compiling minimal-lexical v0.2.1
+   Compiling cfg_aliases v0.1.1
+   Compiling hyper-util v0.1.17
+   Compiling dtoa v1.0.10
+   Compiling utf-8 v0.7.6
+   Compiling nix v0.28.0
+   Compiling mcp-types v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\mcp-types)
+   Compiling nom v7.1.3
+   Compiling dtoa-short v0.3.5
+   Compiling axum v0.8.6
+   Compiling tendril v0.4.3
+   Compiling phf v0.11.3
+   Compiling hyper-tls v0.6.0
+   Compiling hyper-rustls v0.27.7
+   Compiling hyper-timeout v0.5.2
+   Compiling same-file v1.0.6
+   Compiling html5ever v0.26.0
+   Compiling windows v0.61.3
+   Compiling sha2 v0.10.9
+   Compiling reqwest v0.12.24
+   Compiling pin-project v1.1.10
+   Compiling string_cache v0.8.9
+   Compiling socket2 v0.5.10
+   Compiling tree-sitter v0.25.10
+   Compiling selectors v0.25.0
+   Compiling schemars_derive v1.0.4
+   Compiling ahash v0.8.12
+   Compiling cssparser-macros v0.6.1
+   Compiling prost v0.13.5
+   Compiling serde_path_to_error v0.1.20
+   Compiling winreg v0.10.1
+   Compiling ascii v1.1.0
+   Compiling chunked_transfer v1.5.0
+   Compiling option-ext v0.2.0
+   Compiling tree-sitter-language v0.1.5
+   Compiling winnow v0.7.13
+   Compiling libm v0.2.15
+   Compiling tiny_http v0.12.0
+   Compiling cssparser v0.31.2
+   Compiling toml_parser v1.0.4
+   Compiling dirs-sys v0.5.0
+   Compiling oauth2 v5.0.0
+   Compiling tonic v0.13.1
+   Compiling process-wrap v8.2.1
+   Compiling walkdir v2.5.0
+   Compiling schemars v1.0.4
+   Compiling fxhash v0.2.1
+   Compiling opentelemetry_sdk v0.30.0
+   Compiling getopts v0.2.24
+   Compiling os_info v3.12.0
+   Compiling axum-core v0.4.5
+   Compiling rmcp-macros v0.8.3
+   Compiling crossbeam-epoch v0.9.18
+   Compiling concurrent-queue v2.5.0
+   Compiling sse-stream v0.2.1
+   Compiling derive_more v0.99.20
+   Compiling tree-sitter-bash v0.25.0
+   Compiling toml_datetime v0.7.3
+   Compiling servo_arc v0.3.0
+   Compiling bstr v1.12.0
+   Compiling fastrand v2.3.0
+   Compiling parking v2.2.1
+   Compiling toml_writer v1.0.4
+   Compiling matchit v0.7.3
+   Compiling streaming-iterator v0.1.9
+   Compiling event-listener v5.4.1
+   Compiling tempfile v3.23.0
+   Compiling globset v0.4.18
+   Compiling crossbeam-deque v0.8.6
+   Compiling basic-toml v0.1.10
+   Compiling dirs v6.0.0
+   Compiling askama_parser v0.2.1
+   Compiling opentelemetry-http v0.30.0
+   Compiling keyring v3.6.3
+   Compiling webbrowser v1.0.6
+   Compiling shared_library v0.1.9
+   Compiling serial2 v0.2.33
+   Compiling filedescriptor v0.8.3
+   Compiling serde_spanned v1.0.3
+   Compiling env_filter v0.1.4
+   Compiling downcast-rs v1.2.1
+   Compiling bitflags v1.3.2
+   Compiling shell-words v1.1.0
+   Compiling urlencoding v2.1.3
+   Compiling ego-tree v0.6.3
+   Compiling env_logger v0.11.8
+   Compiling toml v0.9.8
+   Compiling portable-pty v0.9.0
+   Compiling askama_derive v0.12.5
+   Compiling humansize v2.1.3
+   Compiling ignore v0.4.24
+   Compiling event-listener-strategy v0.5.4
+   Compiling eventsource-stream v0.2.3
+   Compiling nucleo-matcher v0.3.1
+   Compiling test-log-macros v0.2.18
+   Compiling home v0.5.11
+   Compiling nu-ansi-term v0.50.3
+   Compiling askama_escape v0.10.3
+   Compiling similar v2.7.0
+   Compiling unsafe-libyaml v0.2.11
+   Compiling hashbrown v0.14.5
+   Compiling opentelemetry-semantic-conventions v0.30.0
+   Compiling winsafe v0.0.19
+   Compiling dashmap v6.1.0
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling axum v0.7.9
+   Compiling test-log v0.2.18
+   Compiling codex-file-search v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\file-search)
+   Compiling async-channel v2.5.0
+   Compiling scraper v0.18.1
+   Compiling codex-utils-pty v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\pty)
+   Compiling toml_edit v0.23.7
+   Compiling sha1 v0.10.6
+   Compiling codex-apply-patch v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\apply-patch)
+   Compiling codex-async-utils v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\async-utils)
+   Compiling codex-utils-string v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\string)
+   Compiling regex-lite v0.1.8
+   Compiling dunce v1.0.5
+   Compiling env-flags v0.1.1
+   Compiling wildmatch v2.5.0
+   Compiling sharded-slab v0.1.7
+   Compiling matchers v0.2.0
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.9
+   Compiling debugid v0.8.0
+   Compiling darling_core v0.20.11
+   Compiling rmcp v0.8.3
+   Compiling simd-adler32 v0.3.7
+   Compiling semver v1.0.27
+   Compiling tracing-subscriber v0.3.20
+   Compiling sentry-types v0.34.0
+   Compiling crc32fast v1.5.0
+   Compiling which v6.0.3
+   Compiling rustc-demangle v0.1.26
+   Compiling rustc_version v0.4.1
+   Compiling findshlibs v0.10.2
+   Compiling allocator-api2 v0.2.21
+   Compiling darling_macro v0.20.11
+   Compiling owo-colors v4.2.3
+   Compiling backtrace v0.3.76
+   Compiling sentry-core v0.34.0
+   Compiling instability v0.3.9
+   Compiling foldhash v0.1.5
+   Compiling askama v0.12.1
+   Compiling adler2 v2.0.1
+   Compiling hashbrown v0.15.5
+   Compiling darling v0.20.11
+   Compiling miniz_oxide v0.8.9
+   Compiling sentry-contexts v0.34.0
+   Compiling itertools v0.13.0
+   Compiling strum_macros v0.26.4
+   Compiling castaway v0.2.4
+   Compiling crossterm_winapi v0.9.1
+   Compiling static_assertions v1.1.0
+   Compiling dotenvy v0.15.7
+   Compiling unicode-width v0.1.14
+   Compiling num_cpus v1.17.0
+   Compiling codex-linux-sandbox v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\linux-sandbox
+)
+   Compiling deadpool-runtime v0.1.4
+   Compiling indoc v2.0.7
+   Compiling crossterm v0.28.1
+   Compiling unicode-truncate v1.1.0
+   Compiling compact_str v0.8.1
+   Compiling deadpool v0.12.3
+   Compiling flate2 v1.1.4
+   Compiling lru v0.12.5
+   Compiling sentry-backtrace v0.34.0
+   Compiling fdeflate v0.3.7
+   Compiling assert-json-diff v2.0.2
+   Compiling pxfm v0.1.25
+   Compiling async-stream-impl v0.3.6
+   Compiling hostname v0.4.1
+   Compiling eyre v0.6.12
+   Compiling cassowary v0.3.0
+   Compiling zune-core v0.4.12
+   Compiling color-spantrace v0.3.0
+   Compiling zune-jpeg v0.4.21
+   Compiling moxcms v0.7.7
+   Compiling async-stream v0.3.6
+   Compiling wiremock v0.6.5
+   Compiling sentry-panic v0.34.0
+   Compiling png v0.18.0
+   Compiling sentry-debug-images v0.34.0
+   Compiling tracing-error v0.2.1
+   Compiling opentelemetry-appender-tracing v0.30.1
+   Compiling codex-backend-openapi-models v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\code
+x-backend-openapi-models)
+   Compiling error-code v3.3.2
+   Compiling simdutf8 v0.1.5
+   Compiling bytemuck v1.24.0
+   Compiling pulldown-cmark v0.10.3
+   Compiling indenter v0.3.4
+   Compiling is_ci v1.2.0
+   Compiling byteorder-lite v0.1.0
+   Compiling sentry v0.34.0
+   Compiling clipboard-win v5.4.1
+   Compiling strum v0.26.3
+   Compiling supports-color v3.0.2
+   Compiling image v0.25.8
+   Compiling diffy v0.4.2
+   Compiling codex-git-apply v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-apply)
+   Compiling crossbeam-channel v0.5.15
+   Compiling pulldown-cmark-escape v0.10.1
+   Compiling dtor-proc-macro v0.0.6
+   Compiling smawk v0.3.2
+   Compiling unicode-linebreak v0.1.5
+   Compiling ratatui v0.29.0 (https://github.com/nornagon/ratatui?branch=nornagon-v0.29.0-patch#9b2ad129)
+   Compiling color-eyre v0.6.5
+   Compiling tracing-appender v0.2.3
+   Compiling arboard v3.6.1
+   Compiling codex-utils-json-to-toml v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\js
+on-to-toml)
+   Compiling textwrap v0.16.2
+   Compiling tree-sitter-highlight v0.25.10
+   Compiling codex-git-tooling v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-tooling)
+   Compiling dtor v0.1.0
+   Compiling ctor-proc-macro v0.0.6
+   Compiling pathdiff v0.2.3
+   Compiling codex-process-hardening v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\process-h
+ardening)
+   Compiling clap_complete v4.5.59
+   Compiling ctor v0.5.0
+   Compiling codex-responses-api-proxy v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\respons
+es-api-proxy)
+   Compiling opentelemetry-proto v0.30.0
+   Compiling opentelemetry-otlp v0.30.0
+   Compiling codex-protocol v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol)
+   Compiling ansi-to-tui v7.0.0
+   Compiling codex-ansi-escape v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\ansi-escape)
+   Compiling codex-app-server-protocol v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\app-ser
+ver-protocol)
+   Compiling codex-feedback v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\feedback)
+   Compiling codex-rmcp-client v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\rmcp-client)
+   Compiling codex-deep-research v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\deep-research
+)
+warning: field `api_key` is never read
+  --> deep-research\src\mcp_search_provider.rs:23:5
+   |
+19 | pub struct McpSearchProvider {
+   |            ----------------- field in this struct
+...
+23 |     api_key: Option<String>,
+   |     ^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `codex-deep-research` (lib) generated 1 warning
+   Compiling codex-otel v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\otel)
+   Compiling codex-protocol-ts v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol-ts)
+   Compiling codex-core v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\core)
+warning: unused import: `crate::tools::sandboxing::ApprovalStore`
+   --> core\src\codex.rs:113:5
+    |
+113 | use crate::tools::sandboxing::ApprovalStore;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `crate::tools::sandboxing::ApprovalStore`
+ --> core\src\state\service.rs:8:5
+  |
+8 | use crate::tools::sandboxing::ApprovalStore;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> core\src\codex.rs:553:18
+     |
+ 553 |             .min(usize::MAX as u64) as usize;
+     |              --- ^^^^^^^^^^^^^^^^^ expected `i64`, found `u64`
+     |              |
+     |              arguments to this method are incorrect
+     |
+help: the return type of this call is `u64` due to the type of the argument passed
+    --> core\src\codex.rs:550:28
+     |
+ 550 |           let total_budget = config
+     |  ____________________________^
+ 551 | |             .model_context_window
+ 552 | |             .unwrap_or(100_000)
+ 553 | |             .min(usize::MAX as u64) as usize;
+     | |__________________-----------------^
+     |                    |
+     |                    this argument influences the return type of `min`
+note: method defined here
+    --> C:\Users\downl\.rustup\toolchains\1.90.0-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\cmp.rs:10
+52:8
+     |
+1052 |     fn min(self, other: Self) -> Self
+     |        ^^^
+help: you can convert a `u64` to an `i64` and panic if the converted value doesn't fit
+     |
+ 553 |             .min((usize::MAX as u64).try_into().unwrap()) as usize;
+     |                  +                 +++++++++++++++++++++
+
+error[E0599]: no variant or associated item named `ItemStarted` found for enum `codex_protocol::protocol::EventMsg` in 
+the current scope
+   --> core\src\codex.rs:727:23
+    |
+727 |             EventMsg::ItemStarted(ItemStartedEvent {
+    |                       ^^^^^^^^^^^ variant or associated item not found in `codex_protocol::protocol::EventMsg`
+
+error[E0599]: no variant or associated item named `ItemCompleted` found for enum `codex_protocol::protocol::EventMsg` i
+n the current scope
+   --> core\src\codex.rs:744:23
+    |
+744 |             EventMsg::ItemCompleted(ItemCompletedEvent {
+    |                       ^^^^^^^^^^^^^ variant or associated item not found in `codex_protocol::protocol::EventMsg`
+
+error[E0609]: no field `tool_approvals` on type `&SessionServices`
+  --> core\src\tools\sandboxing.rs:62:30
+   |
+62 |         let store = services.tool_approvals.lock().await;
+   |                              ^^^^^^^^^^^^^^ unknown field
+   |
+   = note: available fields are: `mcp_connection_manager`, `unified_exec_manager`, `notifier`, `rollout`, `user_shell` 
+... and 5 others
+
+error[E0609]: no field `tool_approvals` on type `&SessionServices`
+  --> core\src\tools\sandboxing.rs:71:34
+   |
+71 |         let mut store = services.tool_approvals.lock().await;
+   |                                  ^^^^^^^^^^^^^^ unknown field
+   |
+   = note: available fields are: `mcp_connection_manager`, `unified_exec_manager`, `notifier`, `rollout`, `user_shell` 
+... and 5 others
+
+Some errors have detailed explanations: E0308, E0599, E0609.
+For more information about an error, try `rustc --explain E0308`.
+warning: `codex-core` (lib) generated 2 warnings
+error: could not compile `codex-core` (lib) due to 5 previous errors; 2 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+
+[2025-10-23 18:08:42] Workspace validated: C:\Users\downl\Desktop\codex-main\codex-main\codex-rs
+[2025-10-23 18:08:42] Running cargo clean
+[2025-10-23 18:08:42] cargo : error: failed to remove file `C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\target\rust-analyzer\debug\
+build\parking_lot_core-caea0a06c3a84933\build_script_build-caea0a06c3a84933.exe`
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:108 文字:5
++     cargo clean 2>&1 | Out-String | ForEach-Object { Log $_ }
++     ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (error: failed t...06c3a84933.exe`:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+Caused by:
+  繧｢繧ｯ繧ｻ繧ｹ縺梧拠蜷ｦ縺輔ｌ縺ｾ縺励◆縲・(os error 5)
+
+[2025-10-23 18:08:42] Running just fmt
+[2025-10-23 18:08:42] just : cargo fmt -- --config imports_granularity=Item
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:124 文字:5
++     just fmt 2>&1 | Out-String | ForEach-Object { Log $_ }
++     ~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (cargo fmt -- --...ranularity=Item:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error: Recipe `fmt` could not be run because just could not find the shell: program not found
+
+[2025-10-23 18:08:42] Running cargo build --release -p codex-cli
+[2025-10-23 18:08:42] cargo :    Compiling proc-macro2 v1.0.101
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:137 文字:16
++ $BuildOutput = cargo build --release -p codex-cli 2>&1 | Out-String
++                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling proc-macro2 v1.0.101:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling unicode-ident v1.0.20
+   Compiling quote v1.0.41
+   Compiling cfg-if v1.0.4
+   Compiling memchr v2.7.6
+   Compiling windows-link v0.2.1
+   Compiling smallvec v1.15.1
+   Compiling itoa v1.0.15
+   Compiling pin-project-lite v0.2.16
+   Compiling log v0.4.28
+   Compiling serde_core v1.0.228
+   Compiling once_cell v1.21.3
+   Compiling windows-sys v0.61.2
+   Compiling windows_x86_64_msvc v0.53.1
+   Compiling equivalent v1.0.2
+   Compiling parking_lot_core v0.9.12
+   Compiling futures-core v0.3.31
+   Compiling hashbrown v0.16.0
+   Compiling scopeguard v1.2.0
+   Compiling windows_x86_64_msvc v0.52.6
+   Compiling serde v1.0.228
+   Compiling zerocopy v0.8.27
+   Compiling lock_api v0.4.14
+   Compiling bytes v1.10.1
+   Compiling indexmap v2.12.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling tracing-core v0.1.34
+   Compiling ryu v1.0.20
+   Compiling futures-sink v0.3.31
+   Compiling slab v0.4.11
+   Compiling serde_json v1.0.145
+   Compiling futures-io v0.3.31
+   Compiling pin-utils v0.1.0
+   Compiling futures-task v0.3.31
+   Compiling find-msvc-tools v0.1.4
+   Compiling futures-channel v0.3.31
+   Compiling windows-targets v0.53.5
+   Compiling writeable v0.6.1
+   Compiling getrandom v0.3.4
+   Compiling percent-encoding v2.3.2
+   Compiling windows-targets v0.52.6
+   Compiling parking_lot v0.12.5
+   Compiling shlex v1.3.0
+   Compiling windows-link v0.1.3
+   Compiling windows-sys v0.60.2
+   Compiling litemap v0.8.0
+   Compiling windows-sys v0.59.0
+   Compiling syn v2.0.107
+   Compiling cc v1.2.41
+   Compiling libc v0.2.177
+   Compiling fnv v1.0.7
+   Compiling windows-result v0.3.4
+   Compiling windows-strings v0.4.2
+   Compiling getrandom v0.2.16
+   Compiling icu_properties_data v2.0.1
+   Compiling http v1.3.1
+   Compiling bitflags v2.10.0
+   Compiling icu_normalizer_data v2.0.0
+   Compiling tower-service v0.3.3
+   Compiling base64 v0.22.1
+   Compiling synstructure v0.13.2
+   Compiling serde_derive v1.0.228
+   Compiling tracing-attributes v0.1.30
+   Compiling displaydoc v0.2.5
+   Compiling socket2 v0.6.1
+   Compiling tokio-macros v2.6.0
+   Compiling zerovec-derive v0.11.1
+   Compiling mio v1.0.4
+   Compiling futures-macro v0.3.31
+   Compiling zerofrom-derive v0.1.6
+   Compiling yoke-derive v0.8.0
+   Compiling http-body v1.0.1
+   Compiling aho-corasick v1.1.3
+   Compiling tokio v1.48.0
+   Compiling futures-util v0.3.31
+   Compiling httparse v1.10.1
+   Compiling regex-syntax v0.8.8
+   Compiling strsim v0.11.1
+   Compiling ident_case v1.0.1
+   Compiling form_urlencoded v1.2.2
+   Compiling mime v0.3.17
+   Compiling tracing v0.1.41
+   Compiling try-lock v0.2.5
+   Compiling atomic-waker v1.1.2
+   Compiling utf8_iter v1.0.4
+   Compiling httpdate v1.0.3
+   Compiling thiserror v2.0.17
+   Compiling want v0.3.1
+   Compiling regex-automata v0.4.13
+   Compiling ppv-lite86 v0.2.21
+   Compiling http-body-util v0.1.3
+   Compiling thiserror-impl v2.0.17
+   Compiling zerofrom v0.1.6
+   Compiling anyhow v1.0.100
+   Compiling thiserror v1.0.69
+   Compiling yoke v0.8.0
+   Compiling thiserror-impl v1.0.69
+   Compiling windows-registry v0.5.3
+   Compiling sync_wrapper v1.0.2
+   Compiling tower-layer v0.3.3
+   Compiling zerovec v0.11.4
+   Compiling zerotrie v0.2.2
+   Compiling ipnet v2.11.0
+   Compiling zeroize v1.8.2
+   Compiling rand_core v0.6.4
+   Compiling ring v0.17.14
+   Compiling heck v0.5.0
+   Compiling rustls-pki-types v1.12.0
+   Compiling rand_chacha v0.3.1
+   Compiling schannel v0.1.28
+   Compiling winapi v0.3.9
+   Compiling version_check v0.9.5
+   Compiling untrusted v0.9.0
+   Compiling rand v0.8.5
+   Compiling native-tls v0.2.14
+   Compiling autocfg v1.5.0
+   Compiling rustls v0.23.34
+   Compiling num-traits v0.2.19
+   Compiling darling_core v0.21.3
+   Compiling unicase v2.8.1
+   Compiling tinystr v0.8.1
+   Compiling potential_utf v0.1.3
+   Compiling subtle v2.6.1
+   Compiling uuid v1.18.1
+   Compiling mime_guess v2.0.5
+   Compiling icu_collections v2.0.0
+   Compiling darling_macro v0.21.3
+   Compiling serde_derive_internals v0.29.1
+   Compiling icu_locale_core v2.0.0
+   Compiling lazy_static v1.5.0
+   Compiling rustversion v1.0.22
+   Compiling siphasher v1.0.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling phf_shared v0.11.3
+   Compiling darling v0.21.3
+   Compiling rustls-native-certs v0.8.2
+   Compiling webpki-roots v1.0.3
+   Compiling siphasher v0.3.11
+   Compiling typenum v1.19.0
+   Compiling iri-string v0.7.8
+   Compiling once_cell_polyfill v1.70.2
+   Compiling utf8parse v0.2.2
+   Compiling anstyle v1.0.13
+   Compiling anstyle-wincon v3.0.10
+   Compiling phf_shared v0.10.0
+   Compiling winapi-util v0.1.11
+   Compiling anstyle-parse v0.2.7
+   Compiling phf_generator v0.11.3
+   Compiling serde_urlencoded v0.7.1
+   Compiling generic-array v0.14.9
+   Compiling anstyle-query v1.1.4
+   Compiling encoding_rs v0.8.35
+   Compiling rustls-webpki v0.103.7
+   Compiling paste v1.0.15
+   Compiling time-core v0.1.6
+   Compiling powerfmt v0.2.0
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling dyn-clone v1.0.20
+   Compiling colorchoice v1.0.4
+   Compiling icu_locale_data v2.0.0
+   Compiling hex v0.4.3
+   Compiling num-conv v0.1.0
+   Compiling anstream v0.6.21
+   Compiling deranged v0.5.4
+   Compiling time-macros v0.2.24
+   Compiling termcolor v1.4.1
+   Compiling phf_generator v0.10.0
+   Compiling futures-executor v0.3.31
+   Compiling regex v1.12.2
+   Compiling async-trait v0.1.89
+   Compiling icu_decimal_data v2.0.0
+   Compiling schemars v0.8.22
+   Compiling phf_codegen v0.10.0
+   Compiling ts-rs-macros v11.1.0
+   Compiling serde_with_macros v3.15.1
+   Compiling schemars_derive v0.8.22
+   Compiling rand_core v0.9.3
+   Compiling windows-implement v0.60.2
+   Compiling windows-interface v0.59.3
+   Compiling windows-sys v0.52.0
+   Compiling time v0.3.44
+   Compiling icu_provider v2.0.0
+   Compiling rand_chacha v0.9.0
+   Compiling fixed_decimal v0.7.0
+   Compiling terminal_size v0.4.3
+   Compiling unicode-width v0.2.1
+   Compiling serde_with v3.15.1
+   Compiling clap_lex v0.7.6
+   Compiling new_debug_unreachable v1.0.6
+   Compiling rand v0.9.2
+   Compiling clap_builder v4.5.50
+   Compiling ts-rs v11.1.0
+   Compiling icu_properties v2.0.1
+   Compiling icu_normalizer v2.0.0
+   Compiling windows-core v0.61.2
+   Compiling icu_locale v2.0.0
+   Compiling crypto-common v0.1.6
+   Compiling block-buffer v0.10.4
+   Compiling clap_derive v4.5.49
+   Compiling strum_macros v0.27.2
+   Compiling sys-locale v0.3.2
+   Compiling strum v0.27.2
+   Compiling either v1.15.0
+   Compiling syn v1.0.109
+   Compiling itertools v0.14.0
+   Compiling idna_adapter v1.2.1
+   Compiling idna v1.1.0
+   Compiling digest v0.10.7
+   Compiling string_cache_codegen v0.5.4
+   Compiling icu_decimal v2.0.0
+   Compiling chrono v0.4.42
+   Compiling opentelemetry v0.30.0
+   Compiling windows-threading v0.1.0
+   Compiling mac v0.1.1
+   Compiling url v2.5.7
+   Compiling byteorder v1.5.0
+   Compiling precomputed-hash v0.1.1
+   Compiling clap v4.5.50
+   Compiling ref-cast v1.0.25
+   Compiling unicode-segmentation v1.12.0
+   Compiling cpufeatures v0.2.17
+   Compiling futf v0.1.5
+   Compiling windows-future v0.2.1
+   Compiling markup5ever v0.11.0
+   Compiling prost-derive v0.13.5
+   Compiling phf v0.10.1
+   Compiling mcp-types v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\mcp-types)
+   Compiling windows-numerics v0.2.0
+   Compiling windows-collections v0.2.0
+   Compiling futures v0.3.31
+   Compiling phf_macros v0.11.3
+   Compiling axum-core v0.5.5
+   Compiling ref-cast-impl v1.0.25
+   Compiling pin-project-internal v1.1.10
+   Compiling matchit v0.8.4
+   Compiling dtoa v1.0.10
+   Compiling cfg_aliases v0.1.1
+   Compiling utf-8 v0.7.6
+   Compiling minimal-lexical v0.2.1
+   Compiling dtoa-short v0.3.5
+   Compiling same-file v1.0.6
+   Compiling nix v0.28.0
+   Compiling tendril v0.4.3
+   Compiling nom v7.1.3
+   Compiling html5ever v0.26.0
+   Compiling phf v0.11.3
+   Compiling windows v0.61.3
+   Compiling sha2 v0.10.9
+   Compiling prost v0.13.5
+   Compiling string_cache v0.8.9
+   Compiling socket2 v0.5.10
+   Compiling tree-sitter v0.25.10
+   Compiling pin-project v1.1.10
+   Compiling selectors v0.25.0
+   Compiling schemars_derive v1.0.4
+   Compiling ahash v0.8.12
+   Compiling cssparser-macros v0.6.1
+   Compiling serde_path_to_error v0.1.20
+   Compiling libm v0.2.15
+   Compiling chunked_transfer v1.5.0
+   Compiling tree-sitter-language v0.1.5
+   Compiling winnow v0.7.13
+   Compiling option-ext v0.2.0
+   Compiling ascii v1.1.0
+   Compiling winreg v0.10.1
+   Compiling cssparser v0.31.2
+   Compiling dirs-sys v0.5.0
+   Compiling tiny_http v0.12.0
+   Compiling toml_parser v1.0.4
+   Compiling schemars v1.0.4
+   Compiling walkdir v2.5.0
+   Compiling fxhash v0.2.1
+   Compiling getopts v0.2.24
+   Compiling os_info v3.12.0
+   Compiling axum-core v0.4.5
+   Compiling rmcp-macros v0.8.3
+   Compiling concurrent-queue v2.5.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling sse-stream v0.2.1
+   Compiling derive_more v0.99.20
+   Compiling tree-sitter-bash v0.25.0
+   Compiling toml_datetime v0.7.3
+   Compiling servo_arc v0.3.0
+   Compiling bstr v1.12.0
+   Compiling streaming-iterator v0.1.9
+   Compiling matchit v0.7.3
+   Compiling toml_writer v1.0.4
+   Compiling parking v2.2.1
+   Compiling tokio-util v0.7.16
+   Compiling tokio-rustls v0.26.4
+   Compiling tokio-native-tls v0.3.1
+   Compiling tokio-stream v0.1.17
+   Compiling process-wrap v8.2.1
+   Compiling fastrand v2.3.0
+   Compiling h2 v0.4.12
+   Compiling tower v0.5.2
+   Compiling event-listener v5.4.1
+   Compiling opentelemetry_sdk v0.30.0
+   Compiling tempfile v3.23.0
+   Compiling globset v0.4.18
+   Compiling crossbeam-deque v0.8.6
+   Compiling basic-toml v0.1.10
+   Compiling tower-http v0.6.6
+   Compiling axum v0.8.6
+   Compiling hyper v1.7.0
+   Compiling askama_parser v0.2.1
+   Compiling hyper-util v0.1.17
+   Compiling dirs v6.0.0
+   Compiling keyring v3.6.3
+   Compiling webbrowser v1.0.6
+   Compiling filedescriptor v0.8.3
+   Compiling serial2 v0.2.33
+   Compiling shared_library v0.1.9
+   Compiling serde_spanned v1.0.3
+   Compiling env_filter v0.1.4
+   Compiling shell-words v1.1.0
+   Compiling hyper-rustls v0.27.7
+   Compiling hyper-tls v0.6.0
+   Compiling hyper-timeout v0.5.2
+   Compiling axum v0.7.9
+   Compiling bitflags v1.3.2
+   Compiling urlencoding v2.1.3
+   Compiling ego-tree v0.6.3
+   Compiling downcast-rs v1.2.1
+   Compiling env_logger v0.11.8
+   Compiling toml v0.9.8
+   Compiling reqwest v0.12.24
+   Compiling humansize v2.1.3
+   Compiling tonic v0.13.1
+   Compiling askama_derive v0.12.5
+   Compiling scraper v0.18.1
+   Compiling portable-pty v0.9.0
+   Compiling ignore v0.4.24
+   Compiling event-listener-strategy v0.5.4
+   Compiling oauth2 v5.0.0
+   Compiling opentelemetry-http v0.30.0
+   Compiling eventsource-stream v0.2.3
+   Compiling nucleo-matcher v0.3.1
+   Compiling test-log-macros v0.2.18
+   Compiling home v0.5.11
+   Compiling nu-ansi-term v0.50.3
+   Compiling rmcp v0.8.3
+   Compiling winsafe v0.0.19
+   Compiling opentelemetry-semantic-conventions v0.30.0
+   Compiling askama_escape v0.10.3
+   Compiling unsafe-libyaml v0.2.11
+   Compiling similar v2.7.0
+   Compiling hashbrown v0.14.5
+   Compiling test-log v0.2.18
+   Compiling dashmap v6.1.0
+   Compiling codex-file-search v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\file-search)
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling codex-utils-pty v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\pty)
+   Compiling which v6.0.3
+   Compiling async-channel v2.5.0
+   Compiling codex-async-utils v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\async-utils)
+   Compiling toml_edit v0.23.7
+   Compiling sha1 v0.10.6
+   Compiling wildmatch v2.5.0
+   Compiling env-flags v0.1.1
+   Compiling regex-lite v0.1.8
+   Compiling askama v0.12.1
+   Compiling dunce v1.0.5
+   Compiling codex-utils-string v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\string)
+   Compiling sharded-slab v0.1.7
+   Compiling matchers v0.2.0
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.9
+   Compiling debugid v0.8.0
+   Compiling darling_core v0.20.11
+   Compiling simd-adler32 v0.3.7
+   Compiling crc32fast v1.5.0
+   Compiling rustc-demangle v0.1.26
+   Compiling semver v1.0.27
+   Compiling tracing-subscriber v0.3.20
+   Compiling sentry-types v0.34.0
+   Compiling findshlibs v0.10.2
+   Compiling backtrace v0.3.76
+   Compiling rustc_version v0.4.1
+   Compiling darling_macro v0.20.11
+   Compiling foldhash v0.1.5
+   Compiling sentry-core v0.34.0
+   Compiling instability v0.3.9
+   Compiling owo-colors v4.2.3
+   Compiling adler2 v2.0.1
+   Compiling allocator-api2 v0.2.21
+   Compiling darling v0.20.11
+   Compiling miniz_oxide v0.8.9
+   Compiling hashbrown v0.15.5
+   Compiling sentry-contexts v0.34.0
+   Compiling itertools v0.13.0
+   Compiling castaway v0.2.4
+   Compiling strum_macros v0.26.4
+   Compiling crossterm_winapi v0.9.1
+   Compiling codex-linux-sandbox v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\linux-sandbox
+)
+   Compiling static_assertions v1.1.0
+   Compiling indoc v2.0.7
+   Compiling unicode-width v0.1.14
+   Compiling num_cpus v1.17.0
+   Compiling dotenvy v0.15.7
+   Compiling deadpool-runtime v0.1.4
+   Compiling unicode-truncate v1.1.0
+   Compiling compact_str v0.8.1
+   Compiling crossterm v0.28.1
+   Compiling deadpool v0.12.3
+   Compiling lru v0.12.5
+   Compiling flate2 v1.1.4
+   Compiling sentry-backtrace v0.34.0
+   Compiling fdeflate v0.3.7
+   Compiling pxfm v0.1.25
+   Compiling assert-json-diff v2.0.2
+   Compiling async-stream-impl v0.3.6
+   Compiling hostname v0.4.1
+   Compiling zune-core v0.4.12
+   Compiling codex-apply-patch v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\apply-patch)
+   Compiling cassowary v0.3.0
+   Compiling color-spantrace v0.3.0
+   Compiling eyre v0.6.12
+   Compiling zune-jpeg v0.4.21
+   Compiling moxcms v0.7.7
+   Compiling async-stream v0.3.6
+   Compiling wiremock v0.6.5
+   Compiling png v0.18.0
+   Compiling sentry-panic v0.34.0
+   Compiling sentry-debug-images v0.34.0
+   Compiling opentelemetry-appender-tracing v0.30.1
+   Compiling tracing-error v0.2.1
+   Compiling strum v0.26.3
+   Compiling codex-backend-openapi-models v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\code
+x-backend-openapi-models)
+   Compiling error-code v3.3.2
+   Compiling byteorder-lite v0.1.0
+   Compiling indenter v0.3.4
+   Compiling bytemuck v1.24.0
+   Compiling simdutf8 v0.1.5
+   Compiling is_ci v1.2.0
+   Compiling pulldown-cmark v0.10.3
+   Compiling sentry v0.34.0
+   Compiling ratatui v0.29.0 (https://github.com/nornagon/ratatui?branch=nornagon-v0.29.0-patch#9b2ad129)
+   Compiling clipboard-win v5.4.1
+   Compiling image v0.25.8
+   Compiling supports-color v3.0.2
+   Compiling diffy v0.4.2
+   Compiling codex-git-apply v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-apply)
+   Compiling crossbeam-channel v0.5.15
+   Compiling unicode-linebreak v0.1.5
+   Compiling dtor-proc-macro v0.0.6
+   Compiling smawk v0.3.2
+   Compiling pulldown-cmark-escape v0.10.1
+   Compiling color-eyre v0.6.5
+   Compiling arboard v3.6.1
+   Compiling tracing-appender v0.2.3
+   Compiling tree-sitter-highlight v0.25.10
+   Compiling codex-utils-json-to-toml v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\js
+on-to-toml)
+   Compiling dtor v0.1.0
+   Compiling textwrap v0.16.2
+   Compiling codex-git-tooling v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-tooling)
+   Compiling ctor-proc-macro v0.0.6
+   Compiling pathdiff v0.2.3
+   Compiling codex-process-hardening v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\process-h
+ardening)
+   Compiling clap_complete v4.5.59
+   Compiling ctor v0.5.0
+   Compiling codex-protocol v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol)
+   Compiling codex-responses-api-proxy v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\respons
+es-api-proxy)
+   Compiling opentelemetry-proto v0.30.0
+   Compiling opentelemetry-otlp v0.30.0
+   Compiling ansi-to-tui v7.0.0
+   Compiling codex-ansi-escape v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\ansi-escape)
+   Compiling codex-app-server-protocol v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\app-ser
+ver-protocol)
+   Compiling codex-feedback v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\feedback)
+   Compiling codex-rmcp-client v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\rmcp-client)
+   Compiling codex-deep-research v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\deep-research
+)
+warning: field `api_key` is never read
+  --> deep-research\src\mcp_search_provider.rs:23:5
+   |
+19 | pub struct McpSearchProvider {
+   |            ----------------- field in this struct
+...
+23 |     api_key: Option<String>,
+   |     ^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `codex-deep-research` (lib) generated 1 warning
+   Compiling codex-otel v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\otel)
+   Compiling codex-protocol-ts v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol-ts)
+   Compiling codex-core v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\core)
+warning: ignoring -C extra-filename flag due to -o flag
+
+error[E0252]: the name `ApprovalStore` is defined multiple times
+   --> core\src\codex.rs:112:5
+    |
+ 18 | use crate::tools::sandboxing::ApprovalStore;
+    |     --------------------------------------- previous import of the type `ApprovalStore` here
+...
+112 | use crate::tools::sandboxing::ApprovalStore;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `ApprovalStore` reimported here
+    |
+    = note: `ApprovalStore` must be defined only once in the type namespace of this module
+
+For more information about this error, try `rustc --explain E0252`.
+warning: `codex-core` (lib) generated 1 warning
+error: could not compile `codex-core` (lib) due to 1 previous error; 1 warning emitted
+warning: build failed, waiting for other jobs to finish...
+
+[2025-10-23 18:14:42] Workspace validated: C:\Users\downl\Desktop\codex-main\codex-main\codex-rs
+[2025-10-23 18:14:42] Running cargo clean
+[2025-10-23 18:14:42] cargo :      Removed 6786 files, 2.1GiB total
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:108 文字:5
++     cargo clean 2>&1 | Out-String | ForEach-Object { Log $_ }
++     ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (     Removed 6786 files, 2.1GiB total:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+[2025-10-23 18:14:42] Running just fmt
+[2025-10-23 18:14:42] just : cargo fmt -- --config imports_granularity=Item
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:124 文字:5
++     just fmt 2>&1 | Out-String | ForEach-Object { Log $_ }
++     ~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (cargo fmt -- --...ranularity=Item:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error: Recipe `fmt` could not be run because just could not find the shell: program not found
+
+[2025-10-23 18:14:42] Running cargo build --release -p codex-cli
+[2025-10-23 18:14:42] cargo :    Compiling proc-macro2 v1.0.101
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:137 文字:16
++ $BuildOutput = cargo build --release -p codex-cli 2>&1 | Out-String
++                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling proc-macro2 v1.0.101:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling unicode-ident v1.0.20
+   Compiling quote v1.0.41
+   Compiling cfg-if v1.0.4
+   Compiling memchr v2.7.6
+   Compiling windows-link v0.2.1
+   Compiling smallvec v1.15.1
+   Compiling itoa v1.0.15
+   Compiling pin-project-lite v0.2.16
+   Compiling log v0.4.28
+   Compiling serde_core v1.0.228
+   Compiling once_cell v1.21.3
+   Compiling windows_x86_64_msvc v0.53.1
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.16.0
+   Compiling parking_lot_core v0.9.12
+   Compiling windows-sys v0.61.2
+   Compiling futures-core v0.3.31
+   Compiling scopeguard v1.2.0
+   Compiling windows_x86_64_msvc v0.52.6
+   Compiling serde v1.0.228
+   Compiling zerocopy v0.8.27
+   Compiling lock_api v0.4.14
+   Compiling bytes v1.10.1
+   Compiling indexmap v2.12.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling tracing-core v0.1.34
+   Compiling ryu v1.0.20
+   Compiling futures-sink v0.3.31
+   Compiling futures-channel v0.3.31
+   Compiling futures-io v0.3.31
+   Compiling slab v0.4.11
+   Compiling pin-utils v0.1.0
+   Compiling serde_json v1.0.145
+   Compiling futures-task v0.3.31
+   Compiling percent-encoding v2.3.2
+   Compiling getrandom v0.3.4
+   Compiling find-msvc-tools v0.1.4
+   Compiling writeable v0.6.1
+   Compiling shlex v1.3.0
+   Compiling litemap v0.8.0
+   Compiling windows-targets v0.53.5
+   Compiling windows-link v0.1.3
+   Compiling libc v0.2.177
+   Compiling fnv v1.0.7
+   Compiling getrandom v0.2.16
+   Compiling windows-targets v0.52.6
+   Compiling cc v1.2.41
+   Compiling windows-sys v0.60.2
+   Compiling http v1.3.1
+   Compiling windows-result v0.3.4
+   Compiling windows-strings v0.4.2
+   Compiling parking_lot v0.12.5
+   Compiling icu_properties_data v2.0.1
+   Compiling windows-sys v0.59.0
+   Compiling syn v2.0.107
+   Compiling icu_normalizer_data v2.0.0
+   Compiling bitflags v2.10.0
+   Compiling tower-service v0.3.3
+   Compiling http-body v1.0.1
+   Compiling base64 v0.22.1
+   Compiling socket2 v0.6.1
+   Compiling mio v1.0.4
+   Compiling synstructure v0.13.2
+   Compiling aho-corasick v1.1.3
+   Compiling serde_derive v1.0.228
+   Compiling tracing-attributes v0.1.30
+   Compiling displaydoc v0.2.5
+   Compiling tokio-macros v2.6.0
+   Compiling zerovec-derive v0.11.1
+   Compiling futures-macro v0.3.31
+   Compiling zerofrom-derive v0.1.6
+   Compiling yoke-derive v0.8.0
+   Compiling httparse v1.10.1
+   Compiling regex-syntax v0.8.8
+   Compiling strsim v0.11.1
+   Compiling ident_case v1.0.1
+   Compiling form_urlencoded v1.2.2
+   Compiling regex-automata v0.4.13
+   Compiling atomic-waker v1.1.2
+   Compiling mime v0.3.17
+   Compiling tokio v1.48.0
+   Compiling httpdate v1.0.3
+   Compiling try-lock v0.2.5
+   Compiling futures-util v0.3.31
+   Compiling utf8_iter v1.0.4
+   Compiling thiserror v2.0.17
+   Compiling want v0.3.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling thiserror-impl v2.0.17
+   Compiling http-body-util v0.1.3
+   Compiling thiserror v1.0.69
+   Compiling anyhow v1.0.100
+   Compiling tracing v0.1.41
+   Compiling thiserror-impl v1.0.69
+   Compiling zerofrom v0.1.6
+   Compiling windows-registry v0.5.3
+   Compiling sync_wrapper v1.0.2
+   Compiling ipnet v2.11.0
+   Compiling tower-layer v0.3.3
+   Compiling yoke v0.8.0
+   Compiling zeroize v1.8.2
+   Compiling rand_core v0.6.4
+   Compiling ring v0.17.14
+   Compiling heck v0.5.0
+   Compiling rustls-pki-types v1.12.0
+   Compiling schannel v0.1.28
+   Compiling rand_chacha v0.3.1
+   Compiling untrusted v0.9.0
+   Compiling version_check v0.9.5
+   Compiling winapi v0.3.9
+   Compiling native-tls v0.2.14
+   Compiling autocfg v1.5.0
+   Compiling rand v0.8.5
+   Compiling zerovec v0.11.4
+   Compiling zerotrie v0.2.2
+   Compiling rustls v0.23.34
+   Compiling num-traits v0.2.19
+   Compiling darling_core v0.21.3
+   Compiling unicase v2.8.1
+   Compiling subtle v2.6.1
+   Compiling darling_macro v0.21.3
+   Compiling mime_guess v2.0.5
+   Compiling tinystr v0.8.1
+   Compiling potential_utf v0.1.3
+   Compiling serde_derive_internals v0.29.1
+   Compiling icu_collections v2.0.0
+   Compiling rustversion v1.0.22
+   Compiling icu_locale_core v2.0.0
+   Compiling lazy_static v1.5.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling siphasher v1.0.1
+   Compiling phf_shared v0.11.3
+   Compiling darling v0.21.3
+   Compiling uuid v1.18.1
+   Compiling rustls-native-certs v0.8.2
+   Compiling webpki-roots v1.0.3
+   Compiling anstyle v1.0.13
+   Compiling iri-string v0.7.8
+   Compiling once_cell_polyfill v1.70.2
+   Compiling siphasher v0.3.11
+   Compiling typenum v1.19.0
+   Compiling utf8parse v0.2.2
+   Compiling winapi-util v0.1.11
+   Compiling anstyle-wincon v3.0.10
+   Compiling phf_shared v0.10.0
+   Compiling rustls-webpki v0.103.7
+   Compiling phf_generator v0.11.3
+   Compiling anstyle-parse v0.2.7
+   Compiling serde_urlencoded v0.7.1
+   Compiling generic-array v0.14.9
+   Compiling anstyle-query v1.1.4
+   Compiling encoding_rs v0.8.35
+   Compiling num-conv v0.1.0
+   Compiling colorchoice v1.0.4
+   Compiling hex v0.4.3
+   Compiling time-core v0.1.6
+   Compiling paste v1.0.15
+   Compiling powerfmt v0.2.0
+   Compiling dyn-clone v1.0.20
+   Compiling icu_locale_data v2.0.0
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling time-macros v0.2.24
+   Compiling deranged v0.5.4
+   Compiling anstream v0.6.21
+   Compiling termcolor v1.4.1
+   Compiling phf_generator v0.10.0
+   Compiling futures-executor v0.3.31
+   Compiling regex v1.12.2
+   Compiling async-trait v0.1.89
+   Compiling schemars v0.8.22
+   Compiling icu_decimal_data v2.0.0
+   Compiling phf_codegen v0.10.0
+   Compiling ts-rs-macros v11.1.0
+   Compiling serde_with_macros v3.15.1
+   Compiling schemars_derive v0.8.22
+   Compiling windows-interface v0.59.3
+   Compiling time v0.3.44
+   Compiling icu_provider v2.0.0
+   Compiling windows-implement v0.60.2
+   Compiling rand_core v0.9.3
+   Compiling windows-sys v0.52.0
+   Compiling icu_normalizer v2.0.0
+   Compiling icu_properties v2.0.1
+   Compiling icu_locale v2.0.0
+   Compiling windows-core v0.61.2
+   Compiling rand_chacha v0.9.0
+   Compiling fixed_decimal v0.7.0
+   Compiling serde_with v3.15.1
+   Compiling terminal_size v0.4.3
+   Compiling new_debug_unreachable v1.0.6
+   Compiling clap_lex v0.7.6
+   Compiling unicode-width v0.2.1
+   Compiling clap_builder v4.5.50
+   Compiling rand v0.9.2
+   Compiling ts-rs v11.1.0
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.6
+   Compiling strum_macros v0.27.2
+   Compiling clap_derive v4.5.49
+   Compiling either v1.15.0
+   Compiling sys-locale v0.3.2
+   Compiling syn v1.0.109
+   Compiling strum v0.27.2
+   Compiling itertools v0.14.0
+   Compiling digest v0.10.7
+   Compiling idna_adapter v1.2.1
+   Compiling icu_decimal v2.0.0
+   Compiling string_cache_codegen v0.5.4
+   Compiling chrono v0.4.42
+   Compiling idna v1.1.0
+   Compiling opentelemetry v0.30.0
+   Compiling windows-threading v0.1.0
+   Compiling mac v0.1.1
+   Compiling url v2.5.7
+   Compiling cpufeatures v0.2.17
+   Compiling precomputed-hash v0.1.1
+   Compiling byteorder v1.5.0
+   Compiling unicode-segmentation v1.12.0
+   Compiling ref-cast v1.0.25
+   Compiling futf v0.1.5
+   Compiling windows-future v0.2.1
+   Compiling markup5ever v0.11.0
+   Compiling prost-derive v0.13.5
+   Compiling phf v0.10.1
+   Compiling windows-collections v0.2.0
+   Compiling windows-numerics v0.2.0
+   Compiling futures v0.3.31
+   Compiling phf_macros v0.11.3
+   Compiling axum-core v0.5.5
+   Compiling clap v4.5.50
+   Compiling pin-project-internal v1.1.10
+   Compiling ref-cast-impl v1.0.25
+   Compiling tokio-util v0.7.16
+   Compiling tokio-native-tls v0.3.1
+   Compiling tokio-rustls v0.26.4
+   Compiling tokio-stream v0.1.17
+   Compiling matchit v0.8.4
+   Compiling utf-8 v0.7.6
+   Compiling h2 v0.4.12
+   Compiling tower v0.5.2
+   Compiling cfg_aliases v0.1.1
+   Compiling dtoa v1.0.10
+   Compiling minimal-lexical v0.2.1
+   Compiling tendril v0.4.3
+   Compiling nix v0.28.0
+   Compiling phf v0.11.3
+   Compiling same-file v1.0.6
+   Compiling dtoa-short v0.3.5
+   Compiling mcp-types v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\mcp-types)
+   Compiling nom v7.1.3
+   Compiling html5ever v0.26.0
+   Compiling tower-http v0.6.6
+   Compiling axum v0.8.6
+   Compiling windows v0.61.3
+   Compiling string_cache v0.8.9
+   Compiling hyper v1.7.0
+   Compiling pin-project v1.1.10
+   Compiling sha2 v0.10.9
+   Compiling socket2 v0.5.10
+   Compiling prost v0.13.5
+   Compiling tree-sitter v0.25.10
+   Compiling selectors v0.25.0
+   Compiling schemars_derive v1.0.4
+   Compiling ahash v0.8.12
+   Compiling cssparser-macros v0.6.1
+   Compiling serde_path_to_error v0.1.20
+   Compiling tree-sitter-language v0.1.5
+   Compiling option-ext v0.2.0
+   Compiling chunked_transfer v1.5.0
+   Compiling hyper-util v0.1.17
+   Compiling winreg v0.10.1
+   Compiling ascii v1.1.0
+   Compiling winnow v0.7.13
+   Compiling libm v0.2.15
+   Compiling tiny_http v0.12.0
+   Compiling cssparser v0.31.2
+   Compiling hyper-rustls v0.27.7
+   Compiling hyper-tls v0.6.0
+   Compiling hyper-timeout v0.5.2
+   Compiling toml_parser v1.0.4
+   Compiling tonic v0.13.1
+   Compiling reqwest v0.12.24
+   Compiling dirs-sys v0.5.0
+   Compiling process-wrap v8.2.1
+   Compiling walkdir v2.5.0
+   Compiling schemars v1.0.4
+   Compiling oauth2 v5.0.0
+   Compiling opentelemetry_sdk v0.30.0
+   Compiling fxhash v0.2.1
+   Compiling getopts v0.2.24
+   Compiling os_info v3.12.0
+   Compiling rmcp-macros v0.8.3
+   Compiling axum-core v0.4.5
+   Compiling crossbeam-epoch v0.9.18
+   Compiling concurrent-queue v2.5.0
+   Compiling sse-stream v0.2.1
+   Compiling derive_more v0.99.20
+   Compiling toml_datetime v0.7.3
+   Compiling tree-sitter-bash v0.25.0
+   Compiling servo_arc v0.3.0
+   Compiling bstr v1.12.0
+   Compiling toml_writer v1.0.4
+   Compiling parking v2.2.1
+   Compiling matchit v0.7.3
+   Compiling streaming-iterator v0.1.9
+   Compiling fastrand v2.3.0
+   Compiling event-listener v5.4.1
+   Compiling globset v0.4.18
+   Compiling crossbeam-deque v0.8.6
+   Compiling tempfile v3.23.0
+   Compiling basic-toml v0.1.10
+   Compiling opentelemetry-http v0.30.0
+   Compiling dirs v6.0.0
+   Compiling askama_parser v0.2.1
+   Compiling keyring v3.6.3
+   Compiling webbrowser v1.0.6
+   Compiling shared_library v0.1.9
+   Compiling serial2 v0.2.33
+   Compiling filedescriptor v0.8.3
+   Compiling serde_spanned v1.0.3
+   Compiling env_filter v0.1.4
+   Compiling ego-tree v0.6.3
+   Compiling shell-words v1.1.0
+   Compiling downcast-rs v1.2.1
+   Compiling bitflags v1.3.2
+   Compiling urlencoding v2.1.3
+   Compiling env_logger v0.11.8
+   Compiling toml v0.9.8
+   Compiling humansize v2.1.3
+   Compiling portable-pty v0.9.0
+   Compiling askama_derive v0.12.5
+   Compiling ignore v0.4.24
+   Compiling event-listener-strategy v0.5.4
+   Compiling eventsource-stream v0.2.3
+   Compiling nucleo-matcher v0.3.1
+   Compiling test-log-macros v0.2.18
+   Compiling home v0.5.11
+   Compiling nu-ansi-term v0.50.3
+   Compiling unsafe-libyaml v0.2.11
+   Compiling hashbrown v0.14.5
+   Compiling similar v2.7.0
+   Compiling opentelemetry-semantic-conventions v0.30.0
+   Compiling winsafe v0.0.19
+   Compiling askama_escape v0.10.3
+   Compiling dashmap v6.1.0
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling test-log v0.2.18
+   Compiling codex-file-search v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\file-search)
+   Compiling async-channel v2.5.0
+   Compiling scraper v0.18.1
+   Compiling codex-apply-patch v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\apply-patch)
+   Compiling axum v0.7.9
+   Compiling codex-utils-pty v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\pty)
+   Compiling toml_edit v0.23.7
+   Compiling codex-async-utils v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\async-utils)
+   Compiling sha1 v0.10.6
+   Compiling wildmatch v2.5.0
+   Compiling dunce v1.0.5
+   Compiling regex-lite v0.1.8
+   Compiling codex-utils-string v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\string)
+   Compiling env-flags v0.1.1
+   Compiling sharded-slab v0.1.7
+   Compiling matchers v0.2.0
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.9
+   Compiling debugid v0.8.0
+   Compiling darling_core v0.20.11
+   Compiling rustc-demangle v0.1.26
+   Compiling crc32fast v1.5.0
+   Compiling simd-adler32 v0.3.7
+   Compiling tracing-subscriber v0.3.20
+   Compiling sentry-types v0.34.0
+   Compiling semver v1.0.27
+   Compiling which v6.0.3
+   Compiling backtrace v0.3.76
+   Compiling rustc_version v0.4.1
+   Compiling darling_macro v0.20.11
+   Compiling findshlibs v0.10.2
+   Compiling foldhash v0.1.5
+   Compiling rmcp v0.8.3
+   Compiling adler2 v2.0.1
+   Compiling allocator-api2 v0.2.21
+   Compiling instability v0.3.9
+   Compiling askama v0.12.1
+   Compiling owo-colors v4.2.3
+   Compiling sentry-core v0.34.0
+   Compiling darling v0.20.11
+   Compiling hashbrown v0.15.5
+   Compiling miniz_oxide v0.8.9
+   Compiling sentry-contexts v0.34.0
+   Compiling itertools v0.13.0
+   Compiling strum_macros v0.26.4
+   Compiling castaway v0.2.4
+   Compiling crossterm_winapi v0.9.1
+   Compiling static_assertions v1.1.0
+   Compiling indoc v2.0.7
+   Compiling dotenvy v0.15.7
+   Compiling unicode-width v0.1.14
+   Compiling num_cpus v1.17.0
+   Compiling codex-linux-sandbox v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\linux-sandbox
+)
+   Compiling deadpool-runtime v0.1.4
+   Compiling compact_str v0.8.1
+   Compiling crossterm v0.28.1
+   Compiling deadpool v0.12.3
+   Compiling unicode-truncate v1.1.0
+   Compiling lru v0.12.5
+   Compiling flate2 v1.1.4
+   Compiling sentry-backtrace v0.34.0
+   Compiling fdeflate v0.3.7
+   Compiling pxfm v0.1.25
+   Compiling assert-json-diff v2.0.2
+   Compiling async-stream-impl v0.3.6
+   Compiling hostname v0.4.1
+   Compiling zune-core v0.4.12
+   Compiling eyre v0.6.12
+   Compiling cassowary v0.3.0
+   Compiling color-spantrace v0.3.0
+   Compiling zune-jpeg v0.4.21
+   Compiling async-stream v0.3.6
+   Compiling png v0.18.0
+   Compiling moxcms v0.7.7
+   Compiling wiremock v0.6.5
+   Compiling sentry-panic v0.34.0
+   Compiling sentry-debug-images v0.34.0
+   Compiling opentelemetry-appender-tracing v0.30.1
+   Compiling tracing-error v0.2.1
+   Compiling codex-backend-openapi-models v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\code
+x-backend-openapi-models)
+   Compiling strum v0.26.3
+   Compiling simdutf8 v0.1.5
+   Compiling bytemuck v1.24.0
+   Compiling error-code v3.3.2
+   Compiling pulldown-cmark v0.10.3
+   Compiling indenter v0.3.4
+   Compiling byteorder-lite v0.1.0
+   Compiling is_ci v1.2.0
+   Compiling clipboard-win v5.4.1
+   Compiling image v0.25.8
+   Compiling sentry v0.34.0
+   Compiling ratatui v0.29.0 (https://github.com/nornagon/ratatui?branch=nornagon-v0.29.0-patch#9b2ad129)
+   Compiling supports-color v3.0.2
+   Compiling diffy v0.4.2
+   Compiling codex-git-apply v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-apply)
+   Compiling crossbeam-channel v0.5.15
+   Compiling dtor-proc-macro v0.0.6
+   Compiling pulldown-cmark-escape v0.10.1
+   Compiling unicode-linebreak v0.1.5
+   Compiling smawk v0.3.2
+   Compiling tracing-appender v0.2.3
+   Compiling arboard v3.6.1
+   Compiling color-eyre v0.6.5
+   Compiling textwrap v0.16.2
+   Compiling codex-utils-json-to-toml v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\js
+on-to-toml)
+   Compiling tree-sitter-highlight v0.25.10
+   Compiling codex-git-tooling v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-tooling)
+   Compiling dtor v0.1.0
+   Compiling ctor-proc-macro v0.0.6
+   Compiling pathdiff v0.2.3
+   Compiling codex-process-hardening v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\process-h
+ardening)
+   Compiling clap_complete v4.5.59
+   Compiling ctor v0.5.0
+   Compiling codex-responses-api-proxy v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\respons
+es-api-proxy)
+   Compiling opentelemetry-proto v0.30.0
+   Compiling opentelemetry-otlp v0.30.0
+   Compiling ansi-to-tui v7.0.0
+   Compiling codex-ansi-escape v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\ansi-escape)
+   Compiling codex-protocol v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol)
+   Compiling codex-app-server-protocol v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\app-ser
+ver-protocol)
+   Compiling codex-feedback v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\feedback)
+   Compiling codex-rmcp-client v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\rmcp-client)
+   Compiling codex-deep-research v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\deep-research
+)
+warning: field `api_key` is never read
+  --> deep-research\src\mcp_search_provider.rs:23:5
+   |
+19 | pub struct McpSearchProvider {
+   |            ----------------- field in this struct
+...
+23 |     api_key: Option<String>,
+   |     ^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `codex-deep-research` (lib) generated 1 warning
+   Compiling codex-otel v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\otel)
+   Compiling codex-protocol-ts v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol-ts)
+   Compiling codex-core v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\core)
+   Compiling codex-common v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\common)
+   Compiling codex-arg0 v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\arg0)
+   Compiling codex-backend-client v0.0.0 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\backend-client)
+   Compiling codex-ollama v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\ollama)
+   Compiling codex-login v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\login)
+   Compiling codex-cloud-tasks-client v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\cloud-ta
+sks-client)
+   Compiling codex-chatgpt v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\chatgpt)
+   Compiling codex-mcp-server v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\mcp-server)
+   Compiling codex-exec v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\exec)
+error[E0599]: no variant or associated item named `ItemStarted` found for enum `codex_core::protocol::EventMsg` in the 
+current scope
+   --> mcp-server\src\codex_tool_runner.rs:293:33
+    |
+293 |                     | EventMsg::ItemStarted(_)
+    |                                 ^^^^^^^^^^^ variant or associated item not found in `codex_core::protocol::EventM
+sg`
+
+error[E0599]: no variant or associated item named `ItemCompleted` found for enum `codex_core::protocol::EventMsg` in th
+e current scope
+   --> mcp-server\src\codex_tool_runner.rs:294:33
+    |
+294 |                     | EventMsg::ItemCompleted(_)
+    |                                 ^^^^^^^^^^^^^ variant or associated item not found in `codex_core::protocol::Even
+tMsg`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `codex-mcp-server` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+
+[2025-10-23 18:22:24] Workspace validated: C:\Users\downl\Desktop\codex-main\codex-main\codex-rs
+[2025-10-23 18:22:24] Running cargo clean
+[2025-10-23 18:22:24] cargo :      Removed 4572 files, 1.4GiB total
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:108 文字:5
++     cargo clean 2>&1 | Out-String | ForEach-Object { Log $_ }
++     ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (     Removed 4572 files, 1.4GiB total:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+[2025-10-23 18:22:24] Running just fmt
+[2025-10-23 18:22:24] just : cargo fmt -- --config imports_granularity=Item
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:124 文字:5
++     just fmt 2>&1 | Out-String | ForEach-Object { Log $_ }
++     ~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (cargo fmt -- --...ranularity=Item:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error: Recipe `fmt` could not be run because just could not find the shell: program not found
+
+[2025-10-23 18:22:24] Running cargo build --release -p codex-cli
+[2025-10-23 18:22:24] cargo :    Compiling proc-macro2 v1.0.101
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:137 文字:16
++ $BuildOutput = cargo build --release -p codex-cli 2>&1 | Out-String
++                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling proc-macro2 v1.0.101:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling unicode-ident v1.0.20
+   Compiling quote v1.0.41
+   Compiling cfg-if v1.0.4
+   Compiling memchr v2.7.6
+   Compiling windows-link v0.2.1
+   Compiling smallvec v1.15.1
+   Compiling itoa v1.0.15
+   Compiling pin-project-lite v0.2.16
+   Compiling log v0.4.28
+   Compiling serde_core v1.0.228
+   Compiling once_cell v1.21.3
+   Compiling windows-sys v0.61.2
+   Compiling windows_x86_64_msvc v0.53.1
+   Compiling equivalent v1.0.2
+   Compiling parking_lot_core v0.9.12
+   Compiling futures-core v0.3.31
+   Compiling hashbrown v0.16.0
+   Compiling windows_x86_64_msvc v0.52.6
+   Compiling scopeguard v1.2.0
+   Compiling serde v1.0.228
+   Compiling zerocopy v0.8.27
+   Compiling lock_api v0.4.14
+   Compiling bytes v1.10.1
+   Compiling indexmap v2.12.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling tracing-core v0.1.34
+   Compiling ryu v1.0.20
+   Compiling futures-sink v0.3.31
+   Compiling futures-channel v0.3.31
+   Compiling futures-task v0.3.31
+   Compiling pin-utils v0.1.0
+   Compiling futures-io v0.3.31
+   Compiling serde_json v1.0.145
+   Compiling slab v0.4.11
+   Compiling writeable v0.6.1
+   Compiling percent-encoding v2.3.2
+   Compiling find-msvc-tools v0.1.4
+   Compiling getrandom v0.3.4
+   Compiling shlex v1.3.0
+   Compiling litemap v0.8.0
+   Compiling windows-link v0.1.3
+   Compiling windows-targets v0.53.5
+   Compiling fnv v1.0.7
+   Compiling libc v0.2.177
+   Compiling parking_lot v0.12.5
+   Compiling cc v1.2.41
+   Compiling getrandom v0.2.16
+   Compiling windows-targets v0.52.6
+   Compiling windows-sys v0.60.2
+   Compiling http v1.3.1
+   Compiling windows-result v0.3.4
+   Compiling windows-strings v0.4.2
+   Compiling bitflags v2.10.0
+   Compiling icu_properties_data v2.0.1
+   Compiling syn v2.0.107
+   Compiling icu_normalizer_data v2.0.0
+   Compiling windows-sys v0.59.0
+   Compiling base64 v0.22.1
+   Compiling tower-service v0.3.3
+   Compiling aho-corasick v1.1.3
+   Compiling http-body v1.0.1
+   Compiling serde_derive v1.0.228
+   Compiling synstructure v0.13.2
+   Compiling tracing-attributes v0.1.30
+   Compiling socket2 v0.6.1
+   Compiling zerovec-derive v0.11.1
+   Compiling tokio-macros v2.6.0
+   Compiling displaydoc v0.2.5
+   Compiling futures-macro v0.3.31
+   Compiling mio v1.0.4
+   Compiling zerofrom-derive v0.1.6
+   Compiling yoke-derive v0.8.0
+   Compiling ident_case v1.0.1
+   Compiling httparse v1.10.1
+   Compiling regex-syntax v0.8.8
+   Compiling strsim v0.11.1
+   Compiling form_urlencoded v1.2.2
+   Compiling tokio v1.48.0
+   Compiling thiserror v2.0.17
+   Compiling try-lock v0.2.5
+   Compiling futures-util v0.3.31
+   Compiling utf8_iter v1.0.4
+   Compiling atomic-waker v1.1.2
+   Compiling regex-automata v0.4.13
+   Compiling mime v0.3.17
+   Compiling httpdate v1.0.3
+   Compiling want v0.3.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling http-body-util v0.1.3
+   Compiling thiserror-impl v2.0.17
+   Compiling tracing v0.1.41
+   Compiling thiserror v1.0.69
+   Compiling anyhow v1.0.100
+   Compiling thiserror-impl v1.0.69
+   Compiling zerofrom v0.1.6
+   Compiling windows-registry v0.5.3
+   Compiling sync_wrapper v1.0.2
+   Compiling ipnet v2.11.0
+   Compiling tower-layer v0.3.3
+   Compiling yoke v0.8.0
+   Compiling zeroize v1.8.2
+   Compiling rand_core v0.6.4
+   Compiling ring v0.17.14
+   Compiling heck v0.5.0
+   Compiling rustls-pki-types v1.12.0
+   Compiling rand_chacha v0.3.1
+   Compiling schannel v0.1.28
+   Compiling zerovec v0.11.4
+   Compiling zerotrie v0.2.2
+   Compiling rand v0.8.5
+   Compiling version_check v0.9.5
+   Compiling winapi v0.3.9
+   Compiling untrusted v0.9.0
+   Compiling rustls v0.23.34
+   Compiling autocfg v1.5.0
+   Compiling native-tls v0.2.14
+   Compiling num-traits v0.2.19
+   Compiling darling_core v0.21.3
+   Compiling subtle v2.6.1
+   Compiling unicase v2.8.1
+   Compiling tinystr v0.8.1
+   Compiling potential_utf v0.1.3
+   Compiling darling_macro v0.21.3
+   Compiling icu_collections v2.0.0
+   Compiling serde_derive_internals v0.29.1
+   Compiling mime_guess v2.0.5
+   Compiling icu_locale_core v2.0.0
+   Compiling rustversion v1.0.22
+   Compiling lazy_static v1.5.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling siphasher v1.0.1
+   Compiling uuid v1.18.1
+   Compiling phf_shared v0.11.3
+   Compiling darling v0.21.3
+   Compiling rustls-native-certs v0.8.2
+   Compiling webpki-roots v1.0.3
+   Compiling once_cell_polyfill v1.70.2
+   Compiling utf8parse v0.2.2
+   Compiling anstyle v1.0.13
+   Compiling rustls-webpki v0.103.7
+   Compiling iri-string v0.7.8
+   Compiling siphasher v0.3.11
+   Compiling typenum v1.19.0
+   Compiling anstyle-parse v0.2.7
+   Compiling winapi-util v0.1.11
+   Compiling anstyle-wincon v3.0.10
+   Compiling phf_shared v0.10.0
+   Compiling phf_generator v0.11.3
+   Compiling serde_urlencoded v0.7.1
+   Compiling generic-array v0.14.9
+   Compiling anstyle-query v1.1.4
+   Compiling encoding_rs v0.8.35
+   Compiling paste v1.0.15
+   Compiling time-core v0.1.6
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling dyn-clone v1.0.20
+   Compiling powerfmt v0.2.0
+   Compiling colorchoice v1.0.4
+   Compiling num-conv v0.1.0
+   Compiling hex v0.4.3
+   Compiling icu_locale_data v2.0.0
+   Compiling time-macros v0.2.24
+   Compiling anstream v0.6.21
+   Compiling deranged v0.5.4
+   Compiling phf_generator v0.10.0
+   Compiling termcolor v1.4.1
+   Compiling futures-executor v0.3.31
+   Compiling regex v1.12.2
+   Compiling async-trait v0.1.89
+   Compiling schemars v0.8.22
+   Compiling icu_decimal_data v2.0.0
+   Compiling icu_provider v2.0.0
+   Compiling ts-rs-macros v11.1.0
+   Compiling phf_codegen v0.10.0
+   Compiling time v0.3.44
+   Compiling serde_with_macros v3.15.1
+   Compiling schemars_derive v0.8.22
+   Compiling rand_core v0.9.3
+   Compiling windows-implement v0.60.2
+   Compiling windows-interface v0.59.3
+   Compiling windows-sys v0.52.0
+   Compiling icu_properties v2.0.1
+   Compiling icu_normalizer v2.0.0
+   Compiling icu_locale v2.0.0
+   Compiling windows-core v0.61.2
+   Compiling rand_chacha v0.9.0
+   Compiling serde_with v3.15.1
+   Compiling fixed_decimal v0.7.0
+   Compiling terminal_size v0.4.3
+   Compiling unicode-width v0.2.1
+   Compiling new_debug_unreachable v1.0.6
+   Compiling ts-rs v11.1.0
+   Compiling clap_lex v0.7.6
+   Compiling rand v0.9.2
+   Compiling clap_builder v4.5.50
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.6
+   Compiling strum_macros v0.27.2
+   Compiling clap_derive v4.5.49
+   Compiling strum v0.27.2
+   Compiling either v1.15.0
+   Compiling sys-locale v0.3.2
+   Compiling syn v1.0.109
+   Compiling itertools v0.14.0
+   Compiling idna_adapter v1.2.1
+   Compiling idna v1.1.0
+   Compiling icu_decimal v2.0.0
+   Compiling digest v0.10.7
+   Compiling string_cache_codegen v0.5.4
+   Compiling url v2.5.7
+   Compiling chrono v0.4.42
+   Compiling opentelemetry v0.30.0
+   Compiling windows-threading v0.1.0
+   Compiling precomputed-hash v0.1.1
+   Compiling mac v0.1.1
+   Compiling ref-cast v1.0.25
+   Compiling unicode-segmentation v1.12.0
+   Compiling byteorder v1.5.0
+   Compiling cpufeatures v0.2.17
+   Compiling futf v0.1.5
+   Compiling windows-future v0.2.1
+   Compiling markup5ever v0.11.0
+   Compiling prost-derive v0.13.5
+   Compiling phf v0.10.1
+   Compiling windows-collections v0.2.0
+   Compiling tokio-util v0.7.16
+   Compiling tokio-native-tls v0.3.1
+   Compiling tokio-rustls v0.26.4
+   Compiling tokio-stream v0.1.17
+   Compiling windows-numerics v0.2.0
+   Compiling futures v0.3.31
+   Compiling h2 v0.4.12
+   Compiling tower v0.5.2
+   Compiling phf_macros v0.11.3
+   Compiling axum-core v0.5.5
+   Compiling pin-project-internal v1.1.10
+   Compiling ref-cast-impl v1.0.25
+   Compiling clap v4.5.50
+   Compiling cfg_aliases v0.1.1
+   Compiling matchit v0.8.4
+   Compiling utf-8 v0.7.6
+   Compiling minimal-lexical v0.2.1
+   Compiling tower-http v0.6.6
+   Compiling dtoa v1.0.10
+   Compiling axum v0.8.6
+   Compiling hyper v1.7.0
+   Compiling nom v7.1.3
+   Compiling tendril v0.4.3
+   Compiling mcp-types v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\mcp-types)
+   Compiling dtoa-short v0.3.5
+   Compiling nix v0.28.0
+   Compiling same-file v1.0.6
+   Compiling phf v0.11.3
+   Compiling hyper-util v0.1.17
+   Compiling html5ever v0.26.0
+   Compiling windows v0.61.3
+   Compiling sha2 v0.10.9
+   Compiling string_cache v0.8.9
+   Compiling socket2 v0.5.10
+   Compiling prost v0.13.5
+   Compiling pin-project v1.1.10
+   Compiling tree-sitter v0.25.10
+   Compiling selectors v0.25.0
+   Compiling schemars_derive v1.0.4
+   Compiling ahash v0.8.12
+   Compiling cssparser-macros v0.6.1
+   Compiling hyper-tls v0.6.0
+   Compiling hyper-rustls v0.27.7
+   Compiling hyper-timeout v0.5.2
+   Compiling serde_path_to_error v0.1.20
+   Compiling chunked_transfer v1.5.0
+   Compiling reqwest v0.12.24
+   Compiling libm v0.2.15
+   Compiling option-ext v0.2.0
+   Compiling tree-sitter-language v0.1.5
+   Compiling ascii v1.1.0
+   Compiling winnow v0.7.13
+   Compiling winreg v0.10.1
+   Compiling dirs-sys v0.5.0
+   Compiling tiny_http v0.12.0
+   Compiling tonic v0.13.1
+   Compiling oauth2 v5.0.0
+   Compiling toml_parser v1.0.4
+   Compiling cssparser v0.31.2
+   Compiling process-wrap v8.2.1
+   Compiling walkdir v2.5.0
+   Compiling opentelemetry_sdk v0.30.0
+   Compiling schemars v1.0.4
+   Compiling fxhash v0.2.1
+   Compiling getopts v0.2.24
+   Compiling os_info v3.12.0
+   Compiling axum-core v0.4.5
+   Compiling rmcp-macros v0.8.3
+   Compiling concurrent-queue v2.5.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling sse-stream v0.2.1
+   Compiling derive_more v0.99.20
+   Compiling tree-sitter-bash v0.25.0
+   Compiling toml_datetime v0.7.3
+   Compiling servo_arc v0.3.0
+   Compiling bstr v1.12.0
+   Compiling toml_writer v1.0.4
+   Compiling streaming-iterator v0.1.9
+   Compiling fastrand v2.3.0
+   Compiling matchit v0.7.3
+   Compiling parking v2.2.1
+   Compiling globset v0.4.18
+   Compiling event-listener v5.4.1
+   Compiling tempfile v3.23.0
+   Compiling basic-toml v0.1.10
+   Compiling crossbeam-deque v0.8.6
+   Compiling askama_parser v0.2.1
+   Compiling dirs v6.0.0
+   Compiling opentelemetry-http v0.30.0
+   Compiling keyring v3.6.3
+   Compiling webbrowser v1.0.6
+   Compiling shared_library v0.1.9
+   Compiling serial2 v0.2.33
+   Compiling filedescriptor v0.8.3
+   Compiling serde_spanned v1.0.3
+   Compiling env_filter v0.1.4
+   Compiling urlencoding v2.1.3
+   Compiling downcast-rs v1.2.1
+   Compiling bitflags v1.3.2
+   Compiling shell-words v1.1.0
+   Compiling ego-tree v0.6.3
+   Compiling env_logger v0.11.8
+   Compiling portable-pty v0.9.0
+   Compiling toml v0.9.8
+   Compiling humansize v2.1.3
+   Compiling askama_derive v0.12.5
+   Compiling ignore v0.4.24
+   Compiling event-listener-strategy v0.5.4
+   Compiling eventsource-stream v0.2.3
+   Compiling nucleo-matcher v0.3.1
+   Compiling home v0.5.11
+   Compiling test-log-macros v0.2.18
+   Compiling nu-ansi-term v0.50.3
+   Compiling winsafe v0.0.19
+   Compiling opentelemetry-semantic-conventions v0.30.0
+   Compiling askama_escape v0.10.3
+   Compiling unsafe-libyaml v0.2.11
+   Compiling hashbrown v0.14.5
+   Compiling similar v2.7.0
+   Compiling dashmap v6.1.0
+   Compiling axum v0.7.9
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling test-log v0.2.18
+   Compiling scraper v0.18.1
+   Compiling codex-apply-patch v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\apply-patch)
+   Compiling codex-file-search v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\file-search)
+   Compiling async-channel v2.5.0
+   Compiling codex-utils-pty v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\pty)
+   Compiling toml_edit v0.23.7
+   Compiling codex-async-utils v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\async-utils)
+   Compiling sha1 v0.10.6
+   Compiling env-flags v0.1.1
+   Compiling dunce v1.0.5
+   Compiling regex-lite v0.1.8
+   Compiling wildmatch v2.5.0
+   Compiling codex-utils-string v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\string)
+   Compiling which v6.0.3
+   Compiling sharded-slab v0.1.7
+   Compiling matchers v0.2.0
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.9
+   Compiling debugid v0.8.0
+   Compiling rmcp v0.8.3
+   Compiling darling_core v0.20.11
+   Compiling semver v1.0.27
+   Compiling rustc-demangle v0.1.26
+   Compiling crc32fast v1.5.0
+   Compiling tracing-subscriber v0.3.20
+   Compiling sentry-types v0.34.0
+   Compiling simd-adler32 v0.3.7
+   Compiling rustc_version v0.4.1
+   Compiling backtrace v0.3.76
+   Compiling findshlibs v0.10.2
+   Compiling darling_macro v0.20.11
+   Compiling instability v0.3.9
+   Compiling foldhash v0.1.5
+   Compiling adler2 v2.0.1
+   Compiling allocator-api2 v0.2.21
+   Compiling owo-colors v4.2.3
+   Compiling sentry-core v0.34.0
+   Compiling askama v0.12.1
+   Compiling hashbrown v0.15.5
+   Compiling darling v0.20.11
+   Compiling miniz_oxide v0.8.9
+   Compiling sentry-contexts v0.34.0
+   Compiling itertools v0.13.0
+   Compiling strum_macros v0.26.4
+   Compiling castaway v0.2.4
+   Compiling crossterm_winapi v0.9.1
+   Compiling unicode-width v0.1.14
+   Compiling codex-linux-sandbox v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\linux-sandbox
+)
+   Compiling static_assertions v1.1.0
+   Compiling deadpool-runtime v0.1.4
+   Compiling num_cpus v1.17.0
+   Compiling dotenvy v0.15.7
+   Compiling indoc v2.0.7
+   Compiling unicode-truncate v1.1.0
+   Compiling compact_str v0.8.1
+   Compiling deadpool v0.12.3
+   Compiling crossterm v0.28.1
+   Compiling flate2 v1.1.4
+   Compiling lru v0.12.5
+   Compiling sentry-backtrace v0.34.0
+   Compiling fdeflate v0.3.7
+   Compiling pxfm v0.1.25
+   Compiling assert-json-diff v2.0.2
+   Compiling async-stream-impl v0.3.6
+   Compiling hostname v0.4.1
+   Compiling cassowary v0.3.0
+   Compiling color-spantrace v0.3.0
+   Compiling eyre v0.6.12
+   Compiling zune-core v0.4.12
+   Compiling zune-jpeg v0.4.21
+   Compiling moxcms v0.7.7
+   Compiling async-stream v0.3.6
+   Compiling wiremock v0.6.5
+   Compiling png v0.18.0
+   Compiling sentry-panic v0.34.0
+   Compiling sentry-debug-images v0.34.0
+   Compiling tracing-error v0.2.1
+   Compiling opentelemetry-appender-tracing v0.30.1
+   Compiling codex-backend-openapi-models v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\code
+x-backend-openapi-models)
+   Compiling bytemuck v1.24.0
+   Compiling is_ci v1.2.0
+   Compiling simdutf8 v0.1.5
+   Compiling indenter v0.3.4
+   Compiling pulldown-cmark v0.10.3
+   Compiling error-code v3.3.2
+   Compiling byteorder-lite v0.1.0
+   Compiling sentry v0.34.0
+   Compiling supports-color v3.0.2
+   Compiling strum v0.26.3
+   Compiling clipboard-win v5.4.1
+   Compiling image v0.25.8
+   Compiling diffy v0.4.2
+   Compiling codex-git-apply v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-apply)
+   Compiling crossbeam-channel v0.5.15
+   Compiling smawk v0.3.2
+   Compiling dtor-proc-macro v0.0.6
+   Compiling pulldown-cmark-escape v0.10.1
+   Compiling ratatui v0.29.0 (https://github.com/nornagon/ratatui?branch=nornagon-v0.29.0-patch#9b2ad129)
+   Compiling unicode-linebreak v0.1.5
+   Compiling color-eyre v0.6.5
+   Compiling tracing-appender v0.2.3
+   Compiling arboard v3.6.1
+   Compiling codex-utils-json-to-toml v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\js
+on-to-toml)
+   Compiling textwrap v0.16.2
+   Compiling tree-sitter-highlight v0.25.10
+   Compiling codex-git-tooling v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-tooling)
+   Compiling dtor v0.1.0
+   Compiling ctor-proc-macro v0.0.6
+   Compiling pathdiff v0.2.3
+   Compiling codex-process-hardening v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\process-h
+ardening)
+   Compiling clap_complete v4.5.59
+   Compiling ctor v0.5.0
+   Compiling codex-responses-api-proxy v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\respons
+es-api-proxy)
+   Compiling opentelemetry-proto v0.30.0
+   Compiling opentelemetry-otlp v0.30.0
+   Compiling codex-protocol v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol)
+   Compiling ansi-to-tui v7.0.0
+   Compiling codex-ansi-escape v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\ansi-escape)
+   Compiling codex-app-server-protocol v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\app-ser
+ver-protocol)
+   Compiling codex-feedback v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\feedback)
+   Compiling codex-rmcp-client v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\rmcp-client)
+   Compiling codex-deep-research v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\deep-research
+)
+warning: field `api_key` is never read
+  --> deep-research\src\mcp_search_provider.rs:23:5
+   |
+19 | pub struct McpSearchProvider {
+   |            ----------------- field in this struct
+...
+23 |     api_key: Option<String>,
+   |     ^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `codex-deep-research` (lib) generated 1 warning
+   Compiling codex-otel v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\otel)
+   Compiling codex-protocol-ts v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol-ts)
+   Compiling codex-core v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\core)
+   Compiling codex-common v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\common)
+   Compiling codex-arg0 v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\arg0)
+   Compiling codex-backend-client v0.0.0 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\backend-client)
+   Compiling codex-ollama v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\ollama)
+   Compiling codex-login v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\login)
+   Compiling codex-cloud-tasks-client v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\cloud-ta
+sks-client)
+   Compiling codex-chatgpt v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\chatgpt)
+   Compiling codex-exec v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\exec)
+   Compiling codex-mcp-server v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\mcp-server)
+   Compiling codex-tui v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\tui)
+   Compiling codex-app-server v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\app-server)
+warning: ignoring -C extra-filename flag due to -o flag
+
+error[E0432]: unresolved import `ratatui_macros`
+   --> tui\src\history_cell.rs:288:13
+    |
+288 |         use ratatui_macros::line;
+    |             ^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `ratatui_macros`
+    |
+    = help: if you wanted to use a crate named `ratatui_macros`, use `cargo add ratatui_macros` to add it to your `Carg
+o.toml`
+
+error[E0432]: unresolved import `ratatui_macros`
+   --> tui\src\history_cell.rs:289:13
+    |
+289 |         use ratatui_macros::text;
+    |             ^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `ratatui_macros`
+    |
+    = help: if you wanted to use a crate named `ratatui_macros`, use `cargo add ratatui_macros` to add it to your `Carg
+o.toml`
+
+For more information about this error, try `rustc --explain E0432`.
+warning: `codex-tui` (lib) generated 1 warning
+error: could not compile `codex-tui` (lib) due to 2 previous errors; 1 warning emitted
+warning: build failed, waiting for other jobs to finish...
+
+[2025-10-23 18:30:56] Workspace validated: C:\Users\downl\Desktop\codex-main\codex-main\codex-rs
+[2025-10-23 18:30:56] Running cargo clean
+[2025-10-23 18:30:56] cargo :      Removed 4585 files, 1.4GiB total
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:108 文字:5
++     cargo clean 2>&1 | Out-String | ForEach-Object { Log $_ }
++     ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (     Removed 4585 files, 1.4GiB total:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+[2025-10-23 18:30:56] Running just fmt
+[2025-10-23 18:30:56] just : cargo fmt -- --config imports_granularity=Item
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:124 文字:5
++     just fmt 2>&1 | Out-String | ForEach-Object { Log $_ }
++     ~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (cargo fmt -- --...ranularity=Item:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error: Recipe `fmt` could not be run because just could not find the shell: program not found
+
+[2025-10-23 18:30:56] Running cargo build --release -p codex-cli
+[2025-10-23 18:30:56] cargo :    Compiling proc-macro2 v1.0.101
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:137 文字:16
++ $BuildOutput = cargo build --release -p codex-cli 2>&1 | Out-String
++                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling proc-macro2 v1.0.101:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling unicode-ident v1.0.20
+   Compiling quote v1.0.41
+   Compiling cfg-if v1.0.4
+   Compiling memchr v2.7.6
+   Compiling windows-link v0.2.1
+   Compiling smallvec v1.15.1
+   Compiling itoa v1.0.15
+   Compiling pin-project-lite v0.2.16
+   Compiling log v0.4.28
+   Compiling serde_core v1.0.228
+   Compiling once_cell v1.21.3
+   Compiling windows-sys v0.61.2
+   Compiling windows_x86_64_msvc v0.53.1
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.16.0
+   Compiling futures-core v0.3.31
+   Compiling parking_lot_core v0.9.12
+   Compiling scopeguard v1.2.0
+   Compiling windows_x86_64_msvc v0.52.6
+   Compiling serde v1.0.228
+   Compiling zerocopy v0.8.27
+   Compiling bytes v1.10.1
+   Compiling lock_api v0.4.14
+   Compiling indexmap v2.12.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling tracing-core v0.1.34
+   Compiling ryu v1.0.20
+   Compiling futures-sink v0.3.31
+   Compiling futures-io v0.3.31
+   Compiling futures-channel v0.3.31
+   Compiling pin-utils v0.1.0
+   Compiling serde_json v1.0.145
+   Compiling futures-task v0.3.31
+   Compiling slab v0.4.11
+   Compiling writeable v0.6.1
+   Compiling percent-encoding v2.3.2
+   Compiling shlex v1.3.0
+   Compiling getrandom v0.3.4
+   Compiling find-msvc-tools v0.1.4
+   Compiling litemap v0.8.0
+   Compiling windows-link v0.1.3
+   Compiling libc v0.2.177
+   Compiling fnv v1.0.7
+   Compiling getrandom v0.2.16
+   Compiling windows-targets v0.53.5
+   Compiling windows-targets v0.52.6
+   Compiling http v1.3.1
+   Compiling windows-result v0.3.4
+   Compiling parking_lot v0.12.5
+   Compiling cc v1.2.41
+   Compiling windows-strings v0.4.2
+   Compiling icu_properties_data v2.0.1
+   Compiling windows-sys v0.60.2
+   Compiling windows-sys v0.59.0
+   Compiling icu_normalizer_data v2.0.0
+   Compiling bitflags v2.10.0
+   Compiling syn v2.0.107
+   Compiling base64 v0.22.1
+   Compiling http-body v1.0.1
+   Compiling tower-service v0.3.3
+   Compiling aho-corasick v1.1.3
+   Compiling socket2 v0.6.1
+   Compiling mio v1.0.4
+   Compiling regex-syntax v0.8.8
+   Compiling strsim v0.11.1
+   Compiling ident_case v1.0.1
+   Compiling httparse v1.10.1
+   Compiling serde_derive v1.0.228
+   Compiling synstructure v0.13.2
+   Compiling tracing-attributes v0.1.30
+   Compiling tokio-macros v2.6.0
+   Compiling zerovec-derive v0.11.1
+   Compiling displaydoc v0.2.5
+   Compiling futures-macro v0.3.31
+   Compiling zerofrom-derive v0.1.6
+   Compiling yoke-derive v0.8.0
+   Compiling form_urlencoded v1.2.2
+   Compiling mime v0.3.17
+   Compiling regex-automata v0.4.13
+   Compiling atomic-waker v1.1.2
+   Compiling try-lock v0.2.5
+   Compiling utf8_iter v1.0.4
+   Compiling thiserror v2.0.17
+   Compiling tokio v1.48.0
+   Compiling httpdate v1.0.3
+   Compiling want v0.3.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling futures-util v0.3.31
+   Compiling thiserror-impl v2.0.17
+   Compiling http-body-util v0.1.3
+   Compiling anyhow v1.0.100
+   Compiling thiserror v1.0.69
+   Compiling tracing v0.1.41
+   Compiling thiserror-impl v1.0.69
+   Compiling windows-registry v0.5.3
+   Compiling zerofrom v0.1.6
+   Compiling sync_wrapper v1.0.2
+   Compiling ipnet v2.11.0
+   Compiling tower-layer v0.3.3
+   Compiling zeroize v1.8.2
+   Compiling rand_core v0.6.4
+   Compiling yoke v0.8.0
+   Compiling ring v0.17.14
+   Compiling heck v0.5.0
+   Compiling rustls-pki-types v1.12.0
+   Compiling schannel v0.1.28
+   Compiling rand_chacha v0.3.1
+   Compiling version_check v0.9.5
+   Compiling winapi v0.3.9
+   Compiling untrusted v0.9.0
+   Compiling rand v0.8.5
+   Compiling zerovec v0.11.4
+   Compiling zerotrie v0.2.2
+   Compiling native-tls v0.2.14
+   Compiling rustls v0.23.34
+   Compiling autocfg v1.5.0
+   Compiling num-traits v0.2.19
+   Compiling darling_core v0.21.3
+   Compiling unicase v2.8.1
+   Compiling subtle v2.6.1
+   Compiling tinystr v0.8.1
+   Compiling potential_utf v0.1.3
+   Compiling mime_guess v2.0.5
+   Compiling darling_macro v0.21.3
+   Compiling icu_collections v2.0.0
+   Compiling serde_derive_internals v0.29.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling siphasher v1.0.1
+   Compiling icu_locale_core v2.0.0
+   Compiling lazy_static v1.5.0
+   Compiling rustversion v1.0.22
+   Compiling uuid v1.18.1
+   Compiling phf_shared v0.11.3
+   Compiling darling v0.21.3
+   Compiling rustls-native-certs v0.8.2
+   Compiling webpki-roots v1.0.3
+   Compiling anstyle v1.0.13
+   Compiling iri-string v0.7.8
+   Compiling once_cell_polyfill v1.70.2
+   Compiling siphasher v0.3.11
+   Compiling utf8parse v0.2.2
+   Compiling rustls-webpki v0.103.7
+   Compiling typenum v1.19.0
+   Compiling anstyle-wincon v3.0.10
+   Compiling winapi-util v0.1.11
+   Compiling phf_shared v0.10.0
+   Compiling phf_generator v0.11.3
+   Compiling anstyle-parse v0.2.7
+   Compiling serde_urlencoded v0.7.1
+   Compiling generic-array v0.14.9
+   Compiling anstyle-query v1.1.4
+   Compiling encoding_rs v0.8.35
+   Compiling paste v1.0.15
+   Compiling icu_locale_data v2.0.0
+   Compiling hex v0.4.3
+   Compiling num-conv v0.1.0
+   Compiling powerfmt v0.2.0
+   Compiling colorchoice v1.0.4
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling time-core v0.1.6
+   Compiling dyn-clone v1.0.20
+   Compiling deranged v0.5.4
+   Compiling anstream v0.6.21
+   Compiling time-macros v0.2.24
+   Compiling phf_generator v0.10.0
+   Compiling termcolor v1.4.1
+   Compiling futures-executor v0.3.31
+   Compiling regex v1.12.2
+   Compiling async-trait v0.1.89
+   Compiling schemars v0.8.22
+   Compiling icu_decimal_data v2.0.0
+   Compiling ts-rs-macros v11.1.0
+   Compiling phf_codegen v0.10.0
+   Compiling serde_with_macros v3.15.1
+   Compiling schemars_derive v0.8.22
+   Compiling windows-interface v0.59.3
+   Compiling icu_provider v2.0.0
+   Compiling windows-implement v0.60.2
+   Compiling rand_core v0.9.3
+   Compiling windows-sys v0.52.0
+   Compiling time v0.3.44
+   Compiling rand_chacha v0.9.0
+   Compiling fixed_decimal v0.7.0
+   Compiling terminal_size v0.4.3
+   Compiling serde_with v3.15.1
+   Compiling icu_normalizer v2.0.0
+   Compiling icu_properties v2.0.1
+   Compiling icu_locale v2.0.0
+   Compiling new_debug_unreachable v1.0.6
+   Compiling clap_lex v0.7.6
+   Compiling windows-core v0.61.2
+   Compiling unicode-width v0.2.1
+   Compiling clap_builder v4.5.50
+   Compiling ts-rs v11.1.0
+   Compiling rand v0.9.2
+   Compiling crypto-common v0.1.6
+   Compiling block-buffer v0.10.4
+   Compiling strum_macros v0.27.2
+   Compiling clap_derive v4.5.49
+   Compiling strum v0.27.2
+   Compiling syn v1.0.109
+   Compiling either v1.15.0
+   Compiling sys-locale v0.3.2
+   Compiling itertools v0.14.0
+   Compiling idna_adapter v1.2.1
+   Compiling digest v0.10.7
+   Compiling string_cache_codegen v0.5.4
+   Compiling icu_decimal v2.0.0
+   Compiling chrono v0.4.42
+   Compiling idna v1.1.0
+   Compiling opentelemetry v0.30.0
+   Compiling windows-threading v0.1.0
+   Compiling precomputed-hash v0.1.1
+   Compiling url v2.5.7
+   Compiling ref-cast v1.0.25
+   Compiling cpufeatures v0.2.17
+   Compiling byteorder v1.5.0
+   Compiling unicode-segmentation v1.12.0
+   Compiling mac v0.1.1
+   Compiling windows-future v0.2.1
+   Compiling markup5ever v0.11.0
+   Compiling futf v0.1.5
+   Compiling prost-derive v0.13.5
+   Compiling phf v0.10.1
+   Compiling clap v4.5.50
+   Compiling windows-collections v0.2.0
+   Compiling windows-numerics v0.2.0
+   Compiling futures v0.3.31
+   Compiling phf_macros v0.11.3
+   Compiling axum-core v0.5.5
+   Compiling pin-project-internal v1.1.10
+   Compiling ref-cast-impl v1.0.25
+   Compiling matchit v0.8.4
+   Compiling minimal-lexical v0.2.1
+   Compiling mcp-types v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\mcp-types)
+   Compiling dtoa v1.0.10
+   Compiling utf-8 v0.7.6
+   Compiling cfg_aliases v0.1.1
+   Compiling dtoa-short v0.3.5
+   Compiling same-file v1.0.6
+   Compiling nom v7.1.3
+   Compiling tendril v0.4.3
+   Compiling html5ever v0.26.0
+   Compiling nix v0.28.0
+   Compiling phf v0.11.3
+   Compiling windows v0.61.3
+   Compiling sha2 v0.10.9
+   Compiling string_cache v0.8.9
+   Compiling socket2 v0.5.10
+   Compiling tree-sitter v0.25.10
+   Compiling selectors v0.25.0
+   Compiling pin-project v1.1.10
+   Compiling schemars_derive v1.0.4
+   Compiling ahash v0.8.12
+   Compiling prost v0.13.5
+   Compiling cssparser-macros v0.6.1
+   Compiling serde_path_to_error v0.1.20
+   Compiling winreg v0.10.1
+   Compiling ascii v1.1.0
+   Compiling chunked_transfer v1.5.0
+   Compiling option-ext v0.2.0
+   Compiling winnow v0.7.13
+   Compiling tree-sitter-language v0.1.5
+   Compiling libm v0.2.15
+   Compiling cssparser v0.31.2
+   Compiling toml_parser v1.0.4
+   Compiling dirs-sys v0.5.0
+   Compiling tiny_http v0.12.0
+   Compiling tokio-util v0.7.16
+   Compiling tokio-rustls v0.26.4
+   Compiling tokio-native-tls v0.3.1
+   Compiling tokio-stream v0.1.17
+   Compiling process-wrap v8.2.1
+   Compiling opentelemetry_sdk v0.30.0
+   Compiling h2 v0.4.12
+   Compiling tower v0.5.2
+   Compiling walkdir v2.5.0
+   Compiling schemars v1.0.4
+   Compiling fxhash v0.2.1
+   Compiling getopts v0.2.24
+   Compiling tower-http v0.6.6
+   Compiling axum v0.8.6
+   Compiling os_info v3.12.0
+   Compiling axum-core v0.4.5
+   Compiling rmcp-macros v0.8.3
+   Compiling crossbeam-epoch v0.9.18
+   Compiling concurrent-queue v2.5.0
+   Compiling sse-stream v0.2.1
+   Compiling derive_more v0.99.20
+   Compiling tree-sitter-bash v0.25.0
+   Compiling hyper v1.7.0
+   Compiling toml_datetime v0.7.3
+   Compiling servo_arc v0.3.0
+   Compiling bstr v1.12.0
+   Compiling fastrand v2.3.0
+   Compiling parking v2.2.1
+   Compiling toml_writer v1.0.4
+   Compiling hyper-util v0.1.17
+   Compiling matchit v0.7.3
+   Compiling streaming-iterator v0.1.9
+   Compiling event-listener v5.4.1
+   Compiling tempfile v3.23.0
+   Compiling globset v0.4.18
+   Compiling crossbeam-deque v0.8.6
+   Compiling basic-toml v0.1.10
+   Compiling hyper-tls v0.6.0
+   Compiling hyper-rustls v0.27.7
+   Compiling hyper-timeout v0.5.2
+   Compiling dirs v6.0.0
+   Compiling reqwest v0.12.24
+   Compiling askama_parser v0.2.1
+   Compiling tonic v0.13.1
+   Compiling keyring v3.6.3
+   Compiling webbrowser v1.0.6
+   Compiling serial2 v0.2.33
+   Compiling filedescriptor v0.8.3
+   Compiling shared_library v0.1.9
+   Compiling serde_spanned v1.0.3
+   Compiling oauth2 v5.0.0
+   Compiling opentelemetry-http v0.30.0
+   Compiling env_filter v0.1.4
+   Compiling ego-tree v0.6.3
+   Compiling urlencoding v2.1.3
+   Compiling bitflags v1.3.2
+   Compiling shell-words v1.1.0
+   Compiling downcast-rs v1.2.1
+   Compiling env_logger v0.11.8
+   Compiling toml v0.9.8
+   Compiling askama_derive v0.12.5
+   Compiling humansize v2.1.3
+   Compiling portable-pty v0.9.0
+   Compiling ignore v0.4.24
+   Compiling event-listener-strategy v0.5.4
+   Compiling eventsource-stream v0.2.3
+   Compiling nucleo-matcher v0.3.1
+   Compiling test-log-macros v0.2.18
+   Compiling home v0.5.11
+   Compiling nu-ansi-term v0.50.3
+   Compiling similar v2.7.0
+   Compiling winsafe v0.0.19
+   Compiling axum v0.7.9
+   Compiling unsafe-libyaml v0.2.11
+   Compiling askama_escape v0.10.3
+   Compiling hashbrown v0.14.5
+   Compiling scraper v0.18.1
+   Compiling opentelemetry-semantic-conventions v0.30.0
+   Compiling codex-apply-patch v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\apply-patch)
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling dashmap v6.1.0
+   Compiling test-log v0.2.18
+   Compiling codex-file-search v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\file-search)
+   Compiling codex-utils-pty v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\pty)
+   Compiling async-channel v2.5.0
+   Compiling toml_edit v0.23.7
+   Compiling codex-async-utils v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\async-utils)
+   Compiling sha1 v0.10.6
+   Compiling regex-lite v0.1.8
+   Compiling dunce v1.0.5
+   Compiling wildmatch v2.5.0
+   Compiling codex-utils-string v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\string)
+   Compiling env-flags v0.1.1
+   Compiling sharded-slab v0.1.7
+   Compiling matchers v0.2.0
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.9
+   Compiling debugid v0.8.0
+   Compiling darling_core v0.20.11
+   Compiling which v6.0.3
+   Compiling rustc-demangle v0.1.26
+   Compiling crc32fast v1.5.0
+   Compiling simd-adler32 v0.3.7
+   Compiling tracing-subscriber v0.3.20
+   Compiling sentry-types v0.34.0
+   Compiling semver v1.0.27
+   Compiling backtrace v0.3.76
+   Compiling findshlibs v0.10.2
+   Compiling rustc_version v0.4.1
+   Compiling darling_macro v0.20.11
+   Compiling allocator-api2 v0.2.21
+   Compiling adler2 v2.0.1
+   Compiling rmcp v0.8.3
+   Compiling foldhash v0.1.5
+   Compiling askama v0.12.1
+   Compiling instability v0.3.9
+   Compiling owo-colors v4.2.3
+   Compiling sentry-core v0.34.0
+   Compiling hashbrown v0.15.5
+   Compiling darling v0.20.11
+   Compiling miniz_oxide v0.8.9
+   Compiling sentry-contexts v0.34.0
+   Compiling itertools v0.13.0
+   Compiling castaway v0.2.4
+   Compiling strum_macros v0.26.4
+   Compiling crossterm_winapi v0.9.1
+   Compiling unicode-width v0.1.14
+   Compiling static_assertions v1.1.0
+   Compiling indoc v2.0.7
+   Compiling deadpool-runtime v0.1.4
+   Compiling num_cpus v1.17.0
+   Compiling dotenvy v0.15.7
+   Compiling codex-linux-sandbox v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\linux-sandbox
+)
+   Compiling deadpool v0.12.3
+   Compiling unicode-truncate v1.1.0
+   Compiling compact_str v0.8.1
+   Compiling crossterm v0.28.1
+   Compiling lru v0.12.5
+   Compiling flate2 v1.1.4
+   Compiling sentry-backtrace v0.34.0
+   Compiling fdeflate v0.3.7
+   Compiling pxfm v0.1.25
+   Compiling assert-json-diff v2.0.2
+   Compiling async-stream-impl v0.3.6
+   Compiling hostname v0.4.1
+   Compiling cassowary v0.3.0
+   Compiling eyre v0.6.12
+   Compiling color-spantrace v0.3.0
+   Compiling zune-core v0.4.12
+   Compiling zune-jpeg v0.4.21
+   Compiling async-stream v0.3.6
+   Compiling moxcms v0.7.7
+   Compiling wiremock v0.6.5
+   Compiling png v0.18.0
+   Compiling sentry-panic v0.34.0
+   Compiling sentry-debug-images v0.34.0
+   Compiling opentelemetry-appender-tracing v0.30.1
+   Compiling tracing-error v0.2.1
+   Compiling codex-backend-openapi-models v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\code
+x-backend-openapi-models)
+   Compiling strum v0.26.3
+   Compiling simdutf8 v0.1.5
+   Compiling byteorder-lite v0.1.0
+   Compiling indenter v0.3.4
+   Compiling error-code v3.3.2
+   Compiling pulldown-cmark v0.10.3
+   Compiling bytemuck v1.24.0
+   Compiling is_ci v1.2.0
+   Compiling clipboard-win v5.4.1
+   Compiling sentry v0.34.0
+   Compiling supports-color v3.0.2
+   Compiling diffy v0.4.2
+   Compiling ratatui v0.29.0 (https://github.com/nornagon/ratatui?branch=nornagon-v0.29.0-patch#9b2ad129)
+   Compiling image v0.25.8
+   Compiling codex-git-apply v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-apply)
+   Compiling crossbeam-channel v0.5.15
+   Compiling dtor-proc-macro v0.0.6
+   Compiling pulldown-cmark-escape v0.10.1
+   Compiling unicode-linebreak v0.1.5
+   Compiling smawk v0.3.2
+   Compiling tracing-appender v0.2.3
+   Compiling arboard v3.6.1
+   Compiling color-eyre v0.6.5
+   Compiling dtor v0.1.0
+   Compiling codex-utils-json-to-toml v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\js
+on-to-toml)
+   Compiling textwrap v0.16.2
+   Compiling tree-sitter-highlight v0.25.10
+   Compiling codex-git-tooling v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-tooling)
+   Compiling ctor-proc-macro v0.0.6
+   Compiling pathdiff v0.2.3
+   Compiling codex-process-hardening v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\process-h
+ardening)
+   Compiling clap_complete v4.5.59
+   Compiling ctor v0.5.0
+   Compiling codex-responses-api-proxy v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\respons
+es-api-proxy)
+   Compiling opentelemetry-proto v0.30.0
+   Compiling opentelemetry-otlp v0.30.0
+   Compiling ansi-to-tui v7.0.0
+   Compiling codex-ansi-escape v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\ansi-escape)
+   Compiling codex-protocol v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol)
+   Compiling codex-app-server-protocol v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\app-ser
+ver-protocol)
+   Compiling codex-feedback v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\feedback)
+   Compiling codex-rmcp-client v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\rmcp-client)
+   Compiling codex-deep-research v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\deep-research
+)
+warning: field `api_key` is never read
+  --> deep-research\src\mcp_search_provider.rs:23:5
+   |
+19 | pub struct McpSearchProvider {
+   |            ----------------- field in this struct
+...
+23 |     api_key: Option<String>,
+   |     ^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `codex-deep-research` (lib) generated 1 warning
+   Compiling codex-otel v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\otel)
+   Compiling codex-protocol-ts v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol-ts)
+   Compiling codex-core v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\core)
+   Compiling codex-common v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\common)
+   Compiling codex-arg0 v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\arg0)
+   Compiling codex-login v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\login)
+   Compiling codex-ollama v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\ollama)
+   Compiling codex-backend-client v0.0.0 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\backend-client)
+   Compiling codex-cloud-tasks-client v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\cloud-ta
+sks-client)
+   Compiling codex-chatgpt v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\chatgpt)
+   Compiling codex-exec v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\exec)
+   Compiling codex-mcp-server v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\mcp-server)
+   Compiling codex-tui v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\tui)
+   Compiling codex-app-server v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\app-server)
+   Compiling codex-cloud-tasks v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\cloud-tasks)
+   Compiling codex-cli v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\cli)
+warning: ignoring -C extra-filename flag due to -o flag
+
+error[E0433]: failed to resolve: use of undeclared type `ForcedLoginMethod`
+  --> cli\src\login.rs:38:50
+   |
+38 |     if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
+   |                                                  ^^^^^^^^^^^^^^^^^ use of undeclared type `ForcedLoginMethod`
+   |
+help: consider importing one of these enums
+   |
+ 1 + use codex_core::protocol_config_types::ForcedLoginMethod;
+   |
+ 1 + use codex_protocol::config_types::ForcedLoginMethod;
+   |
+
+error[E0433]: failed to resolve: use of undeclared type `ForcedLoginMethod`
+  --> cli\src\login.rs:63:50
+   |
+63 |     if matches!(config.forced_login_method, Some(ForcedLoginMethod::Chatgpt)) {
+   |                                                  ^^^^^^^^^^^^^^^^^ use of undeclared type `ForcedLoginMethod`
+   |
+help: consider importing one of these enums
+   |
+ 1 + use codex_core::protocol_config_types::ForcedLoginMethod;
+   |
+ 1 + use codex_protocol::config_types::ForcedLoginMethod;
+   |
+
+error[E0433]: failed to resolve: use of undeclared type `ForcedLoginMethod`
+   --> cli\src\login.rs:114:50
+    |
+114 |     if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
+    |                                                  ^^^^^^^^^^^^^^^^^ use of undeclared type `ForcedLoginMethod`
+    |
+help: consider importing one of these enums
+    |
+  1 + use codex_core::protocol_config_types::ForcedLoginMethod;
+    |
+  1 + use codex_protocol::config_types::ForcedLoginMethod;
+    |
+
+For more information about this error, try `rustc --explain E0433`.
+warning: `codex-cli` (lib) generated 1 warning
+error: could not compile `codex-cli` (lib) due to 3 previous errors; 1 warning emitted
+
+[2025-10-23 18:38:41] Workspace validated: C:\Users\downl\Desktop\codex-main\codex-main\codex-rs
+[2025-10-23 18:38:41] Running cargo clean
+[2025-10-23 18:38:41] cargo :      Removed 4599 files, 1.4GiB total
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:108 文字:5
++     cargo clean 2>&1 | Out-String | ForEach-Object { Log $_ }
++     ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (     Removed 4599 files, 1.4GiB total:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+[2025-10-23 18:38:41] Running just fmt
+[2025-10-23 18:38:41] just : cargo fmt -- --config imports_granularity=Item
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:124 文字:5
++     just fmt 2>&1 | Out-String | ForEach-Object { Log $_ }
++     ~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (cargo fmt -- --...ranularity=Item:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error: Recipe `fmt` could not be run because just could not find the shell: program not found
+
+[2025-10-23 18:38:41] Running cargo build --release -p codex-cli
+[2025-10-23 18:38:41] cargo :    Compiling proc-macro2 v1.0.101
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:137 文字:16
++ $BuildOutput = cargo build --release -p codex-cli 2>&1 | Out-String
++                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling proc-macro2 v1.0.101:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling quote v1.0.41
+   Compiling unicode-ident v1.0.20
+   Compiling cfg-if v1.0.4
+   Compiling memchr v2.7.6
+   Compiling windows-link v0.2.1
+   Compiling smallvec v1.15.1
+   Compiling itoa v1.0.15
+   Compiling pin-project-lite v0.2.16
+   Compiling log v0.4.28
+   Compiling serde_core v1.0.228
+   Compiling once_cell v1.21.3
+   Compiling windows-sys v0.61.2
+   Compiling windows_x86_64_msvc v0.53.1
+   Compiling equivalent v1.0.2
+   Compiling parking_lot_core v0.9.12
+   Compiling futures-core v0.3.31
+   Compiling hashbrown v0.16.0
+   Compiling scopeguard v1.2.0
+   Compiling windows_x86_64_msvc v0.52.6
+   Compiling zerocopy v0.8.27
+   Compiling serde v1.0.228
+   Compiling bytes v1.10.1
+   Compiling lock_api v0.4.14
+   Compiling indexmap v2.12.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling tracing-core v0.1.34
+   Compiling ryu v1.0.20
+   Compiling futures-sink v0.3.31
+   Compiling futures-channel v0.3.31
+   Compiling serde_json v1.0.145
+   Compiling pin-utils v0.1.0
+   Compiling slab v0.4.11
+   Compiling futures-task v0.3.31
+   Compiling futures-io v0.3.31
+   Compiling getrandom v0.3.4
+   Compiling find-msvc-tools v0.1.4
+   Compiling shlex v1.3.0
+   Compiling writeable v0.6.1
+   Compiling percent-encoding v2.3.2
+   Compiling litemap v0.8.0
+   Compiling windows-link v0.1.3
+   Compiling windows-targets v0.53.5
+   Compiling windows-targets v0.52.6
+   Compiling libc v0.2.177
+   Compiling fnv v1.0.7
+   Compiling windows-strings v0.4.2
+   Compiling parking_lot v0.12.5
+   Compiling cc v1.2.41
+   Compiling windows-result v0.3.4
+   Compiling getrandom v0.2.16
+   Compiling windows-sys v0.60.2
+   Compiling http v1.3.1
+   Compiling windows-sys v0.59.0
+   Compiling icu_properties_data v2.0.1
+   Compiling icu_normalizer_data v2.0.0
+   Compiling syn v2.0.107
+   Compiling bitflags v2.10.0
+   Compiling tower-service v0.3.3
+   Compiling base64 v0.22.1
+   Compiling http-body v1.0.1
+   Compiling aho-corasick v1.1.3
+   Compiling regex-syntax v0.8.8
+   Compiling strsim v0.11.1
+   Compiling ident_case v1.0.1
+   Compiling mio v1.0.4
+   Compiling serde_derive v1.0.228
+   Compiling synstructure v0.13.2
+   Compiling tracing-attributes v0.1.30
+   Compiling socket2 v0.6.1
+   Compiling zerovec-derive v0.11.1
+   Compiling displaydoc v0.2.5
+   Compiling tokio-macros v2.6.0
+   Compiling futures-macro v0.3.31
+   Compiling zerofrom-derive v0.1.6
+   Compiling yoke-derive v0.8.0
+   Compiling httparse v1.10.1
+   Compiling regex-automata v0.4.13
+   Compiling form_urlencoded v1.2.2
+   Compiling try-lock v0.2.5
+   Compiling thiserror v2.0.17
+   Compiling atomic-waker v1.1.2
+   Compiling utf8_iter v1.0.4
+   Compiling httpdate v1.0.3
+   Compiling tokio v1.48.0
+   Compiling futures-util v0.3.31
+   Compiling mime v0.3.17
+   Compiling want v0.3.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling thiserror-impl v2.0.17
+   Compiling http-body-util v0.1.3
+   Compiling thiserror v1.0.69
+   Compiling anyhow v1.0.100
+   Compiling thiserror-impl v1.0.69
+   Compiling tracing v0.1.41
+   Compiling windows-registry v0.5.3
+   Compiling zerofrom v0.1.6
+   Compiling sync_wrapper v1.0.2
+   Compiling tower-layer v0.3.3
+   Compiling zeroize v1.8.2
+   Compiling ipnet v2.11.0
+   Compiling yoke v0.8.0
+   Compiling rand_core v0.6.4
+   Compiling ring v0.17.14
+   Compiling heck v0.5.0
+   Compiling rustls-pki-types v1.12.0
+   Compiling rand_chacha v0.3.1
+   Compiling schannel v0.1.28
+   Compiling zerovec v0.11.4
+   Compiling zerotrie v0.2.2
+   Compiling rand v0.8.5
+   Compiling untrusted v0.9.0
+   Compiling winapi v0.3.9
+   Compiling version_check v0.9.5
+   Compiling rustls v0.23.34
+   Compiling native-tls v0.2.14
+   Compiling autocfg v1.5.0
+   Compiling darling_core v0.21.3
+   Compiling num-traits v0.2.19
+   Compiling unicase v2.8.1
+   Compiling subtle v2.6.1
+   Compiling tinystr v0.8.1
+   Compiling potential_utf v0.1.3
+   Compiling mime_guess v2.0.5
+   Compiling icu_collections v2.0.0
+   Compiling darling_macro v0.21.3
+   Compiling serde_derive_internals v0.29.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling icu_locale_core v2.0.0
+   Compiling rustversion v1.0.22
+   Compiling siphasher v1.0.1
+   Compiling lazy_static v1.5.0
+   Compiling darling v0.21.3
+   Compiling phf_shared v0.11.3
+   Compiling rustls-native-certs v0.8.2
+   Compiling uuid v1.18.1
+   Compiling webpki-roots v1.0.3
+   Compiling iri-string v0.7.8
+   Compiling typenum v1.19.0
+   Compiling once_cell_polyfill v1.70.2
+   Compiling utf8parse v0.2.2
+   Compiling siphasher v0.3.11
+   Compiling anstyle v1.0.13
+   Compiling winapi-util v0.1.11
+   Compiling rustls-webpki v0.103.7
+   Compiling anstyle-parse v0.2.7
+   Compiling serde_urlencoded v0.7.1
+   Compiling anstyle-wincon v3.0.10
+   Compiling phf_shared v0.10.0
+   Compiling phf_generator v0.11.3
+   Compiling generic-array v0.14.9
+   Compiling anstyle-query v1.1.4
+   Compiling encoding_rs v0.8.35
+   Compiling powerfmt v0.2.0
+   Compiling hex v0.4.3
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling time-core v0.1.6
+   Compiling num-conv v0.1.0
+   Compiling dyn-clone v1.0.20
+   Compiling icu_locale_data v2.0.0
+   Compiling colorchoice v1.0.4
+   Compiling paste v1.0.15
+   Compiling time-macros v0.2.24
+   Compiling deranged v0.5.4
+   Compiling phf_generator v0.10.0
+   Compiling anstream v0.6.21
+   Compiling termcolor v1.4.1
+   Compiling futures-executor v0.3.31
+   Compiling regex v1.12.2
+   Compiling async-trait v0.1.89
+   Compiling icu_decimal_data v2.0.0
+   Compiling schemars v0.8.22
+   Compiling ts-rs-macros v11.1.0
+   Compiling phf_codegen v0.10.0
+   Compiling serde_with_macros v3.15.1
+   Compiling time v0.3.44
+   Compiling schemars_derive v0.8.22
+   Compiling icu_provider v2.0.0
+   Compiling windows-implement v0.60.2
+   Compiling windows-interface v0.59.3
+   Compiling rand_core v0.9.3
+   Compiling windows-sys v0.52.0
+   Compiling icu_normalizer v2.0.0
+   Compiling icu_properties v2.0.1
+   Compiling icu_locale v2.0.0
+   Compiling windows-core v0.61.2
+   Compiling serde_with v3.15.1
+   Compiling rand_chacha v0.9.0
+   Compiling fixed_decimal v0.7.0
+   Compiling terminal_size v0.4.3
+   Compiling clap_lex v0.7.6
+   Compiling new_debug_unreachable v1.0.6
+   Compiling unicode-width v0.2.1
+   Compiling ts-rs v11.1.0
+   Compiling clap_builder v4.5.50
+   Compiling rand v0.9.2
+   Compiling crypto-common v0.1.6
+   Compiling block-buffer v0.10.4
+   Compiling clap_derive v4.5.49
+   Compiling strum_macros v0.27.2
+   Compiling strum v0.27.2
+   Compiling either v1.15.0
+   Compiling syn v1.0.109
+   Compiling sys-locale v0.3.2
+   Compiling itertools v0.14.0
+   Compiling digest v0.10.7
+   Compiling string_cache_codegen v0.5.4
+   Compiling idna_adapter v1.2.1
+   Compiling icu_decimal v2.0.0
+   Compiling chrono v0.4.42
+   Compiling opentelemetry v0.30.0
+   Compiling idna v1.1.0
+   Compiling windows-threading v0.1.0
+   Compiling mac v0.1.1
+   Compiling precomputed-hash v0.1.1
+   Compiling url v2.5.7
+   Compiling cpufeatures v0.2.17
+   Compiling unicode-segmentation v1.12.0
+   Compiling ref-cast v1.0.25
+   Compiling byteorder v1.5.0
+   Compiling futf v0.1.5
+   Compiling windows-future v0.2.1
+   Compiling markup5ever v0.11.0
+   Compiling phf v0.10.1
+   Compiling prost-derive v0.13.5
+   Compiling windows-numerics v0.2.0
+   Compiling windows-collections v0.2.0
+   Compiling futures v0.3.31
+   Compiling phf_macros v0.11.3
+   Compiling axum-core v0.5.5
+   Compiling clap v4.5.50
+   Compiling pin-project-internal v1.1.10
+   Compiling ref-cast-impl v1.0.25
+   Compiling utf-8 v0.7.6
+   Compiling cfg_aliases v0.1.1
+   Compiling minimal-lexical v0.2.1
+   Compiling dtoa v1.0.10
+   Compiling matchit v0.8.4
+   Compiling tendril v0.4.3
+   Compiling phf v0.11.3
+   Compiling mcp-types v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\mcp-types)
+   Compiling nix v0.28.0
+   Compiling nom v7.1.3
+   Compiling dtoa-short v0.3.5
+   Compiling same-file v1.0.6
+   Compiling html5ever v0.26.0
+   Compiling windows v0.61.3
+   Compiling sha2 v0.10.9
+   Compiling string_cache v0.8.9
+   Compiling socket2 v0.5.10
+   Compiling pin-project v1.1.10
+   Compiling tree-sitter v0.25.10
+   Compiling selectors v0.25.0
+   Compiling schemars_derive v1.0.4
+   Compiling ahash v0.8.12
+   Compiling cssparser-macros v0.6.1
+   Compiling serde_path_to_error v0.1.20
+   Compiling prost v0.13.5
+   Compiling option-ext v0.2.0
+   Compiling winnow v0.7.13
+   Compiling chunked_transfer v1.5.0
+   Compiling tree-sitter-language v0.1.5
+   Compiling ascii v1.1.0
+   Compiling winreg v0.10.1
+   Compiling libm v0.2.15
+   Compiling toml_parser v1.0.4
+   Compiling tiny_http v0.12.0
+   Compiling tokio-util v0.7.16
+   Compiling tokio-native-tls v0.3.1
+   Compiling tokio-rustls v0.26.4
+   Compiling tokio-stream v0.1.17
+   Compiling process-wrap v8.2.1
+   Compiling cssparser v0.31.2
+   Compiling dirs-sys v0.5.0
+   Compiling opentelemetry_sdk v0.30.0
+   Compiling h2 v0.4.12
+   Compiling tower v0.5.2
+   Compiling schemars v1.0.4
+   Compiling walkdir v2.5.0
+   Compiling tower-http v0.6.6
+   Compiling axum v0.8.6
+   Compiling fxhash v0.2.1
+   Compiling hyper v1.7.0
+   Compiling getopts v0.2.24
+   Compiling os_info v3.12.0
+   Compiling rmcp-macros v0.8.3
+   Compiling axum-core v0.4.5
+   Compiling concurrent-queue v2.5.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling sse-stream v0.2.1
+   Compiling hyper-util v0.1.17
+   Compiling derive_more v0.99.20
+   Compiling toml_datetime v0.7.3
+   Compiling tree-sitter-bash v0.25.0
+   Compiling servo_arc v0.3.0
+   Compiling bstr v1.12.0
+   Compiling toml_writer v1.0.4
+   Compiling fastrand v2.3.0
+   Compiling streaming-iterator v0.1.9
+   Compiling matchit v0.7.3
+   Compiling hyper-rustls v0.27.7
+   Compiling hyper-tls v0.6.0
+   Compiling hyper-timeout v0.5.2
+   Compiling parking v2.2.1
+   Compiling globset v0.4.18
+   Compiling reqwest v0.12.24
+   Compiling tempfile v3.23.0
+   Compiling event-listener v5.4.1
+   Compiling tonic v0.13.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling basic-toml v0.1.10
+   Compiling dirs v6.0.0
+   Compiling oauth2 v5.0.0
+   Compiling opentelemetry-http v0.30.0
+   Compiling askama_parser v0.2.1
+   Compiling keyring v3.6.3
+   Compiling webbrowser v1.0.6
+   Compiling shared_library v0.1.9
+   Compiling serial2 v0.2.33
+   Compiling filedescriptor v0.8.3
+   Compiling serde_spanned v1.0.3
+   Compiling env_filter v0.1.4
+   Compiling downcast-rs v1.2.1
+   Compiling bitflags v1.3.2
+   Compiling urlencoding v2.1.3
+   Compiling ego-tree v0.6.3
+   Compiling shell-words v1.1.0
+   Compiling env_logger v0.11.8
+   Compiling toml v0.9.8
+   Compiling askama_derive v0.12.5
+   Compiling humansize v2.1.3
+   Compiling portable-pty v0.9.0
+   Compiling event-listener-strategy v0.5.4
+   Compiling ignore v0.4.24
+   Compiling eventsource-stream v0.2.3
+   Compiling nucleo-matcher v0.3.1
+   Compiling test-log-macros v0.2.18
+   Compiling home v0.5.11
+   Compiling nu-ansi-term v0.50.3
+   Compiling opentelemetry-semantic-conventions v0.30.0
+   Compiling askama_escape v0.10.3
+   Compiling similar v2.7.0
+   Compiling axum v0.7.9
+   Compiling hashbrown v0.14.5
+   Compiling unsafe-libyaml v0.2.11
+   Compiling winsafe v0.0.19
+   Compiling test-log v0.2.18
+   Compiling scraper v0.18.1
+   Compiling codex-file-search v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\file-search)
+   Compiling dashmap v6.1.0
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling async-channel v2.5.0
+   Compiling codex-utils-pty v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\pty)
+   Compiling toml_edit v0.23.7
+   Compiling codex-async-utils v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\async-utils)
+   Compiling sha1 v0.10.6
+   Compiling env-flags v0.1.1
+   Compiling codex-utils-string v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\string)
+   Compiling dunce v1.0.5
+   Compiling rmcp v0.8.3
+   Compiling regex-lite v0.1.8
+   Compiling wildmatch v2.5.0
+   Compiling sharded-slab v0.1.7
+   Compiling matchers v0.2.0
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.9
+   Compiling debugid v0.8.0
+   Compiling codex-apply-patch v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\apply-patch)
+   Compiling darling_core v0.20.11
+   Compiling crc32fast v1.5.0
+   Compiling semver v1.0.27
+   Compiling tracing-subscriber v0.3.20
+   Compiling which v6.0.3
+   Compiling sentry-types v0.34.0
+   Compiling rustc-demangle v0.1.26
+   Compiling simd-adler32 v0.3.7
+   Compiling rustc_version v0.4.1
+   Compiling backtrace v0.3.76
+   Compiling darling_macro v0.20.11
+   Compiling findshlibs v0.10.2
+   Compiling allocator-api2 v0.2.21
+   Compiling adler2 v2.0.1
+   Compiling askama v0.12.1
+   Compiling foldhash v0.1.5
+   Compiling instability v0.3.9
+   Compiling owo-colors v4.2.3
+   Compiling sentry-core v0.34.0
+   Compiling hashbrown v0.15.5
+   Compiling darling v0.20.11
+   Compiling miniz_oxide v0.8.9
+   Compiling sentry-contexts v0.34.0
+   Compiling itertools v0.13.0
+   Compiling strum_macros v0.26.4
+   Compiling castaway v0.2.4
+   Compiling crossterm_winapi v0.9.1
+   Compiling num_cpus v1.17.0
+   Compiling deadpool-runtime v0.1.4
+   Compiling unicode-width v0.1.14
+   Compiling dotenvy v0.15.7
+   Compiling indoc v2.0.7
+   Compiling static_assertions v1.1.0
+   Compiling codex-linux-sandbox v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\linux-sandbox
+)
+   Compiling compact_str v0.8.1
+   Compiling deadpool v0.12.3
+   Compiling unicode-truncate v1.1.0
+   Compiling crossterm v0.28.1
+   Compiling flate2 v1.1.4
+   Compiling lru v0.12.5
+   Compiling sentry-backtrace v0.34.0
+   Compiling fdeflate v0.3.7
+   Compiling pxfm v0.1.25
+   Compiling assert-json-diff v2.0.2
+   Compiling async-stream-impl v0.3.6
+   Compiling hostname v0.4.1
+   Compiling eyre v0.6.12
+   Compiling zune-core v0.4.12
+   Compiling color-spantrace v0.3.0
+   Compiling cassowary v0.3.0
+   Compiling zune-jpeg v0.4.21
+   Compiling moxcms v0.7.7
+   Compiling async-stream v0.3.6
+   Compiling wiremock v0.6.5
+   Compiling png v0.18.0
+   Compiling sentry-panic v0.34.0
+   Compiling sentry-debug-images v0.34.0
+   Compiling opentelemetry-appender-tracing v0.30.1
+   Compiling tracing-error v0.2.1
+   Compiling codex-backend-openapi-models v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\code
+x-backend-openapi-models)
+   Compiling is_ci v1.2.0
+   Compiling byteorder-lite v0.1.0
+   Compiling simdutf8 v0.1.5
+   Compiling strum v0.26.3
+   Compiling error-code v3.3.2
+   Compiling bytemuck v1.24.0
+   Compiling pulldown-cmark v0.10.3
+   Compiling indenter v0.3.4
+   Compiling clipboard-win v5.4.1
+   Compiling supports-color v3.0.2
+   Compiling sentry v0.34.0
+   Compiling image v0.25.8
+   Compiling diffy v0.4.2
+   Compiling codex-git-apply v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-apply)
+   Compiling ratatui v0.29.0 (https://github.com/nornagon/ratatui?branch=nornagon-v0.29.0-patch#9b2ad129)
+   Compiling crossbeam-channel v0.5.15
+   Compiling unicode-linebreak v0.1.5
+   Compiling dtor-proc-macro v0.0.6
+   Compiling pulldown-cmark-escape v0.10.1
+   Compiling smawk v0.3.2
+   Compiling tracing-appender v0.2.3
+   Compiling color-eyre v0.6.5
+   Compiling codex-utils-json-to-toml v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\js
+on-to-toml)
+   Compiling textwrap v0.16.2
+   Compiling arboard v3.6.1
+   Compiling tree-sitter-highlight v0.25.10
+   Compiling dtor v0.1.0
+   Compiling codex-git-tooling v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-tooling)
+   Compiling pathdiff v0.2.3
+   Compiling ctor-proc-macro v0.0.6
+   Compiling codex-process-hardening v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\process-h
+ardening)
+   Compiling clap_complete v4.5.59
+   Compiling ctor v0.5.0
+   Compiling codex-responses-api-proxy v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\respons
+es-api-proxy)
+   Compiling opentelemetry-proto v0.30.0
+   Compiling opentelemetry-otlp v0.30.0
+   Compiling ansi-to-tui v7.0.0
+   Compiling codex-ansi-escape v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\ansi-escape)
+   Compiling codex-protocol v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol)
+   Compiling codex-app-server-protocol v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\app-ser
+ver-protocol)
+   Compiling codex-feedback v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\feedback)
+   Compiling codex-rmcp-client v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\rmcp-client)
+   Compiling codex-deep-research v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\deep-research
+)
+warning: field `api_key` is never read
+  --> deep-research\src\mcp_search_provider.rs:23:5
+   |
+19 | pub struct McpSearchProvider {
+   |            ----------------- field in this struct
+...
+23 |     api_key: Option<String>,
+   |     ^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `codex-deep-research` (lib) generated 1 warning
+   Compiling codex-otel v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\otel)
+   Compiling codex-protocol-ts v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol-ts)
+   Compiling codex-core v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\core)
+   Compiling codex-common v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\common)
+   Compiling codex-arg0 v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\arg0)
+   Compiling codex-ollama v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\ollama)
+   Compiling codex-backend-client v0.0.0 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\backend-client)
+   Compiling codex-login v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\login)
+   Compiling codex-cloud-tasks-client v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\cloud-ta
+sks-client)
+   Compiling codex-exec v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\exec)
+   Compiling codex-chatgpt v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\chatgpt)
+   Compiling codex-mcp-server v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\mcp-server)
+   Compiling codex-tui v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\tui)
+   Compiling codex-app-server v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\app-server)
+   Compiling codex-cloud-tasks v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\cloud-tasks)
+   Compiling codex-cli v0.48.0-zapabob.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\cli)
+error[E0308]: mismatched types
+    --> cli\src\agent_create_cmd.rs:83:20
+     |
+  83 |         .unwrap_or(DEFAULT_SUBAGENT_RUNTIME_BUDGET)
+     |          --------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `i64`, found `u64`
+     |          |
+     |          arguments to this method are incorrect
+     |
+help: the return type of this call is `u64` due to the type of the argument passed
+    --> cli\src\agent_create_cmd.rs:81:26
+     |
+  81 |       let runtime_budget = config
+     |  __________________________^
+  82 | |         .model_context_window
+  83 | |         .unwrap_or(DEFAULT_SUBAGENT_RUNTIME_BUDGET)
+     | |____________________-------------------------------^
+     |                      |
+     |                      this argument influences the return type of `unwrap_or`
+note: method defined here
+    --> C:\Users\downl\.rustup\toolchains\1.90.0-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\option.rs
+:1031:18
+     |
+1031 |     pub const fn unwrap_or(self, default: T) -> T
+     |                  ^^^^^^^^^
+help: you can convert a `u64` to an `i64` and panic if the converted value doesn't fit
+     |
+  83 |         .unwrap_or(DEFAULT_SUBAGENT_RUNTIME_BUDGET.try_into().unwrap())
+     |                                                   ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> cli\src\agent_create_cmd.rs:84:14
+     |
+  84 |         .min(usize::MAX as u64) as usize;
+     |          --- ^^^^^^^^^^^^^^^^^ expected `i64`, found `u64`
+     |          |
+     |          arguments to this method are incorrect
+     |
+help: the return type of this call is `u64` due to the type of the argument passed
+    --> cli\src\agent_create_cmd.rs:81:26
+     |
+  81 |       let runtime_budget = config
+     |  __________________________^
+  82 | |         .model_context_window
+  83 | |         .unwrap_or(DEFAULT_SUBAGENT_RUNTIME_BUDGET)
+  84 | |         .min(usize::MAX as u64) as usize;
+     | |______________-----------------^
+     |                |
+     |                this argument influences the return type of `min`
+note: method defined here
+    --> C:\Users\downl\.rustup\toolchains\1.90.0-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\cmp.rs:10
+52:8
+     |
+1052 |     fn min(self, other: Self) -> Self
+     |        ^^^
+help: you can convert a `u64` to an `i64` and panic if the converted value doesn't fit
+     |
+  84 |         .min((usize::MAX as u64).try_into().unwrap()) as usize;
+     |              +                 +++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> cli\src\delegate_cmd.rs:98:20
+     |
+  98 |         .unwrap_or(DEFAULT_SUBAGENT_RUNTIME_BUDGET)
+     |          --------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `i64`, found `u64`
+     |          |
+     |          arguments to this method are incorrect
+     |
+help: the return type of this call is `u64` due to the type of the argument passed
+    --> cli\src\delegate_cmd.rs:96:26
+     |
+  96 |       let runtime_budget = config
+     |  __________________________^
+  97 | |         .model_context_window
+  98 | |         .unwrap_or(DEFAULT_SUBAGENT_RUNTIME_BUDGET)
+     | |____________________-------------------------------^
+     |                      |
+     |                      this argument influences the return type of `unwrap_or`
+note: method defined here
+    --> C:\Users\downl\.rustup\toolchains\1.90.0-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\option.rs
+:1031:18
+     |
+1031 |     pub const fn unwrap_or(self, default: T) -> T
+     |                  ^^^^^^^^^
+help: you can convert a `u64` to an `i64` and panic if the converted value doesn't fit
+     |
+  98 |         .unwrap_or(DEFAULT_SUBAGENT_RUNTIME_BUDGET.try_into().unwrap())
+     |                                                   ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> cli\src\delegate_cmd.rs:99:14
+     |
+  99 |         .min(usize::MAX as u64) as usize;
+     |          --- ^^^^^^^^^^^^^^^^^ expected `i64`, found `u64`
+     |          |
+     |          arguments to this method are incorrect
+     |
+help: the return type of this call is `u64` due to the type of the argument passed
+    --> cli\src\delegate_cmd.rs:96:26
+     |
+  96 |       let runtime_budget = config
+     |  __________________________^
+  97 | |         .model_context_window
+  98 | |         .unwrap_or(DEFAULT_SUBAGENT_RUNTIME_BUDGET)
+  99 | |         .min(usize::MAX as u64) as usize;
+     | |______________-----------------^
+     |                |
+     |                this argument influences the return type of `min`
+note: method defined here
+    --> C:\Users\downl\.rustup\toolchains\1.90.0-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\cmp.rs:10
+52:8
+     |
+1052 |     fn min(self, other: Self) -> Self
+     |        ^^^
+help: you can convert a `u64` to an `i64` and panic if the converted value doesn't fit
+     |
+  99 |         .min((usize::MAX as u64).try_into().unwrap()) as usize;
+     |              +                 +++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> cli\src\parallel_delegate_cmd.rs:92:20
+     |
+  92 |         .unwrap_or(DEFAULT_SUBAGENT_RUNTIME_BUDGET)
+     |          --------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `i64`, found `u64`
+     |          |
+     |          arguments to this method are incorrect
+     |
+help: the return type of this call is `u64` due to the type of the argument passed
+    --> cli\src\parallel_delegate_cmd.rs:90:26
+     |
+  90 |       let runtime_budget = config
+     |  __________________________^
+  91 | |         .model_context_window
+  92 | |         .unwrap_or(DEFAULT_SUBAGENT_RUNTIME_BUDGET)
+     | |____________________-------------------------------^
+     |                      |
+     |                      this argument influences the return type of `unwrap_or`
+note: method defined here
+    --> C:\Users\downl\.rustup\toolchains\1.90.0-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\option.rs
+:1031:18
+     |
+1031 |     pub const fn unwrap_or(self, default: T) -> T
+     |                  ^^^^^^^^^
+help: you can convert a `u64` to an `i64` and panic if the converted value doesn't fit
+     |
+  92 |         .unwrap_or(DEFAULT_SUBAGENT_RUNTIME_BUDGET.try_into().unwrap())
+     |                                                   ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> cli\src\parallel_delegate_cmd.rs:93:14
+     |
+  93 |         .min(usize::MAX as u64) as usize;
+     |          --- ^^^^^^^^^^^^^^^^^ expected `i64`, found `u64`
+     |          |
+     |          arguments to this method are incorrect
+     |
+help: the return type of this call is `u64` due to the type of the argument passed
+    --> cli\src\parallel_delegate_cmd.rs:90:26
+     |
+  90 |       let runtime_budget = config
+     |  __________________________^
+  91 | |         .model_context_window
+  92 | |         .unwrap_or(DEFAULT_SUBAGENT_RUNTIME_BUDGET)
+  93 | |         .min(usize::MAX as u64) as usize;
+     | |______________-----------------^
+     |                |
+     |                this argument influences the return type of `min`
+note: method defined here
+    --> C:\Users\downl\.rustup\toolchains\1.90.0-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\cmp.rs:10
+52:8
+     |
+1052 |     fn min(self, other: Self) -> Self
+     |        ^^^
+help: you can convert a `u64` to an `i64` and panic if the converted value doesn't fit
+     |
+  93 |         .min((usize::MAX as u64).try_into().unwrap()) as usize;
+     |              +                 +++++++++++++++++++++
+
+error[E0599]: no function or associated item named `new_with_mcp` found for struct `GeminiSearchProvider` in the curren
+t scope
+  --> cli\src\research_cmd.rs:58:44
+   |
+58 |             Arc::new(GeminiSearchProvider::new_with_mcp(None))
+   |                                            ^^^^^^^^^^^^ function or associated item not found in `GeminiSearchProv
+ider`
+   |
+note: if you're trying to build a new `GeminiSearchProvider` consider using one of the following associated functions:
+      GeminiSearchProvider::new
+      GeminiSearchProvider::with_mcp_client
+  --> C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\deep-research\src\gemini_search_provider.rs:51:5
+   |
+51 |     pub fn new(model: String) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+59 |     pub fn with_mcp_client(model: String, mcp_client: Arc<RmcpClient>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no function or associated item named `default` found for struct `GeminiSearchProvider` in the current sco
+pe
+  --> cli\src\research_cmd.rs:63:44
+   |
+63 |             Arc::new(GeminiSearchProvider::default())
+   |                                            ^^^^^^^ function or associated item not found in `GeminiSearchProvider`
+   |
+note: if you're trying to build a new `GeminiSearchProvider` consider using one of the following associated functions:
+      GeminiSearchProvider::new
+      GeminiSearchProvider::with_mcp_client
+  --> C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\deep-research\src\gemini_search_provider.rs:51:5
+   |
+51 |     pub fn new(model: String) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+59 |     pub fn with_mcp_client(model: String, mcp_client: Arc<RmcpClient>) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Some errors have detailed explanations: E0308, E0599.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `codex-cli` (lib) due to 8 previous errors
+

@@ -1,0 +1,202 @@
+"""
+define_program() supports the following arguments:
+- program: the name of the program
+- system_path: list of absolute paths on the system where program can likely be found
+- option_bundling (PLANNED): whether to allow bundling of options (e.g. `-al` for `-a -l`)
+- combine_format (PLANNED): whether to allow `--option=value` (as opposed to `--option value`)
+- options: the command-line flags/options: use flag() and opt() to define these
+- args: the rules for what arguments are allowed that are not "options"
+- should_match: list of command-line invocations that should be matched by the rule
+- should_not_match: list of command-line invocations that should not be matched by the rule
+"""
+
+define_program(
+    program="ls",
+    system_path=["/bin/ls", "/usr/bin/ls"],
+    options=[
+        flag("-1"),
+        flag("-a"),
+        flag("-l"),
+    ],
+    args=[ARG_RFILES_OR_CWD],
+)
+
+define_program(
+    program="cat",
+    options=[
+        flag("-b"),
+        flag("-n"),
+        flag("-t"),
+    ],
+    system_path=["/bin/cat", "/usr/bin/cat"],
+    args=[ARG_RFILES],
+    should_match=[
+        ["file.txt"],
+        ["-n", "file.txt"],
+        ["-b", "file.txt"],
+    ],
+    should_not_match=[
+        # While cat without args is valid, it will read from stdin, which
+        # does not seem appropriate for our current use case.
+        [],
+        # Let's not auto-approve advisory locking.
+        ["-l", "file.txt"],
+    ]
+)
+
+define_program(
+    program="cp",
+    options=[
+        flag("-r"),
+        flag("-R"),
+        flag("--recursive"),
+    ],
+    args=[ARG_RFILES, ARG_WFILE],
+    system_path=["/bin/cp", "/usr/bin/cp"],
+    should_match=[
+        ["foo", "bar"],
+    ],
+    should_not_match=[
+        ["foo"],
+    ],
+)
+
+define_program(
+    program="head",
+    system_path=["/bin/head", "/usr/bin/head"],
+    options=[
+        opt("-c", ARG_POS_INT),
+        opt("-n", ARG_POS_INT),
+    ],
+    args=[ARG_RFILES],
+)
+
+printenv_system_path = ["/usr/bin/printenv"]
+
+# Print all environment variables.
+define_program(
+    program="printenv",
+    args=[],
+    system_path=printenv_system_path,
+    # This variant of `printenv` only allows zero args.
+    should_match=[[]],
+    should_not_match=[["PATH"]],
+)
+
+# Print a specific environment variable.
+define_program(
+    program="printenv",
+    args=[ARG_OPAQUE_VALUE],
+    system_path=printenv_system_path,
+    # This variant of `printenv` only allows exactly one arg.
+    should_match=[["PATH"]],
+    should_not_match=[[], ["PATH", "HOME"]],
+)
+
+# Note that `pwd` is generally implemented as a shell built-in. It does not
+# accept any arguments.
+define_program(
+    program="pwd",
+    options=[
+        flag("-L"),
+        flag("-P"),
+    ],
+    args=[],
+)
+
+define_program(
+    program="rg",
+    options=[
+        opt("-A", ARG_POS_INT),
+        opt("-B", ARG_POS_INT),
+        opt("-C", ARG_POS_INT),
+        opt("-d", ARG_POS_INT),
+        opt("--max-depth", ARG_POS_INT),
+        opt("-g", ARG_OPAQUE_VALUE),
+        opt("--glob", ARG_OPAQUE_VALUE),
+        opt("-m", ARG_POS_INT),
+        opt("--max-count", ARG_POS_INT),
+
+        flag("-n"),
+        flag("-i"),
+        flag("-l"),
+        flag("--files"),
+        flag("--files-with-matches"),
+        flag("--files-without-match"),
+    ],
+    args=[ARG_OPAQUE_VALUE, ARG_RFILES_OR_CWD],
+    should_match=[
+        ["-n", "init"],
+        ["-n", "init", "."],
+        ["-i", "-n", "init", "src"],
+        ["--files", "--max-depth", "2", "."],
+    ],
+    should_not_match=[
+        ["-m", "-n", "init"],
+        ["--glob", "src"],
+    ],
+    # TODO(mbolin): Perhaps we need a way to indicate that we expect `rg` to be
+    # bundled with the host environment and we should be using that version.
+    system_path=[],
+)
+
+# Unfortunately, `sed` is difficult to secure because GNU sed supports an `e`
+# flag where `s/pattern/replacement/e` would run `replacement` as a shell
+# command every time `pattern` is matched. For example, try the following on
+# Ubuntu (which uses GNU sed, unlike macOS):
+#
+# ```shell
+# $ yes | head -n 4 > /tmp/yes.txt
+# $ sed 's/y/echo hi/e' /tmp/yes.txt
+# hi
+# hi
+# hi
+# hi
+# ```
+#
+# As you can see, `echo hi` got executed four times. In order to support some
+# basic sed functionality, we implement a bespoke `ARG_SED_COMMAND` that matches
+# only "known safe" sed commands.
+common_sed_flags = [
+    # We deliberately do not support -i or -f.
+    flag("-n"),
+    flag("-u"),
+]
+sed_system_path = ["/usr/bin/sed"]
+
+# When -e is not specified, the first argument must be a valid sed command.
+define_program(
+    program="sed",
+    options=common_sed_flags,
+    args=[ARG_SED_COMMAND, ARG_RFILES],
+    system_path=sed_system_path,
+)
+
+# When -e is required, all arguments are assumed to be readable files.
+define_program(
+    program="sed",
+    options=common_sed_flags + [
+        opt("-e", ARG_SED_COMMAND, required=True),
+    ],
+    args=[ARG_RFILES],
+    system_path=sed_system_path,
+)
+
+define_program(
+    program="which",
+    options=[
+        flag("-a"),
+        flag("-s"),
+    ],
+    # Surprisingly, `which` takes more than one argument.
+    args=[ARG_RFILES],
+    should_match=[
+        ["python3"],
+        ["-a", "python3"],
+        ["-a", "python3", "cargo"],
+    ],
+    should_not_match=[
+        [],
+    ],
+    system_path=["/bin/which", "/usr/bin/which"],
+)

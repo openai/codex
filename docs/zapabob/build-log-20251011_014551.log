@@ -1,0 +1,27 @@
+2025-10-11 01:45:51,724 [INFO] ======================================================================
+2025-10-11 01:45:51,732 [INFO]   🚀 Codex Automatic Build & Install (Enhanced)
+2025-10-11 01:45:51,733 [INFO]   GPU-Optimized | Checkpoint System | Auto-Recovery
+2025-10-11 01:45:51,735 [INFO] ======================================================================
+2025-10-11 01:45:51,744 [INFO] 📋 Pre-build Checks:
+2025-10-11 01:45:52,063 [INFO] 🦀 Rust: cargo 1.87.0 (99624be96 2025-05-06)
+2025-10-11 01:45:52,065 [INFO] ✓ Disk space: 53.4 GB available
+2025-10-11 01:45:52,068 [INFO]   ℹ sccache not found (building without cache)
+2025-10-11 01:45:52,077 [INFO] ⚙️  Build Configuration:
+2025-10-11 01:45:52,086 [INFO]   - Session ID: 20251011_014551
+2025-10-11 01:45:52,095 [INFO]   - Parallel jobs: 12 (RTX3080 CPU cores)
+2025-10-11 01:45:52,095 [INFO]   - Target CPU: native
+2025-10-11 01:45:52,108 [INFO]   - Cache: disabled
+2025-10-11 01:45:52,116 [INFO]   - Log file: _docs/build-log-20251011_014551.log
+2025-10-11 01:45:52,188 [INFO] [1/6] Cleaning build artifacts...
+2025-10-11 01:46:06,770 [WARNING]   ⚠ Clean had issues (continuing)
+2025-10-11 01:46:06,776 [INFO] [2/6] Building Deep Research module (parallel: 12 jobs)...
+2025-10-11 01:47:09,073 [INFO]   ✓ Deep Research compiled in 62.3s
+2025-10-11 01:47:09,075 [INFO] [3/6] Building Core Modules (supervisor excluded)...
+2025-10-11 01:47:09,075 [INFO]   Building codex-core --lib (parallel: 12 jobs)...
+2025-10-11 01:50:33,790 [INFO]   ✓ codex-core compiled in 204.7s
+2025-10-11 01:50:33,791 [INFO]   Building codex-tui --lib (parallel: 12 jobs)...
+2025-10-11 01:55:04,858 [INFO]   ✓ codex-tui compiled in 271.1s
+2025-10-11 01:55:04,860 [INFO]   Building codex-mcp-server  (parallel: 12 jobs)...
+2025-10-11 01:56:29,508 [WARNING]   Retry 1/1...
+2025-10-11 01:56:31,889 [ERROR]   Failed after 2 attempts
+2025-10-11 01:56:31,889 [ERROR]   ❌ codex-mcp-server build failed

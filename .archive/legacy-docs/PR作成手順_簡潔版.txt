@@ -1,0 +1,64 @@
+🚀 OpenAI/Codex PR 作成手順（簡潔版）
+
+═══════════════════════════════════════════════════════
+
+ステップ 1: 新しいPowerShellウィンドウを開く
+───────────────────────────────────────────────────────
+Win + X → Windows PowerShell
+
+
+ステップ 2: スクリプト実行（自動で全部やる！）
+───────────────────────────────────────────────────────
+cd C:\Users\downl\Desktop\codex-main\codex-main
+.\COMPLETE_PR_SETUP.ps1
+
+→ これで自動的に：
+  ✓ 不要な変更を破棄
+  ✓ 実装ファイルをコピー
+  ✓ コミット作成
+  ✓ GitHub にプッシュ
+
+
+ステップ 3: GitHub で PR 作成
+───────────────────────────────────────────────────────
+1. ブラウザで開く: https://github.com/zapabob/codex
+
+2. 「Compare & pull request」をクリック
+
+3. 設定:
+   Base repository: openai/codex
+   Base branch: main
+   
+   Head repository: zapabob/codex  
+   Compare branch: feature/openai-pr-clean
+
+4. タイトル:
+   feat: Enhanced Security, Multi-Agent System, Deep Research
+
+5. 説明:
+   PULL_REQUEST.md の内容をコピペ
+
+6. 「Create pull request」をクリック 🎉
+
+
+完了！
+═══════════════════════════════════════════════════════
+
+トラブルシューティング:
+
+Q: スクリプトが失敗する
+A: 手動で実行:
+   git checkout feature/openai-pr-clean
+   git checkout feature/multi-agent-security-npm-distribution -- codex-rs/supervisor codex-rs/deep-research codex-rs/audit
+   git add -A
+   git commit -m "feat: add Multi-Agent, Deep Research, Security"
+   git push origin feature/openai-pr-clean
+
+Q: push が失敗する  
+A: パーミッション確認:
+   git push origin feature/openai-pr-clean -v
+
+Q: PR が作成できない
+A: ブランチが push されているか確認:
+   https://github.com/zapabob/codex/branches
+

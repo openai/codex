@@ -1,0 +1,141 @@
+.recent-changes {
+  background: white;
+  border-radius: 12px;
+  padding: 25px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  .recent-changes {
+    background: #333;
+  }
+}
+
+.recent-changes h2 {
+  margin-top: 0;
+  margin-bottom: 20px;
+  font-size: 20px;
+  color: #333;
+}
+
+@media (prefers-color-scheme: dark) {
+  .recent-changes h2 {
+    color: #f5f5f5;
+  }
+}
+
+.no-changes {
+  text-align: center;
+  color: #999;
+  padding: 40px 20px;
+}
+
+.changes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.change-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f9f9f9;
+  transition: background 0.2s;
+}
+
+.change-item:hover {
+  background: #f0f0f0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .change-item {
+    background: #2a2a2a;
+  }
+  
+  .change-item:hover {
+    background: #3a3a3a;
+  }
+}
+
+.change-icon {
+  font-size: 20px;
+  padding-top: 2px;
+}
+
+.change-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.change-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  gap: 10px;
+}
+
+.change-path {
+  font-weight: 500;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  .change-path {
+    color: #f5f5f5;
+  }
+}
+
+.change-type {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #e0e0e0;
+  color: #666;
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  .change-type {
+    background: #444;
+    color: #aaa;
+  }
+}
+
+.change-details {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: #999;
+  gap: 10px;
+}
+
+.change-timestamp {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.change-diff {
+  display: flex;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.diff-added {
+  color: #28a745;
+  font-weight: 500;
+}
+
+.diff-removed {
+  color: #dc3545;
+  font-weight: 500;
+}
+

@@ -1,0 +1,34 @@
+sequenceDiagram
+    participant User
+    participant CLI
+    participant ResourceManager
+    participant Orchestrator
+    participant Worktree
+    participant MCP_Codex
+    participant MCP_Gemini
+    participant MCP_Claude
+    
+    User->>CLI: codex parallel --prompts "A" "B" "C"
+    CLI->>ResourceManager: get_capacity()
+    ResourceManager-->>CLI: max_concurrent=6, available=6
+    
+    CLI->>Orchestrator: execute_parallel(tasks)
+    Orchestrator->>Worktree: create_worktrees(3)
+    Worktree-->>Orchestrator: wt_paths
+    
+    par Parallel Execution
+        Orchestrator->>MCP_Codex: execute(task_A)
+        Orchestrator->>MCP_Gemini: execute(task_B)
+        Orchestrator->>MCP_Claude: execute(task_C)
+    end
+    
+    MCP_Codex-->>Orchestrator: result_A
+    MCP_Gemini-->>Orchestrator: result_B
+    MCP_Claude-->>Orchestrator: result_C
+    
+    Orchestrator->>Worktree: merge_worktrees()
+    Worktree-->>Orchestrator: merged
+    
+    Orchestrator-->>CLI: aggregated_results
+    CLI-->>User: Display results
+

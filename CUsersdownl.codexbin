@@ -1,0 +1,7 @@
+[33md98385af[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m feat: E2EテストとCursor IDE統合の完了
+ .cursor/launch.json                                |   57 [32m+[m
+ .cursor/tasks.json                                 |  225 [32m+++[m
+ ...203\275\343\202\222\350\277\275\345\212\240.md" | 1871 [32m+++++++++++++++++++[m[31m-[m
+ ...243\205\345\256\214\345\205\250\347\211\210.md" |  863 [32m+++++++++[m
+ test-e2e-deepresearch.ps1                          |  133 [32m++[m
+ 5 files changed, 3148 insertions(+), 1 deletion(-)

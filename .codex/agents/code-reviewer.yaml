@@ -1,0 +1,45 @@
+name: "code-reviewer"
+goal: "Analyze code for type safety, security vulnerabilities, performance optimizations, and best practices. Generate a detailed markdown report."
+tools:
+  mcp:
+    # 🆕 Codex 専用 MCP ツール（完全な Codex 機能）
+    - codex_read_file       # ✅ Codex 経由でファイル読み取り
+    - codex_grep            # ✅ Codex 経由で grep
+    - codex_codebase_search # ✅ セマンティック検索
+    # 従来の汎用 MCP ツール（互換性のため残す）
+    - grep
+    - read_file
+    - codebase_search
+  fs:
+    read: true
+    write:
+      - "./artifacts"
+      - "./code-review-reports"
+  net:
+    allow:
+      - "https://docs.rs/*"
+      - "https://doc.rust-lang.org/*"
+      - "https://docs.python.org/*"
+      - "https://developer.mozilla.org/*"
+  shell:
+    exec:
+      - cargo
+      - npm
+      - python
+      - rustfmt
+      - clippy
+policies:
+  context:
+    max_tokens: 40000
+    retention: "job"
+  secrets:
+    redact: true
+success_criteria:
+  - "Identify all type safety issues in TypeScript/Rust code"
+  - "Detect security vulnerabilities (SQL injection, XSS, etc.)"
+  - "Suggest performance optimizations with concrete examples"
+  - "Ensure code follows language-specific best practices"
+  - "Generate detailed code review report with line-specific comments"
+artifacts:
+  - "artifacts/code-review-report.md"
+  - "code-review-reports/review-summary.json"

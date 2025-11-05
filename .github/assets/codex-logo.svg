@@ -1,0 +1,121 @@
+<svg width="200" height="200" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <defs>
+    <linearGradient id="mainGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4A90E2;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#357ABD;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="accentGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#5CB3FF;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#4A90E2;stop-opacity:1" />
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Background Circle -->
+  <circle cx="100" cy="100" r="95" fill="url(#mainGradient)" opacity="0.1"/>
+  
+  <!-- Outer Hexagon -->
+  <path d="M 100 20 L 155 52.5 L 155 117.5 L 100 150 L 45 117.5 L 45 52.5 Z" 
+        fill="none" 
+        stroke="url(#mainGradient)" 
+        stroke-width="2.5" 
+        opacity="0.6"/>
+  
+  <!-- Inner Hexagon -->
+  <path d="M 100 40 L 135 62.5 L 135 107.5 L 100 130 L 65 107.5 L 65 62.5 Z" 
+        fill="none" 
+        stroke="url(#accentGradient)" 
+        stroke-width="2"/>
+  
+  <!-- Code Brackets (Left) -->
+  <path d="M 75 75 L 60 85 L 75 95" 
+        fill="none" 
+        stroke="url(#mainGradient)" 
+        stroke-width="3.5" 
+        stroke-linecap="round" 
+        filter="url(#glow)"/>
+  
+  <!-- Code Brackets (Right) -->
+  <path d="M 125 75 L 140 85 L 125 95" 
+        fill="none" 
+        stroke="url(#mainGradient)" 
+        stroke-width="3.5" 
+        stroke-linecap="round" 
+        filter="url(#glow)"/>
+  
+  <!-- Forward Slash -->
+  <line x1="95" y1="95" x2="105" y2="75" 
+        stroke="url(#accentGradient)" 
+        stroke-width="3.5" 
+        stroke-linecap="round" 
+        filter="url(#glow)"/>
+  
+  <!-- AI Neural Network Nodes -->
+  <circle cx="70" cy="60" r="3" fill="#5CB3FF" opacity="0.8"/>
+  <circle cx="85" cy="55" r="3" fill="#5CB3FF" opacity="0.8"/>
+  <circle cx="100" cy="50" r="3" fill="#5CB3FF" opacity="0.8"/>
+  <circle cx="115" cy="55" r="3" fill="#5CB3FF" opacity="0.8"/>
+  <circle cx="130" cy="60" r="3" fill="#5CB3FF" opacity="0.8"/>
+  
+  <!-- Neural Network Connections -->
+  <line x1="70" y1="60" x2="85" y2="55" stroke="#5CB3FF" stroke-width="1" opacity="0.4"/>
+  <line x1="85" y1="55" x2="100" y2="50" stroke="#5CB3FF" stroke-width="1" opacity="0.4"/>
+  <line x1="100" y1="50" x2="115" y2="55" stroke="#5CB3FF" stroke-width="1" opacity="0.4"/>
+  <line x1="115" y1="55" x2="130" y2="60" stroke="#5CB3FF" stroke-width="1" opacity="0.4"/>
+  
+  <!-- Bottom Neural Network Nodes -->
+  <circle cx="70" cy="110" r="3" fill="#4A90E2" opacity="0.8"/>
+  <circle cx="85" cy="115" r="3" fill="#4A90E2" opacity="0.8"/>
+  <circle cx="100" cy="120" r="3" fill="#4A90E2" opacity="0.8"/>
+  <circle cx="115" y="115" r="3" fill="#4A90E2" opacity="0.8"/>
+  <circle cx="130" cy="110" r="3" fill="#4A90E2" opacity="0.8"/>
+  
+  <!-- Bottom Neural Network Connections -->
+  <line x1="70" y1="110" x2="85" y2="115" stroke="#4A90E2" stroke-width="1" opacity="0.4"/>
+  <line x1="85" y1="115" x2="100" y2="120" stroke="#4A90E2" stroke-width="1" opacity="0.4"/>
+  <line x1="100" y1="120" x2="115" y2="115" stroke="#4A90E2" stroke-width="1" opacity="0.4"/>
+  <line x1="115" y1="115" x2="130" y2="110" stroke="#4A90E2" stroke-width="1" opacity="0.4"/>
+  
+  <!-- Connecting Lines between top and bottom networks -->
+  <line x1="85" y1="55" x2="85" y2="115" stroke="#5CB3FF" stroke-width="0.8" opacity="0.3"/>
+  <line x1="100" y1="50" x2="100" y2="120" stroke="#5CB3FF" stroke-width="0.8" opacity="0.3"/>
+  <line x1="115" y1="55" x2="115" y2="115" stroke="#5CB3FF" stroke-width="0.8" opacity="0.3"/>
+  
+  <!-- Center Pulse Circle -->
+  <circle cx="100" cy="85" r="5" fill="none" stroke="url(#accentGradient)" stroke-width="1.5" opacity="0.6">
+    <animate attributeName="r" values="5;8;5" dur="2s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.6;0.3;0.6" dur="2s" repeatCount="indefinite"/>
+  </circle>
+  
+  <!-- Center Core -->
+  <circle cx="100" cy="85" r="4" fill="url(#accentGradient)" opacity="0.9"/>
+  
+  <!-- Orbital Particles -->
+  <circle cx="100" cy="85" r="2" fill="#5CB3FF">
+    <animateTransform
+      attributeName="transform"
+      type="rotate"
+      from="0 100 85"
+      to="360 100 85"
+      dur="4s"
+      repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="1;0.5;1" dur="2s" repeatCount="indefinite"/>
+  </circle>
+  
+  <!-- Text: CODEX -->
+  <text x="100" y="175" font-family="'Segoe UI', Arial, sans-serif" font-size="22" font-weight="700" text-anchor="middle" fill="url(#mainGradient)">
+    CODEX
+  </text>
+  
+  <!-- Subtitle -->
+  <text x="100" y="190" font-family="'Segoe UI', Arial, sans-serif" font-size="9" text-anchor="middle" fill="#4A90E2" opacity="0.7">
+    AI CODING ASSISTANT
+  </text>
+</svg>
+

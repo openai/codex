@@ -1,0 +1,45 @@
+2025-10-10 21:32:21,931 [INFO] ==================================================
+2025-10-10 21:32:21,931 [INFO]   Codex Automatic Build & Install
+2025-10-10 21:32:21,931 [INFO]   GPU-Optimized Build (RTX3080)
+2025-10-10 21:32:21,931 [INFO] ==================================================
+2025-10-10 21:32:21,933 [INFO] sccache not found, attempting install...
+2025-10-10 21:32:21,934 [INFO]   Installing sccache for faster builds...
+2025-10-10 21:35:21,952 [WARNING]   [WARN] sccache install failed, continuing without cache
+2025-10-10 21:35:21,952 [INFO] Build Settings:
+2025-10-10 21:35:21,953 [INFO]   - Parallel jobs: 12 (RTX3080 CPU cores)
+2025-10-10 21:35:21,953 [INFO]   - Target CPU: native
+2025-10-10 21:35:21,953 [INFO]   - Cache: sccache
+2025-10-10 21:35:21,978 [INFO] [1/6] Cleaning build artifacts...
+2025-10-10 21:35:22,262 [WARNING]   [WARN] Clean had issues (continuing)
+2025-10-10 21:35:22,262 [INFO] [2/6] Building Deep Research module (GPU-optimized)...
+2025-10-10 21:35:22,404 [WARNING]   [WARN] Build time: 0.1s, output: error: could not execute process `sccache C:\Users\downl\.rustup\toolchains\nightly-x86_64-pc-windows-msvc\bin\rustc.exe -vV` (never executed)
+
+Caused by:
+  program not found
+
+2025-10-10 21:35:22,404 [INFO] [3/6] Building Core Binaries...
+2025-10-10 21:35:22,405 [INFO]   Building codex-tui (parallel: 12 jobs)...
+2025-10-10 21:35:22,539 [WARNING]   [WARN] codex-tui build time: 0.1s
+2025-10-10 21:35:22,540 [INFO]   Building codex-mcp-server (parallel: 12 jobs)...
+2025-10-10 21:35:22,675 [WARNING]   [WARN] codex-mcp-server build time: 0.1s
+2025-10-10 21:35:22,675 [INFO] [4/6] Verifying Binaries...
+2025-10-10 21:35:22,676 [INFO]   [OK] Found 0 binaries:
+2025-10-10 21:35:22,676 [INFO] [5/6] Installing Globally...
+2025-10-10 21:35:22,680 [INFO]   [OK] Installed: index.js
+2025-10-10 21:35:22,681 [INFO]   [OK] Installed: web-search.js
+2025-10-10 21:35:22,686 [INFO]   [OK] Installed 7 agents
+2025-10-10 21:35:22,686 [INFO]   Installation: C:\Users\downl\.codex\bin
+2025-10-10 21:35:22,686 [INFO]   Total files: 2
+2025-10-10 21:35:22,687 [INFO] [6/6] Git Commit & Push...
+2025-10-10 21:35:23,077 [INFO]   [OK] Committed
+2025-10-10 21:35:25,495 [INFO]   [OK] Pushed to GitHub
+2025-10-10 21:35:25,496 [INFO] ==================================================
+2025-10-10 21:35:25,496 [INFO]   Installation Complete!
+2025-10-10 21:35:25,497 [INFO] ==================================================
+2025-10-10 21:35:25,497 [INFO] Installed to: C:\Users\downl\.codex\bin
+2025-10-10 21:35:25,497 [INFO] Files: 2 binaries + 7 agents
+2025-10-10 21:35:25,497 [INFO] Log saved: _docs/build-log-2025-10-10_21-32-21.log
+2025-10-10 21:35:25,497 [INFO] Quick Test:
+2025-10-10 21:35:25,497 [INFO]   cd "C:\Users\downl\.codex\bin"
+2025-10-10 21:35:25,497 [INFO]   .\codex-tui.exe --version
+2025-10-10 21:35:25,498 [INFO] Status: Production Ready ✓

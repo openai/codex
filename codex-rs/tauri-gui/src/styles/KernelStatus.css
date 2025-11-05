@@ -1,0 +1,242 @@
+.kernel-status {
+  background: white;
+  border-radius: 12px;
+  padding: 25px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  margin-bottom: 20px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .kernel-status {
+    background: #333;
+  }
+}
+
+.kernel-status.loading,
+.kernel-status.error {
+  text-align: center;
+  padding: 40px;
+  color: #999;
+}
+
+.kernel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.kernel-header h2 {
+  margin: 0;
+  font-size: 20px;
+  color: #333;
+}
+
+@media (prefers-color-scheme: dark) {
+  .kernel-header h2 {
+    color: #f5f5f5;
+  }
+}
+
+.driver-badge {
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.driver-badge.loaded {
+  background: #28a745;
+  color: white;
+}
+
+.driver-badge.not-loaded {
+  background: #ffc107;
+  color: #000;
+}
+
+.driver-info {
+  padding: 20px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  text-align: center;
+}
+
+@media (prefers-color-scheme: dark) {
+  .driver-info {
+    background: #2a2a2a;
+  }
+}
+
+.info-text {
+  color: #666;
+  margin: 10px 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .info-text {
+    color: #aaa;
+  }
+}
+
+.version-info {
+  font-size: 12px;
+  color: #999;
+  margin-bottom: 20px;
+}
+
+.status-section {
+  margin-bottom: 25px;
+}
+
+.status-section:last-child {
+  margin-bottom: 0;
+}
+
+.status-section h3 {
+  margin: 0 0 15px 0;
+  font-size: 16px;
+  color: #333;
+  border-bottom: 2px solid #0070f3;
+  padding-bottom: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .status-section h3 {
+    color: #f5f5f5;
+  }
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 20px;
+}
+
+.status-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.status-item label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #666;
+}
+
+@media (prefers-color-scheme: dark) {
+  .status-item label {
+    color: #aaa;
+  }
+}
+
+.progress-bar {
+  height: 20px;
+  background: #f0f0f0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+@media (prefers-color-scheme: dark) {
+  .progress-bar {
+    background: #444;
+  }
+}
+
+.progress-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.progress-fill.gpu {
+  background: linear-gradient(90deg, #0070f3, #00c6ff);
+}
+
+.progress-fill.memory {
+  background: linear-gradient(90deg, #28a745, #20c997);
+}
+
+.progress-fill.pool {
+  background: linear-gradient(90deg, #ffc107, #fd7e14);
+}
+
+.value {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+}
+
+@media (prefers-color-scheme: dark) {
+  .value {
+    color: #f5f5f5;
+  }
+}
+
+.temperature-display {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.temp-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: #333;
+}
+
+@media (prefers-color-scheme: dark) {
+  .temp-value {
+    color: #f5f5f5;
+  }
+}
+
+.temp-indicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #28a745;
+}
+
+.temp-indicator.hot {
+  background: #dc3545;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-top: 15px;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background-color: #f0f0f0;
+  color: #333;
+}
+
+@media (prefers-color-scheme: dark) {
+  .btn-secondary {
+    background-color: #444;
+    color: #f5f5f5;
+  }
+}
+

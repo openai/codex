@@ -1,0 +1,114 @@
+# Copyright 2025 zapabob
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: PR Review with Gemini CLI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  # Gemini CLI version (stable version to avoid errors)
+  GEMINI_CLI_VERSION: 0.1.17
+
+jobs:
+  gemini_review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      # GitHub App token generation
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.CODE_REVIEW_APP_ID }}
+          private-key: ${{ secrets.CODE_REVIEW_APP_PRIVATE_KEY }}
+
+      # Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+        env:
+          token: ${{ steps.app-token.outputs.token }}
+
+      # Install pnpm (faster installation)
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      # Setup Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      # Install Gemini CLI
+      - name: Install Gemini CLI
+        run: |
+          pnpm add -g @google/gemini-cli@${{ env.GEMINI_CLI_VERSION }}
+
+      # Run Gemini CLI Review
+      - name: Run Gemini CLI Review
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          # Enhanced review guidelines for Gemini
+          REVIEW_PROMPT="
+          Please perform a comprehensive code review for this pull request:
+
+          **Code Quality Assessment:**
+          1. Code structure and organization
+          2. Best practices adherence
+          3. Performance considerations
+          4. Maintainability and readability
+
+          **Security Review:**
+          1. Potential security vulnerabilities
+          2. Input validation and sanitization
+          3. Authentication and authorization
+          4. Data protection measures
+
+          **Technical Analysis:**
+          1. Algorithm efficiency
+          2. Error handling
+          3. Test coverage
+          4. Documentation completeness
+
+          **Recommendations:**
+          - Provide specific, actionable feedback
+          - Suggest improvements with examples
+          - Highlight critical issues
+          - Acknowledge good practices
+
+          Format your review in clear sections with bullet points.
+          "
+
+          echo "Starting Gemini CLI PR Review..."
+          gemini -y -m "${{ vars.AI_REVIEW_GEMINI_MODEL }}" -p "$(printf '%s' '$REVIEW_PROMPT')"
+
+      # Post review completion message
+      - name: Review Completion Notice
+        if: always()
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          echo "✅ Gemini CLI PR Review completed!"
+          echo "Check the PR comments for detailed feedback."

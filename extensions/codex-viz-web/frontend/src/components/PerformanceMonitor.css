@@ -1,0 +1,93 @@
+.performance-monitor {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: rgba(17, 17, 24, 0.7);
+  backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 12px;
+  padding: 16px;
+  min-width: 200px;
+  z-index: 900;
+  color: white;
+  font-family: 'Monaco', 'Consolas', monospace;
+  box-shadow: 
+    0 8px 32px 0 rgba(0, 0, 0, 0.37),
+    0 0 30px rgba(56, 189, 248, 0.2);
+  animation: slideInRight 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.perf-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.2);
+}
+
+.perf-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #38bdf8;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.perf-metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.perf-metric {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.perf-label {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.perf-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: #38bdf8;
+}
+
+.perf-value-large {
+  font-size: 24px;
+  font-weight: 700;
+  text-shadow: 0 0 10px currentColor;
+}
+
+.perf-bar {
+  margin-top: 12px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.perf-bar-fill {
+  height: 100%;
+  transition: width 0.3s ease, background 0.3s ease;
+  box-shadow: 0 0 10px currentColor;
+}
+

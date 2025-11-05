@@ -1,0 +1,36 @@
+{
+  "mcp": {
+    "servers": {
+      "codex": {
+        "command": "codex",
+        "args": ["mcp-server"],
+        "env": {
+          "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}",
+          "SLACK_WEBHOOK_URL": "${SLACK_WEBHOOK_URL}"
+        },
+        "description": "Codex v0.48.0 - Autonomous AI coding assistant with sub-agent orchestration"
+      }
+    }
+  },
+  "cursor.mcp": {
+    "enabled": true,
+    "servers": [
+      {
+        "name": "codex",
+        "command": "codex",
+        "args": ["mcp-server"],
+        "description": "Codex v0.48.0 - ClaudeCode-surpassing features",
+        "capabilities": [
+          "code-review",
+          "security-audit", 
+          "test-generation",
+          "deep-research",
+          "auto-orchestration",
+          "webhook-integration",
+          "natural-language-cli"
+        ]
+      }
+    ]
+  }
+}

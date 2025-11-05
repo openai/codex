@@ -1,0 +1,232 @@
+.git-vr-setup,
+.git-vr-loading,
+.git-vr-viewer {
+  width: 100%;
+  height: 100vh;
+  position: relative;
+}
+
+.git-vr-setup {
+  padding: 40px;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.git-vr-setup h1 {
+  margin-bottom: 10px;
+  color: #333;
+}
+
+@media (prefers-color-scheme: dark) {
+  .git-vr-setup h1 {
+    color: #f5f5f5;
+  }
+}
+
+.subtitle {
+  color: #666;
+  margin-bottom: 40px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .subtitle {
+    color: #aaa;
+  }
+}
+
+.setup-card {
+  background: white;
+  border-radius: 12px;
+  padding: 30px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  .setup-card {
+    background: #333;
+  }
+}
+
+.setup-card h2 {
+  margin-top: 0;
+  margin-bottom: 20px;
+  color: #333;
+}
+
+@media (prefers-color-scheme: dark) {
+  .setup-card h2 {
+    color: #f5f5f5;
+  }
+}
+
+.input-group {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 30px;
+}
+
+.repo-input {
+  flex: 1;
+  padding: 12px 15px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .repo-input {
+    background: #2a2a2a;
+    border-color: #555;
+    color: #f5f5f5;
+  }
+}
+
+.btn-load {
+  padding: 12px 24px;
+  background: #0070f3;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-load:hover {
+  background: #0060df;
+}
+
+.features,
+.instructions {
+  margin-bottom: 25px;
+}
+
+.features h3,
+.instructions h3 {
+  margin-bottom: 12px;
+  color: #333;
+}
+
+@media (prefers-color-scheme: dark) {
+  .features h3,
+  .instructions h3 {
+    color: #f5f5f5;
+  }
+}
+
+.features ul {
+  list-style: none;
+  padding: 0;
+}
+
+.features li {
+  padding: 8px 0;
+  color: #666;
+}
+
+@media (prefers-color-scheme: dark) {
+  .features li {
+    color: #aaa;
+  }
+}
+
+.instructions table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.instructions td {
+  padding: 8px;
+  border-bottom: 1px solid #f0f0f0;
+  color: #666;
+}
+
+@media (prefers-color-scheme: dark) {
+  .instructions td {
+    border-bottom-color: #444;
+    color: #aaa;
+  }
+}
+
+.instructions td:first-child {
+  font-family: monospace;
+  color: #0070f3;
+}
+
+.git-vr-loading {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  color: #666;
+}
+
+@media (prefers-color-scheme: dark) {
+  .git-vr-loading {
+    color: #aaa;
+  }
+}
+
+.commit-info-overlay {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 350px;
+  background: rgba(26, 26, 26, 0.95);
+  color: white;
+  padding: 20px;
+  border-radius: 12px;
+  z-index: 1000;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.commit-info-overlay h3 {
+  margin: 0 0 15px 0;
+  font-family: monospace;
+  color: #00c6ff;
+}
+
+.commit-info-overlay p {
+  margin: 8px 0;
+  font-size: 14px;
+}
+
+.commit-message {
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid #444;
+  font-style: italic;
+}
+
+.btn-close {
+  margin-top: 15px;
+  padding: 8px 16px;
+  background: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn-close:hover {
+  background: #c82333;
+}
+
+.stats-overlay {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 15px;
+  border-radius: 8px;
+  z-index: 1000;
+  font-size: 14px;
+}
+
+.stats-overlay div {
+  margin: 5px 0;
+}
+

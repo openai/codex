@@ -1,0 +1,200 @@
+---
+title: Codex v0.48.0-zapabob.1 Architecture
+---
+graph TB
+    %% ========================================
+    %% User Interface Layer
+    %% ========================================
+    subgraph UI["🖥️ User Interface Layer"]
+        CLI["CLI<br/>codex-cli"]
+        TUI["TUI<br/>Interactive Mode"]
+        CursorIDE["Cursor IDE<br/>MCP Integration"]
+        NaturalLangCLI["🗣️ Natural Language CLI<br/>AgentInterpreter"]
+    end
+
+    %% ========================================
+    %% Core Orchestration Layer
+    %% ========================================
+    subgraph Core["🧠 Core Orchestration Layer"]
+        TaskAnalyzer["Task Analyzer<br/>Complexity Analysis"]
+        AutoOrchestrator["Auto Orchestrator<br/>Threshold: 0.7"]
+        Supervisor["Supervisor<br/>Agent Coordinator"]
+        FileEditTracker["🔒 File Edit Tracker<br/>Conflict Resolution"]
+    end
+
+    %% ========================================
+    %% Sub-Agent System
+    %% ========================================
+    subgraph Agents["🤖 Specialized Sub-Agents"]
+        CodeExpert["Code Expert<br/>Analysis & Refactoring"]
+        SecurityExpert["Security Expert<br/>CVE Scanning"]
+        TestingExpert["Testing Expert<br/>Test Generation"]
+        DeepResearcher["Deep Researcher<br/>Multi-source Research"]
+        DocsExpert["Docs Expert<br/>Documentation"]
+        DebugExpert["Debug Expert<br/>Issue Resolution"]
+        PerfExpert["Performance Expert<br/>Optimization"]
+    end
+
+    %% ========================================
+    %% Deep Research Engine
+    %% ========================================
+    subgraph Research["🔍 Deep Research Engine"]
+        ResearchCore["Research Core<br/>Depth: 1-5"]
+        GeminiCLI["🔌 Gemini CLI<br/>OAuth 2.0 + Google Search"]
+        DuckDuckGo["DuckDuckGo API"]
+        BraveAPI["Brave Search API"]
+        GoogleAPI["Google Custom Search"]
+        BingAPI["Bing Search API"]
+        CitationEngine["Citation Engine<br/>Source Attribution"]
+        ContradictionDetect["Contradiction Detection"]
+    end
+
+    %% ========================================
+    %% MCP Integration Layer
+    %% ========================================
+    subgraph MCP["🔗 MCP (Model Context Protocol)"]
+        MCPServer["MCP Server Core"]
+        CodexMCP["codex-agent MCP"]
+        SerenaMCP["serena MCP"]
+        Context7MCP["context7 MCP"]
+        PlaywrightMCP["playwright MCP"]
+        GitHubMCP["github MCP"]
+        GeminiMCP["🆕 codex-gemini-mcp<br/>OAuth 2.0"]
+        FetchMCP["fetch MCP"]
+        FileSystemMCP["filesystem MCP"]
+    end
+
+    %% ========================================
+    %% External Integrations
+    %% ========================================
+    subgraph External["🌐 External Integrations"]
+        GitHubAPI["GitHub API<br/>PR/Issue Management"]
+        SlackWebhook["Slack Webhooks<br/>Notifications"]
+        CustomWebhook["Custom Webhooks<br/>Generic HTTP"]
+        AudioNotif["🔔 Audio Notification<br/>Marisa 'Owattaze!'"]
+    end
+
+    %% ========================================
+    %% Data & Config Layer
+    %% ========================================
+    subgraph Data["💾 Data & Configuration"]
+        ConfigTOML["config.toml<br/>14 MCP Servers"]
+        CursorMCPJSON["~/.cursor/mcp.json<br/>IDE Integration"]
+        SessionStore["Session Store<br/>Resume Support"]
+        AuditLog["Audit Log<br/>Security Tracking"]
+        AudioFile["marisa_owattaze.wav<br/>38,972 bytes"]
+    end
+
+    %% ========================================
+    %% Model Providers
+    %% ========================================
+    subgraph Models["🤖 LLM Model Providers"]
+        OpenAI["OpenAI API<br/>gpt-5-codex"]
+        Anthropic["Anthropic API<br/>Claude Sonnet"]
+        GeminiModel["Google Gemini<br/>gemini-2.5-pro/flash"]
+    end
+
+    %% ========================================
+    %% Flow Connections - UI to Core
+    %% ========================================
+    CLI --> TaskAnalyzer
+    TUI --> TaskAnalyzer
+    CursorIDE --> MCPServer
+    NaturalLangCLI --> TaskAnalyzer
+    
+    %% ========================================
+    %% Core Orchestration Flow
+    %% ========================================
+    TaskAnalyzer -->|Complexity > 0.7| AutoOrchestrator
+    TaskAnalyzer -->|Direct Execution| Supervisor
+    AutoOrchestrator --> Supervisor
+    Supervisor --> FileEditTracker
+    
+    %% ========================================
+    %% Agent Delegation
+    %% ========================================
+    Supervisor --> CodeExpert
+    Supervisor --> SecurityExpert
+    Supervisor --> TestingExpert
+    Supervisor --> DeepResearcher
+    Supervisor --> DocsExpert
+    Supervisor --> DebugExpert
+    Supervisor --> PerfExpert
+    
+    %% ========================================
+    %% Deep Research Flow
+    %% ========================================
+    DeepResearcher --> ResearchCore
+    ResearchCore --> GeminiCLI
+    ResearchCore --> DuckDuckGo
+    ResearchCore --> BraveAPI
+    ResearchCore --> GoogleAPI
+    ResearchCore --> BingAPI
+    GeminiCLI -->|Fallback| DuckDuckGo
+    ResearchCore --> CitationEngine
+    ResearchCore --> ContradictionDetect
+    
+    %% ========================================
+    %% MCP Integration Flow
+    %% ========================================
+    MCPServer --> CodexMCP
+    MCPServer --> SerenaMCP
+    MCPServer --> Context7MCP
+    MCPServer --> PlaywrightMCP
+    MCPServer --> GitHubMCP
+    MCPServer --> GeminiMCP
+    MCPServer --> FetchMCP
+    MCPServer --> FileSystemMCP
+    
+    GeminiMCP --> GeminiCLI
+    GitHubMCP --> GitHubAPI
+    
+    %% ========================================
+    %% External Integration Flow
+    %% ========================================
+    Supervisor --> GitHubAPI
+    Supervisor --> SlackWebhook
+    Supervisor --> CustomWebhook
+    FileEditTracker --> AudioNotif
+    Supervisor --> AudioNotif
+    
+    %% ========================================
+    %% Configuration Flow
+    %% ========================================
+    CLI --> ConfigTOML
+    CursorIDE --> CursorMCPJSON
+    ConfigTOML -.Sync.- CursorMCPJSON
+    Supervisor --> SessionStore
+    Supervisor --> AuditLog
+    AudioNotif --> AudioFile
+    
+    %% ========================================
+    %% Model Provider Flow
+    %% ========================================
+    Supervisor --> OpenAI
+    Supervisor --> Anthropic
+    GeminiCLI --> GeminiModel
+    DeepResearcher --> OpenAI
+    
+    %% ========================================
+    %% Styling
+    %% ========================================
+    classDef uiClass fill:#4A90E2,stroke:#2E5C8A,stroke-width:2px,color:#fff
+    classDef coreClass fill:#E24A90,stroke:#8A2E5C,stroke-width:2px,color:#fff
+    classDef agentClass fill:#90E24A,stroke:#5C8A2E,stroke-width:2px,color:#000
+    classDef researchClass fill:#E2904A,stroke:#8A5C2E,stroke-width:2px,color:#fff
+    classDef mcpClass fill:#4AE290,stroke:#2E8A5C,stroke-width:2px,color:#000
+    classDef externalClass fill:#904AE2,stroke:#5C2E8A,stroke-width:2px,color:#fff
+    classDef dataClass fill:#E2E24A,stroke:#8A8A2E,stroke-width:2px,color:#000
+    classDef modelClass fill:#4AE2E2,stroke:#2E8A8A,stroke-width:2px,color:#000
+    classDef newClass fill:#FF6B6B,stroke:#C92A2A,stroke-width:3px,color:#fff
+    
+    class CLI,TUI,CursorIDE,NaturalLangCLI uiClass
+    class TaskAnalyzer,AutoOrchestrator,Supervisor,FileEditTracker coreClass
+    class CodeExpert,SecurityExpert,TestingExpert,DeepResearcher,DocsExpert,DebugExpert,PerfExpert agentClass
+    class ResearchCore,GeminiCLI,DuckDuckGo,BraveAPI,GoogleAPI,BingAPI,CitationEngine,ContradictionDetect researchClass
+    class MCPServer,CodexMCP,SerenaMCP,Context7MCP,PlaywrightMCP,GitHubMCP,GeminiMCP,FetchMCP,FileSystemMCP mcpClass
+    class GitHubAPI,SlackWebhook,CustomWebhook,AudioNotif externalClass
+    class ConfigTOML,CursorMCPJSON,SessionStore,AuditLog,AudioFile dataClass
+    class OpenAI,Anthropic,GeminiModel modelClass
+    class GeminiMCP,AudioNotif newClass

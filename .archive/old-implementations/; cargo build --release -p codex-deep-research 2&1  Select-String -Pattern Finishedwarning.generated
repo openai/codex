@@ -1,0 +1,11 @@
+* [33m12b5962d[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m feat: Web検索とDeepResearch統合完了
+* [33md98385af[m feat: E2EテストとCursor IDE統合の完了
+* [33ma4bc49dd[m feat: グローバルインストールスクリプト完成
+* [33m88a1848f[m feat: 本番環境実装完了 - MockProvider削除 & ベストプラクティス実装
+* [33mc183e23a[m docs: Cursor IDE完全統合レポート
+* [33m05c86f3c[m feat: Cursor IDE完全統合 - MCP/Composer/Chat対応
+* [33me50b74bc[m docs: 多言語コードレビュー実装完了レポート
+* [33m79788d7d[m feat: Multi-Language Code Reviewers (TS/Python/Rust/C# Unity)
+*   [33m5970ed06[m Merge: Resolve conflicts for Sub-Agents & Deep Research
+[32m|[m[33m\[m  
+[32m|[m * [33mcadeaafe[m feat: Add Sub-Agents & Deep Research - Exceeds Claude Code

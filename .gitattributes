@@ -1,0 +1,53 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+# Source code
+*.rs text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+*.cpp text eol=lf
+*.hpp text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.jsx text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+# Config files
+*.toml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+# Windows specific
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=lf
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.wav binary
+*.mp3 binary
+*.so binary
+*.dll binary
+*.ko binary
+*.sys binary
+# Archives
+*.zip binary
+*.tar binary
+*.gz binary
+*.7z binary
+# Linguist overrides
+docs/architecture/*.mmd linguist-language=Mermaid
+*.svg linguist-generated=true
+Cargo.lock linguist-generated=true
+package-lock.json linguist-generated=true
+# *.tgz filter=lfs diff=lfs merge=lfs -text  # Disabled: Fork LFS limitation

@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<instrumentationManifest
+    xmlns="http://schemas.microsoft.com/win/2004/08/events"
+    xmlns:win="http://manifests.microsoft.com/win/2004/08/windows/events"
+    xmlns:xs="http://www.w3.org/2001/XMLSchema">
+    
+  <instrumentation>
+    <events>
+      <provider
+          name="Codex-AI-Provider"
+          guid="{12345678-1234-1234-1234-123456789ABC}"
+          symbol="CODEX_AI_PROVIDER"
+          resourceFileName="%SystemRoot%\System32\drivers\ai_driver.sys"
+          messageFileName="%SystemRoot%\System32\drivers\ai_driver.sys">
+        
+        <channels>
+          <channel
+              name="Codex-AI/Operational"
+              chid="Operational"
+              symbol="CHANNEL_OPERATIONAL"
+              type="Operational"
+              enabled="true" />
+        </channels>
+        
+        <templates>
+          <template tid="GpuUtilizationTemplate">
+            <data name="Utilization" inType="win:UInt32" />
+            <data name="MemoryUsed" inType="win:UInt64" />
+            <data name="Temperature" inType="win:UInt32" />
+          </template>
+          
+          <template tid="InferenceLatencyTemplate">
+            <data name="ModelId" inType="win:UInt32" />
+            <data name="LatencyMs" inType="win:UInt64" />
+            <data name="BatchSize" inType="win:UInt32" />
+          </template>
+          
+          <template tid="AiTaskTemplate">
+            <data name="ProcessId" inType="win:UInt32" />
+            <data name="ProcessName" inType="win:UnicodeString" />
+            <data name="Priority" inType="win:Int32" />
+          </template>
+        </templates>
+        
+        <events>
+          <event
+              symbol="GPU_UTILIZATION_EVENT"
+              value="1"
+              version="1"
+              channel="Operational"
+              level="win:Informational"
+              template="GpuUtilizationTemplate"
+              message="$(string.Event.GpuUtilization)" />
+          
+          <event
+              symbol="INFERENCE_LATENCY_EVENT"
+              value="2"
+              version="1"
+              channel="Operational"
+              level="win:Informational"
+              template="InferenceLatencyTemplate"
+              message="$(string.Event.InferenceLatency)" />
+          
+          <event
+              symbol="AI_TASK_REGISTERED_EVENT"
+              value="3"
+              version="1"
+              channel="Operational"
+              level="win:Informational"
+              template="AiTaskTemplate"
+              message="$(string.Event.AiTaskRegistered)" />
+        </events>
+      </provider>
+    </events>
+  </instrumentation>
+  
+  <localization>
+    <resources culture="en-US">
+      <stringTable>
+        <string id="Event.GpuUtilization" value="GPU Utilization: %1%%, Memory: %2 bytes, Temperature: %3°C" />
+        <string id="Event.InferenceLatency" value="Inference completed: Model %1, Latency %2ms, Batch %3" />
+        <string id="Event.AiTaskRegistered" value="AI Task registered: PID %1, Name %2, Priority %3" />
+      </stringTable>
+    </resources>
+  </localization>
+</instrumentationManifest>
+

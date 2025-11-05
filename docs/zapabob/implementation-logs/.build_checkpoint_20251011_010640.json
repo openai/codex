@@ -1,0 +1,20 @@
+{
+  "session_id": "20251011_010640",
+  "completed_steps": [
+    "clean",
+    "deep-research"
+  ],
+  "current_step": "core-binaries",
+  "build_times": {
+    "deep-research": 1.437743,
+    "codex-tui": 7.855875
+  },
+  "errors": [
+    {
+      "cmd": "cargo build --release -p codex-tui",
+      "error": "",
+      "timestamp": "2025-10-11T01:06:50.344128"
+    }
+  ],
+  "timestamp": "2025-10-11T01:06:50.345133"
+}

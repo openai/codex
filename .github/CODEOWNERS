@@ -1,0 +1,35 @@
+# Code Owners for Codex AI-Native OS
+# These owners will be requested for review when someone opens a pull request
+
+# Global owners
+* @zapabob
+
+# Core Rust code
+/codex-rs/ @zapabob
+/codex-rs/core/ @zapabob
+/codex-rs/cli/ @zapabob
+
+# Kernel extensions
+/kernel-extensions/ @zapabob
+/kernel-extensions/linux/ @zapabob
+/kernel-extensions/windows/ @zapabob
+/kernel-extensions/rust/ @zapabob
+
+# Repository visualization
+/extensions/codex-viz-web/ @zapabob
+/extensions/codex-viz-web/backend/ @zapabob
+/extensions/codex-viz-web/frontend/ @zapabob
+/extensions/codex-viz-web/desktop/ @zapabob
+
+# Documentation
+/docs/ @zapabob
+/_docs/ @zapabob
+README.md @zapabob
+
+# CI/CD
+/.github/ @zapabob
+/.github/workflows/ @zapabob
+
+# Security
+/kernel-extensions/security/ @zapabob
+

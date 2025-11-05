@@ -1,0 +1,44 @@
+[
+  {
+    "claim": "Actix Web remains the fastest, feature-rich choice for performance-critical services.",
+    "status": "corroborated",
+    "evidence": [
+      "https://blog.logrocket.com/top-rust-web-frameworks/#actix-web",
+      "https://actix.rs/"
+    ],
+    "notes": "LogRocket highlights Actix's production-grade speed and actor model while the official site emphasizes type safety and performance marketing language; no conflicting 2024-2025 reports located."
+  },
+  {
+    "claim": "Axum prioritizes ergonomics and modularity while leveraging Tokio/Tower middleware.",
+    "status": "corroborated",
+    "evidence": [
+      "https://blog.logrocket.com/top-rust-web-frameworks/#axum",
+      "https://docs.rs/axum/latest/axum/index.html"
+    ],
+    "notes": "Rustdoc lists macro-free routing, extractors, and Tower integration; LogRocket echoes the async-first ergonomics and middleware story."
+  },
+  {
+    "claim": "Rocket's strict type validation and responder system reduce runtime errors and now runs on stable Rust.",
+    "status": "corroborated",
+    "evidence": [
+      "https://rocket.rs/overview/",
+      "https://blog.logrocket.com/top-rust-web-frameworks/#dev-sentiment"
+    ],
+    "notes": "Rocket docs detail the validation pipeline and responder model; 2025 developer sentiment confirms stable+async support resolved earlier nightly-only limitation."
+  },
+  {
+    "claim": "Warp offers a lightweight, composable filter system for rapid API prototyping.",
+    "status": "corroborated",
+    "evidence": [
+      "https://blog.logrocket.com/top-rust-web-frameworks/#warp",
+      "https://docs.rs/warp/latest/warp/index.html"
+    ],
+    "notes": "Docs.rs describes warp as super-easy and filter-centric; LogRocket reiterates quick startup and composability."
+  },
+  {
+    "claim": "Actix Web security controversy persists in 2025.",
+    "status": "refuted",
+    "evidence": [],
+    "notes": "Searched 2024-2025 articles in LogRocket comparison and official Actix messaging; no current sources cite unresolved safety issues, suggesting prior 2020 concerns have been addressed." 
+  }
+]

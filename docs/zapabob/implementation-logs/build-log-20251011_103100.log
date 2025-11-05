@@ -1,0 +1,20 @@
+2025-10-11 10:31:00,023 [INFO] ======================================================================
+2025-10-11 10:31:00,023 [INFO]   🚀 Codex Automatic Build & Install (Enhanced)
+2025-10-11 10:31:00,025 [INFO]   GPU-Optimized | Checkpoint System | Auto-Recovery
+2025-10-11 10:31:00,025 [INFO] ======================================================================
+2025-10-11 10:31:00,025 [INFO] 📋 Pre-build Checks:
+2025-10-11 10:31:00,149 [INFO] 🦀 Rust: cargo 1.87.0 (99624be96 2025-05-06)
+2025-10-11 10:31:00,150 [INFO] ✓ Disk space: 48.6 GB available
+2025-10-11 10:31:00,154 [INFO]   ℹ sccache not found (building without cache)
+2025-10-11 10:31:00,155 [INFO] ⚙️  Build Configuration:
+2025-10-11 10:31:00,155 [INFO]   - Session ID: 20251011_103100
+2025-10-11 10:31:00,155 [INFO]   - Parallel jobs: 12 (RTX3080 CPU cores)
+2025-10-11 10:31:00,155 [INFO]   - Target CPU: native
+2025-10-11 10:31:00,155 [INFO]   - Cache: disabled
+2025-10-11 10:31:00,155 [INFO]   - Log file: _docs/build-log-20251011_103100.log
+2025-10-11 10:31:00,189 [INFO] [1/6] Cleaning build artifacts...
+2025-10-11 10:31:00,189 [INFO]   ⏭ Skipped (--skip-clean flag)
+2025-10-11 10:31:00,191 [INFO] [2/6] Building Deep Research module (parallel: 12 jobs)...
+2025-10-11 10:31:04,459 [INFO]   ✓ Deep Research compiled in 4.3s
+2025-10-11 10:31:04,460 [INFO] [3/6] Building Core Modules (supervisor excluded)...
+2025-10-11 10:31:04,461 [INFO]   Building codex-core --lib (parallel: 12 jobs)...

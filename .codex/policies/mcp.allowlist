@@ -1,0 +1,27 @@
+# MCP Tools Allowlist
+# 各サブエージェントが使用可能なMCPツールを定義
+
+# 検索・クロール系
+search
+crawler
+web_search
+brave_search
+
+# ファイル・コード解析
+code_indexer
+pdf_reader
+file_search
+ast_analyzer
+
+# データベース・API
+database_query
+api_client
+
+# 画像・メディア
+image_analyzer
+screenshot_tool
+
+# セキュリティ
+cve_lookup
+dependency_scanner
+

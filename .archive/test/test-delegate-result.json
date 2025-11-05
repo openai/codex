@@ -1,0 +1,10 @@
+{
+  "status": "Success",
+  "tokens_used": 1500,
+  "duration_secs": 3.1e-6,
+  "artifacts": [
+    "artifacts/code-review-info.md (simulated)"
+  ],
+  "message": "📊 Code Review Summary\n\nScope: .\nGoal: Test agent functionality\n\n✅ Files reviewed: Simulated\n✅ Issues found: Would be analyzed in full implementation\n\n💡 Recommendation:\nFor full code review functionality, use interactive mode:\n$ codex\n> @code-reviewer .\n\nThis will provide:\n- Real-time analysis\n- Detailed issue reports\n- Automatic fix suggestions\n- PR template generation",
+  "error": null
+}

@@ -1,0 +1,93 @@
+use builtin;
+use str;
+
+set edit:completion:arg-completer[just] = {|@words|
+    fn spaces {|n|
+        builtin:repeat $n ' ' | str:join ''
+    }
+    fn cand {|text desc|
+        edit:complex-candidate $text &display=$text' '(spaces (- 14 (wcswidth $text)))$desc
+    }
+    var command = 'just'
+    for word $words[1..-1] {
+        if (str:has-prefix $word '-') {
+            break
+        }
+        set command = $command';'$word
+    }
+    var completions = [
+        &'just'= {
+            cand --alias-style 'Set list command alias display style'
+            cand --ceiling 'Do not ascend above <CEILING> directory when searching for a justfile.'
+            cand --chooser 'Override binary invoked by `--choose`'
+            cand --color 'Print colorful output'
+            cand --command-color 'Echo recipe lines in <COMMAND-COLOR>'
+            cand --cygpath 'Use binary at <CYGPATH> to convert between unix and Windows paths.'
+            cand --dotenv-filename 'Search for environment file named <DOTENV-FILENAME> instead of `.env`'
+            cand -E 'Load <DOTENV-PATH> as environment file instead of searching for one'
+            cand --dotenv-path 'Load <DOTENV-PATH> as environment file instead of searching for one'
+            cand --dump-format 'Dump justfile as <FORMAT>'
+            cand -f 'Use <JUSTFILE> as justfile'
+            cand --justfile 'Use <JUSTFILE> as justfile'
+            cand --list-heading 'Print <TEXT> before list'
+            cand --list-prefix 'Print <TEXT> before each list item'
+            cand --set 'Override <VARIABLE> with <VALUE>'
+            cand --shell 'Invoke <SHELL> to run recipes'
+            cand --shell-arg 'Invoke shell with <SHELL-ARG> as an argument'
+            cand --tempdir 'Save temporary files to <TEMPDIR>.'
+            cand --timestamp-format 'Timestamp format string'
+            cand -d 'Use <WORKING-DIRECTORY> as working directory. --justfile must also be set'
+            cand --working-directory 'Use <WORKING-DIRECTORY> as working directory. --justfile must also be set'
+            cand -c 'Run an arbitrary command with the working directory, `.env`, overrides, and exports set'
+            cand --command 'Run an arbitrary command with the working directory, `.env`, overrides, and exports set'
+            cand --completions 'Print shell completion script for <SHELL>'
+            cand -l 'List available recipes in <MODULE> or root if omitted'
+            cand --list 'List available recipes in <MODULE> or root if omitted'
+            cand --request 'Execute <REQUEST>. For internal testing purposes only. May be changed or removed at any time.'
+            cand -s 'Show recipe at <PATH>'
+            cand --show 'Show recipe at <PATH>'
+            cand --check 'Run `--fmt` in ''check'' mode. Exits with 0 if justfile is formatted correctly. Exits with 1 and prints a diff if formatting is required.'
+            cand --clear-shell-args 'Clear shell arguments'
+            cand -n 'Print what just would do without doing it'
+            cand --dry-run 'Print what just would do without doing it'
+            cand --explain 'Print recipe doc comment before running it'
+            cand -g 'Use global justfile'
+            cand --global-justfile 'Use global justfile'
+            cand --highlight 'Highlight echoed recipe lines in bold'
+            cand --list-submodules 'List recipes in submodules'
+            cand --no-aliases 'Don''t show aliases in list'
+            cand --no-deps 'Don''t run recipe dependencies'
+            cand --no-dotenv 'Don''t load `.env` file'
+            cand --no-highlight 'Don''t highlight echoed recipe lines in bold'
+            cand --one 'Forbid multiple recipes from being invoked on the command line'
+            cand -q 'Suppress all output'
+            cand --quiet 'Suppress all output'
+            cand --allow-missing 'Ignore missing recipe and module errors'
+            cand --shell-command 'Invoke <COMMAND> with the shell used to run recipe lines and backticks'
+            cand --timestamp 'Print recipe command timestamps'
+            cand -u 'Return list and summary entries in source order'
+            cand --unsorted 'Return list and summary entries in source order'
+            cand --unstable 'Enable unstable features'
+            cand -v 'Use verbose output'
+            cand --verbose 'Use verbose output'
+            cand --yes 'Automatically confirm all recipes.'
+            cand --changelog 'Print changelog'
+            cand --choose 'Select one or more recipes to run using a binary chooser. If `--chooser` is not passed the chooser defaults to the value of $JUST_CHOOSER, falling back to `fzf`'
+            cand --dump 'Print justfile'
+            cand -e 'Edit justfile with editor given by $VISUAL or $EDITOR, falling back to `vim`'
+            cand --edit 'Edit justfile with editor given by $VISUAL or $EDITOR, falling back to `vim`'
+            cand --evaluate 'Evaluate and print all variables. If a variable name is given as an argument, only print that variable''s value.'
+            cand --fmt 'Format and overwrite justfile'
+            cand --groups 'List recipe groups'
+            cand --init 'Initialize new justfile in project root'
+            cand --man 'Print man page'
+            cand --summary 'List names of available recipes'
+            cand --variables 'List names of variables'
+            cand -h 'Print help'
+            cand --help 'Print help'
+            cand -V 'Print version'
+            cand --version 'Print version'
+        }
+    ]
+    $completions[$command]
+}

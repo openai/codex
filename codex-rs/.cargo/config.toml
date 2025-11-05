@@ -1,0 +1,32 @@
+# Codex-rs Cargo Build Configuration
+# 
+# This configuration ensures stable builds across different environments
+# and prevents CPU instruction set related build errors.
+
+[build]
+# Use generic x86-64 instruction set to avoid ILLEGAL_INSTRUCTION errors
+rustflags = ["-C", "target-cpu=x86-64"]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-cpu=x86-64"]
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=x86-64"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "target-cpu=x86-64"]
+
+# 🚀 Build Performance Optimization (2025-10-15)
+# Parallel jobs: RTX3080システムで8コア推奨（論理16コア - 8予備）
+jobs = 8
+
+# Incremental compilation: 開発時の差分ビルド高速化
+# デバッグビルド：デフォルトtrue
+# リリースビルド：デフォルトfalse（フルLTOと競合するため）
+incremental = true
+
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "link-arg=/STACK:8388608"]
+
+[target.'cfg(all(windows, target_env = "gnu"))']
+rustflags = ["-C", "link-arg=-Wl,--stack,8388608"]

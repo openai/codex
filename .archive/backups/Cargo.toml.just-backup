@@ -1,0 +1,108 @@
+[package]
+name = "just"
+version = "1.43.0"
+authors = ["Casey Rodarmor <casey@rodarmor.com>"]
+autotests = false
+categories = ["command-line-utilities", "development-tools"]
+description = "🤖 Just a command runner"
+edition = "2021"
+exclude = ["/book", "/icon.png", "/screenshot.png", "/www"]
+homepage = "https://github.com/casey/just"
+keywords = ["command-line", "task", "runner", "development", "utility"]
+license = "CC0-1.0"
+readme = "crates-io-readme.md"
+repository = "https://github.com/casey/just"
+rust-version = "1.80.0"
+
+[workspace]
+members = [".", "crates/*"]
+
+[dependencies]
+ansi_term = "0.12.0"
+blake3 = { version = "1.5.0", features = ["rayon", "mmap"] }
+camino = "1.0.4"
+chrono = "0.4.38"
+clap = { version = "4.0.0", features = ["derive", "env", "wrap_help"] }
+clap_mangen = "0.2.20"
+derive-where = "1.2.7"
+dirs = "6.0.0"
+dotenvy = "0.15"
+edit-distance = "2.0.0"
+heck = "0.5.0"
+is_executable = "1.0.4"
+lexiclean = "0.0.1"
+libc = "0.2.0"
+num_cpus = "1.15.0"
+percent-encoding = "2.3.1"
+rand = "0.9.0"
+regex = "1.10.4"
+rustversion = "1.0.18"
+semver = "1.0.20"
+serde = { version = "1.0.130", features = ["derive", "rc"] }
+serde_json = "1.0.68"
+sha2 = "0.10"
+shellexpand = "3.1.0"
+similar = { version = "2.1.0", features = ["unicode"] }
+snafu = "0.8.0"
+strum = { version = "0.27.1", features = ["derive"] }
+target = "2.0.0"
+tempfile = "3.0.0"
+typed-arena = "2.0.1"
+unicode-width = "0.2.0"
+uuid = { version = "1.0.0", features = ["v4"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.30.1", features = ["signal", "user"] }
+
+[target.'cfg(windows)'.dependencies]
+ctrlc = { version = "3.1.1", features = ["termination"] }
+
+[dev-dependencies]
+clap_complete = "=4.5.48"
+executable-path = "1.0.0"
+pretty_assertions = "1.0.0"
+temptree = "0.2.0"
+which = "8.0.0"
+
+[lints.rust]
+mismatched_lifetime_syntaxes = "allow"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+arbitrary-source-item-ordering = "deny"
+enum_glob_use = "allow"
+ignore_without_reason = "allow"
+needless_pass_by_value = "allow"
+pedantic = { level = "deny", priority = -1 }
+similar_names = "allow"
+struct_excessive_bools = "allow"
+struct_field_names = "allow"
+too_many_arguments = "allow"
+too_many_lines = "allow"
+type_complexity = "allow"
+undocumented_unsafe_blocks = "deny"
+unnecessary_wraps = "allow"
+wildcard_imports = "allow"
+
+[lib]
+doctest = false
+
+[[bin]]
+path = "src/main.rs"
+name = "just"
+test = false
+
+# The public documentation is minimal and doesn't change between
+# platforms, so we only build them for linux on docs.rs to save
+# their build machines some cycles.
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[[test]]
+name = "integration"
+path = "tests/lib.rs"

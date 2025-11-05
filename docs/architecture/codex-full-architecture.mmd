@@ -1,0 +1,92 @@
+graph TB
+    subgraph "User Space"
+        subgraph "Frontend Layer"
+            WebUI["🌐 Web UI<br/>React + Three.js<br/>3D/4D Visualization"]
+            DesktopUI["🖥️ Desktop Client<br/>Electron<br/>System Tray"]
+            VSCodeExt["📝 VSCode Extension<br/>Blueprint Mode<br/>Orchestrator Dashboard"]
+        end
+        
+        subgraph "Application Layer"
+            CodexCore["🤖 Codex Core<br/>Rust<br/>AI Assistant"]
+            VizBackend["📊 Viz Backend<br/>axum + git2<br/>REST API"]
+            OrchestratorRPC["🎯 Orchestrator RPC<br/>16 Methods<br/>HMAC-SHA256"]
+        end
+        
+        subgraph "AI/ML Layer"
+            SubAgents["🤝 Sub-Agents<br/>Code Review<br/>Test Gen<br/>Security"]
+            DeepResearch["🔍 Deep Research<br/>15+ MCP Servers<br/>Zero-cost Search"]
+            MLModels["🧠 ML Models<br/>ONNX/TensorRT<br/>GPU Accelerated"]
+        end
+        
+        subgraph "Integration Layer"
+            ProtocolClient["📡 Protocol Client<br/>TypeScript SDK<br/>React Hooks"]
+            KernelIntegration["🔗 Kernel Integration<br/>Rust FFI<br/>/proc Parser"]
+            WindowsAPI["🪟 Windows API<br/>DeviceIoControl<br/>ETW Tracing"]
+        end
+    end
+    
+    subgraph "Kernel Space"
+        subgraph "Linux Kernel Modules"
+            AIScheduler["⚡ AI Scheduler<br/>GPU-aware<br/>Priority Boost"]
+            AIMem["💾 AI Memory<br/>256MB Pinned<br/>Zero-copy"]
+            AIGPU["🎮 AI GPU<br/>DMA Direct<br/>CUDA/ROCm"]
+        end
+        
+        subgraph "Windows Kernel Driver"
+            WinDriver["🪟 AI Driver<br/>WDM/KMDF<br/>Non-paged Pool"]
+            ETWProvider["📊 ETW Provider<br/>Event Manifest<br/>Performance Trace"]
+        end
+        
+        subgraph "eBPF Tracing"
+            GPUTracer["📈 GPU Tracer<br/>CUDA Hook<br/>Latency Hist"]
+            PerfMonitor["⏱️ Perf Monitor<br/>Real-time Stats<br/>BCC/bpftrace"]
+        end
+    end
+    
+    subgraph "Hardware Layer"
+        CPU["💻 CPU<br/>x86_64/ARM64<br/>16+ cores"]
+        GPU["🎮 GPU<br/>RTX 3080<br/>CUDA 12"]
+        Memory["🧠 Memory<br/>DDR4/DDR5<br/>64GB+"]
+        Storage["💿 Storage<br/>NVMe SSD<br/>PCIe 4.0"]
+    end
+    
+    WebUI --> VizBackend
+    DesktopUI --> VizBackend
+    VSCodeExt --> OrchestratorRPC
+    
+    CodexCore --> SubAgents
+    CodexCore --> DeepResearch
+    CodexCore --> MLModels
+    CodexCore --> OrchestratorRPC
+    
+    VizBackend --> KernelIntegration
+    ProtocolClient --> OrchestratorRPC
+    
+    KernelIntegration -.->|/proc| AIScheduler
+    KernelIntegration -.->|/proc| AIMem
+    KernelIntegration -.->|/proc| AIGPU
+    
+    WindowsAPI -.->|IOCTL| WinDriver
+    WindowsAPI -.->|logman| ETWProvider
+    
+    MLModels --> AIScheduler
+    MLModels --> AIMem
+    MLModels --> AIGPU
+    
+    AIScheduler --> CPU
+    AIScheduler --> GPU
+    AIMem --> Memory
+    AIGPU --> GPU
+    
+    WinDriver --> CPU
+    WinDriver --> GPU
+    
+    GPUTracer -.->|trace| GPU
+    PerfMonitor -.->|monitor| CPU
+    
+    style CodexCore fill:#38bdf8
+    style WebUI fill:#22c55e
+    style AIScheduler fill:#ef4444
+    style AIGPU fill:#f59e0b
+    style GPU fill:#8b5cf6
+

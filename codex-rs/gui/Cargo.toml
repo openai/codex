@@ -1,0 +1,17 @@
+[package]
+name = "codex-gui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.42", features = ["macros", "rt-multi-thread", "process", "signal"] }
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+http = "1.1"
+chrono = { version = "0.4", features = ["serde"] }

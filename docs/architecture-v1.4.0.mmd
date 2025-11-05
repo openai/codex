@@ -1,0 +1,49 @@
+graph TB
+    subgraph "User Interface Layer"
+        CLI[Codex CLI v1.4.0]
+        GUI[Tauri GUI]
+    end
+    
+    subgraph "Core Layer"
+        CORE[Codex Core]
+        ORCH[Orchestration Module]
+        RESOURCE[Resource Manager]
+        WORKTREE[Worktree Manager]
+    end
+    
+    subgraph "MCP Layer"
+        CODEX_MCP[Codex MCP Server]
+        GEMINI_MCP[Gemini MCP Server]
+        CLAUDE_MCP[Claude MCP Server]
+    end
+    
+    subgraph "External Services"
+        GEMINI[Gemini API]
+        CLAUDE_API[Claude API]
+        GIT[Git Repository]
+    end
+    
+    CLI --> CORE
+    GUI --> CORE
+    CORE --> ORCH
+    CORE --> RESOURCE
+    CORE --> WORKTREE
+    
+    ORCH --> CODEX_MCP
+    ORCH --> GEMINI_MCP
+    ORCH --> CLAUDE_MCP
+    
+    GEMINI_MCP --> GEMINI
+    CLAUDE_MCP --> CLAUDE_API
+    WORKTREE --> GIT
+    
+    style CLI fill:#4a90e2
+    style GUI fill:#4a90e2
+    style CORE fill:#50c878
+    style ORCH fill:#f39c12
+    style RESOURCE fill:#f39c12
+    style WORKTREE fill:#f39c12
+    style CODEX_MCP fill:#e74c3c
+    style GEMINI_MCP fill:#e74c3c
+    style CLAUDE_MCP fill:#e74c3c
+

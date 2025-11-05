@@ -1,0 +1,32 @@
+graph LR
+    subgraph "Codex Core"
+        CLIENT[MCP Client]
+    end
+    
+    subgraph "MCP Servers"
+        SERVER1[Codex MCP Server]
+        SERVER2[Gemini MCP Server]
+        SERVER3[Claude MCP Server]
+    end
+    
+    subgraph "Tools"
+        T1[orchestrate_parallel]
+        T2[resource_capacity]
+        T3[googleSearch]
+        T4[execute_prompt]
+    end
+    
+    CLIENT -->|JSON-RPC 2.0| SERVER1
+    CLIENT -->|JSON-RPC 2.0| SERVER2
+    CLIENT -->|JSON-RPC 2.0| SERVER3
+    
+    SERVER1 --> T1
+    SERVER1 --> T2
+    SERVER2 --> T3
+    SERVER3 --> T4
+    
+    style CLIENT fill:#3498db
+    style SERVER1 fill:#e74c3c
+    style SERVER2 fill:#e74c3c
+    style SERVER3 fill:#e74c3c
+

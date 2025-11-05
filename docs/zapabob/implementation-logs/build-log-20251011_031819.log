@@ -1,0 +1,37 @@
+2025-10-11 03:18:19,178 [INFO] ======================================================================
+2025-10-11 03:18:19,178 [INFO]   🚀 Codex Automatic Build & Install (Enhanced)
+2025-10-11 03:18:19,179 [INFO]   GPU-Optimized | Checkpoint System | Auto-Recovery
+2025-10-11 03:18:19,179 [INFO] ======================================================================
+2025-10-11 03:18:19,179 [INFO] 📋 Pre-build Checks:
+2025-10-11 03:18:19,262 [INFO] 🦀 Rust: cargo 1.87.0 (99624be96 2025-05-06)
+2025-10-11 03:18:19,263 [INFO] ✓ Disk space: 52.0 GB available
+2025-10-11 03:18:19,265 [INFO]   ℹ sccache not found (building without cache)
+2025-10-11 03:18:19,267 [INFO] ⚙️  Build Configuration:
+2025-10-11 03:18:19,267 [INFO]   - Session ID: 20251011_031819
+2025-10-11 03:18:19,267 [INFO]   - Parallel jobs: 12 (RTX3080 CPU cores)
+2025-10-11 03:18:19,267 [INFO]   - Target CPU: native
+2025-10-11 03:18:19,267 [INFO]   - Cache: disabled
+2025-10-11 03:18:19,267 [INFO]   - Log file: _docs/build-log-20251011_031819.log
+2025-10-11 03:18:19,294 [INFO] [1/6] Cleaning build artifacts...
+2025-10-11 03:18:19,295 [INFO]   ⏭ Skipped (--skip-clean flag)
+2025-10-11 03:18:19,296 [INFO] [2/6] Building Deep Research module (parallel: 12 jobs)...
+2025-10-11 03:18:22,945 [INFO]   ✓ Deep Research compiled in 3.6s
+2025-10-11 03:18:22,946 [INFO] [3/6] Building Core Modules (supervisor excluded)...
+2025-10-11 03:18:22,946 [INFO]   Building codex-core --lib (parallel: 12 jobs)...
+2025-10-11 03:18:29,827 [INFO]   ✓ codex-core compiled in 6.9s
+2025-10-11 03:18:29,828 [INFO]   Building codex-deep-research --lib (parallel: 12 jobs)...
+2025-10-11 03:18:30,373 [INFO]   ✓ codex-deep-research compiled in 0.5s
+2025-10-11 03:18:30,373 [INFO]   Building codex-tui --lib (parallel: 12 jobs)...
+2025-10-11 03:18:33,507 [INFO]   ✓ codex-tui compiled in 3.1s
+2025-10-11 03:18:33,510 [INFO] [4/6] Verifying Binaries...
+2025-10-11 03:18:33,745 [INFO]   ✓ codex_core.rlib (23.5 MB)
+2025-10-11 03:18:33,937 [INFO]   ✓ codex_tui.rlib (21.2 MB)
+2025-10-11 03:18:34,129 [INFO]   ✓ codex_deep_research.rlib (1.6 MB)
+2025-10-11 03:18:34,129 [INFO]   ✓ Found 0 executables, 3 libraries
+2025-10-11 03:18:34,129 [INFO] [5/6] Installing Globally...
+2025-10-11 03:18:34,134 [INFO]   [OK] Installed: index.js
+2025-10-11 03:18:34,135 [INFO]   [OK] Installed: web-search.js
+2025-10-11 03:18:34,145 [INFO]   [OK] Installed 7 agents
+2025-10-11 03:18:34,145 [INFO]   Installation: C:\Users\downl\.codex\bin
+2025-10-11 03:18:34,145 [INFO]   Total files: 2
+2025-10-11 03:18:34,145 [INFO] [6/6] Git Commit & Push...

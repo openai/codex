@@ -1,0 +1,22 @@
+#!/bin/bash
+# Pre-removal script
+
+set -e
+
+echo "🛑 Codex AI Kernel Modules - Uninstalling"
+echo ""
+
+# Unload modules
+echo "Unloading modules..."
+rmmod ai_gpu 2>/dev/null || true
+rmmod ai_mem 2>/dev/null || true
+rmmod ai_scheduler 2>/dev/null || true
+
+# DKMS remove
+echo "Removing from DKMS..."
+dkms remove -m codex-ai-kernel -v 0.2.0 --all || true
+
+echo "✅ Uninstallation complete"
+
+exit 0
+

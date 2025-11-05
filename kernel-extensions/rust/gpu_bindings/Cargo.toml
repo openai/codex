@@ -1,0 +1,23 @@
+[package]
+name = "gpu-bindings"
+version = "0.2.0"
+edition = "2024"
+authors = ["zapabob"]
+license = "Apache-2.0"
+
+[dependencies]
+# No dependencies for maximum portability
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[lints.rust]
+warnings = "deny"
+unsafe_code = "warn"
+
+[lints.clippy]
+all = "deny"
+pedantic = "warn"
+

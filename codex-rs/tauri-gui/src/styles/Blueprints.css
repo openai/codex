@@ -1,0 +1,311 @@
+.blueprints {
+  max-width: 1200px;
+}
+
+.blueprints h1 {
+  margin-bottom: 30px;
+  color: #333;
+}
+
+@media (prefers-color-scheme: dark) {
+  .blueprints h1 {
+    color: #f5f5f5;
+  }
+}
+
+.create-blueprint-section,
+.execution-progress,
+.blueprints-list-section {
+  background: white;
+  border-radius: 12px;
+  padding: 25px;
+  margin-bottom: 30px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  .create-blueprint-section,
+  .execution-progress,
+  .blueprints-list-section {
+    background: #333;
+  }
+}
+
+.create-blueprint-section h2,
+.execution-progress h3,
+.blueprints-list-section h2 {
+  margin-top: 0;
+  margin-bottom: 20px;
+  font-size: 20px;
+  color: #333;
+}
+
+@media (prefers-color-scheme: dark) {
+  .create-blueprint-section h2,
+  .execution-progress h3,
+  .blueprints-list-section h2 {
+    color: #f5f5f5;
+  }
+}
+
+.create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-group label {
+  font-weight: 500;
+  color: #333;
+}
+
+@media (prefers-color-scheme: dark) {
+  .form-group label {
+    color: #f5f5f5;
+  }
+}
+
+.blueprint-textarea {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+@media (prefers-color-scheme: dark) {
+  .blueprint-textarea {
+    background: #2a2a2a;
+    border-color: #555;
+    color: #f5f5f5;
+  }
+}
+
+.mode-select {
+  padding: 10px 12px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  font-size: 14px;
+  max-width: 300px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .mode-select {
+    background: #2a2a2a;
+    border-color: #555;
+    color: #f5f5f5;
+  }
+}
+
+.btn {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  align-self: flex-start;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background-color: #0070f3;
+  color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: #0060df;
+}
+
+.btn-execute {
+  background-color: #28a745;
+  color: white;
+  padding: 8px 16px;
+  font-size: 13px;
+}
+
+.btn-execute:hover:not(:disabled) {
+  background-color: #218838;
+}
+
+.btn-secondary {
+  background-color: #f0f0f0;
+  color: #333;
+  padding: 8px 16px;
+  font-size: 13px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .btn-secondary {
+    background-color: #444;
+    color: #f5f5f5;
+  }
+}
+
+.execution-progress {
+  border-left: 4px solid #0070f3;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 30px;
+  background-color: #f0f0f0;
+  border-radius: 15px;
+  overflow: hidden;
+  margin: 15px 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .progress-bar {
+    background-color: #444;
+  }
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #0070f3, #00c6ff);
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  text-align: center;
+  font-weight: 500;
+  color: #666;
+}
+
+@media (prefers-color-scheme: dark) {
+  .progress-text {
+    color: #aaa;
+  }
+}
+
+.no-blueprints {
+  text-align: center;
+  color: #999;
+  padding: 40px 20px;
+}
+
+.blueprints-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  gap: 20px;
+}
+
+.blueprint-card {
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 20px;
+  transition: all 0.2s;
+}
+
+.blueprint-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
+}
+
+@media (prefers-color-scheme: dark) {
+  .blueprint-card {
+    border-color: #444;
+    background: #2a2a2a;
+  }
+  
+  .blueprint-card:hover {
+    background: #353535;
+  }
+}
+
+.blueprint-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.blueprint-status {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.status-pending {
+  background: #ffc107;
+  color: #000;
+}
+
+.status-approved {
+  background: #17a2b8;
+  color: #fff;
+}
+
+.status-executing {
+  background: #0070f3;
+  color: #fff;
+}
+
+.status-completed {
+  background: #28a745;
+  color: #fff;
+}
+
+.status-failed {
+  background: #dc3545;
+  color: #fff;
+}
+
+.blueprint-id {
+  font-size: 12px;
+  color: #999;
+  font-family: monospace;
+}
+
+.blueprint-description {
+  margin: 12px 0;
+  color: #333;
+  line-height: 1.6;
+}
+
+@media (prefers-color-scheme: dark) {
+  .blueprint-description {
+    color: #f5f5f5;
+  }
+}
+
+.blueprint-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid #f0f0f0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .blueprint-footer {
+    border-top-color: #444;
+  }
+}
+
+.blueprint-created {
+  font-size: 12px;
+  color: #999;
+}
+
+.blueprint-actions {
+  display: flex;
+  gap: 8px;
+}
+

@@ -1,0 +1,8 @@
+/target/
+/target-*/
+
+# Recommended value of CARGO_TARGET_DIR when using Docker as explained in .devcontainer/README.md.
+/target-amd64/
+
+# Value of CARGO_TARGET_DIR when using .devcontainer/devcontainer.json.
+/target-arm64/

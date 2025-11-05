@@ -1,0 +1,7 @@
+{
+  "name": "codex-test",
+  "version": "1.0.0",
+  "dependencies": {
+    "@openai/codex": "file:../codex-cli/openai-codex-0.52.0.tgz"
+  }
+}

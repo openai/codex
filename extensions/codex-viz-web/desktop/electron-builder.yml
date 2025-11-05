@@ -1,0 +1,65 @@
+appId: com.zapabob.codex-viz
+productName: Codex Viz
+copyright: Copyright © 2025 zapabob
+
+directories:
+  buildResources: resources
+  output: dist-electron
+
+files:
+  - dist/**/*
+  - node_modules/**/*
+  - package.json
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  icon: resources/icon.ico
+  
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Codex Viz
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  icon: resources/icon.icns
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  gatekeeperAssess: false
+
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  icon: resources/icon.png
+  category: Development
+  desktop:
+    Name: Codex Viz
+    Comment: Repository Visualizer
+    Categories: Development;Utility;
+
+publish:
+  provider: github
+  owner: zapabob
+  repo: codex
+

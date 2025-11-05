@@ -1,0 +1,67 @@
+{
+  "mcpServers": {
+    "codex": {
+      "command": "codex",
+      "args": ["mcp-server"],
+      "env": {
+        "CODEX_WORKSPACE": "${workspaceFolder}",
+        "RUST_LOG": "info",
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "description": "Codex AI orchestration and sub-agent coordination via MCP"
+    },
+    "codex-subagent": {
+      "command": "codex",
+      "args": ["mcp-server"],
+      "env": {
+        "CODEX_WORKSPACE": "${workspaceFolder}",
+        "RUST_LOG": "info",
+        "CODEX_MODE": "subagent"
+      },
+      "description": "Direct sub-agent execution (researcher, code-reviewer, test-gen, sec-audit)"
+    },
+    "codex-deep-research": {
+      "command": "codex",
+      "args": ["mcp-server"],
+      "env": {
+        "CODEX_WORKSPACE": "${workspaceFolder}",
+        "RUST_LOG": "info",
+        "CODEX_MODE": "research"
+      },
+      "description": "Deep research with multi-source validation and citations"
+    }
+  },
+  "tools": {
+    "codex-subagent": {
+      "available_agents": [
+        "researcher",
+        "code-reviewer",
+        "test-gen",
+        "sec-audit",
+        "python-reviewer",
+        "ts-reviewer",
+        "unity-reviewer"
+      ],
+      "usage": "@code-reviewer Review this code for best practices"
+    },
+    "codex-deep-research": {
+      "parameters": {
+        "depth": "1-5 (default: 3)",
+        "max_sources": "3-20 (default: 10)",
+        "strategy": "comprehensive|focused|exploratory (default: comprehensive)"
+      },
+      "usage": "@researcher Research Rust async best practices --depth 3"
+    },
+    "codex-supervisor": {
+      "parameters": {
+        "goal": "High-level task description",
+        "agents": "Optional: specific agents to use",
+        "strategy": "parallel|sequential|hybrid (default: parallel)",
+        "merge_strategy": "concatenate|voting|highest_score (default: concatenate)"
+      },
+      "usage": "@supervisor Coordinate code review and testing"
+    }
+  }
+}
+

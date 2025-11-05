@@ -1,0 +1,373 @@
+# Codex Secure Configuration (TLS/mTLS + Encrypted Agents)
+# バージョン: v0.51.0-zapabob.1 (Secure Edition)
+# 作成日: 2025-10-28
+# 設計書: _docs/2025-10-28_セキュア通信アーキテクチャ設計書.md
+#
+# 📋 使用方法:
+#   1. zapabob/scripts/generate-mcp-certs.ps1 を実行して証明書生成
+#   2. config.toml をこのファイルで置き換えるか、設定をマージ
+#   3. codex --config config-secure.toml で起動
+
+# ==================== 基本設定 ====================
+model = "gpt-5-codex"
+
+# 🆕 MCP Client機能を有効化
+experimental_use_rmcp_client = true
+
+# 🔍 Web検索機能を有効化（モデル組み込み検索）
+enable_web_search = true
+
+# ==================== 機能フラグ ====================
+[features]
+# Web検索機能（モデル組み込み）
+web_search = true
+# MCP統合
+mcp_integration = true
+# 🔐 セキュアモード（TLS/mTLS + 暗号化）
+secure_mode = true
+
+# ==================== OpenAI Provider ====================
+[model_providers.openai]
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+name = "OpenAI (Chat Completions API)"
+requires_openai_auth = true
+wire_api = "chat"
+enable_web_search = true
+web_search_grounding = true
+
+# ==================== セキュリティ ====================
+[security]
+# ゼロトラストモード
+zero_trust_mode = true
+
+# TLS/mTLS設定
+tls_enabled = true
+tls_version = "1.3"  # TLS 1.3のみ許可（TLS 1.2以下は拒否）
+mtls_enabled = true  # 相互TLS認証（クライアント証明書必須）
+
+[security.certificates]
+# 証明書パス（~/.codex/certs/）
+ca_cert = "~/.codex/certs/ca/ca-cert.pem"
+client_cert = "~/.codex/certs/codex/codex-cert.pem"
+client_key = "~/.codex/certs/codex/codex-key.pem"
+verify_peer = true  # ピア証明書の検証を強制
+
+# 証明書ローテーション
+[security.certificates.rotation]
+enabled = true
+rotation_days = 90  # 90日ごとに自動ローテーション
+warn_before_expiry_days = 14  # 14日前に警告
+
+[security.signing]
+# Ed25519署名鍵（メッセージ署名用）
+algorithm = "Ed25519"
+signing_key = "~/.codex/keys/ed25519-signing"
+signing_public_key = "~/.codex/keys/ed25519-signing.pub"
+
+[security.encryption]
+# ペイロード暗号化
+algorithm = "AES-256-GCM"
+key_derivation = "HKDF-SHA256"
+key_rotation_days = 90
+
+[security.replay_protection]
+# リプレイ攻撃対策
+enabled = true
+nonce_store = "redis"  # "redis" or "memory" (for testing)
+redis_url = "redis://localhost:6379"
+timestamp_tolerance_sec = 300  # 5分以内のメッセージのみ受け入れ
+
+[security.rate_limiting]
+# Rate Limiting（DDoS対策）
+enabled = true
+max_requests_per_sec = 10.0
+burst_size = 20
+
+# ==================== Sandbox ====================
+[sandbox]
+default_mode = "read-only"  # デフォルトは読み取り専用
+
+[approval]
+policy = "on-request"  # 危険な操作は都度承認
+
+# ==================== エージェント通信セキュリティ ====================
+[agent_security]
+encryption_enabled = true
+signing_enabled = true
+
+[agent_security.encryption]
+algorithm = "AES-256-GCM"
+key_derivation = "HKDF-SHA256"
+
+[agent_security.signing]
+algorithm = "Ed25519"
+keys_directory = "~/.codex/keys/agents"
+
+# エージェント信頼関係（RBAC: Role-Based Access Control）
+[agent_security.trust]
+# 特権エージェント（すべてのエージェントと通信可能）
+privileged_agents = ["SecurityExpert"]
+
+# CodeExpert: 限定的な通信
+[agent_security.trust.CodeExpert]
+can_communicate_with = ["General", "TestingExpert", "DocsExpert"]
+permissions = ["read", "write"]
+
+# SecurityExpert: すべてのエージェントと通信可能（特権）
+[agent_security.trust.SecurityExpert]
+can_communicate_with = ["*"]  # ワイルドカード
+permissions = ["read", "write", "execute", "admin"]
+
+# TestingExpert: 制限あり
+[agent_security.trust.TestingExpert]
+can_communicate_with = ["CodeExpert", "General"]
+permissions = ["read", "write"]
+
+# DeepResearcher: 外部アクセス可能
+[agent_security.trust.DeepResearcher]
+can_communicate_with = ["General"]
+permissions = ["read", "network"]
+
+# DocsExpert: ドキュメント生成のみ
+[agent_security.trust.DocsExpert]
+can_communicate_with = ["General", "CodeExpert"]
+permissions = ["read", "write"]
+
+# DebugExpert: デバッグ権限
+[agent_security.trust.DebugExpert]
+can_communicate_with = ["General", "CodeExpert"]
+permissions = ["read", "write", "execute"]
+
+# PerformanceExpert: パフォーマンス測定
+[agent_security.trust.PerformanceExpert]
+can_communicate_with = ["General"]
+permissions = ["read"]
+
+# General: 汎用エージェント
+[agent_security.trust.General]
+can_communicate_with = ["*"]
+permissions = ["read"]
+
+[agent_security.rate_limiting]
+enabled = true
+max_messages_per_sec = 5.0
+
+# ==================== 監査ログ ====================
+[audit]
+enabled = true
+log_dir = "~/.codex/audit-logs"
+include_mcp_calls = true
+include_agent_messages = true
+include_security_events = true
+include_tool_args = true
+format = "json"
+rotation = "daily"
+retention_days = 90
+
+# セキュリティイベントの即時通知
+[audit.alerts]
+enabled = true
+alert_on_security_events = true
+alert_email = "security@example.com"
+alert_slack_webhook = "${SLACK_SECURITY_WEBHOOK}"
+
+# 重要イベントの閾値
+[audit.thresholds]
+# mTLS認証失敗が5分間に10回以上でアラート
+mtls_auth_failures_per_5min = 10
+# 署名検証失敗が5分間に5回以上でアラート
+signature_failures_per_5min = 5
+# Rate Limit超過が5分間に100回以上でアラート
+rate_limit_exceeded_per_5min = 100
+
+# ==================== MCP サーバー（セキュア版） ====================
+# 🔒 すべてのMCPサーバーでTLS/mTLS有効化
+
+# Codex MCP Server - メインサーバー（TLS/mTLS）
+[mcp_servers.codex]
+command = "codex"
+args = ["mcp-server"]
+env.RUST_LOG = "info"
+env.OPENAI_API_KEY = "${OPENAI_API_KEY}"
+env.GITHUB_TOKEN = "${GITHUB_TOKEN}"
+env.SLACK_WEBHOOK_URL = "${SLACK_WEBHOOK_URL}"
+startup_timeout_sec = 60
+
+# 🔒 TLS/mTLS設定
+transport = "https"  # 🆕 HTTPSに変更（stdio→TCP+TLS）
+bind_address = "127.0.0.1:8001"
+tls_cert = "~/.codex/certs/mcp-servers/codex-cert.pem"
+tls_key = "~/.codex/certs/mcp-servers/codex-key.pem"
+require_client_cert = true  # mTLS必須
+
+# 🔐 認証設定
+auth_method = "mtls"  # mTLS認証
+trusted_ca = "~/.codex/certs/ca/ca-cert.pem"
+
+# Serena - AIオーケストレーション（TLS/mTLS）
+[mcp_servers.serena]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-everything"]
+transport = "https"
+bind_address = "127.0.0.1:8002"
+tls_cert = "~/.codex/certs/mcp-servers/serena-cert.pem"
+tls_key = "~/.codex/certs/mcp-servers/serena-key.pem"
+require_client_cert = true
+auth_method = "mtls"
+
+# Gemini CLI - Google Gemini AI統合（TLS/mTLS）
+[mcp_servers.codex-gemini-mcp]
+command = "codex-gemini-mcp"
+args = []
+transport = "https"
+bind_address = "127.0.0.1:8003"
+tls_cert = "~/.codex/certs/mcp-servers/gemini-cli-cert.pem"
+tls_key = "~/.codex/certs/mcp-servers/gemini-cli-key.pem"
+require_client_cert = true
+auth_method = "mtls"
+
+# Filesystem - ファイル操作（TLS/mTLS）
+[mcp_servers.filesystem]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "C:\\Users\\downl\\Desktop\\codex"]
+transport = "https"
+bind_address = "127.0.0.1:8004"
+tls_cert = "~/.codex/certs/mcp-servers/filesystem-cert.pem"
+tls_key = "~/.codex/certs/mcp-servers/filesystem-key.pem"
+require_client_cert = true
+auth_method = "mtls"
+
+# GitHub - GitHub API（TLS/mTLS）
+[mcp_servers.github]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env.GITHUB_PERSONAL_ACCESS_TOKEN = "${GITHUB_TOKEN}"
+transport = "https"
+bind_address = "127.0.0.1:8005"
+tls_cert = "~/.codex/certs/mcp-servers/github-cert.pem"
+tls_key = "~/.codex/certs/mcp-servers/github-key.pem"
+require_client_cert = true
+auth_method = "mtls"
+
+# Chrome DevTools - ブラウザ自動化（TLS/mTLS）
+[mcp_servers.chrome-devtools]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-chrome"]
+transport = "https"
+bind_address = "127.0.0.1:8006"
+tls_cert = "~/.codex/certs/mcp-servers/chrome-devtools-cert.pem"
+tls_key = "~/.codex/certs/mcp-servers/chrome-devtools-key.pem"
+require_client_cert = true
+auth_method = "mtls"
+
+# Sequential Thinking - 段階的思考（TLS/mTLS）
+[mcp_servers.sequential-thinking]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+transport = "https"
+bind_address = "127.0.0.1:8007"
+tls_cert = "~/.codex/certs/mcp-servers/sequential-thinking-cert.pem"
+tls_key = "~/.codex/certs/mcp-servers/sequential-thinking-key.pem"
+require_client_cert = true
+auth_method = "mtls"
+
+# ... (他のMCPサーバーも同様にTLS/mTLS設定)
+
+# ==================== サブエージェント ====================
+[subagents]
+enabled = true
+max_parallel = 4
+token_budget = 40000
+inherit_model = true
+use_codex_mcp = true
+
+# 🔐 セキュア通信有効化
+secure_channel = true
+encryption_enabled = true
+signing_enabled = true
+
+# ==================== Deep Research ====================
+[deep_research]
+enabled = true
+default_backend = "gemini"  # Gemini Search Grounding
+fallback_backends = ["duckduckgo", "google", "bing"]
+max_sources = 10
+citation_style = "academic"
+
+# ==================== セキュリティモニタリング ====================
+[monitoring]
+enabled = true
+prometheus_endpoint = "http://localhost:9090"
+grafana_dashboard_url = "http://localhost:3000/d/codex-security"
+
+[monitoring.metrics]
+# 収集するメトリクス
+collect_tls_metrics = true
+collect_auth_metrics = true
+collect_rate_limit_metrics = true
+collect_agent_metrics = true
+
+[monitoring.export]
+# メトリクスのエクスポート
+format = "prometheus"
+export_interval_sec = 30
+
+# ==================== バックアップ ====================
+[backup]
+enabled = true
+backup_dir = "~/.codex/backups"
+backup_interval_hours = 24
+retention_days = 30
+
+# バックアップ対象
+[backup.targets]
+include_certs = true
+include_keys = true
+include_audit_logs = true
+include_config = true
+
+# ==================== コンプライアンス ====================
+[compliance]
+# ISO 27001準拠モード
+iso27001_mode = true
+
+# GDPR準拠
+gdpr_mode = true
+data_retention_days = 90
+
+# SOC 2 Type II
+soc2_mode = true
+
+[compliance.reporting]
+# コンプライアンスレポート生成
+enabled = true
+report_dir = "~/.codex/compliance-reports"
+report_frequency = "monthly"
+
+# ==================== 開発者モード ====================
+[developer]
+# 開発時はセキュリティを緩和（本番環境では無効化）
+development_mode = false
+
+[developer.overrides]
+# 開発時のみ有効（本番では必ず false）
+disable_tls = false
+disable_mtls = false
+disable_encryption = false
+disable_signing = false
+disable_rate_limiting = false
+
+# ==================== END OF CONFIG ====================
+
+# 📚 参照ドキュメント:
+#   - セキュア通信アーキテクチャ設計書: _docs/2025-10-28_セキュア通信アーキテクチャ設計書.md
+#   - 証明書生成スクリプト: zapabob/scripts/generate-mcp-certs.ps1
+#   - 監査ログ仕様: codex-rs/core/src/audit_log/
+#
+# ⚠️ セキュリティ注意事項:
+#   - 本番環境では必ず証明書を生成してください
+#   - 秘密鍵（*-key.pem）は絶対にGitにコミットしないでください
+#   - CA秘密鍵（ca-key.pem）はオフラインバックアップを推奨
+#   - 証明書は90日ごとにローテーションしてください
+

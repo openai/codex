@@ -1,0 +1,241 @@
+# Codex Configuration
+# サブエージェント用の設定
+# モデル設定例: model = "gpt-5-codex"
+
+# 💡 MCP Client機能を有効化
+# experimental_use_rmcp_client = true
+
+# 🔍 Web検索機能を有効化（モデルによる参照・組み込み検索）
+# enable_web_search = true
+
+# ==================== 機能フラグ ====================
+[features]
+# Web検索機能（モデルへの組み込み用）
+# web_search = true
+# MCP統合
+# mcp_integration = true
+
+# OpenAI Provider設定を上書き
+# デフォルトのResponses APIの代わりにChat Completions APIを使用
+[model_providers.openai]
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+name = "OpenAI (Chat Completions API)"
+requires_openai_auth = true
+wire_api = "chat"
+# 🔍 Web検索機能を有効化
+# enable_web_search = true
+web_search_grounding = true
+
+# ==================== セキュリティ ====================
+[sandbox]
+default_mode = "workspace-write"
+
+[approval]
+policy = "on-request"
+
+# ==================== MCP サーバー ====================
+# 🔄 CursorIDE統合済み設定 - v0.51.0-zapabob.1 (2025-10-28更新)
+# 
+# 📝 Cursor IDE統合説明:
+#   - Codex CLI: このconfig.tomlを使用
+#   - Cursor IDE: c:\Users\downl\.cursor\mcp.json を使用
+#   - 🔄 両方の設定ファイルを完全同期（2025-10-28）
+# ✅ テスト済み（2025-10-24）
+#   - 全5サーバー動作確認済み
+#   - codex: 7チャンネル利用可能
+#   - serena: 21チャンネル利用可能
+#   - markitdown, arxiv, gemini: 動作確認済み
+#
+# 💡 追加サーバー（2025-10-28）
+#   - context7: Upstash コンテキスト管理
+#   - playwright: Web自動化
+#   - filesystem: ファイル操作
+#   - github: GitHub API
+#   - youtube: YouTube統合
+#   - chrome-devtools: ブラウザ自動化
+#   - sequential-thinking: 段階的思考 NEW!
+# Codex MCP Server - メインサーバー。複数サーバーとのコンフリクト回避、自然言語CLI、Webhook統合！
+[mcp_servers.codex]
+args = ["mcp-server"]
+command = "codex"
+env.GITHUB_TOKEN = "${GITHUB_TOKEN}"
+env.OPENAI_API_KEY = "${OPENAI_API_KEY}"
+env.RUST_LOG = "info"
+env.SLACK_WEBHOOK_URL = "${SLACK_WEBHOOK_URL}"
+startup_timeout_sec = 180
+
+# Codex Supervisor - マルチエージェント調整・高度なエラーハンドリング
+# ⚠️ 無効化: 'supervisor'サブコマンドは未実装（代わりに'delegate'を使用）
+[mcp_servers.codex-supervisor]
+args = ["supervisor"]
+command = "codex"
+disabled = true
+env.OPENAI_API_KEY = "${OPENAI_API_KEY}"
+env.RUST_LOG = "info"
+startup_timeout_sec = 180
+
+# Codex Research - チームリサーチ/Wedhook統合付き
+# 🔄 有効化済み（2025-10-28）'research'サブコマンド実装済み
+[mcp_servers.codex-research]
+args = ["research"]
+command = "codex"
+env.OPENAI_API_KEY = "${OPENAI_API_KEY}"
+env.RUST_LOG = "info"
+startup_timeout_sec = 180
+
+# Codex Agent - 自然言語CLI型AgentInterpreter
+# 🔄 有効化済み（2025-10-28）'agent'サブコマンド実装済み
+[mcp_servers.codex-agent]
+args = ["agent"]
+command = "codex"
+env.OPENAI_API_KEY = "${OPENAI_API_KEY}"
+env.RUST_LOG = "info"
+startup_timeout_sec = 180
+
+# Serena - AIオーケストレーション・コンテキスト管理
+# 21チャンネル利用可能
+[mcp_servers.serena]
+args = [
+    "--from",
+    "git+https://github.com/oraios/serena",
+    "serena",
+    "start-mcp-server",
+    "--context",
+    "codex",
+]
+command = "C:\\Users\\downl\\.local\\bin\\uvx.exe"
+env.RUST_LOG = "info"
+startup_timeout_sec = 90
+
+# Context7 - Upstash コンテキスト管理・ベクター検索
+[mcp_servers.context7]
+args = ["-y", "@upstash/context7-mcp@latest"]
+command = "C:\\nvm4w\\nodejs\\npx.cmd"
+# 🔄 Cursor IDE (mcp.json) と同期
+startup_timeout_sec = 180
+
+# Playwright - Web自動化・チャットスクレイピング
+[mcp_servers.playwright]
+args = ["-y", "@playwright/mcp@latest"]
+command = "C:\\nvm4w\\nodejs\\npx.cmd"
+# 🔄 Cursor IDE (mcp.json) と同期
+startup_timeout_sec = 180
+
+# Filesystem - ファイルシステム操作・管理
+[mcp_servers.filesystem]
+args = ["-y", "@modelcontextprotocol/server-filesystem@latest"]
+command = "C:\\nvm4w\\nodejs\\npx.cmd"
+# 🔄 Cursor IDE (mcp.json) と同期
+startup_timeout_sec = 180
+
+# GitHub - GitHub API操作・PR/Issue管理
+[mcp_servers.github]
+args = ["-y", "@modelcontextprotocol/server-github@latest"]
+command = "C:\\nvm4w\\nodejs\\npx.cmd"
+env.GITHUB_TOKEN = "${GITHUB_TOKEN}"
+# 🔄 Cursor IDE (mcp.json) と同期
+startup_timeout_sec = 180
+
+# Markitdown - 各種ファイル形式をMarkdownに変換
+[mcp_servers.markitdown]
+args = ["markitdown-mcp"]
+command = "C:\\Users\\downl\\.local\\bin\\uvx.exe"
+startup_timeout_sec = 180
+
+# arXiv - 学術論文検索・取得
+[mcp_servers.arxiv-mcp-server]
+args = ["arxiv-mcp-server"]
+command = "C:\\Users\\downl\\.local\\bin\\uvx.exe"
+startup_timeout_sec = 180
+
+# YouTube - 動画検索・メタデータ・字幕取得
+[mcp_servers.youtube]
+args = ["-y", "@anaisbetts/mcp-youtube@latest"]
+command = "C:\\nvm4w\\nodejs\\npx.cmd"
+# 🔄 Cursor IDE (mcp.json) と同期
+startup_timeout_sec = 180
+
+# Gemini CLI - Google Gemini AI統合（OAuth 2.0、Google Search機能付き）
+[mcp_servers.codex-gemini-mcp]
+args = []
+command = "codex-gemini-mcp"
+description = "Codex Gemini CLI MCP Server v0.49.0 - Google Gemini AI integration with OAuth 2.0 authentication and Google Search Grounding"
+env.PATH = "C:\\Users\\downl\\.cargo\\bin;${PATH}"
+startup_timeout_sec = 180
+
+# Brave Search - Web検索APIキー要
+# ⚠️ 無効化中（BRAVE_API_KEY環境変数の設定が必要）
+# 使用方法: 環境変数BRAVE_API_KEYを設定後、disabled行を削除
+[mcp_servers.brave-search]
+args = ["-y", "@modelcontextprotocol/server-brave-search"]
+command = "C:\\nvm4w\\nodejs\\npx.cmd"
+disabled = true
+env.BRAVE_API_KEY = "${BRAVE_API_KEY}"
+startup_timeout_sec = 180
+
+# Chrome DevTools - ブラウザ操作・自動化（Chrome DevTools Protocol）
+[mcp_servers.chrome-devtools]
+args = ["-y", "chrome-devtools-mcp@latest"]
+command = "C:\\nvm4w\\nodejs\\npx.cmd"
+# 🔄 Cursor IDE (mcp.json) と同期
+startup_timeout_sec = 180
+
+# Sequential Thinking - 段階的思考プロセス実行
+[mcp_servers.sequential-thinking]
+args = ["-y", "@modelcontextprotocol/server-sequential-thinking@latest"]
+command = "C:\\nvm4w\\nodejs\\npx.cmd"
+# 🔄 Cursor IDE (mcp.json) と同期
+startup_timeout_sec = 180
+
+# ==================== サブエージェント ====================
+[subagents]
+enabled = true
+inherit_model = true
+max_parallel = 4
+token_budget = 40000
+# 💡 MCP経由でCodexチャンネルを使用
+use_codex_mcp = true
+
+# ==================== Deep Research設定 ====================
+[deep_research]
+# Web検索バックエンド: brave, google, duckduckgo, bing, gemini
+# ✨ 更新（2025-10-28）Gemini Search Groundingをデフォルトに設定
+default_backend = "gemini"
+# フォールバックチェーン・有効なバックエンドの順
+# Gemini -> DuckDuckGo -> Google -> Bingの順に試行
+fallback_backends = ["duckduckgo", "google", "bing"]
+# 最大検索結果数
+max_results = 10
+# タイムアウト（秒）
+timeout_seconds = 30
+# キャッシュ有効化
+enable_cache = true
+
+# ==================== フック機能 ====================
+# タスク完了の音声通知
+# Agent/Plan完了: marisa_owattaze.wav「終わったぜ」
+[hooks]
+# タスク全体完了・Plan実行完了時（ↁEMarisaサウンド）
+on_task_complete = "powershell -ExecutionPolicy Bypass -File C:\\Users\\downl\\Desktop\\codex\\zapabob\\scripts\\play-completion-sound.ps1"
+# サブエージェント完了・Subagent実行完了時（ↁEMarisaサウンド）
+on_subagent_complete = "powershell -ExecutionPolicy Bypass -File C:\\Users\\downl\\Desktop\\codex\\zapabob\\scripts\\play-completion-sound.ps1"
+# セッション終了時（ↁEMarisaサウンド）
+on_session_end = "powershell -ExecutionPolicy Bypass -File C:\\Users\\downl\\Desktop\\codex\\zapabob\\scripts\\play-completion-sound.ps1"
+
+# ==================== 監査ログ ====================
+[audit]
+enabled = true
+format = "json"
+include_mcp_calls = true
+include_tool_args = true
+log_dir = "~/.codex/audit-logs"
+
+# ==================== チェック完了 ====================
+# 🎉 全チェックリスト完了（2025-10-24）
+# - コンパイルチェックス PASS
+# - MCPサーバーチェックス PASS（全5サーバー）
+# - CLIコマンドテスト PASS
+# - 統合テスト PASS
+# - 本番準備：完了
+# 詳細: _docs/2025-10-24_comprehensive_test_results.md

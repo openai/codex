@@ -1,0 +1,57 @@
+name: "refactorer"
+goal: "Refactor code to improve maintainability, performance, and readability. Identify code smells, extract reusable components, optimize algorithms, and reduce technical debt."
+tools:
+  mcp:
+    # Codex専用MCPツール
+    - codex_read_file
+    - codex_grep
+    - codex_codebase_search
+    - codex_write_file
+    - codex_search_replace
+    # 汎用MCPツール
+    - grep
+    - read_file
+    - codebase_search
+    - write
+    - search_replace
+  fs:
+    read: true
+    write:
+      - "./src"
+      - "./lib"
+      - "./app"
+      - "./components"
+      - "./artifacts"
+      - "./refactoring-reports"
+  net:
+    allow:
+      - "https://refactoring.guru/*"
+      - "https://martinfowler.com/*"
+      - "https://docs.rs/*"
+      - "https://doc.rust-lang.org/*"
+  shell:
+    exec:
+      - cargo
+      - npm
+      - rustfmt
+      - clippy
+      - prettier
+      - eslint
+policies:
+  context:
+    max_tokens: 50000
+    retention: "job"
+  secrets:
+    redact: true
+success_criteria:
+  - "Identify code smells and anti-patterns"
+  - "Extract duplicated code into reusable functions/modules"
+  - "Optimize performance-critical sections"
+  - "Improve code readability and maintainability"
+  - "Reduce cyclomatic complexity"
+  - "Follow SOLID principles and design patterns"
+  - "Ensure refactored code passes all existing tests"
+artifacts:
+  - "artifacts/refactoring-report.md"
+  - "refactoring-reports/changes-summary.json"
+

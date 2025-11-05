@@ -1,0 +1,30 @@
+{
+  "name": "@codex/orchestrator",
+  "version": "0.1.0",
+  "description": "ClaudeCode-style autonomous sub-agent orchestration for Codex",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "codex",
+    "orchestration",
+    "agents",
+    "mcp",
+    "ai"
+  ],
+  "author": "zapabob",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "jest": "^29.7.0",
+    "typescript": "^5.6.0"
+  },
+  "dependencies": {},
+  "engines": {
+    "node": ">=22"
+  }
+}

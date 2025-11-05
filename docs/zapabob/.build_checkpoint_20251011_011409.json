@@ -1,0 +1,22 @@
+{
+  "session_id": "20251011_011409",
+  "completed_steps": [
+    "clean",
+    "deep-research",
+    "core-binaries:codex-tui"
+  ],
+  "current_step": "core-binaries",
+  "build_times": {
+    "deep-research": 0.736476,
+    "codex-tui": 538.262523,
+    "codex-mcp-server": 155.688043
+  },
+  "errors": [
+    {
+      "cmd": "cargo build --release -p codex-mcp-server",
+      "error": "",
+      "timestamp": "2025-10-11T01:25:44.662116"
+    }
+  ],
+  "timestamp": "2025-10-11T01:25:44.663122"
+}

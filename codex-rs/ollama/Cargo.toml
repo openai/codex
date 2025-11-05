@@ -1,0 +1,31 @@
+[package]
+edition = "2024"
+name = "codex-ollama"
+version = { workspace = true }
+
+[lib]
+name = "codex_ollama"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+async-stream = { workspace = true }
+bytes = { workspace = true }
+codex-core = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+tracing = { workspace = true, features = ["log"] }
+wiremock = { workspace = true }
+
+[dev-dependencies]
+assert_matches = { workspace = true }

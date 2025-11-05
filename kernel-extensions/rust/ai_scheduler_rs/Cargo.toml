@@ -1,0 +1,30 @@
+[package]
+name = "ai-scheduler-rs"
+version = "0.2.0"
+edition = "2024"
+authors = ["zapabob"]
+license = "GPL-2.0"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# No dependencies for maximum portability
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.test]
+panic = "unwind"
+
+[lints.rust]
+warnings = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+pedantic = "warn"
+

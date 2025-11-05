@@ -1,0 +1,77 @@
+[package]
+edition = "2024"
+name = "codex-wasm-cli"
+version = "0.83.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+console_error_panic_hook = "0.1"
+console_log = "1"
+futures = "0.3"
+js-sys = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+tokio = { version = "1.42", features = ["sync"] }
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "console",
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "Node",
+    "EventTarget",
+    "Event",
+    "KeyboardEvent",
+    "MouseEvent",
+    "FocusEvent",
+    "AbortController",
+    "AbortSignal",
+    "ReadableStream",
+    "WritableStream",
+    "Headers",
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "Body",
+    "Blob",
+    "Url",
+    "UrlSearchParams",
+    "File",
+    "FileList",
+    "FormData",
+    "Worker",
+    "WorkerOptions",
+    "MessageEvent",
+    "ErrorEvent",
+    "DedicatedWorkerGlobalScope",
+    "WorkerGlobalScope",
+    "MessagePort",
+    "BroadcastChannel",
+    "IdbFactory",
+    "IdbDatabase",
+    "IdbObjectStore",
+    "IdbIndex",
+    "IdbKeyRange",
+    "IdbCursor",
+    "IdbTransaction",
+    "IdbOpenDbRequest",
+    "IdbRequest",
+    "DomException",
+    "DomStringList",
+    "Storage",
+    "Navigator",
+    "Performance",
+    "PerformanceTiming",
+    "PerformanceNavigation",
+] }
+
+# Temporarily remove complex dependencies to avoid conflicts
+# TODO: Add back when WASM support is more mature
+
+[dependencies.wasm-bindgen]
+features = ["serde-serialize"]
+version = "0.2"

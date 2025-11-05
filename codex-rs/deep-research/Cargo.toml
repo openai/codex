@@ -1,0 +1,30 @@
+[package]
+edition.workspace = true
+name = "codex-deep-research"
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+codex-rmcp-client = { path = "../rmcp-client" }
+mcp-types = { path = "../mcp-types" }
+regex.workspace = true
+reqwest.workspace = true
+rmcp.workspace = true
+scraper = "0.24"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+urlencoding = { workspace = true }
+
+[dev-dependencies]
+codex-core = { path = "../core" }
+criterion = { version = "0.7", features = ["async_tokio"] }
+pretty_assertions.workspace = true
+tokio-test.workspace = true
+
+[[bench]]
+harness = false
+name = "performance"

@@ -1,0 +1,165 @@
+graph TB
+    subgraph UI["🖥️ User Interface Layer"]
+        CLI["CLI<br/>codex [OPTIONS] [PROMPT]<br/>12 subcommands"]
+        TUI["TUI<br/>Interactive Terminal UI<br/>Real-time rendering"]
+        Cursor["Cursor IDE<br/>MCP Integration<br/>mcp.json sync"]
+        NaturalCLI["Natural Language CLI<br/>codex agent 'task'<br/>Intent parsing"]
+    end
+
+    subgraph Core["🧠 Core Layer - codex-core v0.51.0"]
+        Codex["Codex<br/>Main orchestrator<br/>Event-driven"]
+        ConvMgr["ConversationManager<br/>History management<br/>Token tracking"]
+        AuthMgr["AuthManager<br/>Keyring/File storage<br/>OAuth 2.0"]
+        Config["Config<br/>TOML parser<br/>Override system"]
+    end
+
+    subgraph Orchestration["🎯 Orchestration Layer - rmcp 0.8.3"]
+        TaskAnalyzer["TaskAnalyzer<br/>Complexity: 0-1.0<br/>Skill detection"]
+        AutoOrch["AutoOrchestrator<br/>Strategy: Parallel/Sequential<br/>Dynamic dispatch"]
+        CollabStore["CollaborationStore<br/>Message passing<br/>Priority queue"]
+        ConflictRes["ConflictResolver<br/>3 merge strategies<br/>FileEditTracker"]
+    end
+
+    subgraph Agents["🤖 Sub-Agent System (8 Agents)"]
+        AgentRuntime["AgentRuntime<br/>Lifecycle management<br/>Token budget: 40k"]
+        CodeReviewer["code-reviewer<br/>Security + Best practices"]
+        SecAudit["sec-audit<br/>OWASP Top 10<br/>CVE scanning"]
+        TestGen["test-gen<br/>Unit/Integration/E2E<br/>Coverage 80%+"]
+        Researcher["researcher<br/>Multi-source validation"]
+        PythonRev["python-reviewer"]
+        TSRev["ts-reviewer"]
+        UnityRev["unity-reviewer"]
+        CustomAgent["Custom Agents<br/>User-defined YAML"]
+    end
+
+    subgraph DeepResearch["🔍 Deep Research Engine v0.51.0"]
+        Pipeline["Research Pipeline<br/>Planner + Executor"]
+        SearchProvider["Search Provider<br/>Cache TTL: 1h"]
+        Gemini["Gemini Search Grounding<br/>Google Search API<br/>OAuth 2.0 (default)"]
+        DuckDuckGo["DuckDuckGo<br/>No API key<br/>Fallback #1"]
+        GoogleSearch["Google Search<br/>Fallback #2"]
+        BingSearch["Bing Search<br/>Fallback #3"]
+        Citation["Citation Manager<br/>Source tracking<br/>Confidence scoring"]
+        Contradiction["Contradiction Checker<br/>Cross-validation<br/>Conflict detection"]
+    end
+
+    subgraph MCP["🔗 MCP Integration (15 Servers)"]
+        CodexMCP["codex mcp-server<br/>7 tools<br/>Self-hosted"]
+        ResearchMCP["codex-research<br/>Deep research<br/>NEW v0.51.0"]
+        AgentMCP["codex-agent<br/>Natural language<br/>NEW v0.51.0"]
+        GeminiMCP["codex-gemini-mcp<br/>Google Gemini<br/>Search Grounding"]
+        SerenaMCP["serena<br/>21 tools<br/>Code intelligence"]
+        ArxivMCP["arxiv-mcp-server<br/>Academic papers"]
+        ChromeMCP["chrome-devtools<br/>Browser automation"]
+        PlaywrightMCP["playwright<br/>Web testing"]
+        SeqThink["sequential-thinking<br/>Step-by-step reasoning<br/>NEW v0.51.0"]
+        OtherMCP["+ 6 more servers<br/>filesystem, github,<br/>youtube, etc."]
+    end
+
+    subgraph Tools["🛠️ Tools & Execution"]
+        ToolRouter["ToolRouter<br/>Dynamic dispatch"]
+        ToolCallRuntime["ToolCallRuntime<br/>Parallel execution<br/>3x speedup"]
+        ExecEngine["ExecEngine<br/>Sandboxed execution<br/>Approval system"]
+        ApplyPatch["ApplyPatch<br/>Git-style merging<br/>Conflict markers"]
+    end
+
+    subgraph External["🌐 External Integrations"]
+        GitHub["GitHub API<br/>PR/Issue management<br/>Webhooks"]
+        Slack["Slack<br/>Channel notifications<br/>Webhooks"]
+        Audio["Audio System<br/>marisa_owattaze.wav<br/>Task completion"]
+        Hooks["Hook System<br/>on_task_complete<br/>on_subagent_complete"]
+    end
+
+    subgraph Storage["💾 Storage & State"]
+        Sessions["Session Manager<br/>Conversation history<br/>Resume capability"]
+        AuditLog["Audit Logger<br/>JSON format<br/>Token tracking"]
+        Cache["Cache System<br/>Search results<br/>MCP responses"]
+    end
+
+    %% User Interface connections
+    CLI --> Codex
+    TUI --> Codex
+    Cursor --> CodexMCP
+    NaturalCLI --> AgentRuntime
+
+    %% Core connections
+    Codex --> ConvMgr
+    Codex --> AuthMgr
+    Codex --> Config
+    Codex --> TaskAnalyzer
+
+    %% Orchestration flow
+    TaskAnalyzer -->|complexity > 0.7| AutoOrch
+    AutoOrch --> CollabStore
+    CollabStore --> AgentRuntime
+    AutoOrch --> ConflictRes
+
+    %% Agent system
+    AgentRuntime --> CodeReviewer
+    AgentRuntime --> SecAudit
+    AgentRuntime --> TestGen
+    AgentRuntime --> Researcher
+    AgentRuntime --> PythonRev
+    AgentRuntime --> TSRev
+    AgentRuntime --> UnityRev
+    AgentRuntime --> CustomAgent
+
+    %% Deep Research flow
+    Researcher --> Pipeline
+    Pipeline --> SearchProvider
+    SearchProvider --> Gemini
+    SearchProvider -->|fallback| DuckDuckGo
+    SearchProvider -->|fallback| GoogleSearch
+    SearchProvider -->|fallback| BingSearch
+    SearchProvider --> Citation
+    Citation --> Contradiction
+
+    %% MCP connections
+    CodexMCP --> Codex
+    ResearchMCP --> Pipeline
+    AgentMCP --> AgentRuntime
+    GeminiMCP --> Gemini
+    SerenaMCP --> ToolRouter
+    ArxivMCP --> Pipeline
+    ChromeMCP --> ToolRouter
+    PlaywrightMCP --> ToolRouter
+    SeqThink --> Codex
+
+    %% Tools integration
+    Codex --> ToolRouter
+    ToolRouter --> ToolCallRuntime
+    ToolRouter --> ExecEngine
+    ToolRouter --> ApplyPatch
+
+    %% External integrations
+    Hooks --> GitHub
+    Hooks --> Slack
+    Hooks --> Audio
+    Codex --> Hooks
+
+    %% Storage connections
+    ConvMgr --> Sessions
+    Codex --> AuditLog
+    SearchProvider --> Cache
+
+    %% Styling
+    classDef uiClass fill:#e1f5ff,stroke:#01579b,stroke-width:3px,color:#000
+    classDef coreClass fill:#fff9c4,stroke:#f57f17,stroke-width:3px,color:#000
+    classDef orchClass fill:#f3e5f5,stroke:#4a148c,stroke-width:3px,color:#000
+    classDef agentClass fill:#e8f5e9,stroke:#1b5e20,stroke-width:3px,color:#000
+    classDef researchClass fill:#e3f2fd,stroke:#0d47a1,stroke-width:3px,color:#000
+    classDef mcpClass fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#000
+    classDef toolClass fill:#fce4ec,stroke:#880e4f,stroke-width:2px,color:#000
+    classDef externalClass fill:#f1f8e9,stroke:#33691e,stroke-width:2px,color:#000
+    classDef storageClass fill:#eceff1,stroke:#37474f,stroke-width:2px,color:#000
+
+    class CLI,TUI,Cursor,NaturalCLI uiClass
+    class Codex,ConvMgr,AuthMgr,Config coreClass
+    class TaskAnalyzer,AutoOrch,CollabStore,ConflictRes orchClass
+    class AgentRuntime,CodeReviewer,SecAudit,TestGen,Researcher,PythonRev,TSRev,UnityRev,CustomAgent agentClass
+    class Pipeline,SearchProvider,Gemini,DuckDuckGo,GoogleSearch,BingSearch,Citation,Contradiction researchClass
+    class CodexMCP,ResearchMCP,AgentMCP,GeminiMCP,SerenaMCP,ArxivMCP,ChromeMCP,PlaywrightMCP,SeqThink,OtherMCP mcpClass
+    class ToolRouter,ToolCallRuntime,ExecEngine,ApplyPatch toolClass
+    class GitHub,Slack,Audio,Hooks externalClass
+    class Sessions,AuditLog,Cache storageClass
+

@@ -1,0 +1,620 @@
+﻿cargo :   Installing codex-cli v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\cli)
+    + CategoryInfo          : NotSpecified: (  Installing co...n\codex-rs\cli):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Updating git repository `https://github.com/nornagon/ratatui`
+    Updating crates.io index
+     Locking 605 packages to latest compatible versions
+      Adding askama v0.12.1 (available: v0.14.0)
+      Adding axum v0.7.9 (available: v0.8.6)
+      Adding core-foundation v0.9.4 (available: v0.10.1)
+      Adding crossterm v0.28.1 (available: v0.29.0)
+      Adding ctor v0.5.0 (available: v0.6.0)
+      Adding matchit v0.8.4 (available: v0.8.6)
+      Adding opentelemetry v0.30.0 (available: v0.31.0)
+      Adding opentelemetry-appender-tracing v0.30.1 (available: v0.31.1)
+      Adding opentelemetry-otlp v0.30.0 (available: v0.31.0)
+      Adding opentelemetry-semantic-conventions v0.30.0 (available: v0.31.0)
+      Adding opentelemetry_sdk v0.30.0 (available: v0.31.0)
+      Adding pulldown-cmark v0.10.3 (available: v0.13.0)
+      Adding schemars v0.8.22 (available: v1.0.4)
+      Adding scraper v0.18.1 (available: v0.24.0)
+      Adding tonic v0.13.1 (available: v0.14.2)
+      Adding unicode-width v0.2.1 (available: v0.2.2)
+      Adding which v6.0.3 (available: v8.0.0)
+   Compiling proc-macro2 v1.0.101
+   Compiling unicode-ident v1.0.19
+   Compiling quote v1.0.41
+   Compiling cfg-if v1.0.3
+   Compiling memchr v2.7.6
+   Compiling windows-link v0.2.1
+   Compiling smallvec v1.15.1
+   Compiling pin-project-lite v0.2.16
+   Compiling itoa v1.0.15
+   Compiling log v0.4.28
+   Compiling serde_core v1.0.228
+   Compiling once_cell v1.21.3
+   Compiling equivalent v1.0.2
+   Compiling futures-core v0.3.31
+   Compiling parking_lot_core v0.9.12
+   Compiling windows_x86_64_msvc v0.52.6
+   Compiling scopeguard v1.2.0
+   Compiling hashbrown v0.16.0
+   Compiling bytes v1.10.1
+   Compiling lock_api v0.4.14
+   Compiling tracing-core v0.1.34
+   Compiling serde v1.0.228
+   Compiling windows-sys v0.61.2
+   Compiling zerocopy v0.8.27
+   Compiling indexmap v2.11.4
+   Compiling futures-sink v0.3.31
+   Compiling stable_deref_trait v1.2.1
+   Compiling ryu v1.0.20
+   Compiling futures-task v0.3.31
+   Compiling windows-targets v0.52.6
+   Compiling slab v0.4.11
+   Compiling futures-channel v0.3.31
+   Compiling futures-io v0.3.31
+   Compiling pin-utils v0.1.0
+   Compiling fnv v1.0.7
+   Compiling parking_lot v0.12.5
+   Compiling windows-sys v0.59.0
+   Compiling windows-link v0.1.3
+   Compiling http v1.3.1
+   Compiling serde_json v1.0.145
+   Compiling find-msvc-tools v0.1.4
+   Compiling syn v2.0.106
+   Compiling shlex v1.3.0
+   Compiling windows-result v0.3.4
+   Compiling windows-strings v0.4.2
+   Compiling percent-encoding v2.3.2
+   Compiling writeable v0.6.1
+   Compiling libc v0.2.177
+   Compiling litemap v0.8.0
+   Compiling cc v1.2.41
+   Compiling getrandom v0.3.3
+   Compiling http-body v1.0.1
+   Compiling bitflags v2.9.4
+   Compiling tower-service v0.3.3
+   Compiling base64 v0.22.1
+   Compiling thiserror v2.0.17
+   Compiling httparse v1.10.1
+   Compiling mime v0.3.17
+   Compiling atomic-waker v1.1.2
+   Compiling mio v1.0.4
+   Compiling socket2 v0.6.0
+   Compiling try-lock v0.2.5
+   Compiling httpdate v1.0.3
+   Compiling want v0.3.1
+   Compiling http-body-util v0.1.3
+   Compiling anyhow v1.0.100
+   Compiling windows-registry v0.5.3
+   Compiling aho-corasick v1.1.3
+   Compiling sync_wrapper v1.0.2
+   Compiling getrandom v0.2.16
+   Compiling icu_normalizer_data v2.0.0
+   Compiling regex-syntax v0.8.7
+   Compiling icu_properties_data v2.0.1
+   Compiling zeroize v1.8.2
+   Compiling ident_case v1.0.1
+   Compiling synstructure v0.13.2
+   Compiling ipnet v2.11.0
+   Compiling strsim v0.11.1
+   Compiling tower-layer v0.3.3
+   Compiling rand_core v0.6.4
+   Compiling ring v0.17.14
+   Compiling rustls-pki-types v1.12.0
+   Compiling windows_x86_64_msvc v0.53.1
+   Compiling schannel v0.1.28
+   Compiling version_check v0.9.5
+   Compiling untrusted v0.9.0
+   Compiling form_urlencoded v1.2.2
+   Compiling autocfg v1.5.0
+   Compiling ppv-lite86 v0.2.21
+   Compiling heck v0.5.0
+   Compiling native-tls v0.2.14
+   Compiling utf8_iter v1.0.4
+   Compiling regex-automata v0.4.12
+   Compiling rand_chacha v0.3.1
+   Compiling rustls v0.23.32
+   Compiling windows-targets v0.53.5
+   Compiling num-traits v0.2.19
+   Compiling serde_derive v1.0.228
+   Compiling tracing-attributes v0.1.30
+   Compiling tokio-macros v2.5.0
+   Compiling futures-macro v0.3.31
+   Compiling zerofrom-derive v0.1.6
+   Compiling yoke-derive v0.8.0
+   Compiling zerovec-derive v0.11.1
+   Compiling displaydoc v0.2.5
+   Compiling futures-util v0.3.31
+   Compiling tokio v1.47.1
+   Compiling thiserror-impl v2.0.17
+   Compiling rand v0.8.5
+   Compiling zerofrom v0.1.6
+   Compiling tracing v0.1.41
+   Compiling subtle v2.6.1
+   Compiling windows-sys v0.60.2
+   Compiling yoke v0.8.0
+   Compiling zerovec v0.11.4
+   Compiling zerotrie v0.2.2
+   Compiling siphasher v1.0.1
+   Compiling phf_shared v0.11.3
+   Compiling rustls-webpki v0.103.7
+   Compiling webpki-roots v1.0.3
+   Compiling rustls-native-certs v0.8.1
+   Compiling lazy_static v1.5.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling siphasher v0.3.11
+   Compiling iri-string v0.7.8
+   Compiling tinystr v0.8.1
+   Compiling potential_utf v0.1.3
+   Compiling rustversion v1.0.22
+   Compiling icu_collections v2.0.0
+   Compiling icu_locale_core v2.0.0
+   Compiling phf_shared v0.10.0
+   Compiling serde_urlencoded v0.7.1
+   Compiling tokio-util v0.7.16
+   Compiling tokio-native-tls v0.3.1
+   Compiling phf_generator v0.11.3
+   Compiling darling_core v0.21.3
+   Compiling encoding_rs v0.8.35
+   Compiling unicase v2.8.1
+   Compiling typenum v1.19.0
+   Compiling winapi v0.3.9
+   Compiling icu_provider v2.0.0
+   Compiling h2 v0.4.12
+   Compiling tower v0.5.2
+   Compiling icu_properties v2.0.1
+   Compiling icu_normalizer v2.0.0
+   Compiling mime_guess v2.0.5
+   Compiling tokio-rustls v0.26.4
+   Compiling tower-http v0.6.6
+   Compiling idna_adapter v1.2.1
+   Compiling idna v1.1.0
+   Compiling winapi-util v0.1.11
+   Compiling phf_generator v0.10.0
+   Compiling async-trait v0.1.89
+   Compiling generic-array v0.14.7
+   Compiling url v2.5.7
+   Compiling thiserror v1.0.69
+   Compiling paste v1.0.15
+   Compiling termcolor v1.4.1
+   Compiling darling_macro v0.21.3
+   Compiling phf_codegen v0.10.0
+   Compiling futures-executor v0.3.31
+   Compiling uuid v1.18.1
+   Compiling thiserror-impl v1.0.69
+   Compiling nu-ansi-term v0.50.3
+   Compiling darling v0.21.3
+   Compiling ts-rs-macros v11.0.1
+   Compiling windows-interface v0.59.3
+   Compiling windows-implement v0.60.2
+   Compiling rand_core v0.9.3
+   Compiling unicode-width v0.2.1
+   Compiling once_cell_polyfill v1.70.1
+   Compiling anstyle v1.0.13
+   Compiling utf8parse v0.2.2
+   Compiling icu_locale_data v2.0.0
+   Compiling new_debug_unreachable v1.0.6
+   Compiling windows-core v0.61.2
+   Compiling anstyle-parse v0.2.7
+   Compiling rand_chacha v0.9.0
+   Compiling anstyle-wincon v3.0.10
+   Compiling tokio-stream v0.1.17
+   Compiling anstyle-query v1.1.4
+   Compiling sharded-slab v0.1.7
+   Compiling matchers v0.2.0
+   Compiling hyper v1.7.0
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.9
+   Compiling syn v1.0.109
+   Compiling icu_decimal_data v2.0.0
+   Compiling ts-rs v11.0.1
+   Compiling either v1.15.0
+   Compiling is_terminal_polyfill v1.70.1
+   Compiling colorchoice v1.0.4
+   Compiling tracing-subscriber v0.3.20
+   Compiling anstream v0.6.21
+   Compiling itertools v0.14.0
+   Compiling rand v0.9.2
+   Compiling mcp-types v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\mcp-types)
+   Compiling crypto-common v0.1.6
+   Compiling block-buffer v0.10.4
+   Compiling string_cache_codegen v0.5.4
+   Compiling hyper-util v0.1.17
+   Compiling chrono v0.4.42
+   Compiling terminal_size v0.4.3
+   Compiling regex v1.12.1
+   Compiling opentelemetry v0.30.0
+   Compiling serde_derive_internals v0.29.1
+   Compiling windows-sys v0.52.0
+   Compiling unicode-segmentation v1.12.0
+   Compiling clap_lex v0.7.5
+   Compiling byteorder v1.5.0
+   Compiling precomputed-hash v0.1.1
+   Compiling mac v0.1.1
+   Compiling clap_builder v4.5.48
+   Compiling prost-derive v0.13.5
+   Compiling markup5ever v0.11.0
+   Compiling digest v0.10.7
+   Compiling futf v0.1.5
+   Compiling icu_locale v2.0.0
+   Compiling phf v0.10.1
+   Compiling serde_with_macros v3.15.0
+   Compiling hyper-rustls v0.27.7
+   Compiling hyper-tls v0.6.0
+   Compiling phf_macros v0.11.3
+   Compiling fixed_decimal v0.7.0
+   Compiling reqwest v0.12.23
+   Compiling clap_derive v4.5.47
+   Compiling pin-project-internal v1.1.10
+   Compiling axum-core v0.5.5
+   Compiling windows-threading v0.1.0
+   Compiling matchit v0.8.4
+   Compiling minimal-lexical v0.2.1
+   Compiling cpufeatures v0.2.17
+   Compiling ref-cast v1.0.25
+   Compiling utf-8 v0.7.6
+   Compiling dtoa v1.0.10
+   Compiling dtoa-short v0.3.5
+   Compiling tendril v0.4.3
+   Compiling serde_with v3.15.0
+   Compiling pin-project v1.1.10
+   Compiling axum v0.8.6
+   Compiling clap v4.5.48
+   Compiling nom v7.1.3
+   Compiling phf v0.11.3
+   Compiling same-file v1.0.6
+   Compiling windows-future v0.2.1
+   Compiling socket2 v0.5.10
+   Compiling prost v0.13.5
+   Compiling icu_decimal v2.0.0
+   Compiling hyper-timeout v0.5.2
+   Compiling string_cache v0.8.9
+   Compiling windows-numerics v0.2.0
+   Compiling windows-collections v0.2.0
+   Compiling tree-sitter v0.25.10
+   Compiling futures v0.3.31
+   Compiling selectors v0.25.0
+   Compiling cssparser-macros v0.6.1
+   Compiling strum_macros v0.27.2
+   Compiling ref-cast-impl v1.0.25
+   Compiling ahash v0.8.12
+   Compiling dyn-clone v1.0.20
+   Compiling tree-sitter-language v0.1.5
+   Compiling html5ever v0.26.0
+   Compiling strum v0.27.2
+   Compiling libm v0.2.15
+   Compiling sys-locale v0.3.2
+   Compiling winnow v0.7.13
+   Compiling cfg_aliases v0.1.1
+   Compiling fastrand v2.3.0
+   Compiling nix v0.28.0
+   Compiling tempfile v3.23.0
+   Compiling cssparser v0.31.2
+   Compiling tonic v0.13.1
+   Compiling toml_parser v1.0.4
+   Compiling windows v0.61.3
+   Compiling walkdir v2.5.0
+   Compiling sha2 v0.10.9
+   Compiling fxhash v0.2.1
+   Compiling schemars_derive v1.0.4
+   Compiling opentelemetry_sdk v0.30.0
+   Compiling getopts v0.2.24
+   Compiling concurrent-queue v2.5.0
+   Compiling codex-protocol v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol)
+   Compiling crossbeam-epoch v0.9.18
+   Compiling derive_more v0.99.20
+   Compiling tree-sitter-bash v0.25.0
+   Compiling toml_datetime v0.7.3
+   Compiling serde_path_to_error v0.1.20
+   Compiling servo_arc v0.3.0
+   Compiling bstr v1.12.0
+   Compiling num-conv v0.1.0
+   Compiling winreg v0.10.1
+   Compiling hex v0.4.3
+   Compiling powerfmt v0.2.0
+   Compiling option-ext v0.2.0
+   Compiling chunked_transfer v1.5.0
+   Compiling toml_writer v1.0.4
+   Compiling parking v2.2.1
+   Compiling ascii v1.1.0
+   Compiling streaming-iterator v0.1.9
+   Compiling time-core v0.1.6
+   Compiling tiny_http v0.12.0
+   Compiling schemars v1.0.4
+   Compiling event-listener v5.4.1
+   Compiling globset v0.4.16
+   Compiling time-macros v0.2.24
+   Compiling dirs-sys v0.5.0
+   Compiling deranged v0.5.4
+   Compiling codex-app-server-protocol v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\app-server-protocol)
+   Compiling opentelemetry-proto v0.30.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling oauth2 v5.0.0
+   Compiling basic-toml v0.1.10
+   Compiling process-wrap v8.2.1
+   Compiling askama_parser v0.2.1
+   Compiling opentelemetry-http v0.30.0
+   Compiling rmcp-macros v0.8.1
+   Compiling axum-core v0.4.5
+   Compiling sse-stream v0.2.1
+   Compiling serde_spanned v1.0.3
+   Compiling matchit v0.7.3
+   Compiling urlencoding v2.1.3
+   Compiling ego-tree v0.6.3
+   Compiling humansize v2.1.3
+   Compiling scraper v0.18.1
+   Compiling toml v0.9.8
+   Compiling rmcp v0.8.1
+   Compiling time v0.3.44
+   Compiling opentelemetry-otlp v0.30.0
+   Compiling axum v0.7.9
+   Compiling ignore v0.4.23
+   Compiling askama_derive v0.12.5
+   Compiling dirs v6.0.0
+   Compiling event-listener-strategy v0.5.4
+   Compiling eventsource-stream v0.2.3
+   Compiling keyring v3.6.3
+   Compiling nucleo-matcher v0.3.1
+   Compiling filedescriptor v0.8.3
+   Compiling serial2 v0.2.33
+   Compiling webbrowser v1.0.5
+   Compiling shared_library v0.1.9
+   Compiling home v0.5.11
+   Compiling shell-words v1.1.0
+   Compiling similar v2.7.0
+   Compiling opentelemetry-semantic-conventions v0.30.0
+   Compiling unsafe-libyaml v0.2.11
+   Compiling downcast-rs v1.2.1
+   Compiling bitflags v1.3.2
+   Compiling winsafe v0.0.19
+   Compiling askama_escape v0.10.3
+   Compiling portable-pty v0.9.0
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling codex-apply-patch v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\apply-patch)
+   Compiling codex-otel v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\otel)
+   Compiling codex-file-search v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\file-search)
+   Compiling async-channel v2.5.0
+   Compiling askama v0.12.1
+   Compiling codex-deep-research v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\deep-research)
+   Compiling toml_edit v0.23.7
+   Compiling codex-mcp-client v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\mcp-client)
+   Compiling which v6.0.3
+   Compiling sha1 v0.10.6
+   Compiling os_info v3.12.0
+   Compiling dunce v1.0.5
+   Compiling env-flags v0.1.1
+   Compiling wildmatch v2.5.0
+   Compiling regex-lite v0.1.8
+   Compiling darling_core v0.20.11
+   Compiling crc32fast v1.5.0
+   Compiling codex-rmcp-client v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\rmcp-client)
+   Compiling simd-adler32 v0.3.7
+   Compiling allocator-api2 v0.2.21
+   Compiling adler2 v2.0.1
+   Compiling owo-colors v4.2.3
+   Compiling foldhash v0.1.5
+   Compiling instability v0.3.9
+   Compiling miniz_oxide v0.8.9
+   Compiling codex-core v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\core)
+   Compiling hashbrown v0.15.5
+   Compiling itertools v0.13.0
+   Compiling crossterm_winapi v0.9.1
+   Compiling strum_macros v0.26.4
+   Compiling castaway v0.2.4
+   Compiling indoc v2.0.6
+warning: unused import: `tokio::sync::RwLock`
+ --> core\src\audit_log\logger.rs:7:5
+  |
+7 | use tokio::sync::RwLock;
+  |     ^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::process::Command as ProcessCommand`
+ --> core\src\hooks.rs:6:5
+  |
+6 | use std::process::Command as ProcessCommand;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `anyhow::Context`
+ --> core\src\integrations\github.rs:4:5
+  |
+4 | use anyhow::Context;
+  |     ^^^^^^^^^^^^^^^
+
+   Compiling deadpool-runtime v0.1.4
+warning: unused variable: `deadline`
+   --> core\src\agents\runtime.rs:548:9
+    |
+548 |         deadline: Option<u64>,
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_deadline`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling dotenvy v0.15.7
+   Compiling num_cpus v1.17.0
+   Compiling static_assertions v1.1.0
+   Compiling unicode-width v0.1.14
+   Compiling codex-linux-sandbox v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\linux-sandbox)
+   Compiling compact_str v0.8.1
+   Compiling deadpool v0.12.3
+   Compiling unicode-truncate v1.1.0
+warning: unused variable: `context`
+    --> core\src\codex.rs:1803:38
+     |
+1803 |             Op::ExecuteHook { event, context } => {
+     |                                      ^^^^^^^ help: try ignoring the field: `context: _`
+
+   Compiling lru v0.12.5
+   Compiling crossterm v0.28.1
+   Compiling darling_macro v0.20.11
+   Compiling flate2 v1.1.4
+   Compiling fdeflate v0.3.7
+   Compiling darling v0.20.11
+   Compiling pxfm v0.1.25
+   Compiling assert-json-diff v2.0.2
+   Compiling strum v0.26.3
+   Compiling async-stream-impl v0.3.6
+   Compiling zune-core v0.4.12
+   Compiling cassowary v0.3.0
+   Compiling eyre v0.6.12
+   Compiling color-spantrace v0.3.0
+   Compiling async-stream v0.3.6
+   Compiling ratatui v0.29.0 (https://github.com/nornagon/ratatui?branch=nornagon-v0.29.0-patch#9b2ad129)
+   Compiling zune-jpeg v0.4.21
+warning: unused variable: `comment`
+  --> core\src\integrations\github.rs:51:60
+   |
+51 |     pub async fn add_review_comment(&self, pr_number: u64, comment: ReviewComment) -> Result<()> {
+   |                                                            ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_comment`
+
+   Compiling wiremock v0.6.5
+   Compiling png v0.18.0
+warning: unused variable: `blocks`
+  --> core\src\integrations\slack.rs:59:9
+   |
+59 |         blocks: Option<Vec<SlackBlock>>,
+   |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_blocks`
+
+   Compiling tracing-error v0.2.1
+   Compiling rustc-demangle v0.1.26
+   Compiling bytemuck v1.24.0
+   Compiling simdutf8 v0.1.5
+   Compiling indenter v0.3.4
+   Compiling byteorder-lite v0.1.0
+   Compiling error-code v3.3.2
+   Compiling is_ci v1.2.0
+   Compiling pulldown-cmark v0.10.3
+   Compiling supports-color v3.0.2
+   Compiling clipboard-win v5.4.1
+   Compiling ansi-to-tui v7.0.0
+   Compiling backtrace v0.3.76
+   Compiling codex-git-apply v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-apply)
+   Compiling opentelemetry-appender-tracing v0.30.1
+   Compiling diffy v0.4.2
+   Compiling crossbeam-channel v0.5.15
+   Compiling codex-backend-openapi-models v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\codex-backend-openapi-models)
+   Compiling unicode-linebreak v0.1.5
+   Compiling pulldown-cmark-escape v0.10.1
+   Compiling dtor-proc-macro v0.0.6
+   Compiling schemars v0.8.22
+   Compiling smawk v0.3.2
+   Compiling textwrap v0.16.2
+   Compiling dtor v0.1.0
+   Compiling tracing-appender v0.2.3
+   Compiling codex-backend-client v0.0.0 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\backend-client)
+   Compiling color-eyre v0.6.5
+   Compiling codex-ansi-escape v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\ansi-escape)
+warning: unused variable: `url`
+   --> core\src\agents\permission_checker.rs:195:29
+    |
+195 |                 if let Some(url) = parameters.get("search_term").and_then(|v| v.as_str()) {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_url`
+
+   Compiling codex-utils-json-to-toml v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\utils\json-to-toml)
+   Compiling tree-sitter-highlight v0.25.10
+   Compiling codex-git-tooling v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\git-tooling)
+   Compiling schemars_derive v0.8.22
+   Compiling ctor-proc-macro v0.0.6
+   Compiling pathdiff v0.2.3
+   Compiling path-clean v1.0.1
+   Compiling codex-cloud-tasks-client v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\cloud-tasks-client)
+   Compiling ctor v0.5.0
+   Compiling codex-process-hardening v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\process-hardening)
+   Compiling codex-protocol-ts v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\protocol-ts)
+   Compiling codex-responses-api-proxy v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\responses-api-proxy)
+   Compiling moxcms v0.7.7
+   Compiling clap_complete v4.5.58
+   Compiling image v0.25.8
+   Compiling arboard v3.6.1
+warning: fields `token` and `base_url` are never read
+  --> core\src\integrations\github.rs:18:5
+   |
+16 | pub struct GitHubIntegration {
+   |            ----------------- fields in this struct
+17 |     /// GitHub token
+18 |     token: Option<String>,
+   |     ^^^^^
+...
+22 |     base_url: String,
+   |     ^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `default_channel` is never read
+  --> core\src\integrations\slack.rs:21:5
+   |
+15 | pub struct SlackIntegration {
+   |            ---------------- field in this struct
+...
+21 |     default_channel: String,
+   |     ^^^^^^^^^^^^^^^
+
+warning: field `deep_web_search` is never read
+  --> core\src\tools\spec.rs:29:9
+   |
+24 | pub(crate) struct ToolsConfig {
+   |                   ----------- field in this struct
+...
+29 |     pub deep_web_search: bool,
+   |         ^^^^^^^^^^^^^^^
+   |
+   = note: `ToolsConfig` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `agent_runtime` is never read
+  --> core\src\state\service.rs:21:16
+   |
+12 | pub(crate) struct SessionServices {
+   |                   --------------- field in this struct
+...
+21 |     pub(crate) agent_runtime: Arc<AgentRuntime>,
+   |                ^^^^^^^^^^^^^
+
+   Compiling codex-common v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\common)
+   Compiling codex-arg0 v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\arg0)
+   Compiling codex-login v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\login)
+   Compiling codex-ollama v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\ollama)
+   Compiling codex-chatgpt v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\chatgpt)
+   Compiling codex-mcp-server v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\mcp-server)
+   Compiling codex-exec v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\exec)
+warning: unused import: `serde::Deserialize`
+ --> mcp-server\src\codex_tools.rs:5:5
+  |
+5 | use serde::Deserialize;
+  |     ^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `serde::Serialize`
+ --> mcp-server\src\codex_tools.rs:6:5
+  |
+6 | use serde::Serialize;
+  |     ^^^^^^^^^^^^^^^^
+
+   Compiling codex-tui v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\tui)
+   Compiling codex-app-server v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\app-server)
+   Compiling codex-cloud-tasks v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\cloud-tasks)
+   Compiling codex-cli v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\cli)
+error[E0599]: no variant or associated item named `Success` found for enum `AgentStatus` in the current scope
+   --> cli\src\agent_create_cmd.rs:137:38
+    |
+137 |     if result.status == AgentStatus::Success {
+    |                                      ^^^^^^^ variant or associated item not found in `AgentStatus`
+
+error[E0599]: no variant or associated item named `Success` found for enum `AgentStatus` in the current scope
+   --> cli\src\parallel_delegate_cmd.rs:167:42
+    |
+167 |         if result.status == AgentStatus::Success {
+    |                                          ^^^^^^^ variant or associated item not found in `AgentStatus`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `codex-cli` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+warning: `codex-mcp-server` (lib) generated 2 warnings (run `cargo fix --lib -p codex-mcp-server` to apply 2 suggestions)
+warning: `codex-core` (lib) generated 12 warnings (run `cargo fix --lib -p codex-core` to apply 3 suggestions)
+error: failed to compile `codex-cli v0.47.0-alpha.1 (C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\cli)`, intermediate artifacts can be found at `C:\U
+sers\downl\Desktop\codex-main\codex-main\codex-rs\target`.
+To reuse those artifacts with a future compilation, set the environment variable `CARGO_TARGET_DIR` to that path.

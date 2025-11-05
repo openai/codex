@@ -1,0 +1,133 @@
+name: AI Kernel Modules CI
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-linux:
+    name: Build Linux Kernel Modules
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install kernel headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y linux-headers-$(uname -r) build-essential
+      
+      - name: Build AI Scheduler
+        working-directory: kernel-extensions/linux/ai_scheduler
+        run: make
+      
+      - name: Build AI Memory
+        working-directory: kernel-extensions/linux/ai_mem
+        run: make
+      
+      - name: Build AI GPU
+        working-directory: kernel-extensions/linux/ai_gpu
+        run: make
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-kernel-modules
+          path: |
+            kernel-extensions/linux/**/*.ko
+
+  test-rust:
+    name: Test Rust Libraries
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      
+      - name: Check ai-scheduler-rs
+        working-directory: kernel-extensions/rust/ai_scheduler_rs
+        run: |
+          cargo check --release
+          cargo test --release
+          cargo clippy -- -D warnings
+      
+      - name: Check gpu-bindings
+        working-directory: kernel-extensions/rust/gpu_bindings
+        run: |
+          cargo check --release
+          cargo test --release
+          cargo clippy -- -D warnings
+      
+      - name: Check codex-integration
+        working-directory: kernel-extensions/codex-integration
+        run: |
+          cargo check --release
+          cargo test --release
+          cargo clippy -- -D warnings
+      
+      - name: Run cargo audit
+        run: |
+          cargo install cargo-audit
+          cargo audit
+
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    needs: [build-linux, test-rust]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install security tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sparse cppcheck
+      
+      - name: Run sparse (static analysis)
+        working-directory: kernel-extensions/linux
+        run: |
+          make C=2 CF="-D__CHECK_ENDIAN__" || true
+      
+      - name: Run cppcheck
+        run: |
+          cppcheck --enable=all --inconclusive \
+            --suppress=missingIncludeSystem \
+            kernel-extensions/linux/ || true
+
+  package-linux:
+    name: Package for Linux
+    runs-on: ubuntu-latest
+    needs: [build-linux, test-rust, security-audit]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Build .deb package
+        run: |
+          # TODO: Implement .deb packaging
+          echo "Building .deb package..."
+      
+      - name: Build .rpm package
+        run: |
+          # TODO: Implement .rpm packaging
+          echo "Building .rpm package..."
+      
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            *.deb
+            *.rpm
+

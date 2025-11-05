@@ -1,0 +1,86 @@
+# Codex Configuration File - Recommended Settings
+# Based on OpenAI best practices + zapabob extensions
+# Copy this to ~/.codex/config.toml and adjust as needed
+# Last updated: 2025-10-13
+
+# ==================== Core Settings ====================
+# Model: Default model (override with --model flag)
+model = "gpt-5-codex"  # Latest Codex model (2025)
+# Alternative: "gpt-5-codex-medium", "gpt-4o", "gpt-4o-mini", "o1-preview", "o1-mini"
+model_reasoning_summary = "detailed"
+windows_wsl_setup_acknowledged = true
+
+# ==================== Provider Configuration ====================
+[model_providers.openai]
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+name = "OpenAI"
+requires_openai_auth = true
+wire_api = "chat"  # Use Chat Completions API (recommended)
+
+# ==================== MCP Servers ====================
+# Codex as MCP server (for meta-orchestration)
+[mcp_servers.codex-agent]
+command = "codex"
+args = ["mcp-server"]
+env.CODEX_CONFIG_PATH = "~/.codex/config.toml"
+env.RUST_LOG = "info"
+
+# ==================== Project Trust Levels ====================
+# Add your trusted projects here
+# Example:
+# [projects.'/path/to/your/project']
+# trust_level = "trusted"
+
+# ==================== Optional: Advanced Settings ====================
+
+# Security & Sandbox (uncomment to customize)
+# [sandbox]
+# default_mode = "read-only"  # Safe default
+#
+# [sandbox_permissions]
+# workspace_write = true
+# disk_full_read_access = false
+# network_access = false
+
+# Approval Policy (uncomment to customize)
+# [approval]
+# policy = "on-request"  # Ask before executing
+# # Options: "untrusted", "on-request", "never"
+
+# Session Management (uncomment to customize)
+# [session]
+# auto_save = true
+# save_interval = 300  # 5 minutes
+# max_history = 100
+
+# Logging (uncomment to customize)
+# [logging]
+# level = "info"  # info, debug, warn, error
+# log_dir = "~/.codex/logs"
+# max_log_files = 10
+
+# ==================== zapabob Extensions ====================
+
+# Subagent Configuration (uncomment to enable)
+# [subagents]
+# enabled = true
+# max_parallel = 4  # Limit concurrent subagents
+# token_budget = 10000  # Per subagent token limit
+# inherit_model = true  # Use parent's model
+
+# Deep Research Configuration (uncomment to enable)
+# [deep_research]
+# enabled = true
+# max_depth = 3
+# max_sources = 5
+# default_strategy = "focused"  # focused, comprehensive, exploratory
+
+# Audit Logging (uncomment to enable)
+# [audit]
+# enabled = true
+# log_dir = "~/.codex/audit-logs"
+# include_token_usage = true
+# include_model_info = true
+# format = "json"  # json or yaml
+

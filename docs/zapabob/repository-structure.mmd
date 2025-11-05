@@ -1,0 +1,65 @@
+```mermaid
+graph TB
+    subgraph Root["📦 Repository Root"]
+        RootFiles["Core Files<br/>README.md, LICENSE, .gitignore"]
+    end
+
+    subgraph Official["🏢 Official OpenAI/codex (Upstream)"]
+        CodexRS["codex-rs/<br/>Rust Implementation<br/>70+ modules"]
+        CodexCLI["codex-cli/<br/>npm Package"]
+        OfficialDocs["docs/<br/>Official Documentation<br/>51 files"]
+        OfficialScripts["scripts/<br/>Build Scripts<br/>9 files"]
+        Examples["examples/<br/>Code Samples"]
+    end
+
+    subgraph Zapabob["⭐ zapabob Extensions (独自機能)"]
+        ZapaDocs["zapabob/docs/<br/>Implementation Logs<br/>236+ files"]
+        ZapaScripts["zapabob/scripts/<br/>Build & Automation<br/>12 scripts"]
+        Extensions["zapabob/extensions/<br/>VSCode/Windsurf<br/>2 extensions"]
+        SDK["zapabob/sdk/<br/>TypeScript SDK<br/>Orchestration API"]
+        Reports["zapabob/reports/<br/>Review Reports<br/>7 reports"]
+    end
+
+    subgraph Config["⚙️ Configuration"]
+        CursorCfg[".cursor/<br/>Cursor IDE Config<br/>MCP Integration"]
+        CodexCfg[".codex/<br/>Agent Definitions<br/>8 .yaml files"]
+        GitCfg[".git/<br/>Version Control"]
+    end
+
+    subgraph Temp["🗑️ Temporary Files (.gitignore)"]
+        TempBuild["_temp/build-logs/<br/>7 build logs"]
+        TempTest["_temp/test-outputs/<br/>6 test files"]
+        TempArtifacts["_temp/build-artifacts/<br/>exe/pdb files"]
+    end
+
+    subgraph Archive["📦 Archive"]
+        ArchiveOld["archive/<br/>Legacy Implementations<br/>Old PRs"]
+        ArchiveBackup["archive/backups/<br/>2 backup files"]
+    end
+
+    Root --> Official
+    Root --> Zapabob
+    Root --> Config
+    Root --> Temp
+    Root --> Archive
+
+    %% Enhanced Details
+    CodexRS -.->|"AgentRuntime<br/>Orchestration<br/>DeepResearch"| Zapabob
+    OfficialDocs -.->|"Extended by"| ZapaDocs
+    CursorCfg -.->|"Integrates"| CodexRS
+    CodexCfg -.->|"Defines"| Zapabob
+
+    %% Styling
+    classDef officialClass fill:#e3f2fd,stroke:#0d47a1,stroke-width:3px
+    classDef zapaClass fill:#fff9c4,stroke:#f57f17,stroke-width:3px
+    classDef configClass fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef tempClass fill:#ffebee,stroke:#b71c1c,stroke-width:2px,stroke-dasharray: 5 5
+    classDef archiveClass fill:#eceff1,stroke:#37474f,stroke-width:2px
+
+    class CodexRS,CodexCLI,OfficialDocs,OfficialScripts,Examples officialClass
+    class ZapaDocs,ZapaScripts,Extensions,SDK,Reports zapaClass
+    class CursorCfg,CodexCfg,GitCfg configClass
+    class TempBuild,TempTest,TempArtifacts tempClass
+    class ArchiveOld,ArchiveBackup archiveClass
+```
+

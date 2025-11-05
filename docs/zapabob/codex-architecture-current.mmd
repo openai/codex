@@ -1,0 +1,189 @@
+graph TB
+    subgraph UI["🖥️ User Interface Layer (v0.52.0)"]
+        CLI["CLI<br/>Command Line Interface<br/>codex-cli"]
+        TUI["TUI<br/>Terminal UI<br/>ratatui"]
+        Cursor["Cursor IDE<br/>Composer Integration<br/>MCP Protocol"]
+        NaturalCLI["Natural Language CLI<br/>AgentInterpreter"]
+        NPM["npm Package<br/>@openai/codex<br/>Cross-platform<br/>GitHub Packages"]
+    end
+
+    subgraph Orchestration["🧠 Core Orchestration Layer - rmcp 0.8.3+"]
+        TaskAnalyzer["Task Analyzer<br/>Complexity: 0-1.0<br/>Skills Detection"]
+        AutoOrch["Auto Orchestrator<br/>Dynamic Agent Selection<br/>Strategy: Parallel/Sequential/Hybrid"]
+        Supervisor["Supervisor<br/>Timeout: 5min<br/>Retry: 3x Exponential Backoff<br/>40+ Sub-agents"]
+        CollabStore["Collaboration Store<br/>Message Passing<br/>Priority: 0-255"]
+    end
+
+    subgraph Agents["🤖 Specialized Sub-Agents (8+ Types)"]
+        Researcher["Researcher<br/>Multi-source Validation"]
+        CodeReviewer["Code Reviewer<br/>Best Practices"]
+        TestGen["Test Generator<br/>Coverage 80%+"]
+        SecAudit["Security Auditor<br/>OWASP Top 10"]
+        PythonRev["Python Reviewer"]
+        TSRev["TypeScript Reviewer"]
+        UnityRev["Unity Reviewer"]
+        CustomAgent["Custom Agent<br/>User-defined<br/>.codex/agents/*.yaml"]
+        PerformanceExpert["Performance Expert<br/>Optimization"]
+        DebugExpert["Debug Expert<br/>Issue Diagnosis"]
+        DocsExpert["Docs Expert<br/>Documentation"]
+    end
+
+    subgraph DeepResearch["🔍 Deep Research Engine"]
+        SearchProvider["MCP Search Provider<br/>Cache TTL: 1h<br/>45x Faster"]
+        Gemini["Gemini CLI<br/>OAuth 2.0<br/>Google Search Grounding<br/>v2.5 Pro/Flash"]
+        DuckDuckGo["DuckDuckGo<br/>API Key Free"]
+        Citation["Citation Manager<br/>Source Tracking"]
+        Contradiction["Contradiction Checker<br/>Cross-validation"]
+    end
+
+    subgraph MCP["🔗 MCP Integration (15+ Servers)"]
+        CodexMCP["codex mcp-server<br/>Self-hosted<br/>Rust"]
+        GeminiMCP["gemini-cli<br/>Google Search<br/>Node.js"]
+        SerenaM["serena<br/>Code Intelligence<br/>Python"]
+        ArxivMCP["arxiv-mcp-server<br/>Academic Papers"]
+        ChromeMCP["chrome-devtools<br/>Web Automation"]
+        Context7["context7<br/>Context Analysis"]
+        FileSystemMCP["filesystem<br/>File Operations"]
+        GitHubMCP["github<br/>Git Operations"]
+        MarkitdownMCP["markitdown<br/>Document Processing"]
+        PlaywrightMCP["playwright<br/>Browser Automation"]
+        YoutubeMCP["youtube<br/>Video Analysis"]
+        SequentialThinking["sequential-thinking<br/>Reasoning"]
+    end
+
+    subgraph RustCore["⚙️ Rust Core Implementation (40+ Crates)"]
+        Core["codex-core<br/>Main Logic<br/>Session Engine"]
+        Common["codex-common<br/>Shared Utilities"]
+        Protocol["codex-protocol<br/>Communication"]
+        McpTypes["mcp-types<br/>MCP Protocol Types"]
+        SupervisorC["codex-supervisor<br/>Agent Orchestration"]
+        DeepResearchC["codex-deep-research<br/>Research Engine"]
+        TuiC["codex-tui<br/>Terminal Interface"]
+        CliC["codex-cli<br/>Command Interface"]
+    end
+
+    subgraph External["🌐 External Integrations"]
+        GitHub["GitHub API<br/>PR Review<br/>Issue Management"]
+        Slack["Slack Webhooks<br/>Notifications<br/>Real-time Updates"]
+        Audio["Audio Notifications<br/>Completion Sounds<br/>Marisa Voice"]
+        Webhook["Custom Webhooks<br/>Generic HTTP<br/>CI/CD Integration"]
+    end
+
+    subgraph Extensions["🎨 Editor Extensions & SDK"]
+        VSCode["VS Code Extension<br/>IntelliSense & Commands<br/>extensions/vscode/"]
+        Windsurf["Windsurf Extension<br/>AI-assisted Development<br/>extensions/windsurf/"]
+        TypeScriptSDK["TypeScript SDK<br/>Programmatic Integration<br/>sdk/typescript/"]
+        Archive[".archive/<br/>Development Artifacts<br/>260+ Implementation Logs"]
+    end
+
+    subgraph Data["💾 Data & Configuration"]
+        Config["config.toml<br/>MCP Servers<br/>Model Settings"]
+        Session["Session Management<br/>Conversation History<br/>Auto-save"]
+        Audit["Audit Logs<br/>Security Tracking<br/>Compliance"]
+        AgentDef[".codex/agents/*.yaml<br/>Agent Definitions<br/>Permissions"]
+    end
+
+    subgraph LLM["🤖 LLM Model Providers"]
+        OpenAI["OpenAI<br/>gpt-5-codex-medium/high<br/>o1/o3-preview"]
+        Anthropic["Anthropic<br/>Claude 3.5 Sonnet<br/>Claude 3 Opus"]
+        Google["Google<br/>Gemini 2.5 Pro/Flash<br/>Gemini Ultra"]
+        Local["Local Models<br/>Ollama<br/>Llama 3.1/3.2"]
+    end
+
+    %% User Interface Connections
+    CLI --> TaskAnalyzer
+    TUI --> TaskAnalyzer
+    Cursor --> CodexMCP
+    NaturalCLI --> AutoOrch
+    NPM --> CLI
+
+    %% Orchestration Flow
+    TaskAnalyzer -->|complexity > 0.7| AutoOrch
+    AutoOrch --> Supervisor
+    Supervisor --> CollabStore
+    CollabStore --> Agents
+
+    %% Agent Execution (8+ Types)
+    AutoOrch --> Researcher
+    AutoOrch --> CodeReviewer
+    AutoOrch --> TestGen
+    AutoOrch --> SecAudit
+    AutoOrch --> PythonRev
+    AutoOrch --> TSRev
+    AutoOrch --> UnityRev
+    AutoOrch --> CustomAgent
+    AutoOrch --> PerformanceExpert
+    AutoOrch --> DebugExpert
+    AutoOrch --> DocsExpert
+
+    %% Deep Research Flow
+    Researcher --> SearchProvider
+    SearchProvider -->|Cache Miss| Gemini
+    SearchProvider -->|Fallback| DuckDuckGo
+    SearchProvider --> Citation
+    Citation --> Contradiction
+
+    %% MCP Integration (15+ Servers)
+    CodexMCP --> Supervisor
+    GeminiMCP --> Gemini
+    SerenaM --> CodeReviewer
+    ArxivMCP --> Researcher
+    ChromeMCP --> TestGen
+    SequentialThinking --> AutoOrch
+
+    %% Rust Core Architecture
+    CliC --> Core
+    TuiC --> Core
+    Core --> SupervisorC
+    SupervisorC --> DeepResearchC
+    Core --> Protocol
+    Protocol --> McpTypes
+    DeepResearchC --> SearchProvider
+
+    %% External Integration
+    GitHub --> CodeReviewer
+    Slack --> Supervisor
+    Audio --> Supervisor
+    Webhook --> Supervisor
+
+    %% Data Layer
+    Config --> MCP
+    Session --> Orchestration
+    Audit --> Orchestration
+    AgentDef --> Agents
+
+    %% Extensions Integration
+    VSCode --> Cursor
+    Windsurf --> Cursor
+    TypeScriptSDK --> Orchestration
+    Archive --> Data
+
+    %% LLM Providers
+    Agents --> OpenAI
+    Agents --> Anthropic
+    DeepResearch --> Google
+    DeepResearch --> Local
+
+    %% Styling
+    classDef uiClass fill:#e1f5ff,stroke:#01579b,stroke-width:2px
+    classDef orchClass fill:#fff9c4,stroke:#f57f17,stroke-width:2px
+    classDef agentClass fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef researchClass fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
+    classDef mcpClass fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef rustClass fill:#ffebee,stroke:#b71c1c,stroke-width:2px
+    classDef extClass fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    classDef dataClass fill:#e0f2f1,stroke:#004d40,stroke-width:2px
+    classDef llmClass fill:#ede7f6,stroke:#311b92,stroke-width:2px
+    classDef extToolsClass fill:#f1f8e9,stroke:#33691e,stroke-width:2px
+
+    class CLI,TUI,Cursor,NaturalCLI,NPM uiClass
+    class TaskAnalyzer,AutoOrch,Supervisor,CollabStore orchClass
+    class Researcher,CodeReviewer,TestGen,SecAudit,PythonRev,TSRev,UnityRev,CustomAgent,PerformanceExpert,DebugExpert,DocsExpert agentClass
+    class SearchProvider,Gemini,DuckDuckGo,Citation,Contradiction researchClass
+    class CodexMCP,GeminiMCP,SerenaM,ArxivMCP,ChromeMCP,Context7,FileSystemMCP,GitHubMCP,MarkitdownMCP,PlaywrightMCP,YoutubeMCP,SequentialThinking mcpClass
+    class Core,Common,Protocol,McpTypes,SupervisorC,DeepResearchC,TuiC,CliC rustClass
+    class GitHub,Slack,Audio,Webhook extClass
+    class Config,Session,Audit,AgentDef dataClass
+    class OpenAI,Anthropic,Google,Local llmClass
+    class VSCode,Windsurf,TypeScriptSDK,Archive extToolsClass
+

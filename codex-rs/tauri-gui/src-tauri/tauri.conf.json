@@ -1,0 +1,60 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0",
+  "productName": "Codex",
+  "version": "1.4.0",
+  "identifier": "com.codex.app",
+  "build": {
+    "frontendDist": "../dist",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Codex - AI Native OS",
+        "width": 1200,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
+    },
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": false,
+      "menuOnLeftClick": false,
+      "title": "Codex",
+      "tooltip": "Codex - AI Coding Assistant"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "publisher": "zapabob",
+    "copyright": "Copyright © 2025 zapabob. All rights reserved.",
+    "category": "DeveloperTool",
+    "shortDescription": "Codex - AI-Powered Multi-Agent Coding Assistant",
+    "longDescription": "Codex is an AI-powered coding assistant with sub-agent orchestration, deep research, and MCP integration. Automate complex tasks with 2.6x faster parallel execution.",
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "",
+      "wix": {
+        "language": ["ja-JP", "en-US"]
+      }
+    }
+  },
+  "plugins": {}
+}
+
