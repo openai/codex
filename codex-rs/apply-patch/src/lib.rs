@@ -599,7 +599,9 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
                     target = e;
                 }
                 // Optional detect-from-buffer fallback for non-git dir, per policy.
-                use crate::eol::{AssumeEol, Eol, get_assume_eol};
+                use crate::eol::AssumeEol;
+                use crate::eol::Eol;
+                use crate::eol::get_assume_eol;
                 match get_assume_eol() {
                     AssumeEol::Detect => {
                         let det = eol::detect_eol_from_bytes(contents.as_bytes());
@@ -662,7 +664,8 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
                 } = derive_new_contents_from_chunks(path, chunks)?;
                 let (repo_root, rel) = repo_root_and_rel_for_path(path);
                 let final_contents = {
-                    use crate::eol::{AssumeEol, Eol};
+                    use crate::eol::AssumeEol;
+                    use crate::eol::Eol;
                     match crate::eol::get_assume_eol() {
                         AssumeEol::Lf => {
                             crate::eol::normalize_to_eol_preserve_eof(new_contents.clone(), Eol::Lf)
@@ -1678,7 +1681,8 @@ PATCH"#,
 
     #[test]
     fn test_detect_eol_from_bytes_variants() {
-        use crate::eol::{Eol, detect_eol_from_bytes};
+        use crate::eol::Eol;
+        use crate::eol::detect_eol_from_bytes;
         assert_eq!(detect_eol_from_bytes(b"no newlines"), Eol::Unknown);
         assert_eq!(detect_eol_from_bytes(b"a\n"), Eol::Lf);
         assert_eq!(detect_eol_from_bytes(b"a\r\n"), Eol::Crlf);
@@ -1688,7 +1692,8 @@ PATCH"#,
 
     #[test]
     fn test_normalize_to_eol_preserve_eof() {
-        use crate::eol::{Eol, normalize_to_eol_preserve_eof};
+        use crate::eol::Eol;
+        use crate::eol::normalize_to_eol_preserve_eof;
         // Preserve EOF newline presence when converting
         let s = String::from("a\nb\n");
         let out = normalize_to_eol_preserve_eof(s, Eol::Crlf);
