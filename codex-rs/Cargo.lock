@@ -1467,7 +1467,6 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-async-utils",
- "codex-cuda-runtime",
  "codex-deep-research",
  "codex-file-search",
  "codex-git",
