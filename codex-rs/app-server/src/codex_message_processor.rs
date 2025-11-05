@@ -591,7 +591,7 @@ impl CodexMessageProcessor {
                         };
 
                         let payload_v2 = AccountLoginCompletedNotification {
-                            login_id: Some(login_id),
+                            login_id: Some(login_id.to_string()),
                             success,
                             error: error_msg,
                         };
@@ -624,7 +624,7 @@ impl CodexMessageProcessor {
                     });
 
                     let response = codex_app_server_protocol::LoginAccountResponse::ChatGpt {
-                        login_id,
+                        login_id: login_id.to_string(),
                         auth_url,
                     };
                     self.outgoing.send_response(request_id, response).await;

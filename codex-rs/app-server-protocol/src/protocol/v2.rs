@@ -13,7 +13,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use ts_rs::TS;
-use uuid::Uuid;
 
 // Macro to declare a camelCased API v2 enum mirroring a core enum which
 // tends to use kebab-case.
@@ -160,8 +159,9 @@ pub enum LoginAccountResponse {
     #[serde(rename = "chatgpt")]
     #[ts(rename = "chatgpt")]
     ChatGpt {
-        #[schemars(with = "String")]
-        login_id: Uuid,
+        // Use plain String for identifiers to avoid TS/JSON Schema quirks around uuid-specific types.
+        // Convert to/from UUIDs at the application layer as needed.
+        login_id: String,
         /// URL the client should open in a browser to initiate the OAuth flow.
         auth_url: String,
     },
@@ -621,8 +621,9 @@ impl From<CoreRateLimitWindow> for RateLimitWindow {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AccountLoginCompletedNotification {
-    #[schemars(with = "Option<String>")]
-    pub login_id: Option<Uuid>,
+    // Use plain String for identifiers to avoid TS/JSON Schema quirks around uuid-specific types.
+    // Convert to/from UUIDs at the application layer as needed.
+    pub login_id: Option<String>,
     pub success: bool,
     pub error: Option<String>,
 }
