@@ -789,7 +789,7 @@ fn exec_history_cell_shows_working_then_failed() {
     let lines = &cells[0];
     let blob = lines_to_single_string(lines);
     assert!(
-        blob.contains("• Ran false"),
+        blob.contains("• Ran: false"),
         "expected command and header text present: {blob:?}"
     );
     assert!(blob.to_lowercase().contains("bloop"), "expected error text");
