@@ -1708,6 +1708,37 @@ PATCH"#,
         assert!(contents.windows(2).any(|w| w == b"\r\n"));
     }
 
+    #[test]
+    fn test_new_file_eol_from_gitattributes_lf() {
+        let dir = tempdir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        // init repo and write .gitattributes
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .status()
+            .unwrap();
+        fs::write(dir.path().join(".gitattributes"), "*.txt text eol=lf\n").unwrap();
+
+        let path = dir.path().join("bar.txt");
+        let patch = wrap_patch(&format!("*** Add File: {}\n+line1\n+line2", path.display()));
+        use assert_cmd::prelude::*;
+        use std::process::Command as PCommand;
+        let fake_global = dir.path().join("_gitconfig_global");
+        fs::write(&fake_global, "").unwrap();
+        let mut cmd = PCommand::cargo_bin("apply_patch").unwrap();
+        cmd.current_dir(dir.path())
+            .env("GIT_CONFIG_GLOBAL", &fake_global)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .arg(&patch)
+            .assert()
+            .success();
+        let contents = fs::read(&path).unwrap();
+        // Should be LF only
+        assert!(!contents.windows(2).any(|w| w == b"\r\n"));
+        assert!(contents.contains(&b'\n'));
+    }
+
     // core.autocrlf precedence is environment dependent (can be masked by
     // user/system core.eol). We validate core.eol directly and .gitattributes above.
 

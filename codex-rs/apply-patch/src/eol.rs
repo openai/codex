@@ -339,9 +339,9 @@ pub fn raw_counts() -> (usize, usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     #[cfg(feature = "eol-cache")]
     use tempfile::tempdir;
-    use std::sync::Mutex;
 
     // Serialize tests that touch global RAW_* counters to avoid flakiness
     // when tests run in parallel.
