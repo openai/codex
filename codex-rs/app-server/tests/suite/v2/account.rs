@@ -2,15 +2,19 @@ use anyhow::Result;
 use anyhow::bail;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_login::login_with_api_key;
 use pretty_assertions::assert_eq;
+use serial_test::serial;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -18,14 +22,29 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 // Helper to create a minimal config.toml for the app server
-fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
+fn create_config_toml(
+    codex_home: &Path,
+    forced_method: Option<&str>,
+    forced_workspace_id: Option<&str>,
+) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
+    let forced_line = if let Some(method) = forced_method {
+        format!("forced_login_method = \"{method}\"\n")
+    } else {
+        String::new()
+    };
+    let forced_workspace_line = if let Some(ws) = forced_workspace_id {
+        format!("forced_chatgpt_workspace_id = \"{ws}\"\n")
+    } else {
+        String::new()
+    };
+    let contents = format!(
         r#"
 model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
+{forced_line}
+{forced_workspace_line}
 
 model_provider = "mock_provider"
 
@@ -35,14 +54,15 @@ base_url = "http://127.0.0.1:0/v1"
 wire_api = "chat"
 request_max_retries = 0
 stream_max_retries = 0
-"#,
-    )
+"#
+    );
+    std::fs::write(config_toml, contents)
 }
 
 #[tokio::test]
 async fn logout_account_removes_auth_and_notifies() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
+    create_config_toml(codex_home.path(), None, None)?;
 
     login_with_api_key(
         codex_home.path(),
@@ -72,7 +92,7 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
         bail!("unexpected notification: {parsed:?}");
     };
     assert!(
-        payload.auth_method.is_none(),
+        payload.auth_mode.is_none(),
         "auth_method should be None after logout"
     );
 
@@ -95,5 +115,158 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
     let status: GetAuthStatusResponse = to_response(status_resp)?;
     assert_eq!(status.auth_method, None);
     assert_eq!(status.auth_token, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), None, None)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_login_account_api_key_request("sk-test-key")
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let login: LoginAccountResponse = to_response(resp)?;
+    assert_eq!(login, LoginAccountResponse::ApiKey {});
+
+    let note = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("account/login/completed"),
+    )
+    .await??;
+    let parsed: ServerNotification = note.try_into()?;
+    let ServerNotification::AccountLoginCompleted(payload) = parsed else {
+        bail!("unexpected notification: {parsed:?}");
+    };
+    pretty_assertions::assert_eq!(payload.login_id, None);
+    pretty_assertions::assert_eq!(payload.success, true);
+    pretty_assertions::assert_eq!(payload.error, None);
+
+    let note = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("account/updated"),
+    )
+    .await??;
+    let parsed: ServerNotification = note.try_into()?;
+    let ServerNotification::AccountUpdated(payload) = parsed else {
+        bail!("unexpected notification: {parsed:?}");
+    };
+    pretty_assertions::assert_eq!(payload.auth_mode, Some(AuthMode::ApiKey));
+
+    assert!(codex_home.path().join("auth.json").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn login_account_api_key_rejected_when_forced_chatgpt() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), Some("chatgpt"), None)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_login_account_api_key_request("sk-test-key")
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        err.error.message,
+        "API key login is disabled. Use ChatGPT login instead."
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn login_account_chatgpt_rejected_when_forced_api() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), Some("api"), None)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_login_account_chatgpt_request().await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        err.error.message,
+        "ChatGPT login is disabled. Use API key login instead."
+    );
+    Ok(())
+}
+
+#[tokio::test]
+// Serialize tests that launch the login server since it binds to a fixed port.
+#[serial(login_port)]
+async fn login_account_chatgpt_start() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), None, None)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_login_account_chatgpt_request().await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let login: LoginAccountResponse = to_response(resp)?;
+    let LoginAccountResponse::Chatgpt {
+        login_id: _,
+        auth_url,
+    } = login
+    else {
+        bail!("unexpected login response: {login:?}");
+    };
+    assert!(
+        auth_url.contains("redirect_uri=http%3A%2F%2Flocalhost"),
+        "auth_url should contain a redirect_uri to localhost"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+// Serialize tests that launch the login server since it binds to a fixed port.
+#[serial(login_port)]
+async fn login_account_chatgpt_includes_forced_workspace_query_param() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), None, Some("ws-forced"))?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_login_account_chatgpt_request().await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let login: LoginAccountResponse = to_response(resp)?;
+    let LoginAccountResponse::Chatgpt { auth_url, .. } = login else {
+        bail!("unexpected login response: {login:?}");
+    };
+    assert!(
+        auth_url.contains("allowed_workspace_id=ws-forced"),
+        "auth URL should include forced workspace"
+    );
     Ok(())
 }

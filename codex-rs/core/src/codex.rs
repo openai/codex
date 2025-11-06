@@ -58,7 +58,7 @@ use crate::client_common::ResponseEvent;
 use crate::config::Config;
 use crate::config::types::McpServerTransportConfig;
 use crate::config::types::ShellEnvironmentPolicy;
-use crate::conversation_history::ConversationHistory;
+use crate::context_manager::ContextManager;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -553,7 +553,7 @@ impl Session {
                 None
             } else {
                 Some(format!(
-                    "You can either enable it using the CLI with `--enable {canonical}` or through the config.toml file with `[features].{canonical}`"
+                    "Enable it with `--enable {canonical}` or `[features].{canonical}` in config.toml. See https://github.com/openai/codex/blob/main/docs/config.md#feature-flags for details."
                 ))
             };
             post_session_configured_events.push(Event {
@@ -945,7 +945,7 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> Vec<ResponseItem> {
-        let mut history = ConversationHistory::new();
+        let mut history = ContextManager::new();
         for item in rollout_items {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
@@ -1032,7 +1032,7 @@ impl Session {
         }
     }
 
-    pub(crate) async fn clone_history(&self) -> ConversationHistory {
+    pub(crate) async fn clone_history(&self) -> ContextManager {
         let state = self.state.lock().await;
         state.clone_history()
     }
@@ -1928,6 +1928,7 @@ async fn run_turn(
                 return Err(CodexErr::UsageLimitReached(e));
             }
             Err(CodexErr::UsageNotIncluded) => return Err(CodexErr::UsageNotIncluded),
+            Err(e @ CodexErr::RefreshTokenFailed(_)) => return Err(e),
             Err(e) => {
                 // Use the configured provider-specific stream retry budget.
                 let max_retries = turn_context.client.get_provider().stream_max_retries();
@@ -1946,7 +1947,7 @@ async fn run_turn(
                     // at a seemingly frozen screen.
                     sess.notify_stream_error(
                         &turn_context,
-                        format!("Re-connecting... {retries}/{max_retries}"),
+                        format!("Reconnecting... {retries}/{max_retries}"),
                     )
                     .await;
 
@@ -2834,7 +2835,7 @@ mod tests {
         turn_context: &TurnContext,
     ) -> (Vec<RolloutItem>, Vec<ResponseItem>) {
         let mut rollout_items = Vec::new();
-        let mut live_history = ConversationHistory::new();
+        let mut live_history = ContextManager::new();
 
         let initial_context = session.build_initial_context(turn_context);
         for item in &initial_context {
