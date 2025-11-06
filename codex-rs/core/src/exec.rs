@@ -24,7 +24,6 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::SandboxPolicy;
-use crate::protocol::UserCommandOutputDeltaEvent;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::ExecEnv;
 use crate::sandboxing::SandboxManager;
@@ -99,6 +98,7 @@ impl DeltaEventBuilder {
             inner: Arc::new(|call_id, stream, chunk| {
                 EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
                     call_id: call_id.to_string(),
+                    is_user_shell_command: false,
                     stream,
                     chunk,
                 })
@@ -109,8 +109,9 @@ impl DeltaEventBuilder {
     pub fn user_command() -> Self {
         Self {
             inner: Arc::new(|call_id, stream, chunk| {
-                EventMsg::UserCommandOutputDelta(UserCommandOutputDeltaEvent {
+                EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
                     call_id: call_id.to_string(),
+                    is_user_shell_command: true,
                     stream,
                     chunk,
                 })

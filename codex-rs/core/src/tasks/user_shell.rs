@@ -19,10 +19,10 @@ use crate::exec::execute_exec_env;
 use crate::exec_env::create_env;
 use crate::parse_command::parse_command;
 use crate::protocol::EventMsg;
+use crate::protocol::ExecCommandBeginEvent;
+use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::TaskStartedEvent;
-use crate::protocol::UserCommandBeginEvent;
-use crate::protocol::UserCommandEndEvent;
 use crate::sandboxing::ExecEnv;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_for_model;
@@ -106,11 +106,12 @@ impl SessionTask for UserShellCommandTask {
         session
             .send_event(
                 turn_context.as_ref(),
-                EventMsg::UserCommandBegin(UserCommandBeginEvent {
+                EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                     call_id: call_id.clone(),
                     command: shell_invocation.clone(),
                     cwd: turn_context.cwd.clone(),
                     parsed_cmd,
+                    is_user_shell_command: true,
                 }),
             )
             .await;
@@ -159,8 +160,9 @@ impl SessionTask for UserShellCommandTask {
                 session
                     .send_event(
                         turn_context.as_ref(),
-                        EventMsg::UserCommandEnd(UserCommandEndEvent {
+                        EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id,
+                            is_user_shell_command: true,
                             stdout: String::new(),
                             stderr: aborted_message.clone(),
                             aggregated_output: aborted_message.clone(),
@@ -175,8 +177,9 @@ impl SessionTask for UserShellCommandTask {
                 session
                     .send_event(
                         turn_context.as_ref(),
-                        EventMsg::UserCommandEnd(UserCommandEndEvent {
+                        EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id: call_id.clone(),
+                            is_user_shell_command: true,
                             stdout: output.stdout.text.clone(),
                             stderr: output.stderr.text.clone(),
                             aggregated_output: output.aggregated_output.text.clone(),
@@ -210,8 +213,9 @@ impl SessionTask for UserShellCommandTask {
                 session
                     .send_event(
                         turn_context.as_ref(),
-                        EventMsg::UserCommandEnd(UserCommandEndEvent {
+                        EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id,
+                            is_user_shell_command: true,
                             stdout: exec_output.stdout.text.clone(),
                             stderr: exec_output.stderr.text.clone(),
                             aggregated_output: exec_output.aggregated_output.text.clone(),
