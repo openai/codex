@@ -1,58 +1,36 @@
-use crate::auth::AuthCredentialsStoreMode;
-use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
-use crate::config::types::History;
-use crate::config::types::McpServerConfig;
-use crate::config::types::Notice;
-use crate::config::types::Notifications;
-use crate::config::types::OtelConfig;
-use crate::config::types::OtelConfigToml;
-use crate::config::types::OtelExporterKind;
-use crate::config::types::ReasoningSummaryFormat;
-use crate::config::types::SandboxWorkspaceWrite;
-use crate::config::types::ShellEnvironmentPolicy;
-use crate::config::types::ShellEnvironmentPolicyToml;
-use crate::config::types::Tui;
-use crate::config::types::UriBasedFileOpener;
-use crate::config_loader::LoadedConfigLayers;
-use crate::config_loader::load_config_as_toml;
-use crate::config_loader::load_config_layers_with_overrides;
-use crate::config_loader::merge_toml_values;
-use crate::features::Feature;
-use crate::features::FeatureOverrides;
-use crate::features::Features;
-use crate::features::FeaturesToml;
-use crate::git_info::resolve_root_git_project_for_trust;
-use crate::model_family::ModelFamily;
-use crate::model_family::derive_default_model_family;
-use crate::model_family::find_family_for_model;
-use crate::model_provider_info::ModelProviderInfo;
-use crate::model_provider_info::built_in_model_providers;
-use crate::openai_model_info::get_model_info;
-use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
-use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
-use crate::protocol::AskForApproval;
-use crate::protocol::SandboxPolicy;
-use codex_app_server_protocol::Tools;
-use codex_app_server_protocol::UserSavedConfig;
-use codex_protocol::config_types::ForcedLoginMethod;
-use codex_protocol::config_types::ReasoningEffort;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::SandboxMode;
-use codex_protocol::config_types::Verbosity;
+use std::collections::{BTreeMap, HashMap};
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+
+use codex_app_server_protocol::{Tools, UserSavedConfig};
+use codex_protocol::config_types::{
+    ForcedLoginMethod, ReasoningEffort, ReasoningSummary, SandboxMode, Verbosity,
+};
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use dirs::home_dir;
 use dunce::canonicalize;
 use serde::Deserialize;
 use similar::DiffableStr;
-use std::collections::BTreeMap;
-use std::collections::HashMap;
-use std::io::ErrorKind;
-use std::path::Path;
-use std::path::PathBuf;
-
-use crate::config::profile::ConfigProfile;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
+
+use crate::auth::AuthCredentialsStoreMode;
+use crate::config::profile::ConfigProfile;
+use crate::config::types::{
+    DEFAULT_OTEL_ENVIRONMENT, History, McpServerConfig, Notice, Notifications, OtelConfig,
+    OtelConfigToml, OtelExporterKind, ReasoningSummaryFormat, SandboxWorkspaceWrite,
+    ShellEnvironmentPolicy, ShellEnvironmentPolicyToml, Tui, UriBasedFileOpener,
+};
+use crate::config_loader::{
+    LoadedConfigLayers, load_config_as_toml, load_config_layers_with_overrides, merge_toml_values,
+};
+use crate::features::{Feature, FeatureOverrides, Features, FeaturesToml};
+use crate::git_info::resolve_root_git_project_for_trust;
+use crate::model_family::{ModelFamily, derive_default_model_family, find_family_for_model};
+use crate::model_provider_info::{ModelProviderInfo, built_in_model_providers};
+use crate::openai_model_info::get_model_info;
+use crate::project_doc::{DEFAULT_PROJECT_DOC_FILENAME, LOCAL_PROJECT_DOC_FILENAME};
+use crate::protocol::{AskForApproval, SandboxPolicy};
 
 pub mod edit;
 pub mod profile;
@@ -1281,19 +1259,15 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::edit::ConfigEdit;
-    use crate::config::edit::ConfigEditsBuilder;
-    use crate::config::edit::apply_blocking;
-    use crate::config::types::HistoryPersistence;
-    use crate::config::types::McpServerTransportConfig;
-    use crate::config::types::Notifications;
-    use crate::features::Feature;
+    use std::time::Duration;
+
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     use super::*;
-    use pretty_assertions::assert_eq;
-
-    use std::time::Duration;
-    use tempfile::TempDir;
+    use crate::config::edit::{ConfigEdit, ConfigEditsBuilder, apply_blocking};
+    use crate::config::types::{HistoryPersistence, McpServerTransportConfig, Notifications};
+    use crate::features::Feature;
 
     #[test]
     fn test_toml_parsing() {
@@ -3269,9 +3243,10 @@ trust_level = "trusted"
 
 #[cfg(test)]
 mod notifications_tests {
-    use crate::config::types::Notifications;
     use assert_matches::assert_matches;
     use serde::Deserialize;
+
+    use crate::config::types::Notifications;
 
     #[derive(Deserialize, Debug, PartialEq)]
     struct TuiTomlTest {

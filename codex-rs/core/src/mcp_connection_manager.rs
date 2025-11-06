@@ -6,39 +6,25 @@
 //! in a single aggregated map using the fully-qualified tool name
 //! `"<server><MCP_TOOL_NAME_DELIMITER><tool>"` as the key.
 
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::ffi::OsString;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context;
-use anyhow::Result;
-use anyhow::anyhow;
-use codex_rmcp_client::OAuthCredentialsStoreMode;
-use codex_rmcp_client::RmcpClient;
-use mcp_types::ClientCapabilities;
-use mcp_types::Implementation;
-use mcp_types::ListResourceTemplatesRequestParams;
-use mcp_types::ListResourceTemplatesResult;
-use mcp_types::ListResourcesRequestParams;
-use mcp_types::ListResourcesResult;
-use mcp_types::ReadResourceRequestParams;
-use mcp_types::ReadResourceResult;
-use mcp_types::Resource;
-use mcp_types::ResourceTemplate;
-use mcp_types::Tool;
-
+use anyhow::{Context, Result, anyhow};
+use codex_rmcp_client::{OAuthCredentialsStoreMode, RmcpClient};
+use mcp_types::{
+    ClientCapabilities, Implementation, ListResourceTemplatesRequestParams,
+    ListResourceTemplatesResult, ListResourcesRequestParams, ListResourcesResult,
+    ReadResourceRequestParams, ReadResourceResult, Resource, ResourceTemplate, Tool,
+};
 use serde_json::json;
-use sha1::Digest;
-use sha1::Sha1;
+use sha1::{Digest, Sha1};
 use tokio::task::JoinSet;
-use tracing::info;
-use tracing::warn;
+use tracing::{info, warn};
 
-use crate::config::types::McpServerConfig;
-use crate::config::types::McpServerTransportConfig;
+use crate::config::types::{McpServerConfig, McpServerTransportConfig};
 
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.
@@ -663,9 +649,11 @@ fn is_valid_mcp_server_name(server_name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use mcp_types::ToolInputSchema;
     use std::collections::HashSet;
+
+    use mcp_types::ToolInputSchema;
+
+    use super::*;
 
     fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
         ToolInfo {

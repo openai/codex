@@ -1,23 +1,19 @@
 use std::cmp::Reverse;
 use std::io::{self};
 use std::num::NonZero;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use time::OffsetDateTime;
-use time::PrimitiveDateTime;
+use codex_file_search as file_search;
+use codex_protocol::protocol::{RolloutItem, RolloutLine, SessionSource};
 use time::format_description::FormatItem;
 use time::macros::format_description;
+use time::{OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
 
 use super::SESSIONS_SUBDIR;
 use crate::protocol::EventMsg;
-use codex_file_search as file_search;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SessionSource;
 
 /// Returned page of conversation summaries.
 #[derive(Debug, Default, PartialEq)]
@@ -463,8 +459,8 @@ async fn read_tail_records(
     max_records: usize,
 ) -> io::Result<(Vec<serde_json::Value>, Option<String>)> {
     use std::io::SeekFrom;
-    use tokio::io::AsyncReadExt;
-    use tokio::io::AsyncSeekExt;
+
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
     if max_records == 0 {
         return Ok((Vec::new(), None));

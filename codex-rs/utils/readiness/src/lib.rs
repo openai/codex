@@ -2,13 +2,10 @@
 
 use std::collections::HashSet;
 use std::fmt;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicI32;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::Duration;
 
-use tokio::sync::Mutex;
-use tokio::sync::watch;
+use tokio::sync::{Mutex, watch};
 use tokio::time;
 
 /// Opaque subscription token returned by `subscribe()`.
@@ -200,11 +197,10 @@ mod errors {
 mod tests {
     use std::sync::Arc;
 
-    use super::Readiness;
-    use super::ReadinessFlag;
-    use super::Token;
-    use super::errors::ReadinessError;
     use assert_matches::assert_matches;
+
+    use super::errors::ReadinessError;
+    use super::{Readiness, ReadinessFlag, Token};
 
     #[tokio::test]
     async fn subscribe_and_mark_ready_roundtrip() -> Result<(), ReadinessError> {

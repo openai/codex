@@ -117,8 +117,9 @@ pub(crate) fn simulate_stream_markdown_for_tests(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ratatui::style::Color;
+
+    use super::*;
 
     #[tokio::test]
     async fn no_commit_until_newline() {

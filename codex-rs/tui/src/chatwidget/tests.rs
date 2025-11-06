@@ -1,61 +1,34 @@
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
+
+use assert_matches::assert_matches;
+use codex_common::approval_presets::builtin_approval_presets;
+use codex_core::config::{Config, ConfigOverrides, ConfigToml, OPENAI_DEFAULT_MODEL};
+use codex_core::protocol::{
+    AgentMessageDeltaEvent, AgentMessageEvent, AgentReasoningDeltaEvent, AgentReasoningEvent,
+    ApplyPatchApprovalRequestEvent, Event, EventMsg, ExecApprovalRequestEvent,
+    ExecCommandBeginEvent, ExecCommandEndEvent, ExitedReviewModeEvent, FileChange, Op,
+    PatchApplyBeginEvent, PatchApplyEndEvent, ReviewCodeLocation, ReviewFinding, ReviewLineRange,
+    ReviewOutputEvent, ReviewRequest, StreamErrorEvent, TaskCompleteEvent, TaskStartedEvent,
+    UndoCompletedEvent, UndoStartedEvent, ViewImageToolCallEvent, WarningEvent,
+};
+use codex_core::{AuthManager, CodexAuth};
+use codex_protocol::ConversationId;
+use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::plan_tool::{PlanItemArg, StepStatus, UpdatePlanArgs};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use insta::assert_snapshot;
+use pretty_assertions::assert_eq;
+use tempfile::{NamedTempFile, tempdir};
+use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::unbounded_channel;
+
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
-use assert_matches::assert_matches;
-use codex_common::approval_presets::builtin_approval_presets;
-use codex_core::AuthManager;
-use codex_core::CodexAuth;
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use codex_core::config::ConfigToml;
-use codex_core::config::OPENAI_DEFAULT_MODEL;
-use codex_core::protocol::AgentMessageDeltaEvent;
-use codex_core::protocol::AgentMessageEvent;
-use codex_core::protocol::AgentReasoningDeltaEvent;
-use codex_core::protocol::AgentReasoningEvent;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::ExecCommandBeginEvent;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::ExitedReviewModeEvent;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::Op;
-use codex_core::protocol::PatchApplyBeginEvent;
-use codex_core::protocol::PatchApplyEndEvent;
-use codex_core::protocol::ReviewCodeLocation;
-use codex_core::protocol::ReviewFinding;
-use codex_core::protocol::ReviewLineRange;
-use codex_core::protocol::ReviewOutputEvent;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::StreamErrorEvent;
-use codex_core::protocol::TaskCompleteEvent;
-use codex_core::protocol::TaskStartedEvent;
-use codex_core::protocol::UndoCompletedEvent;
-use codex_core::protocol::UndoStartedEvent;
-use codex_core::protocol::ViewImageToolCallEvent;
-use codex_core::protocol::WarningEvent;
-use codex_protocol::ConversationId;
-use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::plan_tool::PlanItemArg;
-use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::UpdatePlanArgs;
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyModifiers;
-use insta::assert_snapshot;
-use pretty_assertions::assert_eq;
-use std::fs::File;
-use std::io::BufRead;
-use std::io::BufReader;
-use std::path::PathBuf;
-use tempfile::NamedTempFile;
-use tempfile::tempdir;
-use tokio::sync::mpsc::error::TryRecvError;
-use tokio::sync::mpsc::unbounded_channel;
 
 const TEST_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start new a new conversation when possible to keep conversations small and targeted.";
 

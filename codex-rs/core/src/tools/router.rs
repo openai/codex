@@ -1,21 +1,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use codex_protocol::models::{
+    LocalShellAction, ResponseInputItem, ResponseItem, ShellToolCallParams,
+};
+
 use crate::client_common::tools::ToolSpec;
-use crate::codex::Session;
-use crate::codex::TurnContext;
+use crate::codex::{Session, TurnContext};
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::SharedTurnDiffTracker;
-use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolPayload;
-use crate::tools::registry::ConfiguredToolSpec;
-use crate::tools::registry::ToolRegistry;
-use crate::tools::spec::ToolsConfig;
-use crate::tools::spec::build_specs;
-use codex_protocol::models::LocalShellAction;
-use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::models::ShellToolCallParams;
+use crate::tools::context::{SharedTurnDiffTracker, ToolInvocation, ToolPayload};
+use crate::tools::registry::{ConfiguredToolSpec, ToolRegistry};
+use crate::tools::spec::{ToolsConfig, build_specs};
 
 #[derive(Clone)]
 pub struct ToolCall {

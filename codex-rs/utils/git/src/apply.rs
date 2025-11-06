@@ -6,12 +6,12 @@
 //! mode via [`ApplyGitRequest::preflight`] and inspect the resulting paths to
 //! learn what would change before applying for real.
 
-use once_cell::sync::Lazy;
-use regex::Regex;
 use std::ffi::OsStr;
 use std::io;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use once_cell::sync::Lazy;
+use regex::Regex;
 
 /// Parameters for invoking [`apply_git_patch`].
 #[derive(Debug, Clone)]
@@ -492,10 +492,10 @@ fn regex_ci(pat: &str) -> Regex {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::path::Path;
-    use std::sync::Mutex;
-    use std::sync::OnceLock;
+    use std::sync::{Mutex, OnceLock};
+
+    use super::*;
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();

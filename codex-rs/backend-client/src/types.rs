@@ -1,14 +1,12 @@
-pub use codex_backend_openapi_models::models::PaginatedListTaskListItem;
-pub use codex_backend_openapi_models::models::PlanType;
-pub use codex_backend_openapi_models::models::RateLimitStatusDetails;
-pub use codex_backend_openapi_models::models::RateLimitStatusPayload;
-pub use codex_backend_openapi_models::models::RateLimitWindowSnapshot;
-pub use codex_backend_openapi_models::models::TaskListItem;
+use std::collections::HashMap;
 
+pub use codex_backend_openapi_models::models::{
+    PaginatedListTaskListItem, PlanType, RateLimitStatusDetails, RateLimitStatusPayload,
+    RateLimitWindowSnapshot, TaskListItem,
+};
 use serde::Deserialize;
 use serde::de::Deserializer;
 use serde_json::Value;
-use std::collections::HashMap;
 
 /// Hand-rolled models for the Cloud Tasks task-details response.
 /// The generated OpenAPI models are pretty bad. This is a half-step
@@ -317,8 +315,9 @@ pub struct TurnAttemptsSiblingTurnsResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_eq;
+
+    use super::*;
 
     fn fixture(name: &str) -> CodeTaskDetailsResponse {
         let json = match name {

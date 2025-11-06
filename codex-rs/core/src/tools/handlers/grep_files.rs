@@ -7,11 +7,8 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
-use crate::tools::context::ToolPayload;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::context::{ToolInvocation, ToolOutput, ToolPayload};
+use crate::tools::registry::{ToolHandler, ToolKind};
 
 pub struct GrepFilesHandler;
 
@@ -176,9 +173,11 @@ fn parse_results(stdout: &[u8], limit: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::process::Command as StdCommand;
+
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn parses_basic_results() {

@@ -1,30 +1,21 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyModifiers;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::text::Span;
-use ratatui::widgets::Clear;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::StatefulWidgetRef;
-use ratatui::widgets::Widget;
-
-use crate::app_event::AppEvent;
-use crate::app_event::FeedbackCategory;
-use crate::app_event_sender::AppEventSender;
-use crate::history_cell;
-use crate::render::renderable::Renderable;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Clear, Paragraph, StatefulWidgetRef, Widget};
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
 use super::popup_consts::standard_popup_hint_line;
-use super::textarea::TextArea;
-use super::textarea::TextAreaState;
+use super::textarea::{TextArea, TextAreaState};
+use crate::app_event::{AppEvent, FeedbackCategory};
+use crate::app_event_sender::AppEventSender;
+use crate::history_cell;
+use crate::render::renderable::Renderable;
 
 const BASE_ISSUE_URL: &str = "https://github.com/openai/codex/issues/new?template=2-bug-report.yml";
 

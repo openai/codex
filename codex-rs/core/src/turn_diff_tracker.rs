@@ -1,12 +1,9 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::Context;
-use anyhow::Result;
-use anyhow::anyhow;
+use anyhow::{Context, Result, anyhow};
 use sha1::digest::Output;
 use uuid::Uuid;
 
@@ -466,9 +463,10 @@ fn is_windows_drive_or_unc_root(p: &std::path::Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
+
+    use super::*;
 
     /// Compute the Git SHA-1 blob object ID for the given content (string).
     /// This delegates to the bytes version to avoid UTF-8 lossy conversions here.

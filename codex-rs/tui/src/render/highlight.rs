@@ -1,12 +1,8 @@
-use ratatui::style::Style;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::text::Span;
 use std::sync::OnceLock;
-use tree_sitter_highlight::Highlight;
-use tree_sitter_highlight::HighlightConfiguration;
-use tree_sitter_highlight::HighlightEvent;
-use tree_sitter_highlight::Highlighter;
+
+use ratatui::style::{Style, Stylize};
+use ratatui::text::{Line, Span};
+use tree_sitter_highlight::{Highlight, HighlightConfiguration, HighlightEvent, Highlighter};
 
 // Ref: https://github.com/tree-sitter/tree-sitter-bash/blob/master/queries/highlights.scm
 #[derive(Copy, Clone)]
@@ -145,9 +141,10 @@ pub(crate) fn highlight_bash_to_lines(script: &str) -> Vec<Line<'static>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_eq;
     use ratatui::style::Modifier;
+
+    use super::*;
 
     fn reconstructed(lines: &[Line<'static>]) -> String {
         lines

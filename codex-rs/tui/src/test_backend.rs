@@ -1,15 +1,12 @@
 use std::fmt::{self};
-use std::io::Write;
-use std::io::{self};
+use std::io::{
+    Write, {self},
+};
 
-use ratatui::prelude::CrosstermBackend;
-
-use ratatui::backend::Backend;
-use ratatui::backend::ClearType;
-use ratatui::backend::WindowSize;
+use ratatui::backend::{Backend, ClearType, WindowSize};
 use ratatui::buffer::Cell;
-use ratatui::layout::Position;
-use ratatui::layout::Size;
+use ratatui::layout::{Position, Size};
+use ratatui::prelude::CrosstermBackend;
 
 /// This wraps a CrosstermBackend and a vt100::Parser to mock
 /// a "real" terminal.

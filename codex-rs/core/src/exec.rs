@@ -1,33 +1,21 @@
-#[cfg(unix)]
-use std::os::unix::process::ExitStatusExt;
-
 use std::collections::HashMap;
 use std::io;
-use std::path::Path;
-use std::path::PathBuf;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
+use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use async_channel::Sender;
-use tokio::io::AsyncRead;
-use tokio::io::AsyncReadExt;
-use tokio::io::BufReader;
+use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tokio::process::Child;
 
-use crate::error::CodexErr;
-use crate::error::Result;
-use crate::error::SandboxErr;
-use crate::protocol::Event;
-use crate::protocol::EventMsg;
-use crate::protocol::ExecCommandOutputDeltaEvent;
-use crate::protocol::ExecOutputStream;
-use crate::protocol::SandboxPolicy;
-use crate::sandboxing::CommandSpec;
-use crate::sandboxing::ExecEnv;
-use crate::sandboxing::SandboxManager;
-use crate::spawn::StdioPolicy;
-use crate::spawn::spawn_child_async;
+use crate::error::{CodexErr, Result, SandboxErr};
+use crate::protocol::{
+    Event, EventMsg, ExecCommandOutputDeltaEvent, ExecOutputStream, SandboxPolicy,
+};
+use crate::sandboxing::{CommandSpec, ExecEnv, SandboxManager};
+use crate::spawn::{StdioPolicy, spawn_child_async};
 
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
@@ -171,8 +159,9 @@ async fn exec_windows_sandbox(
     params: ExecParams,
     sandbox_policy: &SandboxPolicy,
 ) -> Result<RawExecToolCallOutput> {
-    use crate::config::find_codex_home;
     use codex_windows_sandbox::run_windows_sandbox_capture;
+
+    use crate::config::find_codex_home;
 
     let ExecParams {
         command,
@@ -619,8 +608,9 @@ fn synthetic_exit_status(code: i32) -> ExitStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::Duration;
+
+    use super::*;
 
     fn make_exec_output(
         exit_code: i32,

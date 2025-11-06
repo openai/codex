@@ -1,19 +1,16 @@
-use bytes::BytesMut;
-use futures::StreamExt;
-use futures::stream::BoxStream;
-use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
 use std::io;
 
-use crate::parser::pull_events_from_value;
-use crate::pull::PullEvent;
-use crate::pull::PullProgressReporter;
-use crate::url::base_url_to_host_root;
-use crate::url::is_openai_compatible_base_url;
-use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
-use codex_core::ModelProviderInfo;
-use codex_core::WireApi;
+use bytes::BytesMut;
 use codex_core::config::Config;
+use codex_core::{BUILT_IN_OSS_MODEL_PROVIDER_ID, ModelProviderInfo, WireApi};
+use futures::StreamExt;
+use futures::stream::BoxStream;
+use serde_json::Value as JsonValue;
+
+use crate::parser::pull_events_from_value;
+use crate::pull::{PullEvent, PullProgressReporter};
+use crate::url::{base_url_to_host_root, is_openai_compatible_base_url};
 
 const OLLAMA_CONNECTION_ERROR: &str = "No running Ollama server detected. Start it with: `ollama serve` (after installing). Install instructions: https://github.com/ollama/ollama?tab=readme-ov-file#ollama";
 

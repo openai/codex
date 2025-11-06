@@ -5,16 +5,15 @@
 //!   2. User-defined entries inside `~/.codex/config.toml` under the `model_providers`
 //!      key. These override or extend the defaults at runtime.
 
-use crate::CodexAuth;
-use crate::default_client::CodexHttpClient;
-use crate::default_client::CodexRequestBuilder;
-use codex_app_server_protocol::AuthMode;
-use serde::Deserialize;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::env::VarError;
 use std::time::Duration;
 
+use codex_app_server_protocol::AuthMode;
+use serde::{Deserialize, Serialize};
+
+use crate::CodexAuth;
+use crate::default_client::{CodexHttpClient, CodexRequestBuilder};
 use crate::error::EnvVarError;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
@@ -371,8 +370,9 @@ fn matches_azure_responses_base_url(base_url: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_eq;
+
+    use super::*;
 
     #[test]
     fn test_deserialize_ollama_model_provider_toml() {

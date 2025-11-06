@@ -1,19 +1,16 @@
+use std::collections::HashSet;
+
+use codex_common::fuzzy_match::fuzzy_match;
+use codex_protocol::custom_prompts::{CustomPrompt, PROMPTS_CMD_PREFIX};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
-use super::selection_popup_common::GenericDisplayRow;
-use super::selection_popup_common::render_rows;
-use crate::render::Insets;
-use crate::render::RectExt;
-use crate::slash_command::SlashCommand;
-use crate::slash_command::built_in_slash_commands;
-use codex_common::fuzzy_match::fuzzy_match;
-use codex_protocol::custom_prompts::CustomPrompt;
-use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
-use std::collections::HashSet;
+use super::selection_popup_common::{GenericDisplayRow, render_rows};
+use crate::render::{Insets, RectExt};
+use crate::slash_command::{SlashCommand, built_in_slash_commands};
 
 /// A selectable item in the popup: either a built-in command or a user prompt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -227,8 +224,9 @@ impl WidgetRef for CommandPopup {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_eq;
+
+    use super::*;
 
     #[test]
     fn filter_includes_init_when_typing_prefix() {

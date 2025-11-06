@@ -1,9 +1,9 @@
-use crate::bash::try_parse_shell;
-use crate::bash::try_parse_word_only_commands_sequence;
-use codex_protocol::parse_command::ParsedCommand;
-use shlex::split as shlex_split;
-use shlex::try_join as shlex_try_join;
 use std::path::PathBuf;
+
+use codex_protocol::parse_command::ParsedCommand;
+use shlex::{split as shlex_split, try_join as shlex_try_join};
+
+use crate::bash::{try_parse_shell, try_parse_word_only_commands_sequence};
 
 fn shlex_join(tokens: &[String]) -> String {
     shlex_try_join(tokens.iter().map(String::as_str))
@@ -37,9 +37,10 @@ pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
 #[allow(clippy::items_after_test_module)]
 /// Tests are at the top to encourage using TDD + Codex to fix the implementation.
 mod tests {
-    use super::*;
     use std::path::PathBuf;
     use std::string::ToString;
+
+    use super::*;
 
     fn shlex_split_safe(s: &str) -> Vec<String> {
         shlex_split(s).unwrap_or_else(|| s.split_whitespace().map(ToString::to_string).collect())

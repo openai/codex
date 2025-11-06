@@ -6,6 +6,12 @@ macro_rules! windows_modules {
 
 windows_modules!(acl, allow, audit, cap, env, logging, policy, token, winutil);
 
+#[cfg(not(target_os = "windows"))]
+pub use stub::preflight_audit_everyone_writable;
+#[cfg(not(target_os = "windows"))]
+pub use stub::run_windows_sandbox_capture;
+#[cfg(not(target_os = "windows"))]
+pub use stub::CaptureResult;
 #[cfg(target_os = "windows")]
 pub use windows_impl::preflight_audit_everyone_writable;
 #[cfg(target_os = "windows")]
@@ -13,56 +19,34 @@ pub use windows_impl::run_windows_sandbox_capture;
 #[cfg(target_os = "windows")]
 pub use windows_impl::CaptureResult;
 
-#[cfg(not(target_os = "windows"))]
-pub use stub::preflight_audit_everyone_writable;
-#[cfg(not(target_os = "windows"))]
-pub use stub::run_windows_sandbox_capture;
-#[cfg(not(target_os = "windows"))]
-pub use stub::CaptureResult;
-
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use super::acl::add_allow_ace;
-    use super::acl::allow_null_device;
-    use super::acl::revoke_ace;
-    use super::allow::compute_allow_paths;
-    use super::audit;
-    use super::cap::cap_sid_file;
-    use super::cap::load_or_create_cap_sids;
-    use super::env::apply_no_network_to_env;
-    use super::env::ensure_non_interactive_pager;
-    use super::env::normalize_null_device_env;
-    use super::logging::debug_log;
-    use super::logging::log_failure;
-    use super::logging::log_start;
-    use super::logging::log_success;
-    use super::policy::SandboxMode;
-    use super::policy::SandboxPolicy;
-    use super::token::convert_string_sid_to_sid;
-    use super::winutil::format_last_error;
-    use super::winutil::to_wide;
-    use anyhow::Result;
     use std::collections::HashMap;
     use std::ffi::c_void;
-    use std::fs;
-    use std::io;
-    use std::path::Path;
-    use std::path::PathBuf;
-    use std::ptr;
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::Foundation::GetLastError;
-    use windows_sys::Win32::Foundation::SetHandleInformation;
-    use windows_sys::Win32::Foundation::HANDLE;
-    use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
+    use std::path::{Path, PathBuf};
+    use std::{fs, io, ptr};
+
+    use anyhow::Result;
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT,
+    };
     use windows_sys::Win32::System::Pipes::CreatePipe;
-    use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
-    use windows_sys::Win32::System::Threading::GetExitCodeProcess;
-    use windows_sys::Win32::System::Threading::WaitForSingleObject;
-    use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
-    use windows_sys::Win32::System::Threading::INFINITE;
-    use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
-    use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
-    use windows_sys::Win32::System::Threading::STARTUPINFOW;
+    use windows_sys::Win32::System::Threading::{
+        CreateProcessAsUserW, GetExitCodeProcess, WaitForSingleObject, CREATE_UNICODE_ENVIRONMENT,
+        INFINITE, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
+    };
+
+    use super::acl::{add_allow_ace, allow_null_device, revoke_ace};
+    use super::allow::compute_allow_paths;
+    use super::audit;
+    use super::cap::{cap_sid_file, load_or_create_cap_sids};
+    use super::env::{
+        apply_no_network_to_env, ensure_non_interactive_pager, normalize_null_device_env,
+    };
+    use super::logging::{debug_log, log_failure, log_start, log_success};
+    use super::policy::{SandboxMode, SandboxPolicy};
+    use super::token::convert_string_sid_to_sid;
+    use super::winutil::{format_last_error, to_wide};
 
     type PipeHandles = ((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE));
 
@@ -420,10 +404,10 @@ mod windows_impl {
 
 #[cfg(not(target_os = "windows"))]
 mod stub {
-    use anyhow::bail;
-    use anyhow::Result;
     use std::collections::HashMap;
     use std::path::Path;
+
+    use anyhow::{bail, Result};
 
     #[derive(Debug, Default)]
     pub struct CaptureResult {

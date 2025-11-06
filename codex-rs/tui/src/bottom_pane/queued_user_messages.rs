@@ -7,8 +7,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::key_hint;
 use crate::render::renderable::Renderable;
-use crate::wrapping::RtOptions;
-use crate::wrapping::word_wrap_lines;
+use crate::wrapping::{RtOptions, word_wrap_lines};
 
 /// Widget that displays a list of user messages queued while a turn is in progress.
 pub(crate) struct QueuedUserMessages {
@@ -74,9 +73,10 @@ impl Renderable for QueuedUserMessages {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
+
+    use super::*;
 
     #[test]
     fn desired_height_empty() {

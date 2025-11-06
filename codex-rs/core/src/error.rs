@@ -1,21 +1,19 @@
-use crate::codex::ProcessedResponseItem;
-use crate::exec::ExecToolCallOutput;
-use crate::token_data::KnownPlan;
-use crate::token_data::PlanType;
-use crate::truncate::truncate_middle;
-use chrono::DateTime;
-use chrono::Datelike;
-use chrono::Local;
-use chrono::Utc;
+use std::io;
+use std::time::Duration;
+
+use chrono::{DateTime, Datelike, Local, Utc};
 use codex_async_utils::CancelErr;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::RateLimitSnapshot;
 use reqwest::StatusCode;
 use serde_json;
-use std::io;
-use std::time::Duration;
 use thiserror::Error;
 use tokio::task::JoinError;
+
+use crate::codex::ProcessedResponseItem;
+use crate::exec::ExecToolCallOutput;
+use crate::token_data::{KnownPlan, PlanType};
+use crate::truncate::truncate_middle;
 
 pub type Result<T> = std::result::Result<T, CodexErr>;
 
@@ -437,14 +435,12 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::exec::StreamOutput;
-    use chrono::DateTime;
-    use chrono::Duration as ChronoDuration;
-    use chrono::TimeZone;
-    use chrono::Utc;
+    use chrono::{DateTime, Duration as ChronoDuration, TimeZone, Utc};
     use codex_protocol::protocol::RateLimitWindow;
     use pretty_assertions::assert_eq;
+
+    use super::*;
+    use crate::exec::StreamOutput;
 
     fn rate_limit_snapshot() -> RateLimitSnapshot {
         let primary_reset_at = Utc

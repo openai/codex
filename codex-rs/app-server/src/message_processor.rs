@@ -1,25 +1,19 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use codex_app_server_protocol::{
+    ClientInfo, ClientRequest, InitializeResponse, JSONRPCError, JSONRPCErrorError,
+    JSONRPCNotification, JSONRPCRequest, JSONRPCResponse,
+};
+use codex_core::config::Config;
+use codex_core::default_client::{USER_AGENT_SUFFIX, get_codex_user_agent};
+use codex_core::{AuthManager, ConversationManager};
+use codex_feedback::CodexFeedback;
+use codex_protocol::protocol::SessionSource;
 
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
-use codex_app_server_protocol::ClientInfo;
-use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::InitializeResponse;
-
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCRequest;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_core::AuthManager;
-use codex_core::ConversationManager;
-use codex_core::config::Config;
-use codex_core::default_client::USER_AGENT_SUFFIX;
-use codex_core::default_client::get_codex_user_agent;
-use codex_feedback::CodexFeedback;
-use codex_protocol::protocol::SessionSource;
-use std::sync::Arc;
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,

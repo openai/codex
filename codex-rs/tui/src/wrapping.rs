@@ -1,7 +1,7 @@
-use ratatui::text::Line;
-use ratatui::text::Span;
 use std::borrow::Cow;
 use std::ops::Range;
+
+use ratatui::text::{Line, Span};
 use textwrap::Options;
 use textwrap::wrap_algorithms::Penalties;
 
@@ -402,12 +402,13 @@ fn slice_line_spans<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::string::ToString;
+
     use itertools::Itertools as _;
     use pretty_assertions::assert_eq;
-    use ratatui::style::Color;
-    use ratatui::style::Stylize;
-    use std::string::ToString;
+    use ratatui::style::{Color, Stylize};
+
+    use super::*;
 
     fn concat_line(line: &Line) -> String {
         line.spans

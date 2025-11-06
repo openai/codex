@@ -1,17 +1,14 @@
-use crate::config::CONFIG_TOML_FILE;
-use crate::config::types::McpServerConfig;
-use crate::config::types::Notice;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
 use anyhow::Context;
 use codex_protocol::config_types::ReasoningEffort;
-use std::collections::BTreeMap;
-use std::path::Path;
-use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use tokio::task;
-use toml_edit::DocumentMut;
-use toml_edit::Item as TomlItem;
-use toml_edit::Table as TomlTable;
-use toml_edit::value;
+use toml_edit::{DocumentMut, Item as TomlItem, Table as TomlTable, value};
+
+use crate::config::CONFIG_TOML_FILE;
+use crate::config::types::{McpServerConfig, Notice};
 
 /// Discrete config mutations supported by the persistence engine.
 #[derive(Clone, Debug)]
@@ -41,13 +38,9 @@ pub enum ConfigEdit {
 
 // TODO(jif) move to a dedicated file
 mod document_helpers {
-    use crate::config::types::McpServerConfig;
-    use crate::config::types::McpServerTransportConfig;
-    use toml_edit::Array as TomlArray;
-    use toml_edit::InlineTable;
-    use toml_edit::Item as TomlItem;
-    use toml_edit::Table as TomlTable;
-    use toml_edit::value;
+    use toml_edit::{Array as TomlArray, InlineTable, Item as TomlItem, Table as TomlTable, value};
+
+    use crate::config::types::{McpServerConfig, McpServerTransportConfig};
 
     pub(super) fn ensure_table_for_write(item: &mut TomlItem) -> Option<&mut TomlTable> {
         match item {
@@ -508,13 +501,14 @@ impl ConfigEditsBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config::types::McpServerTransportConfig;
     use codex_protocol::config_types::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
     use tokio::runtime::Builder;
     use toml::Value as TomlValue;
+
+    use super::*;
+    use crate::config::types::McpServerTransportConfig;
 
     #[test]
     fn blocking_set_model_top_level() {

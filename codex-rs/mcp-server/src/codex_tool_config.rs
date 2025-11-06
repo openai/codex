@@ -1,16 +1,15 @@
 //! Configuration object accepted by the `codex` MCP tool-call.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
+
 use codex_core::protocol::AskForApproval;
 use codex_protocol::config_types::SandboxMode;
 use codex_utils_json_to_toml::json_to_toml;
-use mcp_types::Tool;
-use mcp_types::ToolInputSchema;
+use mcp_types::{Tool, ToolInputSchema};
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaSettings;
-use serde::Deserialize;
-use serde::Serialize;
-use std::collections::HashMap;
-use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
 
 /// Client-supplied configuration for a `codex` tool-call.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -230,8 +229,9 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_eq;
+
+    use super::*;
 
     /// We include a test to verify the exact JSON schema as "executable
     /// documentation" for the schema. When can track changes to this test as a

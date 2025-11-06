@@ -1,37 +1,29 @@
 mod storage;
 
-use chrono::Utc;
-use reqwest::StatusCode;
-use serde::Deserialize;
-use serde::Serialize;
-#[cfg(test)]
-use serial_test::serial;
 use std::env;
 use std::fmt::Debug;
 use std::io::ErrorKind;
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
+use reqwest::StatusCode;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+#[cfg(test)]
+use serial_test::serial;
+use thiserror::Error;
 
-pub use crate::auth::storage::AuthCredentialsStoreMode;
-pub use crate::auth::storage::AuthDotJson;
-use crate::auth::storage::AuthStorageBackend;
-use crate::auth::storage::create_auth_storage;
+pub use crate::auth::storage::{AuthCredentialsStoreMode, AuthDotJson};
+use crate::auth::storage::{AuthStorageBackend, create_auth_storage};
 use crate::config::Config;
 use crate::default_client::CodexHttpClient;
-use crate::error::RefreshTokenFailedError;
-use crate::error::RefreshTokenFailedReason;
-use crate::token_data::PlanType;
-use crate::token_data::TokenData;
-use crate::token_data::parse_id_token;
+use crate::error::{RefreshTokenFailedError, RefreshTokenFailedReason};
+use crate::token_data::{PlanType, TokenData, parse_id_token};
 use crate::util::try_parse_error_message;
-use serde_json::Value;
-use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub struct CodexAuth {
@@ -602,22 +594,17 @@ struct CachedAuth {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::auth::storage::FileAuthStorage;
-    use crate::auth::storage::get_auth_file;
-    use crate::config::Config;
-    use crate::config::ConfigOverrides;
-    use crate::config::ConfigToml;
-    use crate::token_data::IdTokenInfo;
-    use crate::token_data::KnownPlan;
-    use crate::token_data::PlanType;
-
     use base64::Engine;
     use codex_protocol::config_types::ForcedLoginMethod;
     use pretty_assertions::assert_eq;
     use serde::Serialize;
     use serde_json::json;
     use tempfile::tempdir;
+
+    use super::*;
+    use crate::auth::storage::{FileAuthStorage, get_auth_file};
+    use crate::config::{Config, ConfigOverrides, ConfigToml};
+    use crate::token_data::{IdTokenInfo, KnownPlan, PlanType};
 
     #[tokio::test]
     async fn refresh_without_id_token() {

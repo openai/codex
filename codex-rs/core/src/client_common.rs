@@ -1,24 +1,24 @@
-use crate::client_common::tools::ToolSpec;
-use crate::error::Result;
-use crate::model_family::ModelFamily;
-use crate::protocol::RateLimitSnapshot;
-use crate::protocol::TokenUsage;
-use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
-use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::config_types::Verbosity as VerbosityConfig;
-use codex_protocol::models::ResponseItem;
-use futures::Stream;
-use serde::Deserialize;
-use serde::Serialize;
-use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ops::Deref;
 use std::pin::Pin;
-use std::task::Context;
-use std::task::Poll;
+use std::task::{Context, Poll};
+
+use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
+use codex_protocol::config_types::{
+    ReasoningEffort as ReasoningEffortConfig, ReasoningSummary as ReasoningSummaryConfig,
+    Verbosity as VerbosityConfig,
+};
+use codex_protocol::models::ResponseItem;
+use futures::Stream;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::sync::mpsc;
+
+use crate::client_common::tools::ToolSpec;
+use crate::error::Result;
+use crate::model_family::ModelFamily;
+use crate::protocol::{RateLimitSnapshot, TokenUsage};
 
 /// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
 pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
@@ -284,9 +284,9 @@ pub(crate) struct ResponsesApiRequest<'a> {
 }
 
 pub(crate) mod tools {
+    use serde::{Deserialize, Serialize};
+
     use crate::tools::spec::JsonSchema;
-    use serde::Deserialize;
-    use serde::Serialize;
 
     /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
     /// Responses API.
@@ -390,10 +390,10 @@ impl Stream for ResponseStream {
 
 #[cfg(test)]
 mod tests {
-    use crate::model_family::find_family_for_model;
     use pretty_assertions::assert_eq;
 
     use super::*;
+    use crate::model_family::find_family_for_model;
 
     struct InstructionsTestCase {
         pub slug: &'static str,

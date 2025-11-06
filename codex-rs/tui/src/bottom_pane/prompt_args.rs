@@ -1,10 +1,9 @@
-use codex_protocol::custom_prompts::CustomPrompt;
-use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
+use std::collections::{HashMap, HashSet};
+
+use codex_protocol::custom_prompts::{CustomPrompt, PROMPTS_CMD_PREFIX};
 use lazy_static::lazy_static;
 use regex_lite::Regex;
 use shlex::Shlex;
-use std::collections::HashMap;
-use std::collections::HashSet;
 
 lazy_static! {
     static ref PROMPT_ARG_REGEX: Regex =

@@ -1,29 +1,22 @@
-use anyhow::Context;
-use anyhow::Result;
+use std::ffi::OsString;
+
+use anyhow::{Context, Result};
 use base64::Engine;
-use chrono::Duration;
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use codex_core::CodexAuth;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::AuthDotJson;
-use codex_core::auth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
-use codex_core::auth::RefreshTokenError;
-use codex_core::auth::load_auth_dot_json;
-use codex_core::auth::save_auth;
+use codex_core::auth::{
+    AuthCredentialsStoreMode, AuthDotJson, REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR, RefreshTokenError,
+    load_auth_dot_json, save_auth,
+};
 use codex_core::error::RefreshTokenFailedReason;
-use codex_core::token_data::IdTokenInfo;
-use codex_core::token_data::TokenData;
+use codex_core::token_data::{IdTokenInfo, TokenData};
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
 use serde_json::json;
-use std::ffi::OsString;
 use tempfile::TempDir;
-use wiremock::Mock;
-use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const INITIAL_ACCESS_TOKEN: &str = "initial-access-token";
 const INITIAL_REFRESH_TOKEN: &str = "initial-refresh-token";

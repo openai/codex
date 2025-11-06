@@ -1,26 +1,20 @@
-use crate::AuthManager;
-use crate::CodexAuth;
-use crate::codex::Codex;
-use crate::codex::CodexSpawnOk;
-use crate::codex::INITIAL_SUBMIT_ID;
-use crate::codex_conversation::CodexConversation;
-use crate::config::Config;
-use crate::error::CodexErr;
-use crate::error::Result as CodexResult;
-use crate::protocol::Event;
-use crate::protocol::EventMsg;
-use crate::protocol::SessionConfiguredEvent;
-use crate::rollout::RolloutRecorder;
-use codex_protocol::ConversationId;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::InitialHistory;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SessionSource;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use codex_protocol::ConversationId;
+use codex_protocol::items::TurnItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::{InitialHistory, RolloutItem, SessionSource};
 use tokio::sync::RwLock;
+
+use crate::codex::{Codex, CodexSpawnOk, INITIAL_SUBMIT_ID};
+use crate::codex_conversation::CodexConversation;
+use crate::config::Config;
+use crate::error::{CodexErr, Result as CodexResult};
+use crate::protocol::{Event, EventMsg, SessionConfiguredEvent};
+use crate::rollout::RolloutRecorder;
+use crate::{AuthManager, CodexAuth};
 
 /// Represents a newly created Codex conversation, including the first event
 /// (which is [`EventMsg::SessionConfigured`]).
@@ -228,13 +222,12 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
 
 #[cfg(test)]
 mod tests {
+    use assert_matches::assert_matches;
+    use codex_protocol::models::{ContentItem, ReasoningItemReasoningSummary, ResponseItem};
+    use pretty_assertions::assert_eq;
+
     use super::*;
     use crate::codex::make_session_and_context;
-    use assert_matches::assert_matches;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ReasoningItemReasoningSummary;
-    use codex_protocol::models::ResponseItem;
-    use pretty_assertions::assert_eq;
 
     fn user_msg(text: &str) -> ResponseItem {
         ResponseItem::Message {

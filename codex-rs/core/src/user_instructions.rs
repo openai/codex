@@ -1,8 +1,5 @@
-use serde::Deserialize;
-use serde::Serialize;
-
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::{ContentItem, ResponseItem};
+use serde::{Deserialize, Serialize};
 
 pub const USER_INSTRUCTIONS_OPEN_TAG_LEGACY: &str = "<user_instructions>";
 pub const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";

@@ -2,19 +2,15 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use crate::error::ImageProcessingError;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use codex_utils_cache::BlockingLruCache;
-use codex_utils_cache::sha1_digest;
-use image::ColorType;
-use image::DynamicImage;
-use image::GenericImageView;
-use image::ImageEncoder;
-use image::ImageFormat;
+use codex_utils_cache::{BlockingLruCache, sha1_digest};
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::imageops::FilterType;
+use image::{ColorType, DynamicImage, GenericImageView, ImageEncoder, ImageFormat};
+
+use crate::error::ImageProcessingError;
 /// Maximum width used when resizing images before uploading.
 pub const MAX_WIDTH: u32 = 2048;
 /// Maximum height used when resizing images before uploading.
@@ -168,11 +164,10 @@ fn format_to_mime(format: ImageFormat) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use image::GenericImageView;
-    use image::ImageBuffer;
-    use image::Rgba;
+    use image::{GenericImageView, ImageBuffer, Rgba};
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn returns_original_image_when_within_bounds() {

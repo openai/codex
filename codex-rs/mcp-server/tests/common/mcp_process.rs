@@ -1,34 +1,19 @@
 use std::path::Path;
-use std::process::Stdio;
-use std::sync::atomic::AtomicI64;
-use std::sync::atomic::Ordering;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::AsyncWriteExt;
-use tokio::io::BufReader;
-use tokio::process::Child;
-use tokio::process::ChildStdin;
-use tokio::process::ChildStdout;
+use std::process::{Command as StdCommand, Stdio};
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use anyhow::Context;
 use assert_cmd::prelude::*;
 use codex_mcp_server::CodexToolCallParam;
-
-use mcp_types::CallToolRequestParams;
-use mcp_types::ClientCapabilities;
-use mcp_types::Implementation;
-use mcp_types::InitializeRequestParams;
-use mcp_types::JSONRPC_VERSION;
-use mcp_types::JSONRPCMessage;
-use mcp_types::JSONRPCNotification;
-use mcp_types::JSONRPCRequest;
-use mcp_types::JSONRPCResponse;
-use mcp_types::ModelContextProtocolNotification;
-use mcp_types::ModelContextProtocolRequest;
-use mcp_types::RequestId;
+use mcp_types::{
+    CallToolRequestParams, ClientCapabilities, Implementation, InitializeRequestParams,
+    JSONRPC_VERSION, JSONRPCMessage, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse,
+    ModelContextProtocolNotification, ModelContextProtocolRequest, RequestId,
+};
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::process::Command as StdCommand;
-use tokio::process::Command;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 pub struct McpProcess {
     next_request_id: AtomicI64,

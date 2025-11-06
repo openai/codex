@@ -1,14 +1,12 @@
-use crate::protocol::AgentMessageEvent;
-use crate::protocol::AgentReasoningEvent;
-use crate::protocol::AgentReasoningRawContentEvent;
-use crate::protocol::EventMsg;
-use crate::protocol::UserMessageEvent;
-use crate::protocol::WebSearchEndEvent;
-use crate::user_input::UserInput;
 use schemars::JsonSchema;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+
+use crate::protocol::{
+    AgentMessageEvent, AgentReasoningEvent, AgentReasoningRawContentEvent, EventMsg,
+    UserMessageEvent, WebSearchEndEvent,
+};
+use crate::user_input::UserInput;
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub enum TurnItem {

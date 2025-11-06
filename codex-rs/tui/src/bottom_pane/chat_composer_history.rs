@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
+use codex_core::protocol::Op;
+
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use codex_core::protocol::Op;
 
 /// State machine that manages shell-style history navigation (Up/Down) inside
 /// the chat composer. This struct is intentionally decoupled from the
@@ -196,10 +197,11 @@ impl ChatComposerHistory {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::app_event::AppEvent;
     use codex_core::protocol::Op;
     use tokio::sync::mpsc::unbounded_channel;
+
+    use super::*;
+    use crate::app_event::AppEvent;
 
     #[test]
     fn duplicate_submissions_are_not_recorded() {

@@ -1,19 +1,14 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_core::CodexAuth;
-use codex_core::ConversationManager;
-use codex_core::ModelProviderInfo;
-use codex_core::built_in_model_providers;
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
+use codex_core::protocol::{EventMsg, Op};
+use codex_core::{CodexAuth, ConversationManager, ModelProviderInfo, built_in_model_providers};
 use codex_protocol::user_input::UserInput;
-use core_test_support::load_default_config_for_test;
-use core_test_support::load_sse_fixture_with_id;
-use core_test_support::responses;
-use core_test_support::skip_if_no_network;
-use core_test_support::wait_for_event;
+use core_test_support::{
+    load_default_config_for_test, load_sse_fixture_with_id, responses, skip_if_no_network,
+    wait_for_event,
+};
 use tempfile::TempDir;
 use wiremock::MockServer;
 

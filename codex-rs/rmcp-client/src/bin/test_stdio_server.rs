@@ -2,26 +2,14 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rmcp::ErrorData as McpError;
-use rmcp::ServiceExt;
 use rmcp::handler::server::ServerHandler;
-use rmcp::model::CallToolRequestParam;
-use rmcp::model::CallToolResult;
-use rmcp::model::JsonObject;
-use rmcp::model::ListResourceTemplatesResult;
-use rmcp::model::ListResourcesResult;
-use rmcp::model::ListToolsResult;
-use rmcp::model::PaginatedRequestParam;
-use rmcp::model::RawResource;
-use rmcp::model::RawResourceTemplate;
-use rmcp::model::ReadResourceRequestParam;
-use rmcp::model::ReadResourceResult;
-use rmcp::model::Resource;
-use rmcp::model::ResourceContents;
-use rmcp::model::ResourceTemplate;
-use rmcp::model::ServerCapabilities;
-use rmcp::model::ServerInfo;
-use rmcp::model::Tool;
+use rmcp::model::{
+    CallToolRequestParam, CallToolResult, JsonObject, ListResourceTemplatesResult,
+    ListResourcesResult, ListToolsResult, PaginatedRequestParam, RawResource, RawResourceTemplate,
+    ReadResourceRequestParam, ReadResourceResult, Resource, ResourceContents, ResourceTemplate,
+    ServerCapabilities, ServerInfo, Tool,
+};
+use rmcp::{ErrorData as McpError, ServiceExt};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::task;

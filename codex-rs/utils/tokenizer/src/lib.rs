@@ -1,7 +1,6 @@
 use std::fmt;
 
-use anyhow::Context;
-use anyhow::Error as AnyhowError;
+use anyhow::{Context, Error as AnyhowError};
 use thiserror::Error;
 use tiktoken_rs::CoreBPE;
 
@@ -109,8 +108,9 @@ impl Tokenizer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_eq;
+
+    use super::*;
 
     #[test]
     fn cl100k_base_roundtrip_simple() -> Result<(), TokenizerError> {

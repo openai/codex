@@ -1,7 +1,4 @@
-use mcp_types::JSONRPCMessage;
-use mcp_types::ProgressNotificationParams;
-use mcp_types::ProgressToken;
-use mcp_types::ServerNotification;
+use mcp_types::{JSONRPCMessage, ProgressNotificationParams, ProgressToken, ServerNotification};
 
 #[test]
 fn deserialize_progress_notification() {

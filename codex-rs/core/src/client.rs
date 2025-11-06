@@ -1,17 +1,16 @@
 use std::io::BufRead;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use bytes::Bytes;
-use chrono::DateTime;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use codex_app_server_protocol::AuthMode;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
-use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::config_types::{
+    ReasoningEffort as ReasoningEffortConfig, ReasoningSummary as ReasoningSummaryConfig,
+};
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use eventsource_stream::Eventsource;
@@ -19,45 +18,31 @@ use futures::prelude::*;
 use regex_lite::Regex;
 use reqwest::StatusCode;
 use reqwest::header::HeaderMap;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
-use tracing::debug;
-use tracing::trace;
-use tracing::warn;
+use tracing::{debug, trace, warn};
 
 use crate::AuthManager;
-use crate::auth::CodexAuth;
-use crate::auth::RefreshTokenError;
-use crate::chat_completions::AggregateStreamExt;
-use crate::chat_completions::stream_chat_completions;
-use crate::client_common::Prompt;
-use crate::client_common::ResponseEvent;
-use crate::client_common::ResponseStream;
-use crate::client_common::ResponsesApiRequest;
-use crate::client_common::create_reasoning_param_for_request;
-use crate::client_common::create_text_param_for_request;
+use crate::auth::{CodexAuth, RefreshTokenError};
+use crate::chat_completions::{AggregateStreamExt, stream_chat_completions};
+use crate::client_common::{
+    Prompt, ResponseEvent, ResponseStream, ResponsesApiRequest, create_reasoning_param_for_request,
+    create_text_param_for_request,
+};
 use crate::config::Config;
-use crate::default_client::CodexHttpClient;
-use crate::default_client::create_client;
-use crate::error::CodexErr;
-use crate::error::ConnectionFailedError;
-use crate::error::ResponseStreamFailed;
-use crate::error::Result;
-use crate::error::RetryLimitReachedError;
-use crate::error::UnexpectedResponseError;
-use crate::error::UsageLimitReachedError;
+use crate::default_client::{CodexHttpClient, create_client};
+use crate::error::{
+    CodexErr, ConnectionFailedError, ResponseStreamFailed, Result, RetryLimitReachedError,
+    UnexpectedResponseError, UsageLimitReachedError,
+};
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_family::ModelFamily;
-use crate::model_provider_info::ModelProviderInfo;
-use crate::model_provider_info::WireApi;
+use crate::model_provider_info::{ModelProviderInfo, WireApi};
 use crate::openai_model_info::get_model_info;
-use crate::protocol::RateLimitSnapshot;
-use crate::protocol::RateLimitWindow;
-use crate::protocol::TokenUsage;
+use crate::protocol::{RateLimitSnapshot, RateLimitWindow, TokenUsage};
 use crate::token_data::PlanType;
 use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::util::backoff;
@@ -977,12 +962,13 @@ fn is_context_window_error(error: &Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use assert_matches::assert_matches;
     use serde_json::json;
     use tokio::sync::mpsc;
     use tokio_test::io::Builder as IoBuilder;
     use tokio_util::io::ReaderStream;
+
+    use super::*;
 
     // ────────────────────────────
     // Helpers
@@ -1451,8 +1437,7 @@ mod tests {
 
     #[test]
     fn error_response_deserializes_schema_known_plan_type_and_serializes_back() {
-        use crate::token_data::KnownPlan;
-        use crate::token_data::PlanType;
+        use crate::token_data::{KnownPlan, PlanType};
 
         let json =
             r#"{"error":{"type":"usage_limit_reached","plan_type":"pro","resets_at":1704067200}}"#;

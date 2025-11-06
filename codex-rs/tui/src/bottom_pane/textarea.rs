@@ -1,15 +1,11 @@
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyModifiers;
+use std::cell::{Ref, RefCell};
+use std::ops::Range;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
-use ratatui::style::Style;
-use ratatui::widgets::StatefulWidgetRef;
-use ratatui::widgets::WidgetRef;
-use std::cell::Ref;
-use std::cell::RefCell;
-use std::ops::Range;
+use ratatui::style::{Color, Style};
+use ratatui::widgets::{StatefulWidgetRef, WidgetRef};
 use textwrap::Options;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -1011,9 +1007,10 @@ impl TextArea {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     // crossterm types are intentionally not imported here to avoid unused warnings
     use rand::prelude::*;
+
+    use super::*;
 
     fn rand_grapheme(rng: &mut rand::rngs::StdRng) -> String {
         let r: u8 = rng.random_range(0..100);

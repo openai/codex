@@ -1,15 +1,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 
-use crate::codex::TurnContext;
-use crate::codex::compact;
+use super::{SessionTask, SessionTaskContext};
+use crate::codex::{TurnContext, compact};
 use crate::state::TaskKind;
-use codex_protocol::user_input::UserInput;
-
-use super::SessionTask;
-use super::SessionTaskContext;
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct CompactTask;

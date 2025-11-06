@@ -2,18 +2,12 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use anyhow::Result;
-use portable_pty::native_pty_system;
-use portable_pty::CommandBuilder;
-use portable_pty::PtySize;
-use tokio::sync::broadcast;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
-use tokio::sync::Mutex as TokioMutex;
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex as TokioMutex};
 use tokio::task::JoinHandle;
 
 #[derive(Debug)]

@@ -3,23 +3,18 @@ use std::string::String;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context;
-use anyhow::Result;
-use anyhow::anyhow;
+use anyhow::{Context, Result, anyhow};
 use reqwest::ClientBuilder;
 use rmcp::transport::auth::OAuthState;
-use tiny_http::Response;
-use tiny_http::Server;
+use tiny_http::{Response, Server};
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 use urlencoding::decode;
 
-use crate::OAuthCredentialsStoreMode;
-use crate::StoredOAuthTokens;
-use crate::WrappedOAuthTokenResponse;
-use crate::save_oauth_tokens;
-use crate::utils::apply_default_headers;
-use crate::utils::build_default_headers;
+use crate::utils::{apply_default_headers, build_default_headers};
+use crate::{
+    OAuthCredentialsStoreMode, StoredOAuthTokens, WrappedOAuthTokenResponse, save_oauth_tokens,
+};
 
 struct CallbackServerGuard {
     server: Arc<Server>,

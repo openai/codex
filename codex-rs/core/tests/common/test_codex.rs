@@ -1,30 +1,22 @@
 use std::mem::swap;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
-use codex_core::CodexAuth;
-use codex_core::CodexConversation;
-use codex_core::ConversationManager;
-use codex_core::ModelProviderInfo;
-use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::{AskForApproval, EventMsg, Op, SandboxPolicy, SessionConfiguredEvent};
+use codex_core::{
+    CodexAuth, CodexConversation, ConversationManager, ModelProviderInfo, built_in_model_providers,
+};
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
-use crate::load_default_config_for_test;
 use crate::responses::start_mock_server;
-use crate::wait_for_event;
+use crate::{load_default_config_for_test, wait_for_event};
 
 type ConfigMutator = dyn FnOnce(&mut Config) + Send;
 

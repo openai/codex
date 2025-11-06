@@ -1,31 +1,19 @@
-use std::fs::File;
-use std::fs::{self};
+use std::fs::{
+    File, {self},
+};
 use std::io::Write;
-use std::net::SocketAddr;
-use std::net::TcpListener;
-use std::path::Path;
-use std::path::PathBuf;
+use std::net::{SocketAddr, TcpListener};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context;
-use anyhow::Result;
-use anyhow::anyhow;
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use reqwest::Url;
 use reqwest::blocking::Client;
-use reqwest::header::AUTHORIZATION;
-use reqwest::header::HOST;
-use reqwest::header::HeaderMap;
-use reqwest::header::HeaderName;
-use reqwest::header::HeaderValue;
+use reqwest::header::{AUTHORIZATION, HOST, HeaderMap, HeaderName, HeaderValue};
 use serde::Serialize;
-use tiny_http::Header;
-use tiny_http::Method;
-use tiny_http::Request;
-use tiny_http::Response;
-use tiny_http::Server;
-use tiny_http::StatusCode;
+use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 mod read_api_key;
 use read_api_key::read_auth_header_from_stdin;

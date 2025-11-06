@@ -1,19 +1,16 @@
-use crate::codex::TurnContext;
-use crate::state::TaskKind;
-use crate::tasks::SessionTask;
-use crate::tasks::SessionTaskContext;
+use std::sync::Arc;
+
 use async_trait::async_trait;
-use codex_git::CreateGhostCommitOptions;
-use codex_git::GitToolingError;
-use codex_git::create_ghost_commit;
+use codex_git::{CreateGhostCommitOptions, GitToolingError, create_ghost_commit};
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
-use codex_utils_readiness::Readiness;
-use codex_utils_readiness::Token;
-use std::sync::Arc;
+use codex_utils_readiness::{Readiness, Token};
 use tokio_util::sync::CancellationToken;
-use tracing::info;
-use tracing::warn;
+use tracing::{info, warn};
+
+use crate::codex::TurnContext;
+use crate::state::TaskKind;
+use crate::tasks::{SessionTask, SessionTaskContext};
 
 pub(crate) struct GhostSnapshotTask {
     token: Token,

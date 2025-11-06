@@ -1,32 +1,24 @@
+use std::sync::{Arc, RwLock};
+
+use codex_app_server_protocol::AuthMode;
 use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::git_info::get_git_repo_root;
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
+use codex_protocol::config_types::ForcedLoginMethod;
+use color_eyre::eyre::Result;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
 use ratatui::style::Color;
-use ratatui::widgets::Clear;
-use ratatui::widgets::WidgetRef;
-
-use codex_app_server_protocol::AuthMode;
-use codex_protocol::config_types::ForcedLoginMethod;
+use ratatui::widgets::{Clear, WidgetRef};
 
 use crate::LoginStatus;
-use crate::onboarding::auth::AuthModeWidget;
-use crate::onboarding::auth::SignInState;
-use crate::onboarding::trust_directory::TrustDirectorySelection;
-use crate::onboarding::trust_directory::TrustDirectoryWidget;
+use crate::onboarding::auth::{AuthModeWidget, SignInState};
+use crate::onboarding::trust_directory::{TrustDirectorySelection, TrustDirectoryWidget};
 use crate::onboarding::welcome::WelcomeWidget;
 use crate::onboarding::windows::WindowsSetupWidget;
-use crate::tui::FrameRequester;
-use crate::tui::Tui;
-use crate::tui::TuiEvent;
-use color_eyre::eyre::Result;
-use std::sync::Arc;
-use std::sync::RwLock;
+use crate::tui::{FrameRequester, Tui, TuiEvent};
 
 #[allow(clippy::large_enum_variant)]
 enum Step {

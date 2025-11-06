@@ -1,18 +1,13 @@
 use std::sync::Arc;
 
 use codex_app_server_protocol::AuthMode;
-use codex_core::ContentItem;
-use codex_core::ModelClient;
-use codex_core::ModelProviderInfo;
-use codex_core::Prompt;
-use codex_core::ResponseEvent;
-use codex_core::ResponseItem;
-use codex_core::WireApi;
+use codex_core::{
+    ContentItem, ModelClient, ModelProviderInfo, Prompt, ResponseEvent, ResponseItem, WireApi,
+};
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::SessionSource;
-use core_test_support::load_default_config_for_test;
-use core_test_support::responses;
+use core_test_support::{load_default_config_for_test, responses};
 use futures::StreamExt;
 use tempfile::TempDir;
 use wiremock::matchers::header;

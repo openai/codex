@@ -1,61 +1,38 @@
-use crate::diff_render::create_diff_summary;
-use crate::diff_render::display_path_for;
-use crate::exec_cell::CommandOutput;
-use crate::exec_cell::OutputLinesParams;
-use crate::exec_cell::TOOL_CALL_MAX_LINES;
-use crate::exec_cell::output_lines;
-use crate::exec_cell::spinner;
-use crate::exec_command::relativize_to_home;
-use crate::exec_command::strip_bash_lc_and_escape;
-use crate::markdown::append_markdown;
-use crate::render::line_utils::line_to_static;
-use crate::render::line_utils::prefix_lines;
-use crate::render::line_utils::push_owned_lines;
-use crate::render::renderable::Renderable;
-use crate::style::user_message_style;
-use crate::text_formatting::format_and_truncate_tool_result;
-use crate::text_formatting::truncate_text;
-use crate::ui_consts::LIVE_PREFIX_COLS;
-use crate::updates::UpdateAction;
-use crate::version::CODEX_CLI_VERSION;
-use crate::wrapping::RtOptions;
-use crate::wrapping::word_wrap_line;
-use crate::wrapping::word_wrap_lines;
-use base64::Engine;
-use codex_common::format_env_display::format_env_display;
-use codex_core::config::Config;
-use codex_core::config::types::McpServerTransportConfig;
-use codex_core::config::types::ReasoningSummaryFormat;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::McpAuthStatus;
-use codex_core::protocol::McpInvocation;
-use codex_core::protocol::SessionConfiguredEvent;
-use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::plan_tool::PlanItemArg;
-use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::UpdatePlanArgs;
-use image::DynamicImage;
-use image::ImageReader;
-use mcp_types::EmbeddedResourceResource;
-use mcp_types::Resource;
-use mcp_types::ResourceLink;
-use mcp_types::ResourceTemplate;
-use ratatui::prelude::*;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
-use ratatui::style::Styled;
-use ratatui::style::Stylize;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Wrap;
 use std::any::Any;
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::path::Path;
-use std::path::PathBuf;
-use std::time::Duration;
-use std::time::Instant;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use base64::Engine;
+use codex_common::format_env_display::format_env_display;
+use codex_core::config::Config;
+use codex_core::config::types::{McpServerTransportConfig, ReasoningSummaryFormat};
+use codex_core::protocol::{FileChange, McpAuthStatus, McpInvocation, SessionConfiguredEvent};
+use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::plan_tool::{PlanItemArg, StepStatus, UpdatePlanArgs};
+use image::{DynamicImage, ImageReader};
+use mcp_types::{EmbeddedResourceResource, Resource, ResourceLink, ResourceTemplate};
+use ratatui::prelude::*;
+use ratatui::style::{Modifier, Style, Styled, Stylize};
+use ratatui::widgets::{Paragraph, Wrap};
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
+
+use crate::diff_render::{create_diff_summary, display_path_for};
+use crate::exec_cell::{
+    CommandOutput, OutputLinesParams, TOOL_CALL_MAX_LINES, output_lines, spinner,
+};
+use crate::exec_command::{relativize_to_home, strip_bash_lc_and_escape};
+use crate::markdown::append_markdown;
+use crate::render::line_utils::{line_to_static, prefix_lines, push_owned_lines};
+use crate::render::renderable::Renderable;
+use crate::style::user_message_style;
+use crate::text_formatting::{format_and_truncate_tool_result, truncate_text};
+use crate::ui_consts::LIVE_PREFIX_COLS;
+use crate::updates::UpdateAction;
+use crate::version::CODEX_CLI_VERSION;
+use crate::wrapping::{RtOptions, word_wrap_line, word_wrap_lines};
 
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
@@ -299,8 +276,7 @@ impl UpdateAvailableHistoryCell {
 
 impl HistoryCell for UpdateAvailableHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        use ratatui_macros::line;
-        use ratatui_macros::text;
+        use ratatui_macros::{line, text};
         let update_instruction = if let Some(update_action) = self.update_action {
             line!["Run ", update_action.command_str().cyan(), " to update."]
         } else {
@@ -1444,27 +1420,19 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::exec_cell::CommandOutput;
-    use crate::exec_cell::ExecCall;
-    use crate::exec_cell::ExecCell;
-    use codex_core::config::Config;
-    use codex_core::config::ConfigOverrides;
-    use codex_core::config::ConfigToml;
-    use codex_core::config::types::McpServerConfig;
-    use codex_core::config::types::McpServerTransportConfig;
+    use std::collections::HashMap;
+
+    use codex_core::config::types::{McpServerConfig, McpServerTransportConfig};
+    use codex_core::config::{Config, ConfigOverrides, ConfigToml};
     use codex_core::protocol::McpAuthStatus;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
+    use mcp_types::{CallToolResult, ContentBlock, TextContent, Tool, ToolInputSchema};
     use pretty_assertions::assert_eq;
     use serde_json::json;
-    use std::collections::HashMap;
 
-    use mcp_types::CallToolResult;
-    use mcp_types::ContentBlock;
-    use mcp_types::TextContent;
-    use mcp_types::Tool;
-    use mcp_types::ToolInputSchema;
+    use super::*;
+    use crate::exec_cell::{CommandOutput, ExecCall, ExecCell};
 
     fn test_config() -> Config {
         Config::load_from_base_config_with_overrides(

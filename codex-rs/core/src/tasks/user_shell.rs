@@ -8,18 +8,14 @@ use tokio_util::sync::CancellationToken;
 use tracing::error;
 use uuid::Uuid;
 
+use super::{SessionTask, SessionTaskContext};
 use crate::codex::TurnContext;
-use crate::protocol::EventMsg;
-use crate::protocol::TaskStartedEvent;
+use crate::protocol::{EventMsg, TaskStartedEvent};
 use crate::state::TaskKind;
 use crate::tools::context::ToolPayload;
 use crate::tools::parallel::ToolCallRuntime;
-use crate::tools::router::ToolCall;
-use crate::tools::router::ToolRouter;
+use crate::tools::router::{ToolCall, ToolRouter};
 use crate::turn_diff_tracker::TurnDiffTracker;
-
-use super::SessionTask;
-use super::SessionTaskContext;
 
 const USER_SHELL_TOOL_NAME: &str = "local_shell";
 

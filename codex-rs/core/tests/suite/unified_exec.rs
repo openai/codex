@@ -4,28 +4,19 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
+use codex_core::protocol::{AskForApproval, EventMsg, Op, SandboxPolicy};
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::user_input::UserInput;
-use core_test_support::responses::ev_assistant_message;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_function_call;
-use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_sse_sequence;
-use core_test_support::responses::sse;
-use core_test_support::responses::start_mock_server;
-use core_test_support::skip_if_no_network;
-use core_test_support::skip_if_sandbox;
-use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_match;
-use core_test_support::wait_for_event_with_timeout;
-use serde_json::Value;
-use serde_json::json;
+use core_test_support::responses::{
+    ev_assistant_message, ev_completed, ev_function_call, ev_response_created, mount_sse_sequence,
+    sse, start_mock_server,
+};
+use core_test_support::test_codex::{TestCodex, test_codex};
+use core_test_support::{
+    skip_if_no_network, skip_if_sandbox, wait_for_event, wait_for_event_match,
+    wait_for_event_with_timeout,
+};
+use serde_json::{Value, json};
 
 fn extract_output_text(item: &Value) -> Option<&str> {
     item.get("output").and_then(|value| match value {

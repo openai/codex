@@ -1,16 +1,11 @@
 use std::path::Path;
 
-use anyhow::Context;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::DateTime;
-use chrono::Utc;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::AuthDotJson;
-use codex_core::auth::save_auth;
-use codex_core::token_data::TokenData;
-use codex_core::token_data::parse_id_token;
+use chrono::{DateTime, Utc};
+use codex_core::auth::{AuthCredentialsStoreMode, AuthDotJson, save_auth};
+use codex_core::token_data::{TokenData, parse_id_token};
 use serde_json::json;
 
 /// Builder for writing a fake ChatGPT auth.json in tests.

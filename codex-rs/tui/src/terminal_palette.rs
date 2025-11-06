@@ -1,5 +1,6 @@
-use crate::color::perceptual_distance;
 use ratatui::style::Color;
+
+use crate::color::perceptual_distance;
 
 /// Returns the closest color to the target color that the terminal can display.
 pub fn best_color(target: (u8, u8, u8)) -> Color {
@@ -49,12 +50,13 @@ pub fn default_bg() -> Option<(u8, u8, u8)> {
 
 #[cfg(all(unix, not(test)))]
 mod imp {
+    use std::sync::{Mutex, OnceLock};
+
+    use crossterm::style::{
+        Color as CrosstermColor, query_background_color, query_foreground_color,
+    };
+
     use super::DefaultColors;
-    use crossterm::style::Color as CrosstermColor;
-    use crossterm::style::query_background_color;
-    use crossterm::style::query_foreground_color;
-    use std::sync::Mutex;
-    use std::sync::OnceLock;
 
     struct Cache<T> {
         attempted: bool,

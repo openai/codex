@@ -1,9 +1,5 @@
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
-use crossterm::event::KeyModifiers;
-use ratatui::style::Style;
-use ratatui::style::Stylize;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::style::{Style, Stylize};
 use ratatui::text::Span;
 
 #[cfg(test)]

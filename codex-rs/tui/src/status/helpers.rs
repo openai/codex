@@ -1,14 +1,14 @@
-use crate::exec_command::relativize_to_home;
-use crate::text_formatting;
-use chrono::DateTime;
-use chrono::Local;
+use std::path::Path;
+
+use chrono::{DateTime, Local};
 use codex_core::auth::load_auth_dot_json;
 use codex_core::config::Config;
 use codex_core::project_doc::discover_project_doc_paths;
-use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
 use super::account::StatusAccountDisplay;
+use crate::exec_command::relativize_to_home;
+use crate::text_formatting;
 
 fn normalize_agents_display_path(path: &Path) -> String {
     dunce::simplified(path).display().to_string()

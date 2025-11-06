@@ -2,13 +2,10 @@ use std::sync::Arc;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
-use ratatui::text::Span;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::WidgetRef;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, WidgetRef};
 
-use crate::render::Insets;
-use crate::render::RectExt as _;
+use crate::render::{Insets, RectExt as _};
 
 pub trait Renderable {
     fn render(&self, area: Rect, buf: &mut Buffer);

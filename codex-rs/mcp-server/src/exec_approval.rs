@@ -2,17 +2,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_core::CodexConversation;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDecision;
-use codex_core::protocol::SandboxCommandAssessment;
+use codex_core::protocol::{Op, ReviewDecision, SandboxCommandAssessment};
 use codex_protocol::parse_command::ParsedCommand;
-use mcp_types::ElicitRequest;
-use mcp_types::ElicitRequestParamsRequestedSchema;
-use mcp_types::JSONRPCErrorError;
-use mcp_types::ModelContextProtocolRequest;
-use mcp_types::RequestId;
-use serde::Deserialize;
-use serde::Serialize;
+use mcp_types::{
+    ElicitRequest, ElicitRequestParamsRequestedSchema, JSONRPCErrorError,
+    ModelContextProtocolRequest, RequestId,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::error;
 

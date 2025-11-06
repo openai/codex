@@ -1,24 +1,19 @@
+use std::path::Path;
+
 use anyhow::Result;
-use app_test_support::McpProcess;
-use app_test_support::create_final_assistant_message_sse_response;
-use app_test_support::create_mock_chat_completions_server;
-use app_test_support::to_response;
-use codex_app_server_protocol::AddConversationListenerParams;
-use codex_app_server_protocol::AddConversationSubscriptionResponse;
-use codex_app_server_protocol::InputItem;
-use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::NewConversationParams;
-use codex_app_server_protocol::NewConversationResponse;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::SendUserMessageParams;
-use codex_app_server_protocol::SendUserMessageResponse;
+use app_test_support::{
+    McpProcess, create_final_assistant_message_sse_response, create_mock_chat_completions_server,
+    to_response,
+};
+use codex_app_server_protocol::{
+    AddConversationListenerParams, AddConversationSubscriptionResponse, InputItem,
+    JSONRPCNotification, JSONRPCResponse, NewConversationParams, NewConversationResponse,
+    RequestId, SendUserMessageParams, SendUserMessageResponse,
+};
 use codex_protocol::ConversationId;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::{ContentItem, ResponseItem};
 use codex_protocol::protocol::RawResponseItemEvent;
 use pretty_assertions::assert_eq;
-use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 

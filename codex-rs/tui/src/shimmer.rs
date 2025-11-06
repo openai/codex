@@ -1,15 +1,11 @@
 use std::sync::OnceLock;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
 use crate::color::blend;
-use crate::terminal_palette::default_bg;
-use crate::terminal_palette::default_fg;
+use crate::terminal_palette::{default_bg, default_fg};
 
 static PROCESS_START: OnceLock<Instant> = OnceLock::new();
 

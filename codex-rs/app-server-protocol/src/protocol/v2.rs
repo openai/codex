@@ -1,18 +1,19 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::protocol::common::AuthMode;
 use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningEffort;
-use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
-use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
+use codex_protocol::protocol::{
+    RateLimitSnapshot as CoreRateLimitSnapshot, RateLimitWindow as CoreRateLimitWindow,
+};
 use mcp_types::ContentBlock as McpContentBlock;
 use schemars::JsonSchema;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use ts_rs::TS;
+
+use crate::protocol::common::AuthMode;
 
 // Macro to declare a camelCased API v2 enum mirroring a core enum which
 // tends to use kebab-case.

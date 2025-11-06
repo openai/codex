@@ -1,11 +1,9 @@
+use anyhow::Context;
 use codex_core::config::Config;
 use codex_core::default_client::create_client;
-
-use crate::chatgpt_token::get_chatgpt_token_data;
-use crate::chatgpt_token::init_chatgpt_token_from_auth;
-
-use anyhow::Context;
 use serde::de::DeserializeOwned;
+
+use crate::chatgpt_token::{get_chatgpt_token_data, init_chatgpt_token_from_auth};
 
 /// Make a GET request to the ChatGPT backend API.
 pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(

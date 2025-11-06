@@ -5,39 +5,37 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
-use crate::ConversationId;
-use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
-use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use crate::custom_prompts::CustomPrompt;
-use crate::items::TurnItem;
-use crate::message_history::HistoryEntry;
-use crate::models::ContentItem;
-use crate::models::ResponseItem;
-use crate::num_format::format_with_separators;
-use crate::parse_command::ParsedCommand;
-use crate::plan_tool::UpdatePlanArgs;
-use crate::user_input::UserInput;
-use mcp_types::CallToolResult;
-use mcp_types::Resource as McpResource;
-use mcp_types::ResourceTemplate as McpResourceTemplate;
-use mcp_types::Tool as McpTool;
+use mcp_types::{
+    CallToolResult, Resource as McpResource, ResourceTemplate as McpResourceTemplate,
+    Tool as McpTool,
+};
 use schemars::JsonSchema;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
 
-pub use crate::approvals::ApplyPatchApprovalRequestEvent;
-pub use crate::approvals::ExecApprovalRequestEvent;
-pub use crate::approvals::SandboxCommandAssessment;
-pub use crate::approvals::SandboxRiskLevel;
+use crate::ConversationId;
+pub use crate::approvals::{
+    ApplyPatchApprovalRequestEvent, ExecApprovalRequestEvent, SandboxCommandAssessment,
+    SandboxRiskLevel,
+};
+use crate::config_types::{
+    ReasoningEffort as ReasoningEffortConfig, ReasoningSummary as ReasoningSummaryConfig,
+};
+use crate::custom_prompts::CustomPrompt;
+use crate::items::TurnItem;
+use crate::message_history::HistoryEntry;
+use crate::models::{ContentItem, ResponseItem};
+use crate::num_format::format_with_separators;
+use crate::parse_command::ParsedCommand;
+use crate::plan_tool::UpdatePlanArgs;
+use crate::user_input::UserInput;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
@@ -1468,12 +1466,12 @@ pub enum TurnAbortReason {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::items::UserMessageItem;
-    use crate::items::WebSearchItem;
     use anyhow::Result;
     use serde_json::json;
     use tempfile::NamedTempFile;
+
+    use super::*;
+    use crate::items::{UserMessageItem, WebSearchItem};
 
     #[test]
     fn item_started_event_from_web_search_emits_begin_event() {

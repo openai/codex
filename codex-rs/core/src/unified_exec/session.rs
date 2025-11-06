@@ -3,23 +3,15 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
-use tokio::sync::Notify;
-use tokio::sync::mpsc;
+use codex_utils_pty::{ExecCommandSession, SpawnedPty};
 use tokio::sync::oneshot::error::TryRecvError;
+use tokio::sync::{Mutex, Notify, mpsc};
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 
-use crate::exec::ExecToolCallOutput;
-use crate::exec::SandboxType;
-use crate::exec::StreamOutput;
-use crate::exec::is_likely_sandbox_denied;
+use super::{UNIFIED_EXEC_OUTPUT_MAX_BYTES, UnifiedExecError};
+use crate::exec::{ExecToolCallOutput, SandboxType, StreamOutput, is_likely_sandbox_denied};
 use crate::truncate::truncate_middle;
-use codex_utils_pty::ExecCommandSession;
-use codex_utils_pty::SpawnedPty;
-
-use super::UNIFIED_EXEC_OUTPUT_MAX_BYTES;
-use super::UnifiedExecError;
 
 #[derive(Debug, Default)]
 pub(crate) struct OutputBufferState {

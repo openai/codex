@@ -1,8 +1,7 @@
-use codex_core::CodexAuth;
 use std::path::Path;
-use std::sync::LazyLock;
-use std::sync::RwLock;
+use std::sync::{LazyLock, RwLock};
 
+use codex_core::CodexAuth;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::token_data::TokenData;
 

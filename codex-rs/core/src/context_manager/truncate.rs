@@ -1,6 +1,5 @@
 use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_utils_string::take_bytes_at_char_boundary;
-use codex_utils_string::take_last_bytes_at_char_boundary;
+use codex_utils_string::{take_bytes_at_char_boundary, take_last_bytes_at_char_boundary};
 
 // Model-formatting limits: clients get full streams; only content sent to the model is truncated.
 pub(crate) const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB

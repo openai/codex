@@ -16,36 +16,24 @@
 //!
 //! If the keyring is not available or fails, we fall back to CODEX_HOME/.credentials.json which is consistent with other coding CLI agents.
 
-use anyhow::Context;
-use anyhow::Error;
-use anyhow::Result;
-use oauth2::AccessToken;
-use oauth2::EmptyExtraTokenFields;
-use oauth2::RefreshToken;
-use oauth2::Scope;
-use oauth2::TokenResponse;
-use oauth2::basic::BasicTokenType;
-use rmcp::transport::auth::OAuthTokenResponse;
-use serde::Deserialize;
-use serde::Serialize;
-use serde_json::Value;
-use serde_json::map::Map as JsonMap;
-use sha2::Digest;
-use sha2::Sha256;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
-use tracing::warn;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use codex_keyring_store::DefaultKeyringStore;
-use codex_keyring_store::KeyringStore;
-use rmcp::transport::auth::AuthorizationManager;
+use anyhow::{Context, Error, Result};
+use codex_keyring_store::{DefaultKeyringStore, KeyringStore};
+use oauth2::basic::BasicTokenType;
+use oauth2::{AccessToken, EmptyExtraTokenFields, RefreshToken, Scope, TokenResponse};
+use rmcp::transport::auth::{AuthorizationManager, OAuthTokenResponse};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use serde_json::map::Map as JsonMap;
+use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
+use tracing::warn;
 
 use crate::find_codex_home::find_codex_home;
 
@@ -535,17 +523,15 @@ fn sha_256_prefix(value: &Value) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+
     use anyhow::Result;
+    use codex_keyring_store::tests::MockKeyringStore;
     use keyring::Error as KeyringError;
     use pretty_assertions::assert_eq;
-    use std::sync::Mutex;
-    use std::sync::MutexGuard;
-    use std::sync::OnceLock;
-    use std::sync::PoisonError;
     use tempfile::tempdir;
 
-    use codex_keyring_store::tests::MockKeyringStore;
+    use super::*;
 
     struct TempCodexHome {
         _guard: MutexGuard<'static, ()>,

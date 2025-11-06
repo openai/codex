@@ -1,26 +1,18 @@
 use std::collections::HashSet;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use chrono::DateTime;
-use chrono::Utc;
-use codex_core::ConversationItem;
-use codex_core::ConversationsPage;
-use codex_core::Cursor;
-use codex_core::INTERACTIVE_SESSION_SOURCES;
-use codex_core::RolloutRecorder;
+use chrono::{DateTime, Utc};
+use codex_core::{
+    ConversationItem, ConversationsPage, Cursor, INTERACTIVE_SESSION_SOURCES, RolloutRecorder,
+};
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::ResponseItem;
 use color_eyre::eyre::Result;
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
-use ratatui::layout::Constraint;
-use ratatui::layout::Layout;
-use ratatui::layout::Rect;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Stylize as _;
-use ratatui::text::Line;
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -28,10 +20,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::key_hint;
 use crate::text_formatting::truncate_text;
-use crate::tui::FrameRequester;
-use crate::tui::Tui;
-use crate::tui::TuiEvent;
-use codex_protocol::models::ResponseItem;
+use crate::tui::{FrameRequester, Tui, TuiEvent};
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
@@ -918,17 +907,16 @@ fn calculate_column_metrics(rows: &[Row]) -> ColumnMetrics {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use chrono::Duration;
-    use crossterm::event::KeyCode;
-    use crossterm::event::KeyEvent;
-    use crossterm::event::KeyModifiers;
-    use insta::assert_snapshot;
-    use serde_json::json;
     use std::future::Future;
     use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
+
+    use chrono::Duration;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use insta::assert_snapshot;
+    use serde_json::json;
+
+    use super::*;
 
     fn head_with_ts_and_user_text(ts: &str, texts: &[&str]) -> Vec<serde_json::Value> {
         vec![
@@ -1077,10 +1065,10 @@ mod tests {
 
     #[test]
     fn resume_table_snapshot() {
+        use ratatui::layout::{Constraint, Layout};
+
         use crate::custom_terminal::Terminal;
         use crate::test_backend::VT100Backend;
-        use ratatui::layout::Constraint;
-        use ratatui::layout::Layout;
 
         let loader: PageLoader = Arc::new(|_| {});
         let mut state = PickerState::new(

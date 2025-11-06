@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
 use crate::parse_command::ParsedCommand;
 use crate::protocol::FileChange;
-use schemars::JsonSchema;
-use serde::Deserialize;
-use serde::Serialize;
-use ts_rs::TS;
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]

@@ -7,8 +7,7 @@
 //! key/value pairs as well as to apply them onto a mutable
 //! `serde_json::Value` representing the configuration tree.
 
-use clap::ArgAction;
-use clap::Parser;
+use clap::{ArgAction, Parser};
 use serde::de::Error as SerdeError;
 use toml::Value;
 

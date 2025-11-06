@@ -3,15 +3,13 @@
 // Note this file should generally be restricted to simple struct/enum
 // definitions that do not contain business logic.
 
-use serde::Deserializer;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
-use wildmatch::WildMatchPattern;
 
-use serde::Deserialize;
-use serde::Serialize;
 use serde::de::Error as SerdeError;
+use serde::{Deserialize, Deserializer, Serialize};
+use wildmatch::WildMatchPattern;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 
@@ -194,10 +192,9 @@ pub enum McpServerTransportConfig {
 }
 
 mod option_duration_secs {
-    use serde::Deserialize;
-    use serde::Deserializer;
-    use serde::Serializer;
     use std::time::Duration;
+
+    use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(value: &Option<Duration>, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -494,8 +491,9 @@ pub enum ReasoningSummaryFormat {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_eq;
+
+    use super::*;
 
     #[test]
     fn deserialize_stdio_command_server_config() {

@@ -1,30 +1,17 @@
-use ratatui::layout::Constraint;
-use ratatui::layout::Direction;
-use ratatui::layout::Layout;
-use ratatui::prelude::*;
-use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
-use ratatui::style::Stylize;
-use ratatui::widgets::Block;
-use ratatui::widgets::BorderType;
-use ratatui::widgets::Borders;
-use ratatui::widgets::Clear;
-use ratatui::widgets::List;
-use ratatui::widgets::ListItem;
-use ratatui::widgets::ListState;
-use ratatui::widgets::Padding;
-use ratatui::widgets::Paragraph;
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use crate::app::App;
-use crate::app::AttemptView;
-use chrono::Local;
-use chrono::Utc;
-use codex_cloud_tasks_client::AttemptStatus;
-use codex_cloud_tasks_client::TaskStatus;
+use chrono::{Local, Utc};
+use codex_cloud_tasks_client::{AttemptStatus, TaskStatus};
 use codex_tui::render_markdown_text;
+use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::prelude::*;
+use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Clear, List, ListItem, ListState, Padding, Paragraph,
+};
+
+use crate::app::{App, AttemptView};
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -749,9 +736,7 @@ fn attempt_status_span(status: AttemptStatus) -> Option<ratatui::text::Span<'sta
 }
 
 fn style_diff_line(raw: &str) -> Line<'static> {
-    use ratatui::style::Color;
-    use ratatui::style::Modifier;
-    use ratatui::style::Style;
+    use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::Span;
 
     if raw.starts_with("@@") {

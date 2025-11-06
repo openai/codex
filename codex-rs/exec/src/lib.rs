@@ -10,20 +10,19 @@ mod event_processor_with_human_output;
 pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
 
+use std::io::{IsTerminal, Read};
+use std::path::PathBuf;
+
 pub use cli::Cli;
-use codex_core::AuthManager;
-use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
-use codex_core::ConversationManager;
-use codex_core::NewConversation;
 use codex_core::auth::enforce_login_restrictions;
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
+use codex_core::config::{Config, ConfigOverrides};
+use codex_core::default_client::set_default_originator;
 use codex_core::git_info::get_git_repo_root;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SessionSource;
+use codex_core::protocol::{AskForApproval, Event, EventMsg, Op, SessionSource};
+use codex_core::{
+    AuthManager, BUILT_IN_OSS_MODEL_PROVIDER_ID, ConversationManager, NewConversation,
+    find_conversation_path_by_id_str,
+};
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
@@ -31,21 +30,13 @@ use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use serde_json::Value;
-use std::io::IsTerminal;
-use std::io::Read;
-use std::path::PathBuf;
 use supports_color::Stream;
-use tracing::debug;
-use tracing::error;
-use tracing::info;
+use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
 use crate::cli::Command as ExecCommand;
-use crate::event_processor::CodexStatus;
-use crate::event_processor::EventProcessor;
-use codex_core::default_client::set_default_originator;
-use codex_core::find_conversation_path_by_id_str;
+use crate::event_processor::{CodexStatus, EventProcessor};
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     if let Err(err) = set_default_originator("codex_exec".to_string()) {

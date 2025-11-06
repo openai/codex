@@ -1,29 +1,22 @@
 use std::sync::Arc;
 
-use super::Session;
-use super::TurnContext;
-use super::get_last_assistant_message_from_turn;
-use crate::Prompt;
-use crate::client_common::ResponseEvent;
-use crate::error::CodexErr;
-use crate::error::Result as CodexResult;
-use crate::protocol::AgentMessageEvent;
-use crate::protocol::CompactedItem;
-use crate::protocol::ErrorEvent;
-use crate::protocol::EventMsg;
-use crate::protocol::TaskStartedEvent;
-use crate::protocol::TurnContextItem;
-use crate::protocol::WarningEvent;
-use crate::truncate::truncate_middle;
-use crate::util::backoff;
 use codex_protocol::items::TurnItem;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::{ContentItem, ResponseInputItem, ResponseItem};
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
 use tracing::error;
+
+use super::{Session, TurnContext, get_last_assistant_message_from_turn};
+use crate::Prompt;
+use crate::client_common::ResponseEvent;
+use crate::error::{CodexErr, Result as CodexResult};
+use crate::protocol::{
+    AgentMessageEvent, CompactedItem, ErrorEvent, EventMsg, TaskStartedEvent, TurnContextItem,
+    WarningEvent,
+};
+use crate::truncate::truncate_middle;
+use crate::util::backoff;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
@@ -295,8 +288,9 @@ async fn drain_to_completed(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_eq;
+
+    use super::*;
 
     #[test]
     fn content_items_to_text_joins_non_empty_segments() {

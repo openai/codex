@@ -1,18 +1,14 @@
-use anyhow::Result;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_protocol::user_input::UserInput;
-use core_test_support::responses::ev_assistant_message;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_reasoning_item;
-use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_sse_once_match;
-use core_test_support::responses::sse;
-use core_test_support::responses::start_mock_server;
-use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
 use std::sync::Arc;
+
+use anyhow::Result;
+use codex_core::protocol::{EventMsg, Op};
+use codex_protocol::user_input::UserInput;
+use core_test_support::responses::{
+    ev_assistant_message, ev_completed, ev_reasoning_item, ev_response_created,
+    mount_sse_once_match, sse, start_mock_server,
+};
+use core_test_support::test_codex::test_codex;
+use core_test_support::{skip_if_no_network, wait_for_event};
 use wiremock::matchers::any;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

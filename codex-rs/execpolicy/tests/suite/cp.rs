@@ -1,15 +1,9 @@
 extern crate codex_execpolicy;
 
-use codex_execpolicy::ArgMatcher;
-use codex_execpolicy::ArgType;
-use codex_execpolicy::Error;
-use codex_execpolicy::ExecCall;
-use codex_execpolicy::MatchedArg;
-use codex_execpolicy::MatchedExec;
-use codex_execpolicy::Policy;
-use codex_execpolicy::Result;
-use codex_execpolicy::ValidExec;
-use codex_execpolicy::get_default_policy;
+use codex_execpolicy::{
+    ArgMatcher, ArgType, Error, ExecCall, MatchedArg, MatchedExec, Policy, Result, ValidExec,
+    get_default_policy,
+};
 
 #[expect(clippy::expect_used)]
 fn setup() -> Policy {

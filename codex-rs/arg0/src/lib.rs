@@ -1,10 +1,9 @@
 use std::future::Future;
-use std::path::Path;
-use std::path::PathBuf;
-
-use codex_core::CODEX_APPLY_PATCH_ARG1;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
+use std::path::{Path, PathBuf};
+
+use codex_core::CODEX_APPLY_PATCH_ARG1;
 use tempfile::TempDir;
 
 const LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";

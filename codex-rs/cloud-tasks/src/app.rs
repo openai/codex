@@ -1,5 +1,4 @@
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 // Environment filter data models for the TUI
 #[derive(Clone, Debug, Default)]
@@ -39,10 +38,9 @@ pub struct ApplyModalState {
     pub diff_override: Option<String>,
 }
 
+use codex_cloud_tasks_client::{CloudBackend, TaskId, TaskSummary};
+
 use crate::scrollable_diff::ScrollableDiff;
-use codex_cloud_tasks_client::CloudBackend;
-use codex_cloud_tasks_client::TaskId;
-use codex_cloud_tasks_client::TaskSummary;
 #[derive(Default)]
 pub struct App {
     pub tasks: Vec<TaskSummary>,
@@ -348,8 +346,9 @@ pub enum AppEvent {
 // Convenience aliases; currently unused.
 #[cfg(test)]
 mod tests {
-    use super::*;
     use chrono::Utc;
+
+    use super::*;
 
     struct FakeBackend {
         // maps env key to titles

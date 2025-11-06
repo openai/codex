@@ -4,15 +4,11 @@ use std::time::Duration;
 
 use codex_rmcp_client::RmcpClient;
 use escargot::CargoBuild;
-use mcp_types::ClientCapabilities;
-use mcp_types::Implementation;
-use mcp_types::InitializeRequestParams;
-use mcp_types::ListResourceTemplatesResult;
-use mcp_types::ReadResourceRequestParams;
-use mcp_types::ReadResourceResultContents;
-use mcp_types::Resource;
-use mcp_types::ResourceTemplate;
-use mcp_types::TextResourceContents;
+use mcp_types::{
+    ClientCapabilities, Implementation, InitializeRequestParams, ListResourceTemplatesResult,
+    ReadResourceRequestParams, ReadResourceResultContents, Resource, ResourceTemplate,
+    TextResourceContents,
+};
 use serde_json::json;
 
 const RESOURCE_URI: &str = "memo://codex/example-note";

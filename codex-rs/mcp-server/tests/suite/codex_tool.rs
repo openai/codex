@@ -1,36 +1,28 @@
 use std::collections::HashMap;
 use std::env;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use codex_core::parse_command;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::ReviewDecision;
+use codex_core::protocol::{FileChange, ReviewDecision};
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_mcp_server::CodexToolCallParam;
-use codex_mcp_server::ExecApprovalElicitRequestParams;
-use codex_mcp_server::ExecApprovalResponse;
-use codex_mcp_server::PatchApprovalElicitRequestParams;
-use codex_mcp_server::PatchApprovalResponse;
-use mcp_types::ElicitRequest;
-use mcp_types::ElicitRequestParamsRequestedSchema;
-use mcp_types::JSONRPC_VERSION;
-use mcp_types::JSONRPCRequest;
-use mcp_types::JSONRPCResponse;
-use mcp_types::ModelContextProtocolRequest;
-use mcp_types::RequestId;
+use codex_mcp_server::{
+    CodexToolCallParam, ExecApprovalElicitRequestParams, ExecApprovalResponse,
+    PatchApprovalElicitRequestParams, PatchApprovalResponse,
+};
+use core_test_support::skip_if_no_network;
+use mcp_test_support::{
+    McpProcess, create_apply_patch_sse_response, create_final_assistant_message_sse_response,
+    create_mock_chat_completions_server, create_shell_sse_response,
+};
+use mcp_types::{
+    ElicitRequest, ElicitRequestParamsRequestedSchema, JSONRPC_VERSION, JSONRPCRequest,
+    JSONRPCResponse, ModelContextProtocolRequest, RequestId,
+};
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::MockServer;
-
-use core_test_support::skip_if_no_network;
-use mcp_test_support::McpProcess;
-use mcp_test_support::create_apply_patch_sse_response;
-use mcp_test_support::create_final_assistant_message_sse_response;
-use mcp_test_support::create_mock_chat_completions_server;
-use mcp_test_support::create_shell_sse_response;
 
 // Allow ample time on slower CI or under load to avoid flakes.
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);

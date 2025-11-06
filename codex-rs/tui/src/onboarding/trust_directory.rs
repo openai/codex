@@ -2,27 +2,19 @@ use std::path::PathBuf;
 
 use codex_core::config::set_project_trusted;
 use codex_core::git_info::resolve_root_git_project_for_trust;
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::WidgetRef;
-use ratatui::widgets::Wrap;
-
-use crate::key_hint;
-use crate::onboarding::onboarding_screen::KeyboardHandler;
-use crate::onboarding::onboarding_screen::StepStateProvider;
-use crate::render::Insets;
-use crate::render::renderable::ColumnRenderable;
-use crate::render::renderable::Renderable;
-use crate::render::renderable::RenderableExt as _;
-use crate::selection_list::selection_option_row;
+use ratatui::widgets::{Paragraph, WidgetRef, Wrap};
 
 use super::onboarding_screen::StepState;
+use crate::key_hint;
+use crate::onboarding::onboarding_screen::{KeyboardHandler, StepStateProvider};
+use crate::render::Insets;
+use crate::render::renderable::{ColumnRenderable, Renderable, RenderableExt as _};
+use crate::selection_list::selection_option_row;
 pub(crate) struct TrustDirectoryWidget {
     pub codex_home: PathBuf,
     pub cwd: PathBuf,
@@ -169,17 +161,14 @@ impl TrustDirectoryWidget {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_backend::VT100Backend;
+    use std::path::PathBuf;
 
-    use super::*;
-    use crossterm::event::KeyCode;
-    use crossterm::event::KeyEvent;
-    use crossterm::event::KeyEventKind;
-    use crossterm::event::KeyModifiers;
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
     use pretty_assertions::assert_eq;
     use ratatui::Terminal;
 
-    use std::path::PathBuf;
+    use super::*;
+    use crate::test_backend::VT100Backend;
 
     #[test]
     fn release_event_does_not_change_selection() {

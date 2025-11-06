@@ -1,14 +1,9 @@
-use codex_core::ConversationManager;
-use codex_core::NewConversation;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::TurnAbortReason;
-use core_test_support::load_default_config_for_test;
-use core_test_support::wait_for_event;
 use std::path::PathBuf;
-use std::process::Command;
-use std::process::Stdio;
+use std::process::{Command, Stdio};
+
+use codex_core::protocol::{EventMsg, ExecCommandEndEvent, Op, TurnAbortReason};
+use codex_core::{ConversationManager, NewConversation};
+use core_test_support::{load_default_config_for_test, wait_for_event};
 use tempfile::TempDir;
 
 fn detect_python_executable() -> Option<String> {

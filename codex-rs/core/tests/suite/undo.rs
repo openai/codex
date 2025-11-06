@@ -5,25 +5,18 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
-use anyhow::Context;
-use anyhow::Result;
-use anyhow::bail;
+use anyhow::{Context, Result, bail};
 use codex_core::CodexConversation;
 use codex_core::config::Config;
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::UndoCompletedEvent;
-use core_test_support::responses::ev_apply_patch_function_call;
-use core_test_support::responses::ev_assistant_message;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_sse_sequence;
-use core_test_support::responses::sse;
-use core_test_support::skip_if_no_network;
+use codex_core::protocol::{EventMsg, Op, UndoCompletedEvent};
+use core_test_support::responses::{
+    ev_apply_patch_function_call, ev_assistant_message, ev_completed, ev_response_created,
+    mount_sse_sequence, sse,
+};
 use core_test_support::test_codex::TestCodexHarness;
-use core_test_support::wait_for_event_match;
+use core_test_support::{skip_if_no_network, wait_for_event_match};
 use pretty_assertions::assert_eq;
 
 #[allow(clippy::expect_used)]

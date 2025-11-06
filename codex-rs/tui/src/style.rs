@@ -1,9 +1,7 @@
-use crate::color::blend;
-use crate::color::is_light;
-use crate::terminal_palette::best_color;
-use crate::terminal_palette::default_bg;
-use ratatui::style::Color;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
+
+use crate::color::{blend, is_light};
+use crate::terminal_palette::{best_color, default_bg};
 
 pub fn user_message_style() -> Style {
     user_message_style_for(default_bg())

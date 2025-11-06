@@ -2,7 +2,6 @@
 //! Available when the `cli` feature is enabled for the crate.
 
 use clap::ValueEnum;
-
 use codex_core::protocol::AskForApproval;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]

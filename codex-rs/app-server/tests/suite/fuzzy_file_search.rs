@@ -1,8 +1,6 @@
-use anyhow::Result;
-use anyhow::anyhow;
+use anyhow::{Result, anyhow};
 use app_test_support::McpProcess;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::{JSONRPCResponse, RequestId};
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;

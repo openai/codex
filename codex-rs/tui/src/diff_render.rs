@@ -1,25 +1,19 @@
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use codex_core::git_info::get_git_repo_root;
+use codex_core::protocol::FileChange;
 use diffy::Hunk;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
-use ratatui::style::Stylize;
-use ratatui::text::Line as RtLine;
-use ratatui::text::Span as RtSpan;
+use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::text::{Line as RtLine, Span as RtSpan};
 use ratatui::widgets::Paragraph;
-use std::collections::HashMap;
-use std::path::Path;
-use std::path::PathBuf;
 
 use crate::exec_command::relativize_to_home;
 use crate::render::Insets;
 use crate::render::line_utils::prefix_lines;
-use crate::render::renderable::ColumnRenderable;
-use crate::render::renderable::InsetRenderable;
-use crate::render::renderable::Renderable;
-use codex_core::git_info::get_git_repo_root;
-use codex_core::protocol::FileChange;
+use crate::render::renderable::{ColumnRenderable, InsetRenderable, Renderable};
 
 // Internal representation for diff line rendering
 enum DiffLineType {
@@ -418,14 +412,13 @@ fn style_del() -> Style {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use insta::assert_snapshot;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::text::Text;
-    use ratatui::widgets::Paragraph;
-    use ratatui::widgets::WidgetRef;
-    use ratatui::widgets::Wrap;
+    use ratatui::widgets::{Paragraph, WidgetRef, Wrap};
+
+    use super::*;
     fn diff_summary_for_tests(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'static>> {
         create_diff_summary(changes, &PathBuf::from("/"), 80)
     }

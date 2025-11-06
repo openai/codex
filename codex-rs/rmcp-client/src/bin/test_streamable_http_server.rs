@@ -4,39 +4,24 @@ use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::Router;
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::Request;
-use axum::http::StatusCode;
-use axum::http::header::AUTHORIZATION;
-use axum::http::header::CONTENT_TYPE;
-use axum::middleware;
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
+use axum::http::{Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
 use axum::routing::get;
+use axum::{Router, middleware};
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::ServerHandler;
-use rmcp::model::CallToolRequestParam;
-use rmcp::model::CallToolResult;
-use rmcp::model::JsonObject;
-use rmcp::model::ListResourceTemplatesResult;
-use rmcp::model::ListResourcesResult;
-use rmcp::model::ListToolsResult;
-use rmcp::model::PaginatedRequestParam;
-use rmcp::model::RawResource;
-use rmcp::model::RawResourceTemplate;
-use rmcp::model::ReadResourceRequestParam;
-use rmcp::model::ReadResourceResult;
-use rmcp::model::Resource;
-use rmcp::model::ResourceContents;
-use rmcp::model::ResourceTemplate;
-use rmcp::model::ServerCapabilities;
-use rmcp::model::ServerInfo;
-use rmcp::model::Tool;
-use rmcp::transport::StreamableHttpServerConfig;
-use rmcp::transport::StreamableHttpService;
+use rmcp::model::{
+    CallToolRequestParam, CallToolResult, JsonObject, ListResourceTemplatesResult,
+    ListResourcesResult, ListToolsResult, PaginatedRequestParam, RawResource, RawResourceTemplate,
+    ReadResourceRequestParam, ReadResourceResult, Resource, ResourceContents, ResourceTemplate,
+    ServerCapabilities, ServerInfo, Tool,
+};
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::task;

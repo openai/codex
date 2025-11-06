@@ -1,16 +1,13 @@
-use super::*;
-use crate::context_manager::truncate;
 use codex_git::GhostCommit;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::LocalShellAction;
-use codex_protocol::models::LocalShellExecAction;
-use codex_protocol::models::LocalShellStatus;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::models::{
+    ContentItem, FunctionCallOutputContentItem, FunctionCallOutputPayload, LocalShellAction,
+    LocalShellExecAction, LocalShellStatus, ReasoningItemContent, ReasoningItemReasoningSummary,
+};
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
+
+use super::*;
+use crate::context_manager::truncate;
 
 fn assistant_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {

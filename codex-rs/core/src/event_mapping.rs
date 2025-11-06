@@ -1,14 +1,9 @@
-use codex_protocol::items::AgentMessageContent;
-use codex_protocol::items::AgentMessageItem;
-use codex_protocol::items::ReasoningItem;
-use codex_protocol::items::TurnItem;
-use codex_protocol::items::UserMessageItem;
-use codex_protocol::items::WebSearchItem;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::models::ReasoningItemReasoningSummary;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::models::WebSearchAction;
+use codex_protocol::items::{
+    AgentMessageContent, AgentMessageItem, ReasoningItem, TurnItem, UserMessageItem, WebSearchItem,
+};
+use codex_protocol::models::{
+    ContentItem, ReasoningItemContent, ReasoningItemReasoningSummary, ResponseItem, WebSearchAction,
+};
 use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
@@ -124,16 +119,15 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_turn_item;
-    use codex_protocol::items::AgentMessageContent;
-    use codex_protocol::items::TurnItem;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ReasoningItemContent;
-    use codex_protocol::models::ReasoningItemReasoningSummary;
-    use codex_protocol::models::ResponseItem;
-    use codex_protocol::models::WebSearchAction;
+    use codex_protocol::items::{AgentMessageContent, TurnItem};
+    use codex_protocol::models::{
+        ContentItem, ReasoningItemContent, ReasoningItemReasoningSummary, ResponseItem,
+        WebSearchAction,
+    };
     use codex_protocol::user_input::UserInput;
     use pretty_assertions::assert_eq;
+
+    use super::parse_turn_item;
 
     #[test]
     fn parses_user_message_with_text_and_two_images() {

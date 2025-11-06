@@ -3,10 +3,8 @@ use std::hash::Hash;
 use std::num::NonZeroUsize;
 
 use lru::LruCache;
-use sha1::Digest;
-use sha1::Sha1;
-use tokio::sync::Mutex;
-use tokio::sync::MutexGuard;
+use sha1::{Digest, Sha1};
+use tokio::sync::{Mutex, MutexGuard};
 
 /// A minimal LRU cache protected by a Tokio mutex.
 pub struct BlockingLruCache<K, V> {
@@ -131,8 +129,9 @@ pub fn sha1_digest(bytes: &[u8]) -> [u8; 20] {
 
 #[cfg(test)]
 mod tests {
-    use super::BlockingLruCache;
     use std::num::NonZeroUsize;
+
+    use super::BlockingLruCache;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn stores_and_retrieves_values() {

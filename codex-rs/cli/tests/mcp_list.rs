@@ -7,8 +7,7 @@ use codex_core::config::types::McpServerTransportConfig;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
-use serde_json::Value as JsonValue;
-use serde_json::json;
+use serde_json::{Value as JsonValue, json};
 use tempfile::TempDir;
 
 fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {

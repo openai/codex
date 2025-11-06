@@ -1,5 +1,4 @@
-use unicode_width::UnicodeWidthChar;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Scroll position and geometry for a vertical scroll view.
 #[derive(Clone, Copy, Debug, Default)]

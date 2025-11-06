@@ -1,5 +1,6 @@
-use crate::exec::ExecToolCallOutput;
 use thiserror::Error;
+
+use crate::exec::ExecToolCallOutput;
 
 #[derive(Debug, Error)]
 pub(crate) enum UnifiedExecError {

@@ -4,15 +4,15 @@
 //! codex-cloud-tasks) to reuse the mature composer behavior: multi-line input,
 //! paste heuristics, Enter-to-submit, and Shift+Enter for newline.
 
+use std::time::Duration;
+
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use std::time::Duration;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use crate::bottom_pane::ChatComposer;
-use crate::bottom_pane::InputResult;
+use crate::bottom_pane::{ChatComposer, InputResult};
 use crate::render::renderable::Renderable;
 
 /// Action returned from feeding a key event into the ComposerInput.

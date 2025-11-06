@@ -1,10 +1,7 @@
-use std::fs::File;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::LazyLock;
-use std::sync::Mutex;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, Mutex, OnceLock};
 
 use codex_core::config::Config;
 use codex_core::protocol::Op;

@@ -5,20 +5,17 @@ mod new_task;
 pub mod scrollable_diff;
 mod ui;
 pub mod util;
-pub use cli::Cli;
-
-use anyhow::anyhow;
-use std::io::IsTerminal;
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+use anyhow::anyhow;
+pub use cli::Cli;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
-use util::append_error_log;
-use util::set_user_agent_suffix;
+use util::{append_error_log, set_user_agent_suffix};
 
 struct ApplyJob {
     task_id: codex_cloud_tasks_client::TaskId,
@@ -354,15 +351,13 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
 
     // Terminal setup
     use crossterm::ExecutableCommand;
-    use crossterm::event::DisableBracketedPaste;
-    use crossterm::event::EnableBracketedPaste;
-    use crossterm::event::KeyboardEnhancementFlags;
-    use crossterm::event::PopKeyboardEnhancementFlags;
-    use crossterm::event::PushKeyboardEnhancementFlags;
-    use crossterm::terminal::EnterAlternateScreen;
-    use crossterm::terminal::LeaveAlternateScreen;
-    use crossterm::terminal::disable_raw_mode;
-    use crossterm::terminal::enable_raw_mode;
+    use crossterm::event::{
+        DisableBracketedPaste, EnableBracketedPaste, KeyboardEnhancementFlags,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    };
+    use crossterm::terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    };
     use ratatui::Terminal;
     use ratatui::backend::CrosstermBackend;
     let mut stdout = std::io::stdout();
@@ -406,11 +401,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
     // reset any in-flight enrichment state
 
     // Event stream
-    use crossterm::event::Event;
-    use crossterm::event::EventStream;
-    use crossterm::event::KeyCode;
-    use crossterm::event::KeyEventKind;
-    use crossterm::event::KeyModifiers;
+    use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
     use tokio_stream::StreamExt;
     let mut events = EventStream::new();
 
@@ -464,8 +455,8 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
     // Event-driven redraws with a tiny coalescing scheduler (snappy UI, no fixed 250ms tick).
     let mut needs_redraw = true;
     use std::time::Instant;
-    use tokio::time::Instant as TokioInstant;
-    use tokio::time::sleep_until;
+
+    use tokio::time::{Instant as TokioInstant, sleep_until};
     let (frame_tx, mut frame_rx) = tokio::sync::mpsc::unbounded_channel::<Instant>();
     let (redraw_tx, mut redraw_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
 
@@ -1723,11 +1714,8 @@ fn pretty_lines_from_error(raw: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use codex_tui::ComposerAction;
-    use codex_tui::ComposerInput;
-    use crossterm::event::KeyCode;
-    use crossterm::event::KeyEvent;
-    use crossterm::event::KeyModifiers;
+    use codex_tui::{ComposerAction, ComposerInput};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
 

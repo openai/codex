@@ -1,46 +1,33 @@
-use std::io::IsTerminal;
-use std::io::Result;
-use std::io::Stdout;
-use std::io::stdout;
+use std::io::{IsTerminal, Result, Stdout, stdout};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 #[cfg(unix)]
 use std::sync::atomic::AtomicU8;
 #[cfg(unix)]
 use std::sync::atomic::AtomicU16;
-use std::sync::atomic::Ordering;
-use std::time::Duration;
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
-use crossterm::Command;
-use crossterm::SynchronizedUpdate;
 #[cfg(unix)]
 use crossterm::cursor::MoveTo;
-use crossterm::event::DisableBracketedPaste;
-use crossterm::event::DisableFocusChange;
-use crossterm::event::EnableBracketedPaste;
-use crossterm::event::EnableFocusChange;
-use crossterm::event::Event;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyboardEnhancementFlags;
-use crossterm::event::PopKeyboardEnhancementFlags;
-use crossterm::event::PushKeyboardEnhancementFlags;
-use crossterm::terminal::EnterAlternateScreen;
-use crossterm::terminal::LeaveAlternateScreen;
-use crossterm::terminal::supports_keyboard_enhancement;
-use ratatui::backend::Backend;
-use ratatui::backend::CrosstermBackend;
+use crossterm::event::{
+    DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange, Event,
+    KeyEvent, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, supports_keyboard_enhancement,
+};
+use crossterm::{Command, SynchronizedUpdate};
+use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal::disable_raw_mode;
-use ratatui::crossterm::terminal::enable_raw_mode;
+use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::layout::Offset;
 use ratatui::text::Line;
+use tokio::select;
+use tokio_stream::Stream;
 
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
-use tokio::select;
-use tokio_stream::Stream;
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
@@ -235,8 +222,7 @@ impl Tui {
         let draw_tx_clone = draw_tx.clone();
         tokio::spawn(async move {
             use tokio::select;
-            use tokio::time::Instant as TokioInstant;
-            use tokio::time::sleep_until;
+            use tokio::time::{Instant as TokioInstant, sleep_until};
 
             let mut rx = frame_schedule_rx;
             let mut next_deadline: Option<Instant> = None;

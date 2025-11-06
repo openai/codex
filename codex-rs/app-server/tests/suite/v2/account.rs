@@ -1,24 +1,17 @@
-use anyhow::Result;
-use anyhow::bail;
-use app_test_support::McpProcess;
-use app_test_support::to_response;
-use codex_app_server_protocol::AuthMode;
-use codex_app_server_protocol::CancelLoginAccountParams;
-use codex_app_server_protocol::CancelLoginAccountResponse;
-use codex_app_server_protocol::GetAuthStatusParams;
-use codex_app_server_protocol::GetAuthStatusResponse;
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::LoginAccountResponse;
-use codex_app_server_protocol::LogoutAccountResponse;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ServerNotification;
+use std::path::Path;
+use std::time::Duration;
+
+use anyhow::{Result, bail};
+use app_test_support::{McpProcess, to_response};
+use codex_app_server_protocol::{
+    AuthMode, CancelLoginAccountParams, CancelLoginAccountResponse, GetAuthStatusParams,
+    GetAuthStatusResponse, JSONRPCError, JSONRPCResponse, LoginAccountResponse,
+    LogoutAccountResponse, RequestId, ServerNotification,
+};
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_login::login_with_api_key;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
-use std::path::Path;
-use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 

@@ -1,22 +1,13 @@
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDecision;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::SandboxPolicy;
-use core_test_support::responses::ev_apply_patch_function_call;
-use core_test_support::responses::ev_assistant_message;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_function_call;
-use core_test_support::responses::ev_reasoning_item_added;
-use core_test_support::responses::ev_reasoning_summary_text_delta;
-use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_sse_sequence;
-use core_test_support::responses::sse;
-use core_test_support::responses::start_mock_server;
-use core_test_support::skip_if_no_network;
+use codex_core::protocol::{
+    AskForApproval, EventMsg, Op, ReviewDecision, ReviewRequest, SandboxPolicy,
+};
+use core_test_support::responses::{
+    ev_apply_patch_function_call, ev_assistant_message, ev_completed, ev_function_call,
+    ev_reasoning_item_added, ev_reasoning_summary_text_delta, ev_response_created,
+    mount_sse_sequence, sse, start_mock_server,
+};
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
+use core_test_support::{skip_if_no_network, wait_for_event};
 use pretty_assertions::assert_eq;
 
 /// Delegate should surface ExecApprovalRequest from sub-agent and proceed

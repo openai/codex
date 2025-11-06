@@ -6,11 +6,8 @@ use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
-use crate::tools::context::ToolPayload;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::context::{ToolInvocation, ToolOutput, ToolPayload};
+use crate::tools::registry::{ToolHandler, ToolKind};
 
 pub struct ReadFileHandler;
 
@@ -156,12 +153,13 @@ impl ToolHandler for ReadFileHandler {
 }
 
 mod slice {
+    use std::path::Path;
+
+    use tokio::fs::File;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
     use crate::function_tool::FunctionCallError;
     use crate::tools::handlers::read_file::format_line;
-    use std::path::Path;
-    use tokio::fs::File;
-    use tokio::io::AsyncBufReadExt;
-    use tokio::io::BufReader;
 
     pub async fn read(
         path: &Path,
@@ -223,17 +221,16 @@ mod slice {
 }
 
 mod indentation {
-    use crate::function_tool::FunctionCallError;
-    use crate::tools::handlers::read_file::IndentationArgs;
-    use crate::tools::handlers::read_file::LineRecord;
-    use crate::tools::handlers::read_file::TAB_WIDTH;
-    use crate::tools::handlers::read_file::format_line;
-    use crate::tools::handlers::read_file::trim_empty_lines;
     use std::collections::VecDeque;
     use std::path::Path;
+
     use tokio::fs::File;
-    use tokio::io::AsyncBufReadExt;
-    use tokio::io::BufReader;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    use crate::function_tool::FunctionCallError;
+    use crate::tools::handlers::read_file::{
+        IndentationArgs, LineRecord, TAB_WIDTH, format_line, trim_empty_lines,
+    };
 
     pub async fn read_block(
         path: &Path,
@@ -493,11 +490,12 @@ mod defaults {
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_eq;
+    use tempfile::NamedTempFile;
+
     use super::indentation::read_block;
     use super::slice::read;
     use super::*;
-    use pretty_assertions::assert_eq;
-    use tempfile::NamedTempFile;
 
     #[tokio::test]
     async fn reads_requested_range() -> anyhow::Result<()> {

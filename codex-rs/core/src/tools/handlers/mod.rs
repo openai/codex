@@ -10,14 +10,12 @@ mod test_sync;
 mod unified_exec;
 mod view_image;
 
-pub use plan::PLAN_TOOL;
-
 pub use apply_patch::ApplyPatchHandler;
 pub use grep_files::GrepFilesHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;
-pub use plan::PlanHandler;
+pub use plan::{PLAN_TOOL, PlanHandler};
 pub use read_file::ReadFileHandler;
 pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;

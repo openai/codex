@@ -9,31 +9,23 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::select;
-use tokio::sync::Notify;
-use tokio_util::sync::CancellationToken;
-use tokio_util::task::AbortOnDropHandle;
-use tracing::trace;
-use tracing::warn;
-
-use crate::AuthManager;
-use crate::codex::Session;
-use crate::codex::TurnContext;
-use crate::protocol::EventMsg;
-use crate::protocol::TaskCompleteEvent;
-use crate::protocol::TurnAbortReason;
-use crate::protocol::TurnAbortedEvent;
-use crate::state::ActiveTurn;
-use crate::state::RunningTask;
-use crate::state::TaskKind;
 use codex_protocol::user_input::UserInput;
-
 pub(crate) use compact::CompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
 pub(crate) use regular::RegularTask;
 pub(crate) use review::ReviewTask;
+use tokio::select;
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
+use tracing::{trace, warn};
 pub(crate) use undo::UndoTask;
 pub(crate) use user_shell::UserShellCommandTask;
+
+use crate::AuthManager;
+use crate::codex::{Session, TurnContext};
+use crate::protocol::{EventMsg, TaskCompleteEvent, TurnAbortReason, TurnAbortedEvent};
+use crate::state::{ActiveTurn, RunningTask, TaskKind};
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 

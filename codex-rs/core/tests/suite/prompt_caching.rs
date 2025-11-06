@@ -1,32 +1,21 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_core::CodexAuth;
-use codex_core::ConversationManager;
-use codex_core::ModelProviderInfo;
-use codex_core::built_in_model_providers;
+use std::collections::HashMap;
+
 use codex_core::config::OPENAI_DEFAULT_MODEL;
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol_config_types::ReasoningEffort;
-use codex_core::protocol_config_types::ReasoningSummary;
-use codex_core::shell::Shell;
-use codex_core::shell::default_user_shell;
+use codex_core::protocol::{AskForApproval, EventMsg, Op, SandboxPolicy};
+use codex_core::protocol_config_types::{ReasoningEffort, ReasoningSummary};
+use codex_core::shell::{Shell, default_user_shell};
+use codex_core::{CodexAuth, ConversationManager, ModelProviderInfo, built_in_model_providers};
 use codex_protocol::user_input::UserInput;
-use core_test_support::load_default_config_for_test;
-use core_test_support::load_sse_fixture_with_id;
-use core_test_support::skip_if_no_network;
-use core_test_support::wait_for_event;
-use std::collections::HashMap;
+use core_test_support::{
+    load_default_config_for_test, load_sse_fixture_with_id, skip_if_no_network, wait_for_event,
+};
 use tempfile::TempDir;
-use wiremock::Mock;
-use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn text_user_input(text: String) -> serde_json::Value {
     serde_json::json!({

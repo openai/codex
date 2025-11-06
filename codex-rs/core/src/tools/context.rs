@@ -1,22 +1,23 @@
-use crate::codex::Session;
-use crate::codex::TurnContext;
-use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
-use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
-use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
-use crate::turn_diff_tracker::TurnDiffTracker;
-use codex_otel::otel_event_manager::OtelEventManager;
-use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ShellToolCallParams;
-use codex_protocol::protocol::FileChange;
-use codex_utils_string::take_bytes_at_char_boundary;
-use mcp_types::CallToolResult;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use codex_otel::otel_event_manager::OtelEventManager;
+use codex_protocol::models::{
+    FunctionCallOutputContentItem, FunctionCallOutputPayload, ResponseInputItem,
+    ShellToolCallParams,
+};
+use codex_protocol::protocol::FileChange;
+use codex_utils_string::take_bytes_at_char_boundary;
+use mcp_types::CallToolResult;
 use tokio::sync::Mutex;
+
+use crate::codex::{Session, TurnContext};
+use crate::tools::{
+    TELEMETRY_PREVIEW_MAX_BYTES, TELEMETRY_PREVIEW_MAX_LINES, TELEMETRY_PREVIEW_TRUNCATION_NOTICE,
+};
+use crate::turn_diff_tracker::TurnDiffTracker;
 
 pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 
@@ -165,8 +166,9 @@ fn telemetry_preview(content: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_eq;
+
+    use super::*;
 
     #[test]
     fn custom_tool_calls_should_roundtrip_as_custom_outputs() {

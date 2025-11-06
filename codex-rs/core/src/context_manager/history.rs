@@ -1,12 +1,12 @@
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::TokenUsage;
-use codex_protocol::protocol::TokenUsageInfo;
 use std::ops::Deref;
 
+use codex_protocol::models::{FunctionCallOutputPayload, ResponseItem};
+use codex_protocol::protocol::{TokenUsage, TokenUsageInfo};
+
 use crate::context_manager::normalize;
-use crate::context_manager::truncate::format_output_for_model_body;
-use crate::context_manager::truncate::globally_truncate_function_output_items;
+use crate::context_manager::truncate::{
+    format_output_for_model_body, globally_truncate_function_output_items,
+};
 
 /// Transcript of conversation history
 #[derive(Debug, Clone, Default)]

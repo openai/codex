@@ -1,36 +1,23 @@
 use std::sync::Arc;
 
-use tokio::sync::Notify;
-use tokio::sync::mpsc;
-use tokio::time::Duration;
-use tokio::time::Instant;
+use tokio::sync::{Notify, mpsc};
+use tokio::time::{Duration, Instant};
 
-use crate::exec::ExecToolCallOutput;
-use crate::exec::StreamOutput;
+use super::session::{OutputBuffer, UnifiedExecSession};
+use super::{
+    ExecCommandRequest, MIN_YIELD_TIME_MS, SessionEntry, UnifiedExecContext, UnifiedExecError,
+    UnifiedExecResponse, UnifiedExecSessionManager, WriteStdinRequest, clamp_yield_time,
+    generate_chunk_id, resolve_max_tokens, truncate_output_to_tokens,
+};
+use crate::exec::{ExecToolCallOutput, StreamOutput};
 use crate::exec_env::create_env;
 use crate::sandboxing::ExecEnv;
-use crate::tools::events::ToolEmitter;
-use crate::tools::events::ToolEventCtx;
-use crate::tools::events::ToolEventStage;
+use crate::tools::events::{ToolEmitter, ToolEventCtx, ToolEventStage};
 use crate::tools::orchestrator::ToolOrchestrator;
-use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
-use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
+use crate::tools::runtimes::unified_exec::{
+    UnifiedExecRequest as UnifiedExecToolRequest, UnifiedExecRuntime,
+};
 use crate::tools::sandboxing::ToolCtx;
-
-use super::ExecCommandRequest;
-use super::MIN_YIELD_TIME_MS;
-use super::SessionEntry;
-use super::UnifiedExecContext;
-use super::UnifiedExecError;
-use super::UnifiedExecResponse;
-use super::UnifiedExecSessionManager;
-use super::WriteStdinRequest;
-use super::clamp_yield_time;
-use super::generate_chunk_id;
-use super::resolve_max_tokens;
-use super::session::OutputBuffer;
-use super::session::UnifiedExecSession;
-use super::truncate_output_to_tokens;
 
 impl UnifiedExecSessionManager {
     pub(crate) async fn exec_command(

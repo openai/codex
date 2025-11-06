@@ -1,6 +1,5 @@
 use serde::Serialize;
-use tracing::error;
-use tracing::warn;
+use tracing::{error, warn};
 
 #[derive(Debug, Default)]
 pub(crate) struct UserNotifier {
@@ -63,8 +62,9 @@ pub(crate) enum UserNotification {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use anyhow::Result;
+
+    use super::*;
 
     #[test]
     fn test_user_notification() -> Result<()> {

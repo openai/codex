@@ -1,32 +1,25 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
-use codex_common::CliConfigOverrides;
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
-use std::io::ErrorKind;
-use std::io::Result as IoResult;
+use std::io::{ErrorKind, Result as IoResult};
 use std::path::PathBuf;
 
-use crate::message_processor::MessageProcessor;
-use crate::outgoing_message::OutgoingMessage;
-use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_common::CliConfigOverrides;
+use codex_core::config::{Config, ConfigOverrides};
 use codex_feedback::CodexFeedback;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::AsyncWriteExt;
-use tokio::io::BufReader;
-use tokio::io::{self};
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+use tokio::io::{
+    AsyncBufReadExt, AsyncWriteExt, BufReader, {self},
+};
 use tokio::sync::mpsc;
-use tracing::Level;
-use tracing::debug;
-use tracing::error;
-use tracing::info;
-use tracing_subscriber::EnvFilter;
-use tracing_subscriber::Layer;
+use tracing::{Level, debug, error, info};
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer};
+
+use crate::message_processor::MessageProcessor;
+use crate::outgoing_message::{OutgoingMessage, OutgoingMessageSender};
 
 mod codex_message_processor;
 mod error_code;

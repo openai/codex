@@ -1,140 +1,71 @@
-use crate::error_code::INTERNAL_ERROR_CODE;
-use crate::error_code::INVALID_REQUEST_ERROR_CODE;
-use crate::fuzzy_file_search::run_fuzzy_file_search;
-use crate::models::supported_models;
-use crate::outgoing_message::OutgoingMessageSender;
-use crate::outgoing_message::OutgoingNotification;
-use codex_app_server_protocol::AccountLoginCompletedNotification;
-use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
-use codex_app_server_protocol::AccountUpdatedNotification;
-use codex_app_server_protocol::AddConversationListenerParams;
-use codex_app_server_protocol::AddConversationSubscriptionResponse;
-use codex_app_server_protocol::ApplyPatchApprovalParams;
-use codex_app_server_protocol::ApplyPatchApprovalResponse;
-use codex_app_server_protocol::ArchiveConversationParams;
-use codex_app_server_protocol::ArchiveConversationResponse;
-use codex_app_server_protocol::AuthMode;
-use codex_app_server_protocol::AuthStatusChangeNotification;
-use codex_app_server_protocol::CancelLoginAccountParams;
-use codex_app_server_protocol::CancelLoginAccountResponse;
-use codex_app_server_protocol::CancelLoginChatGptResponse;
-use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::ConversationSummary;
-use codex_app_server_protocol::ExecCommandApprovalParams;
-use codex_app_server_protocol::ExecCommandApprovalResponse;
-use codex_app_server_protocol::ExecOneOffCommandParams;
-use codex_app_server_protocol::ExecOneOffCommandResponse;
-use codex_app_server_protocol::FeedbackUploadParams;
-use codex_app_server_protocol::FeedbackUploadResponse;
-use codex_app_server_protocol::FuzzyFileSearchParams;
-use codex_app_server_protocol::FuzzyFileSearchResponse;
-use codex_app_server_protocol::GetAccountRateLimitsResponse;
-use codex_app_server_protocol::GetConversationSummaryParams;
-use codex_app_server_protocol::GetConversationSummaryResponse;
-use codex_app_server_protocol::GetUserAgentResponse;
-use codex_app_server_protocol::GetUserSavedConfigResponse;
-use codex_app_server_protocol::GitDiffToRemoteResponse;
-use codex_app_server_protocol::InputItem as WireInputItem;
-use codex_app_server_protocol::InterruptConversationParams;
-use codex_app_server_protocol::InterruptConversationResponse;
-use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::ListConversationsParams;
-use codex_app_server_protocol::ListConversationsResponse;
-use codex_app_server_protocol::LoginAccountParams;
-use codex_app_server_protocol::LoginApiKeyParams;
-use codex_app_server_protocol::LoginApiKeyResponse;
-use codex_app_server_protocol::LoginChatGptCompleteNotification;
-use codex_app_server_protocol::LoginChatGptResponse;
-use codex_app_server_protocol::ModelListParams;
-use codex_app_server_protocol::ModelListResponse;
-use codex_app_server_protocol::NewConversationParams;
-use codex_app_server_protocol::NewConversationResponse;
-use codex_app_server_protocol::RemoveConversationListenerParams;
-use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::Result as JsonRpcResult;
-use codex_app_server_protocol::ResumeConversationParams;
-use codex_app_server_protocol::SendUserMessageParams;
-use codex_app_server_protocol::SendUserMessageResponse;
-use codex_app_server_protocol::SendUserTurnParams;
-use codex_app_server_protocol::SendUserTurnResponse;
-use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ServerRequestPayload;
-use codex_app_server_protocol::SessionConfiguredNotification;
-use codex_app_server_protocol::SetDefaultModelParams;
-use codex_app_server_protocol::SetDefaultModelResponse;
-use codex_app_server_protocol::Thread;
-use codex_app_server_protocol::ThreadArchiveParams;
-use codex_app_server_protocol::ThreadArchiveResponse;
-use codex_app_server_protocol::ThreadListParams;
-use codex_app_server_protocol::ThreadListResponse;
-use codex_app_server_protocol::ThreadResumeParams;
-use codex_app_server_protocol::ThreadResumeResponse;
-use codex_app_server_protocol::ThreadStartParams;
-use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::ThreadStartedNotification;
-use codex_app_server_protocol::UserInfoResponse;
-use codex_app_server_protocol::UserSavedConfig;
+use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::io::Error as IoError;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use codex_app_server_protocol::{
+    AccountLoginCompletedNotification, AccountRateLimitsUpdatedNotification,
+    AccountUpdatedNotification, AddConversationListenerParams, AddConversationSubscriptionResponse,
+    ApplyPatchApprovalParams, ApplyPatchApprovalResponse, ArchiveConversationParams,
+    ArchiveConversationResponse, AuthMode, AuthStatusChangeNotification, CancelLoginAccountParams,
+    CancelLoginAccountResponse, CancelLoginChatGptResponse, ClientRequest, ConversationSummary,
+    ExecCommandApprovalParams, ExecCommandApprovalResponse, ExecOneOffCommandParams,
+    ExecOneOffCommandResponse, FeedbackUploadParams, FeedbackUploadResponse, FuzzyFileSearchParams,
+    FuzzyFileSearchResponse, GetAccountRateLimitsResponse, GetConversationSummaryParams,
+    GetConversationSummaryResponse, GetUserAgentResponse, GetUserSavedConfigResponse,
+    GitDiffToRemoteResponse, InputItem as WireInputItem, InterruptConversationParams,
+    InterruptConversationResponse, JSONRPCErrorError, ListConversationsParams,
+    ListConversationsResponse, LoginAccountParams, LoginApiKeyParams, LoginApiKeyResponse,
+    LoginChatGptCompleteNotification, LoginChatGptResponse, ModelListParams, ModelListResponse,
+    NewConversationParams, NewConversationResponse, RemoveConversationListenerParams,
+    RemoveConversationSubscriptionResponse, RequestId, Result as JsonRpcResult,
+    ResumeConversationParams, SendUserMessageParams, SendUserMessageResponse, SendUserTurnParams,
+    SendUserTurnResponse, ServerNotification, ServerRequestPayload, SessionConfiguredNotification,
+    SetDefaultModelParams, SetDefaultModelResponse, Thread, ThreadArchiveParams,
+    ThreadArchiveResponse, ThreadListParams, ThreadListResponse, ThreadResumeParams,
+    ThreadResumeResponse, ThreadStartParams, ThreadStartResponse, ThreadStartedNotification,
+    UserInfoResponse, UserSavedConfig,
+};
 use codex_backend_client::Client as BackendClient;
-use codex_core::AuthManager;
-use codex_core::CodexConversation;
-use codex_core::ConversationManager;
-use codex_core::Cursor as RolloutCursor;
-use codex_core::INTERACTIVE_SESSION_SOURCES;
-use codex_core::InitialHistory;
-use codex_core::NewConversation;
-use codex_core::RolloutRecorder;
-use codex_core::SessionMeta;
-use codex_core::auth::CLIENT_ID;
-use codex_core::auth::login_with_api_key;
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use codex_core::config::ConfigToml;
+use codex_core::auth::{CLIENT_ID, login_with_api_key};
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::{Config, ConfigOverrides, ConfigToml};
 use codex_core::config_loader::load_config_as_toml;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
-use codex_core::find_conversation_path_by_id_str;
-use codex_core::get_platform_sandbox;
 use codex_core::git_info::git_diff_to_remote;
-use codex_core::parse_cursor;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDecision;
-use codex_core::read_head_for_summary;
+use codex_core::protocol::{
+    ApplyPatchApprovalRequestEvent, Event, EventMsg, ExecApprovalRequestEvent, Op, ReviewDecision,
+};
+use codex_core::{
+    AuthManager, CodexConversation, ConversationManager, Cursor as RolloutCursor,
+    INTERACTIVE_SESSION_SOURCES, InitialHistory, NewConversation, RolloutRecorder, SessionMeta,
+    find_conversation_path_by_id_str, get_platform_sandbox, parse_cursor, read_head_for_summary,
+};
 use codex_feedback::CodexFeedback;
-use codex_login::ServerOptions as LoginServerOptions;
-use codex_login::ShutdownHandle;
-use codex_login::run_login_server;
+use codex_login::{ServerOptions as LoginServerOptions, ShutdownHandle, run_login_server};
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use codex_protocol::protocol::{
+    RateLimitSnapshot as CoreRateLimitSnapshot, RolloutItem, USER_MESSAGE_BEGIN,
+};
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_utils_json_to_toml::json_to_toml;
-use std::collections::HashMap;
-use std::ffi::OsStr;
-use std::io::Error as IoError;
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use std::time::Duration;
 use tokio::select;
-use tokio::sync::Mutex;
-use tokio::sync::oneshot;
-use tracing::error;
-use tracing::info;
-use tracing::warn;
+use tokio::sync::{Mutex, oneshot};
+use tracing::{error, info, warn};
 use uuid::Uuid;
+
+use crate::error_code::{INTERNAL_ERROR_CODE, INVALID_REQUEST_ERROR_CODE};
+use crate::fuzzy_file_search::run_fuzzy_file_search;
+use crate::models::supported_models;
+use crate::outgoing_message::{OutgoingMessageSender, OutgoingNotification};
 
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -2615,11 +2546,12 @@ fn extract_conversation_summary(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use anyhow::Result;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn extract_conversation_summary_prefers_plain_user_messages() -> Result<()> {
@@ -2672,10 +2604,9 @@ mod tests {
 
     #[tokio::test]
     async fn read_summary_from_rollout_returns_empty_preview_when_no_user_message() -> Result<()> {
-        use codex_protocol::protocol::RolloutItem;
-        use codex_protocol::protocol::RolloutLine;
-        use codex_protocol::protocol::SessionMetaLine;
         use std::fs;
+
+        use codex_protocol::protocol::{RolloutItem, RolloutLine, SessionMetaLine};
 
         let temp_dir = TempDir::new()?;
         let path = temp_dir.path().join("rollout.jsonl");

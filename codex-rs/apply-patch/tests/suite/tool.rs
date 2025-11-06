@@ -1,7 +1,8 @@
-use assert_cmd::Command;
-use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
+
+use assert_cmd::Command;
+use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
 fn run_apply_patch_in_dir(dir: &Path, patch: &str) -> anyhow::Result<assert_cmd::assert::Assert> {

@@ -1,5 +1,4 @@
-use std::io::Read;
-use std::io::Write;
+use std::io::{Read, Write};
 
 pub fn main() -> ! {
     let exit_code = run_main();

@@ -3,13 +3,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 
-use crate::render::Insets;
-use crate::render::RectExt;
-
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
-use super::selection_popup_common::GenericDisplayRow;
-use super::selection_popup_common::render_rows;
+use super::selection_popup_common::{GenericDisplayRow, render_rows};
+use crate::render::{Insets, RectExt};
 
 /// Visual state for the file-search popup.
 pub(crate) struct FileSearchPopup {

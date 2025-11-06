@@ -1,16 +1,12 @@
-use anyhow::Result;
-use app_test_support::McpProcess;
-use app_test_support::to_response;
-use codex_app_server_protocol::AuthMode;
-use codex_app_server_protocol::GetAuthStatusParams;
-use codex_app_server_protocol::GetAuthStatusResponse;
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::LoginApiKeyParams;
-use codex_app_server_protocol::LoginApiKeyResponse;
-use codex_app_server_protocol::RequestId;
-use pretty_assertions::assert_eq;
 use std::path::Path;
+
+use anyhow::Result;
+use app_test_support::{McpProcess, to_response};
+use codex_app_server_protocol::{
+    AuthMode, GetAuthStatusParams, GetAuthStatusResponse, JSONRPCError, JSONRPCResponse,
+    LoginApiKeyParams, LoginApiKeyResponse, RequestId,
+};
+use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
 

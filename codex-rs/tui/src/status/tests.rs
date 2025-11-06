@@ -1,22 +1,15 @@
-use super::new_status_output;
-use super::rate_limit_snapshot_display;
-use crate::history_cell::HistoryCell;
-use chrono::Duration as ChronoDuration;
-use chrono::TimeZone;
-use chrono::Utc;
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use codex_core::config::ConfigToml;
-use codex_core::protocol::RateLimitSnapshot;
-use codex_core::protocol::RateLimitWindow;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::TokenUsage;
-use codex_protocol::config_types::ReasoningEffort;
-use codex_protocol::config_types::ReasoningSummary;
+use std::path::PathBuf;
+
+use chrono::{Duration as ChronoDuration, TimeZone, Utc};
+use codex_core::config::{Config, ConfigOverrides, ConfigToml};
+use codex_core::protocol::{RateLimitSnapshot, RateLimitWindow, SandboxPolicy, TokenUsage};
+use codex_protocol::config_types::{ReasoningEffort, ReasoningSummary};
 use insta::assert_snapshot;
 use ratatui::prelude::*;
-use std::path::PathBuf;
 use tempfile::TempDir;
+
+use super::{new_status_output, rate_limit_snapshot_display};
+use crate::history_cell::HistoryCell;
 
 fn test_config(temp_home: &TempDir) -> Config {
     Config::load_from_base_config_with_overrides(

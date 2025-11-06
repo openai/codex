@@ -111,8 +111,9 @@ pub(crate) fn seek_sequence(
 
 #[cfg(test)]
 mod tests {
-    use super::seek_sequence;
     use std::string::ToString;
+
+    use super::seek_sequence;
 
     fn to_vec(strings: &[&str]) -> Vec<String> {
         strings.iter().map(ToString::to_string).collect()

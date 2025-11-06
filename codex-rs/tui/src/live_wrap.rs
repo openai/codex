@@ -1,5 +1,4 @@
-use unicode_width::UnicodeWidthChar;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// A single visual row produced by RowBuilder.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,8 +207,9 @@ pub fn take_prefix_by_width(text: &str, max_cols: usize) -> (String, &str, usize
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_eq;
+
+    use super::*;
 
     #[test]
     fn rows_do_not_exceed_width_ascii() {

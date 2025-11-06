@@ -1,25 +1,18 @@
 #![allow(clippy::unwrap_used)]
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use anyhow::Context;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::load_auth_dot_json;
-use codex_login::ServerOptions;
-use codex_login::run_device_code_login;
-use serde_json::json;
-use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-use tempfile::tempdir;
-use wiremock::Mock;
-use wiremock::MockServer;
-use wiremock::Request;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
-
+use codex_core::auth::{AuthCredentialsStoreMode, load_auth_dot_json};
+use codex_login::{ServerOptions, run_device_code_login};
 use core_test_support::skip_if_no_network;
+use serde_json::json;
+use tempfile::tempdir;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 // ---------- Small helpers  ----------
 

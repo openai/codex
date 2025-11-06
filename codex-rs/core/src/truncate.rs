@@ -136,8 +136,9 @@ pub(crate) fn truncate_middle(s: &str, max_bytes: usize) -> (String, Option<u64>
 
 #[cfg(test)]
 mod tests {
-    use super::truncate_middle;
     use codex_utils_tokenizer::Tokenizer;
+
+    use super::truncate_middle;
 
     #[test]
     fn truncate_middle_no_newlines_fallback() {

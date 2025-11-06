@@ -1,37 +1,24 @@
-use crate::ClientNotification;
-use crate::ClientRequest;
-use crate::ServerNotification;
-use crate::ServerRequest;
-use crate::export_client_notification_schemas;
-use crate::export_client_param_schemas;
-use crate::export_client_response_schemas;
-use crate::export_client_responses;
-use crate::export_server_notification_schemas;
-use crate::export_server_param_schemas;
-use crate::export_server_response_schemas;
-use crate::export_server_responses;
-use anyhow::Context;
-use anyhow::Result;
-use anyhow::anyhow;
-use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::SandboxPolicy;
-use schemars::JsonSchema;
-use schemars::schema_for;
-use serde::Serialize;
-use serde_json::Map;
-use serde_json::Value;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
-use std::io::Read;
-use std::io::Write;
-use std::path::Path;
-use std::path::PathBuf;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use anyhow::{Context, Result, anyhow};
+use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::protocol::{EventMsg, FileChange, SandboxPolicy};
+use schemars::{JsonSchema, schema_for};
+use serde::Serialize;
+use serde_json::{Map, Value};
 use ts_rs::TS;
+
+use crate::{
+    ClientNotification, ClientRequest, ServerNotification, ServerRequest,
+    export_client_notification_schemas, export_client_param_schemas,
+    export_client_response_schemas, export_client_responses, export_server_notification_schemas,
+    export_server_param_schemas, export_server_response_schemas, export_server_responses,
+};
 
 const HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
 
@@ -707,12 +694,14 @@ fn generate_index_ts(out_dir: &Path) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use anyhow::Result;
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
+
+    use anyhow::Result;
     use uuid::Uuid;
+
+    use super::*;
 
     #[test]
     fn generated_ts_has_no_optional_nullable_fields() -> Result<()> {

@@ -1,12 +1,7 @@
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use wiremock::Mock;
-use wiremock::MockServer;
-use wiremock::Respond;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, Respond, ResponseTemplate};
 
 /// Create a mock server that will provide the responses, in order, for
 /// requests to the `/v1/chat/completions` endpoint.

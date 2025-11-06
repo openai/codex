@@ -1,14 +1,12 @@
-use crate::codex::Session;
-use crate::codex::TurnContext;
-use crate::function_tool::FunctionCallError;
-use crate::protocol::FileChange;
-use crate::protocol::ReviewDecision;
-use crate::safety::SafetyCheck;
-use crate::safety::assess_patch_safety;
-use codex_apply_patch::ApplyPatchAction;
-use codex_apply_patch::ApplyPatchFileChange;
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+use codex_apply_patch::{ApplyPatchAction, ApplyPatchFileChange};
+
+use crate::codex::{Session, TurnContext};
+use crate::function_tool::FunctionCallError;
+use crate::protocol::{FileChange, ReviewDecision};
+use crate::safety::{SafetyCheck, assess_patch_safety};
 
 pub const CODEX_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
 
@@ -118,10 +116,10 @@ pub(crate) fn convert_apply_patch_to_protocol(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_eq;
-
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn convert_apply_patch_maps_add_variant() {

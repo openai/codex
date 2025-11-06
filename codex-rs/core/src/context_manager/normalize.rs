@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::{FunctionCallOutputPayload, ResponseItem};
 
 use crate::util::error_or_panic;
 

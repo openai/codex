@@ -1,19 +1,14 @@
 use std::borrow::Cow;
 use std::ffi::OsString;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::ArgType;
-use crate::Error::CannotCanonicalizePath;
-use crate::Error::CannotCheckRelativePath;
-use crate::Error::ReadablePathNotInReadableFolders;
-use crate::Error::WriteablePathNotInWriteableFolders;
-use crate::ExecCall;
-use crate::MatchedExec;
-use crate::Policy;
-use crate::Result;
-use crate::ValidExec;
 use path_absolutize::*;
+
+use crate::Error::{
+    CannotCanonicalizePath, CannotCheckRelativePath, ReadablePathNotInReadableFolders,
+    WriteablePathNotInWriteableFolders,
+};
+use crate::{ArgType, ExecCall, MatchedExec, Policy, Result, ValidExec};
 
 macro_rules! check_file_in_folders {
     ($file:expr, $folders:expr, $error:ident) => {
@@ -141,13 +136,11 @@ fn is_executable_file(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::{Result, anyhow};
     use tempfile::TempDir;
 
     use super::*;
-    use crate::MatchedArg;
-    use crate::PolicyParser;
-    use anyhow::Result;
-    use anyhow::anyhow;
+    use crate::{MatchedArg, PolicyParser};
 
     fn setup(fake_cp: &Path) -> ExecvChecker {
         let source = format!(

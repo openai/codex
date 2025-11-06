@@ -1,17 +1,13 @@
 #![deny(clippy::print_stdout)]
 
-use std::io;
 use std::io::Write;
 use std::net::Shutdown;
-use std::path::Path;
-use std::thread;
-
-use anyhow::Context;
-use anyhow::anyhow;
-
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
+use std::path::Path;
+use std::{io, thread};
 
+use anyhow::{Context, anyhow};
 #[cfg(windows)]
 use uds_windows::UnixStream;
 

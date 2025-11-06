@@ -26,21 +26,14 @@ use std::io::Write;
 
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
-use crossterm::style::Colors;
-use crossterm::style::Print;
-use crossterm::style::SetAttribute;
-use crossterm::style::SetBackgroundColor;
-use crossterm::style::SetColors;
-use crossterm::style::SetForegroundColor;
+use crossterm::style::{
+    Colors, Print, SetAttribute, SetBackgroundColor, SetColors, SetForegroundColor,
+};
 use crossterm::terminal::Clear;
-use ratatui::backend::Backend;
-use ratatui::backend::ClearType;
+use ratatui::backend::{Backend, ClearType};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Position;
-use ratatui::layout::Rect;
-use ratatui::layout::Size;
-use ratatui::style::Color;
-use ratatui::style::Modifier;
+use ratatui::layout::{Position, Rect, Size};
+use ratatui::style::{Color, Modifier};
 use ratatui::widgets::WidgetRef;
 
 #[derive(Debug, Hash)]
@@ -596,10 +589,11 @@ impl ModifierDiff {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
     use ratatui::style::Style;
+
+    use super::*;
 
     #[test]
     fn diff_buffers_does_not_emit_clear_to_end_for_full_width_row() {

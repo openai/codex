@@ -4,26 +4,19 @@
 //! decision to avoid re-prompting, builds the self-invocation command for
 //! `codex --codex-run-as-apply-patch`, and runs under the current
 //! `SandboxAttempt` with a minimal environment.
-use crate::CODEX_APPLY_PATCH_ARG1;
-use crate::exec::ExecToolCallOutput;
-use crate::sandboxing::CommandSpec;
-use crate::sandboxing::execute_env;
-use crate::tools::sandboxing::Approvable;
-use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ProvidesSandboxRetryData;
-use crate::tools::sandboxing::SandboxAttempt;
-use crate::tools::sandboxing::SandboxRetryData;
-use crate::tools::sandboxing::Sandboxable;
-use crate::tools::sandboxing::SandboxablePreference;
-use crate::tools::sandboxing::ToolCtx;
-use crate::tools::sandboxing::ToolError;
-use crate::tools::sandboxing::ToolRuntime;
-use crate::tools::sandboxing::with_cached_approval;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::ReviewDecision;
-use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+use codex_protocol::protocol::{AskForApproval, ReviewDecision};
+use futures::future::BoxFuture;
+
+use crate::CODEX_APPLY_PATCH_ARG1;
+use crate::exec::ExecToolCallOutput;
+use crate::sandboxing::{CommandSpec, execute_env};
+use crate::tools::sandboxing::{
+    Approvable, ApprovalCtx, ProvidesSandboxRetryData, SandboxAttempt, SandboxRetryData,
+    Sandboxable, SandboxablePreference, ToolCtx, ToolError, ToolRuntime, with_cached_approval,
+};
 
 #[derive(Clone, Debug)]
 pub struct ApplyPatchRequest {

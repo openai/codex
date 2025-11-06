@@ -1,29 +1,19 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use async_channel::Receiver;
-use async_channel::Sender;
+use async_channel::{Receiver, Sender};
 use codex_async_utils::OrCancelExt;
-use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ExecApprovalRequestEvent;
-use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::{
+    ApplyPatchApprovalRequestEvent, Event, EventMsg, ExecApprovalRequestEvent, InitialHistory, Op,
+    SessionSource, SubAgentSource, Submission,
+};
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 
 use crate::AuthManager;
-use crate::codex::Codex;
-use crate::codex::CodexSpawnOk;
-use crate::codex::SUBMISSION_CHANNEL_CAPACITY;
-use crate::codex::Session;
-use crate::codex::TurnContext;
+use crate::codex::{Codex, CodexSpawnOk, SUBMISSION_CHANNEL_CAPACITY, Session, TurnContext};
 use crate::config::Config;
 use crate::error::CodexErr;
-use codex_protocol::protocol::InitialHistory;
 
 /// Start an interactive sub-Codex conversation and return IO channels.
 ///

@@ -1,8 +1,9 @@
-use crate::history_cell::HistoryCell;
-use crate::history_cell::{self};
 use ratatui::text::Line;
 
 use super::StreamState;
+use crate::history_cell::{
+    HistoryCell, {self},
+};
 
 /// Controller that manages newline-gated streaming, header emission, and
 /// commit animation across streams.

@@ -1,8 +1,5 @@
 use strum::IntoEnumIterator;
-use strum_macros::AsRefStr;
-use strum_macros::EnumIter;
-use strum_macros::EnumString;
-use strum_macros::IntoStaticStr;
+use strum_macros::{AsRefStr, EnumIter, EnumString, IntoStaticStr};
 
 /// Commands that can be invoked by starting a message with a leading slash.
 #[derive(

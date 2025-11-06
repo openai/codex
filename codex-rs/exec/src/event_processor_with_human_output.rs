@@ -1,42 +1,23 @@
-use codex_common::elapsed::format_duration;
-use codex_common::elapsed::format_elapsed;
-use codex_core::config::Config;
-use codex_core::protocol::AgentMessageEvent;
-use codex_core::protocol::AgentReasoningRawContentEvent;
-use codex_core::protocol::BackgroundEventEvent;
-use codex_core::protocol::DeprecationNoticeEvent;
-use codex_core::protocol::ErrorEvent;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecCommandBeginEvent;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::McpInvocation;
-use codex_core::protocol::McpToolCallBeginEvent;
-use codex_core::protocol::McpToolCallEndEvent;
-use codex_core::protocol::PatchApplyBeginEvent;
-use codex_core::protocol::PatchApplyEndEvent;
-use codex_core::protocol::SessionConfiguredEvent;
-use codex_core::protocol::StreamErrorEvent;
-use codex_core::protocol::TaskCompleteEvent;
-use codex_core::protocol::TurnAbortReason;
-use codex_core::protocol::TurnDiffEvent;
-use codex_core::protocol::WarningEvent;
-use codex_core::protocol::WebSearchEndEvent;
-use codex_protocol::num_format::format_with_separators;
-use owo_colors::OwoColorize;
-use owo_colors::Style;
-use shlex::try_join;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::event_processor::CodexStatus;
-use crate::event_processor::EventProcessor;
-use crate::event_processor::handle_last_message;
 use codex_common::create_config_summary_entries;
-use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_common::elapsed::{format_duration, format_elapsed};
+use codex_core::config::Config;
+use codex_core::protocol::{
+    AgentMessageEvent, AgentReasoningRawContentEvent, BackgroundEventEvent, DeprecationNoticeEvent,
+    ErrorEvent, Event, EventMsg, ExecCommandBeginEvent, ExecCommandEndEvent, FileChange,
+    McpInvocation, McpToolCallBeginEvent, McpToolCallEndEvent, PatchApplyBeginEvent,
+    PatchApplyEndEvent, SessionConfiguredEvent, StreamErrorEvent, TaskCompleteEvent,
+    TurnAbortReason, TurnDiffEvent, WarningEvent, WebSearchEndEvent,
+};
+use codex_protocol::num_format::format_with_separators;
+use codex_protocol::plan_tool::{StepStatus, UpdatePlanArgs};
+use owo_colors::{OwoColorize, Style};
+use shlex::try_join;
+
+use crate::event_processor::{CodexStatus, EventProcessor, handle_last_message};
 
 /// This should be configurable. When used in CI, users may not want to impose
 /// a limit so they can see the full transcript.

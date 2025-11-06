@@ -1,11 +1,6 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
-use app_test_support::create_fake_rollout;
-use app_test_support::to_response;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ThreadListParams;
-use codex_app_server_protocol::ThreadListResponse;
+use app_test_support::{McpProcess, create_fake_rollout, to_response};
+use codex_app_server_protocol::{JSONRPCResponse, RequestId, ThreadListParams, ThreadListResponse};
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;

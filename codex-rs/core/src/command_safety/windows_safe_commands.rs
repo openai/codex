@@ -274,8 +274,9 @@ fn is_safe_git_command(words: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_safe_command_windows;
     use std::string::ToString;
+
+    use super::is_safe_command_windows;
 
     /// Converts a slice of string literals into owned `String`s for the tests.
     fn vec_str(args: &[&str]) -> Vec<String> {

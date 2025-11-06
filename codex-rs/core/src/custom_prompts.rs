@@ -1,7 +1,7 @@
-use codex_protocol::custom_prompts::CustomPrompt;
 use std::collections::HashSet;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use codex_protocol::custom_prompts::CustomPrompt;
 use tokio::fs;
 
 /// Return the default prompts directory: `$CODEX_HOME/prompts`.
@@ -146,9 +146,11 @@ fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>, String) 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
     use tempfile::tempdir;
+
+    use super::*;
 
     #[tokio::test]
     async fn empty_when_dir_missing() {

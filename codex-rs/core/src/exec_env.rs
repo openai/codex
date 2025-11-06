@@ -1,8 +1,8 @@
-use crate::config::types::EnvironmentVariablePattern;
-use crate::config::types::ShellEnvironmentPolicy;
-use crate::config::types::ShellEnvironmentPolicyInherit;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+use crate::config::types::{
+    EnvironmentVariablePattern, ShellEnvironmentPolicy, ShellEnvironmentPolicyInherit,
+};
 
 /// Construct an environment map based on the rules in the specified policy. The
 /// resulting map can be passed directly to `Command::envs()` after calling
@@ -70,9 +70,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use maplit::hashmap;
+
     use super::*;
     use crate::config::types::ShellEnvironmentPolicyInherit;
-    use maplit::hashmap;
 
     fn make_vars(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs

@@ -1,26 +1,20 @@
-use async_trait::async_trait;
-use codex_protocol::models::ShellToolCallParams;
 use std::sync::Arc;
 
+use async_trait::async_trait;
+use codex_protocol::models::ShellToolCallParams;
+
 use crate::apply_patch;
-use crate::apply_patch::InternalApplyPatchInvocation;
-use crate::apply_patch::convert_apply_patch_to_protocol;
+use crate::apply_patch::{InternalApplyPatchInvocation, convert_apply_patch_to_protocol};
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
-use crate::tools::context::ToolPayload;
-use crate::tools::events::ToolEmitter;
-use crate::tools::events::ToolEventCtx;
+use crate::tools::context::{ToolInvocation, ToolOutput, ToolPayload};
+use crate::tools::events::{ToolEmitter, ToolEventCtx};
 use crate::tools::orchestrator::ToolOrchestrator;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
-use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
-use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
-use crate::tools::runtimes::shell::ShellRequest;
-use crate::tools::runtimes::shell::ShellRuntime;
+use crate::tools::registry::{ToolHandler, ToolKind};
+use crate::tools::runtimes::apply_patch::{ApplyPatchRequest, ApplyPatchRuntime};
+use crate::tools::runtimes::shell::{ShellRequest, ShellRuntime};
 use crate::tools::sandboxing::ToolCtx;
 
 pub struct ShellHandler;

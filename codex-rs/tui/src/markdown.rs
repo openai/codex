@@ -10,9 +10,10 @@ pub(crate) fn append_markdown(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_eq;
     use ratatui::text::Line;
+
+    use super::*;
 
     fn lines_to_strings(lines: &[Line<'static>]) -> Vec<String> {
         lines

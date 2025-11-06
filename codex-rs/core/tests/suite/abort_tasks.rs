@@ -1,17 +1,13 @@
-use assert_matches::assert_matches;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
+use assert_matches::assert_matches;
+use codex_core::protocol::{EventMsg, Op};
 use codex_protocol::user_input::UserInput;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_function_call;
-use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_sse_once;
-use core_test_support::responses::mount_sse_sequence;
-use core_test_support::responses::sse;
-use core_test_support::responses::start_mock_server;
+use core_test_support::responses::{
+    ev_completed, ev_function_call, ev_response_created, mount_sse_once, mount_sse_sequence, sse,
+    start_mock_server,
+};
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_with_timeout;
 use regex_lite::Regex;

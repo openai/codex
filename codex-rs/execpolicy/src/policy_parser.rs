@@ -1,25 +1,22 @@
 #![allow(clippy::needless_lifetimes)]
 
-use crate::Opt;
-use crate::Policy;
-use crate::ProgramSpec;
-use crate::arg_matcher::ArgMatcher;
-use crate::opt::OptMeta;
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use log::info;
 use multimap::MultiMap;
 use regex_lite::Regex;
 use starlark::any::ProvidesStaticType;
-use starlark::environment::GlobalsBuilder;
-use starlark::environment::LibraryExtension;
-use starlark::environment::Module;
+use starlark::environment::{GlobalsBuilder, LibraryExtension, Module};
 use starlark::eval::Evaluator;
-use starlark::syntax::AstModule;
-use starlark::syntax::Dialect;
+use starlark::syntax::{AstModule, Dialect};
 use starlark::values::Heap;
 use starlark::values::list::UnpackList;
 use starlark::values::none::NoneType;
-use std::cell::RefCell;
-use std::collections::HashMap;
+
+use crate::arg_matcher::ArgMatcher;
+use crate::opt::OptMeta;
+use crate::{Opt, Policy, ProgramSpec};
 
 pub struct PolicyParser {
     policy_source: String,

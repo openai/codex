@@ -1,26 +1,17 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::function_tool::FunctionCallError;
-use crate::protocol::EventMsg;
-use crate::protocol::ExecCommandOutputDeltaEvent;
-use crate::protocol::ExecOutputStream;
-use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
-use crate::tools::context::ToolPayload;
-use crate::tools::events::ToolEmitter;
-use crate::tools::events::ToolEventCtx;
-use crate::tools::events::ToolEventStage;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
-use crate::unified_exec::ExecCommandRequest;
-use crate::unified_exec::UnifiedExecContext;
-use crate::unified_exec::UnifiedExecResponse;
-use crate::unified_exec::UnifiedExecSessionManager;
-use crate::unified_exec::WriteStdinRequest;
+use crate::protocol::{EventMsg, ExecCommandOutputDeltaEvent, ExecOutputStream};
+use crate::tools::context::{ToolInvocation, ToolOutput, ToolPayload};
+use crate::tools::events::{ToolEmitter, ToolEventCtx, ToolEventStage};
+use crate::tools::registry::{ToolHandler, ToolKind};
+use crate::unified_exec::{
+    ExecCommandRequest, UnifiedExecContext, UnifiedExecResponse, UnifiedExecSessionManager,
+    WriteStdinRequest,
+};
 
 pub struct UnifiedExecHandler;
 

@@ -1,23 +1,20 @@
 //! Bottom pane: shows the ChatComposer or a BottomPaneView, if one is active.
 use std::path::PathBuf;
+use std::time::Duration;
+
+use bottom_pane_view::BottomPaneView;
+use codex_file_search::FileMatch;
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
-use crate::render::renderable::FlexRenderable;
-use crate::render::renderable::Renderable;
-use crate::render::renderable::RenderableItem;
+use crate::render::renderable::{FlexRenderable, Renderable, RenderableItem};
 use crate::tui::FrameRequester;
-use bottom_pane_view::BottomPaneView;
-use codex_file_search::FileMatch;
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-use std::time::Duration;
 
 mod approval_overlay;
-pub(crate) use approval_overlay::ApprovalOverlay;
-pub(crate) use approval_overlay::ApprovalRequest;
+pub(crate) use approval_overlay::{ApprovalOverlay, ApprovalRequest};
 mod bottom_pane_view;
 mod chat_composer;
 mod chat_composer_history;
@@ -29,8 +26,7 @@ mod list_selection_view;
 mod prompt_args;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
-pub(crate) use feedback_view::feedback_selection_params;
-pub(crate) use feedback_view::feedback_upload_consent_params;
+pub(crate) use feedback_view::{feedback_selection_params, feedback_upload_consent_params};
 mod paste_burst;
 pub mod popup_consts;
 mod queued_user_messages;
@@ -45,13 +41,11 @@ pub(crate) enum CancellationEvent {
     NotHandled,
 }
 
-pub(crate) use chat_composer::ChatComposer;
-pub(crate) use chat_composer::InputResult;
+pub(crate) use chat_composer::{ChatComposer, InputResult};
 use codex_protocol::custom_prompts::CustomPrompt;
+pub(crate) use list_selection_view::{SelectionAction, SelectionItem};
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
-pub(crate) use list_selection_view::SelectionAction;
-pub(crate) use list_selection_view::SelectionItem;
 
 /// Pane displayed in the lower half of the chat UI.
 pub(crate) struct BottomPane {
@@ -501,12 +495,13 @@ impl Renderable for BottomPane {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::app_event::AppEvent;
     use insta::assert_snapshot;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
+
+    use super::*;
+    use crate::app_event::AppEvent;
 
     fn snapshot_buffer(buf: &Buffer) -> String {
         let mut lines = Vec::new();
@@ -606,9 +601,7 @@ mod tests {
         pane.push_approval_request(exec_request());
 
         // Simulate pressing 'n' (No) on the modal.
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         pane.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
 
         // After denial, since the task is still running, the status indicator should be

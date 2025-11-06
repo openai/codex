@@ -1,8 +1,7 @@
-use clap::Parser;
-use clap::ValueHint;
-use codex_common::ApprovalModeCliArg;
-use codex_common::CliConfigOverrides;
 use std::path::PathBuf;
+
+use clap::{Parser, ValueHint};
+use codex_common::{ApprovalModeCliArg, CliConfigOverrides};
 
 #[derive(Parser, Debug)]
 #[command(version)]

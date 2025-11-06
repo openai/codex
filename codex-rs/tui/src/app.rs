@@ -1,3 +1,24 @@
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
+
+use codex_ansi_escape::ansi_escape_line;
+use codex_core::config::Config;
+use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::model_family::find_family_for_model;
+use codex_core::protocol::{SessionSource, TokenUsage};
+use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_core::{AuthManager, ConversationManager};
+use codex_protocol::ConversationId;
+use color_eyre::eyre::{Result, WrapErr};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use tokio::select;
+use tokio::sync::mpsc::unbounded_channel;
+
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -7,6 +28,8 @@ use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
+#[cfg(not(debug_assertions))]
+use crate::history_cell::UpdateAvailableHistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
@@ -14,34 +37,6 @@ use crate::resume_picker::ResumeSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::updates::UpdateAction;
-use codex_ansi_escape::ansi_escape_line;
-use codex_core::AuthManager;
-use codex_core::ConversationManager;
-use codex_core::config::Config;
-use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::model_family::find_family_for_model;
-use codex_core::protocol::SessionSource;
-use codex_core::protocol::TokenUsage;
-use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::ConversationId;
-use color_eyre::eyre::Result;
-use color_eyre::eyre::WrapErr;
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use std::thread;
-use std::time::Duration;
-use tokio::select;
-use tokio::sync::mpsc::unbounded_channel;
-
-#[cfg(not(debug_assertions))]
-use crate::history_cell::UpdateAvailableHistoryCell;
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -545,24 +540,20 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::app_backtrack::BacktrackState;
-    use crate::app_backtrack::user_count;
-    use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
-    use crate::file_search::FileSearchManager;
-    use crate::history_cell::AgentMessageCell;
-    use crate::history_cell::HistoryCell;
-    use crate::history_cell::UserHistoryCell;
-    use crate::history_cell::new_session_info;
-    use codex_core::AuthManager;
-    use codex_core::CodexAuth;
-    use codex_core::ConversationManager;
-    use codex_core::protocol::SessionConfiguredEvent;
-    use codex_protocol::ConversationId;
-    use ratatui::prelude::Line;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+
+    use codex_core::protocol::SessionConfiguredEvent;
+    use codex_core::{AuthManager, CodexAuth, ConversationManager};
+    use codex_protocol::ConversationId;
+    use ratatui::prelude::Line;
+
+    use super::*;
+    use crate::app_backtrack::{BacktrackState, user_count};
+    use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
+    use crate::file_search::FileSearchManager;
+    use crate::history_cell::{AgentMessageCell, HistoryCell, UserHistoryCell, new_session_info};
 
     fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender();

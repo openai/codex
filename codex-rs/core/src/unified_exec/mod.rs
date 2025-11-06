@@ -27,12 +27,10 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 use std::time::Duration;
 
-use rand::Rng;
-use rand::rng;
+use rand::{Rng, rng};
 use tokio::sync::Mutex;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
+use crate::codex::{Session, TurnContext};
 
 mod errors;
 mod session;
@@ -159,19 +157,16 @@ pub(crate) fn truncate_output_to_tokens(
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
-    use super::*;
-    use crate::codex::Session;
-    use crate::codex::TurnContext;
-    use crate::codex::make_session_and_context;
-    use crate::protocol::AskForApproval;
-    use crate::protocol::SandboxPolicy;
-    use crate::unified_exec::ExecCommandRequest;
-    use crate::unified_exec::WriteStdinRequest;
-    use core_test_support::skip_if_sandbox;
     use std::sync::Arc;
+
+    use core_test_support::skip_if_sandbox;
     use tokio::time::Duration;
 
     use super::session::OutputBufferState;
+    use super::*;
+    use crate::codex::{Session, TurnContext, make_session_and_context};
+    use crate::protocol::{AskForApproval, SandboxPolicy};
+    use crate::unified_exec::{ExecCommandRequest, WriteStdinRequest};
 
     fn test_session_and_turn() -> (Arc<Session>, Arc<TurnContext>) {
         let (session, mut turn) = make_session_and_context();

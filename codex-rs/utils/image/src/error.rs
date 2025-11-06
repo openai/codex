@@ -1,5 +1,6 @@
-use image::ImageFormat;
 use std::path::PathBuf;
+
+use image::ImageFormat;
 use thiserror::Error;
 
 #[derive(Debug, Error)]

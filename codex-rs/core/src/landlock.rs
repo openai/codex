@@ -1,10 +1,10 @@
-use crate::protocol::SandboxPolicy;
-use crate::spawn::StdioPolicy;
-use crate::spawn::spawn_child_async;
 use std::collections::HashMap;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
 use tokio::process::Child;
+
+use crate::protocol::SandboxPolicy;
+use crate::spawn::{StdioPolicy, spawn_child_async};
 
 /// Spawn a shell tool command under the Linux Landlock+seccomp sandbox helper
 /// (codex-linux-sandbox).

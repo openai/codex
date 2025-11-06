@@ -1,17 +1,14 @@
-use serde::Deserialize;
-use serde::Serialize;
+use std::path::PathBuf;
+
+use codex_protocol::config_types::SandboxMode;
+use codex_protocol::models::{ContentItem, ResponseItem};
+use codex_protocol::protocol::{ENVIRONMENT_CONTEXT_CLOSE_TAG, ENVIRONMENT_CONTEXT_OPEN_TAG};
+use serde::{Deserialize, Serialize};
 use strum_macros::Display as DeriveDisplay;
 
 use crate::codex::TurnContext;
-use crate::protocol::AskForApproval;
-use crate::protocol::SandboxPolicy;
+use crate::protocol::{AskForApproval, SandboxPolicy};
 use crate::shell::Shell;
-use codex_protocol::config_types::SandboxMode;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
-use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
-use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, DeriveDisplay)]
 #[serde(rename_all = "kebab-case")]
@@ -193,11 +190,10 @@ impl From<EnvironmentContext> for ResponseItem {
 
 #[cfg(test)]
 mod tests {
-    use crate::shell::BashShell;
-    use crate::shell::ZshShell;
+    use pretty_assertions::assert_eq;
 
     use super::*;
-    use pretty_assertions::assert_eq;
+    use crate::shell::{BashShell, ZshShell};
 
     fn workspace_write_policy(writable_roots: Vec<&str>, network_access: bool) -> SandboxPolicy {
         SandboxPolicy::WorkspaceWrite {

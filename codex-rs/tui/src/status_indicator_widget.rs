@@ -1,8 +1,7 @@
 //! A live status indicator that shows the *latest* log line emitted by the
 //! application while the agent is processing a long‑running task.
 
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use codex_core::protocol::Op;
 use crossterm::event::KeyCode;
@@ -167,16 +166,16 @@ impl Renderable for StatusIndicatorWidget {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
+    use pretty_assertions::assert_eq;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use tokio::sync::mpsc::unbounded_channel;
+
     use super::*;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-    use std::time::Duration;
-    use std::time::Instant;
-    use tokio::sync::mpsc::unbounded_channel;
-
-    use pretty_assertions::assert_eq;
 
     #[test]
     fn fmt_elapsed_compact_formats_seconds_minutes_hours() {

@@ -1,25 +1,18 @@
 use std::collections::HashMap;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::JSONRPCNotification;
-use crate::JSONRPCRequest;
-use crate::RequestId;
-use crate::export::GeneratedSchema;
-use crate::export::write_json_schema;
-use crate::protocol::v1;
-use crate::protocol::v2;
 use codex_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SandboxCommandAssessment;
+use codex_protocol::protocol::{FileChange, ReviewDecision, SandboxCommandAssessment};
 use paste::paste;
 use schemars::JsonSchema;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use strum_macros::Display;
 use ts_rs::TS;
+
+use crate::export::{GeneratedSchema, write_json_schema};
+use crate::protocol::{v1, v2};
+use crate::{JSONRPCNotification, JSONRPCRequest, RequestId};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
 #[ts(type = "string")]
@@ -541,12 +534,13 @@ client_notification_definitions! {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use anyhow::Result;
     use codex_protocol::account::PlanType;
     use codex_protocol::protocol::AskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn serialize_new_conversation() -> Result<()> {

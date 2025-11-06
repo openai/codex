@@ -2,18 +2,16 @@ use std::any::TypeId;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::app::App;
-use crate::history_cell::CompositeHistoryCell;
-use crate::history_cell::UserHistoryCell;
-use crate::pager_overlay::Overlay;
-use crate::tui;
-use crate::tui::TuiEvent;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_protocol::ConversationId;
 use color_eyre::eyre::Result;
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+
+use crate::app::App;
+use crate::history_cell::{CompositeHistoryCell, UserHistoryCell};
+use crate::pager_overlay::Overlay;
+use crate::tui;
+use crate::tui::TuiEvent;
 
 /// Aggregates all backtrack-related state used by the App.
 #[derive(Default)]
@@ -412,11 +410,12 @@ fn user_positions_iter(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::history_cell::AgentMessageCell;
-    use crate::history_cell::HistoryCell;
-    use ratatui::prelude::Line;
     use std::sync::Arc;
+
+    use ratatui::prelude::Line;
+
+    use super::*;
+    use crate::history_cell::{AgentMessageCell, HistoryCell};
 
     #[test]
     fn trim_transcript_for_first_user_drops_user_and_newer_cells() {

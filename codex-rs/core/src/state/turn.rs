@@ -1,15 +1,13 @@
 //! Turn-scoped state and active turn metadata scaffolding.
 
-use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio::sync::Notify;
-use tokio_util::sync::CancellationToken;
-use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::models::ResponseInputItem;
-use tokio::sync::oneshot;
+use indexmap::IndexMap;
+use tokio::sync::{Mutex, Notify, oneshot};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 
 use crate::codex::TurnContext;
 use crate::protocol::ReviewDecision;

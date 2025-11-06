@@ -1,9 +1,8 @@
+use std::path::PathBuf;
+
 use crate::codex::Codex;
 use crate::error::Result as CodexResult;
-use crate::protocol::Event;
-use crate::protocol::Op;
-use crate::protocol::Submission;
-use std::path::PathBuf;
+use crate::protocol::{Event, Op, Submission};
 
 pub struct CodexConversation {
     codex: Codex,

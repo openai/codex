@@ -1,21 +1,13 @@
 use std::collections::HashMap;
-use std::sync::atomic::AtomicI64;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use codex_core::protocol::Event;
-use mcp_types::JSONRPC_VERSION;
-use mcp_types::JSONRPCError;
-use mcp_types::JSONRPCErrorError;
-use mcp_types::JSONRPCMessage;
-use mcp_types::JSONRPCNotification;
-use mcp_types::JSONRPCRequest;
-use mcp_types::JSONRPCResponse;
-use mcp_types::RequestId;
-use mcp_types::Result;
+use mcp_types::{
+    JSONRPC_VERSION, JSONRPCError, JSONRPCErrorError, JSONRPCMessage, JSONRPCNotification,
+    JSONRPCRequest, JSONRPCResponse, RequestId, Result,
+};
 use serde::Serialize;
-use tokio::sync::Mutex;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::warn;
 
 use crate::error_code::INTERNAL_ERROR_CODE;
@@ -232,8 +224,7 @@ pub(crate) struct OutgoingError {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use codex_core::protocol::EventMsg;
-    use codex_core::protocol::SessionConfiguredEvent;
+    use codex_core::protocol::{EventMsg, SessionConfiguredEvent};
     use codex_protocol::ConversationId;
     use codex_protocol::config_types::ReasoningEffort;
     use pretty_assertions::assert_eq;

@@ -1,36 +1,29 @@
-use clap::CommandFactory;
-use clap::Parser;
-use clap_complete::Shell;
-use clap_complete::generate;
+use std::path::PathBuf;
+
+use clap::{CommandFactory, Parser};
+use clap_complete::{Shell, generate};
 use codex_arg0::arg0_dispatch_or_else;
-use codex_chatgpt::apply_command::ApplyCommand;
-use codex_chatgpt::apply_command::run_apply_command;
-use codex_cli::LandlockCommand;
-use codex_cli::SeatbeltCommand;
-use codex_cli::WindowsCommand;
-use codex_cli::login::read_api_key_from_stdin;
-use codex_cli::login::run_login_status;
-use codex_cli::login::run_login_with_api_key;
-use codex_cli::login::run_login_with_chatgpt;
-use codex_cli::login::run_login_with_device_code;
-use codex_cli::login::run_logout;
+use codex_chatgpt::apply_command::{ApplyCommand, run_apply_command};
+use codex_cli::login::{
+    read_api_key_from_stdin, run_login_status, run_login_with_api_key, run_login_with_chatgpt,
+    run_login_with_device_code, run_logout,
+};
+use codex_cli::{LandlockCommand, SeatbeltCommand, WindowsCommand};
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
-use codex_tui::AppExitInfo;
-use codex_tui::Cli as TuiCli;
 use codex_tui::updates::UpdateAction;
+use codex_tui::{AppExitInfo, Cli as TuiCli};
 use owo_colors::OwoColorize;
-use std::path::PathBuf;
 use supports_color::Stream;
 
 mod mcp_cmd;
 
-use crate::mcp_cmd::McpCli;
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
+use codex_core::config::{Config, ConfigOverrides};
 use codex_core::features::is_known_feature_key;
+
+use crate::mcp_cmd::McpCli;
 
 /// Codex CLI
 ///
@@ -632,11 +625,12 @@ fn print_completion(cmd: CompletionCommand) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use assert_matches::assert_matches;
     use codex_core::protocol::TokenUsage;
     use codex_protocol::ConversationId;
     use pretty_assertions::assert_eq;
+
+    use super::*;
 
     fn finalize_from_args(args: &[&str]) -> TuiCli {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");

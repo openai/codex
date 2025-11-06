@@ -1,24 +1,18 @@
-use chrono::DateTime;
-use chrono::Utc;
-use serde::Deserialize;
-use serde::Serialize;
-use sha2::Digest;
-use sha2::Sha256;
 use std::fmt::Debug;
-use std::fs::File;
-use std::fs::OpenOptions;
-use std::io::Read;
-use std::io::Write;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+use chrono::{DateTime, Utc};
+use codex_keyring_store::{DefaultKeyringStore, KeyringStore};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use crate::token_data::TokenData;
-use codex_keyring_store::DefaultKeyringStore;
-use codex_keyring_store::KeyringStore;
 
 /// Determine where Codex should store CLI auth credentials.
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -279,16 +273,16 @@ fn create_auth_storage_with_keyring_store(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::token_data::IdTokenInfo;
     use anyhow::Context;
     use base64::Engine;
+    use codex_keyring_store::tests::MockKeyringStore;
+    use keyring::Error as KeyringError;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::tempdir;
 
-    use codex_keyring_store::tests::MockKeyringStore;
-    use keyring::Error as KeyringError;
+    use super::*;
+    use crate::token_data::IdTokenInfo;
 
     #[tokio::test]
     async fn file_storage_load_returns_auth_dot_json() -> anyhow::Result<()> {

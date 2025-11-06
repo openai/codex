@@ -1,6 +1,5 @@
-use std::env;
 use std::path::PathBuf;
-use std::process;
+use std::{env, process};
 
 fn main() -> anyhow::Result<()> {
     let mut args = env::args_os().skip(1);

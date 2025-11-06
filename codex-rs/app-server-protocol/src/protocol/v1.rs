@@ -2,19 +2,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use codex_protocol::ConversationId;
-use codex_protocol::config_types::ForcedLoginMethod;
-use codex_protocol::config_types::ReasoningEffort;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::SandboxMode;
-use codex_protocol::config_types::Verbosity;
+use codex_protocol::config_types::{
+    ForcedLoginMethod, ReasoningEffort, ReasoningSummary, SandboxMode, Verbosity,
+};
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::{AskForApproval, EventMsg, SandboxPolicy, TurnAbortReason};
 use schemars::JsonSchema;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use uuid::Uuid;
 

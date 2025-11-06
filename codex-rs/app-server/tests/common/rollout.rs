@@ -1,11 +1,10 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use anyhow::Result;
 use codex_protocol::ConversationId;
-use codex_protocol::protocol::SessionMeta;
-use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::{SessionMeta, SessionSource};
 use serde_json::json;
-use std::fs;
-use std::path::Path;
-use std::path::PathBuf;
 use uuid::Uuid;
 
 /// Create a minimal rollout file under `CODEX_HOME/sessions/YYYY/MM/DD/`.

@@ -1,29 +1,15 @@
 use std::collections::BTreeMap;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use codex_core::error::CodexErr;
-use codex_core::error::Result;
-use codex_core::error::SandboxErr;
+use codex_core::error::{CodexErr, Result, SandboxErr};
 use codex_core::protocol::SandboxPolicy;
-
-use landlock::ABI;
-use landlock::Access;
-use landlock::AccessFs;
-use landlock::CompatLevel;
-use landlock::Compatible;
-use landlock::Ruleset;
-use landlock::RulesetAttr;
-use landlock::RulesetCreatedAttr;
-use seccompiler::BpfProgram;
-use seccompiler::SeccompAction;
-use seccompiler::SeccompCmpArgLen;
-use seccompiler::SeccompCmpOp;
-use seccompiler::SeccompCondition;
-use seccompiler::SeccompFilter;
-use seccompiler::SeccompRule;
-use seccompiler::TargetArch;
-use seccompiler::apply_filter;
+use landlock::{
+    ABI, Access, AccessFs, CompatLevel, Compatible, Ruleset, RulesetAttr, RulesetCreatedAttr,
+};
+use seccompiler::{
+    BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
+    SeccompRule, TargetArch, apply_filter,
+};
 
 /// Apply sandbox policies inside this thread so only the child inherits
 /// them, not the entire CLI process.

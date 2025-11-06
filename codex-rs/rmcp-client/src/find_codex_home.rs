@@ -1,5 +1,6 @@
-use dirs::home_dir;
 use std::path::PathBuf;
+
+use dirs::home_dir;
 
 /// This was copied from codex-core but codex-core depends on this crate.
 /// TODO: move this to a shared crate lower in the dependency tree.

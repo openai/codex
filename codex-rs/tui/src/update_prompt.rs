@@ -1,31 +1,23 @@
 #![cfg(not(debug_assertions))]
 
-use crate::history_cell::padded_emoji;
-use crate::key_hint;
-use crate::render::Insets;
-use crate::render::renderable::ColumnRenderable;
-use crate::render::renderable::Renderable;
-use crate::render::renderable::RenderableExt as _;
-use crate::selection_list::selection_option_row;
-use crate::tui::FrameRequester;
-use crate::tui::Tui;
-use crate::tui::TuiEvent;
-use crate::updates;
-use crate::updates::UpdateAction;
 use codex_core::config::Config;
 use color_eyre::Result;
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
-use crossterm::event::KeyModifiers;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
-use ratatui::widgets::Clear;
-use ratatui::widgets::WidgetRef;
+use ratatui::widgets::{Clear, WidgetRef};
 use tokio_stream::StreamExt;
+
+use crate::history_cell::padded_emoji;
+use crate::render::Insets;
+use crate::render::renderable::{ColumnRenderable, Renderable, RenderableExt as _};
+use crate::selection_list::selection_option_row;
+use crate::tui::{FrameRequester, Tui, TuiEvent};
+use crate::updates::UpdateAction;
+use crate::{key_hint, updates};
 
 pub(crate) enum UpdatePromptOutcome {
     Continue,
@@ -241,13 +233,12 @@ impl WidgetRef for &UpdatePromptScreen {
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::Terminal;
+
     use super::*;
     use crate::test_backend::VT100Backend;
     use crate::tui::FrameRequester;
-    use crossterm::event::KeyCode;
-    use crossterm::event::KeyEvent;
-    use crossterm::event::KeyModifiers;
-    use ratatui::Terminal;
 
     fn new_prompt() -> UpdatePromptScreen {
         UpdatePromptScreen::new(

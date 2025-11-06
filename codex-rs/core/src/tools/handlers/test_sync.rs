@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -10,11 +9,8 @@ use tokio::sync::Barrier;
 use tokio::time::sleep;
 
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
-use crate::tools::context::ToolPayload;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::context::{ToolInvocation, ToolOutput, ToolPayload};
+use crate::tools::registry::{ToolHandler, ToolKind};
 
 pub struct TestSyncHandler;
 

@@ -1,6 +1,6 @@
-use super::Feature;
-use super::Features;
 use tracing::info;
+
+use super::{Feature, Features};
 
 #[derive(Clone, Copy)]
 struct Alias {

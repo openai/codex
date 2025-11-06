@@ -1,23 +1,16 @@
 use std::path::PathBuf;
 
 use codex_core::config::edit::ConfigEditsBuilder;
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
-use ratatui::style::Color;
-use ratatui::style::Stylize;
+use ratatui::style::{Color, Stylize};
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::WidgetRef;
-use ratatui::widgets::Wrap;
-
-use crate::onboarding::onboarding_screen::KeyboardHandler;
-use crate::onboarding::onboarding_screen::StepStateProvider;
+use ratatui::widgets::{Paragraph, WidgetRef, Wrap};
 
 use super::onboarding_screen::StepState;
+use crate::onboarding::onboarding_screen::{KeyboardHandler, StepStateProvider};
 
 pub(crate) const WSL_INSTRUCTIONS: &str = r#"Install WSL2 by opening PowerShell as Administrator and running:
     # Install WSL using the default Linux distribution (Ubuntu).
@@ -176,8 +169,9 @@ impl StepStateProvider for WindowsSetupWidget {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn windows_step_hidden_after_continue() {

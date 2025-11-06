@@ -13,11 +13,13 @@
 //!     that order.
 //! 3.  We do **not** walk past the Git root.
 
-use crate::config::Config;
-use dunce::canonicalize as normalize_path;
 use std::path::PathBuf;
+
+use dunce::canonicalize as normalize_path;
 use tokio::io::AsyncReadExt;
 use tracing::error;
+
+use crate::config::Config;
 
 /// Default filename scanned for project-level docs.
 pub const DEFAULT_PROJECT_DOC_FILENAME: &str = "AGENTS.md";
@@ -197,11 +199,12 @@ fn candidate_filenames<'a>(config: &'a Config) -> Vec<&'a str> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config::ConfigOverrides;
-    use crate::config::ConfigToml;
     use std::fs;
+
     use tempfile::TempDir;
+
+    use super::*;
+    use crate::config::{ConfigOverrides, ConfigToml};
 
     /// Helper that returns a `Config` pointing at `root` and using `limit` as
     /// the maximum number of bytes to embed from AGENTS.md. The caller can

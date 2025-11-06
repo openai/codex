@@ -1,8 +1,8 @@
-use keyring::Entry;
-use keyring::Error as KeyringError;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
+
+use keyring::{Entry, Error as KeyringError};
 use tracing::trace;
 
 #[derive(Debug)]
@@ -107,15 +107,14 @@ impl KeyringStore for DefaultKeyringStore {
 }
 
 pub mod tests {
-    use super::CredentialStoreError;
-    use super::KeyringStore;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, PoisonError};
+
     use keyring::Error as KeyringError;
     use keyring::credential::CredentialApi as _;
     use keyring::mock::MockCredential;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use std::sync::Mutex;
-    use std::sync::PoisonError;
+
+    use super::{CredentialStoreError, KeyringStore};
 
     #[derive(Default, Clone, Debug)]
     pub struct MockKeyringStore {

@@ -29,9 +29,10 @@ pub fn json_to_toml(v: JsonValue) -> TomlValue {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn json_number_to_toml() {

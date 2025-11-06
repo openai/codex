@@ -5,19 +5,14 @@ Central place for approvals + sandbox selection + retry semantics. Drives a
 simple sequence for any ToolRuntime: approval → select sandbox → attempt →
 retry without sandbox on denial (no re‑approval thanks to caching).
 */
-use crate::error::CodexErr;
-use crate::error::SandboxErr;
-use crate::error::get_error_message_ui;
+use codex_protocol::protocol::{AskForApproval, ReviewDecision};
+
+use crate::error::{CodexErr, SandboxErr, get_error_message_ui};
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::SandboxManager;
-use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ProvidesSandboxRetryData;
-use crate::tools::sandboxing::SandboxAttempt;
-use crate::tools::sandboxing::ToolCtx;
-use crate::tools::sandboxing::ToolError;
-use crate::tools::sandboxing::ToolRuntime;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::ReviewDecision;
+use crate::tools::sandboxing::{
+    ApprovalCtx, ProvidesSandboxRetryData, SandboxAttempt, ToolCtx, ToolError, ToolRuntime,
+};
 
 pub(crate) struct ToolOrchestrator {
     sandbox: SandboxManager,

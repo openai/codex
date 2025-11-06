@@ -1,24 +1,14 @@
-use codex_core::CodexAuth;
-use codex_core::ConversationManager;
-use codex_core::ModelProviderInfo;
-use codex_core::NewConversation;
-use codex_core::built_in_model_providers;
-use codex_core::parse_turn_item;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::RolloutItem;
-use codex_core::protocol::RolloutLine;
+use codex_core::protocol::{EventMsg, Op, RolloutItem, RolloutLine};
+use codex_core::{
+    CodexAuth, ConversationManager, ModelProviderInfo, NewConversation, built_in_model_providers,
+    parse_turn_item,
+};
 use codex_protocol::items::TurnItem;
 use codex_protocol::user_input::UserInput;
-use core_test_support::load_default_config_for_test;
-use core_test_support::skip_if_no_network;
-use core_test_support::wait_for_event;
+use core_test_support::{load_default_config_for_test, skip_if_no_network, wait_for_event};
 use tempfile::TempDir;
-use wiremock::Mock;
-use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Build minimal SSE stream with completed marker using the JSON fixture.
 fn sse_completed(id: &str) -> String {

@@ -1,10 +1,11 @@
 #![cfg(feature = "vt100-tests")]
 #![expect(clippy::expect_used)]
 
-use crate::test_backend::VT100Backend;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+
+use crate::test_backend::VT100Backend;
 
 // Small helper macro to assert a collection contains an item with a clearer
 // failure message.

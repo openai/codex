@@ -3,26 +3,23 @@
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 #![deny(clippy::disallowed_methods)]
+use std::fs::OpenOptions;
+use std::path::PathBuf;
+
 use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
 use codex_app_server_protocol::AuthMode;
-use codex_core::AuthManager;
-use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
-use codex_core::CodexAuth;
-use codex_core::INTERACTIVE_SESSION_SOURCES;
-use codex_core::RolloutRecorder;
 use codex_core::auth::enforce_login_restrictions;
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use codex_core::find_conversation_path_by_id_str;
-use codex_core::get_platform_sandbox;
+use codex_core::config::{Config, ConfigOverrides};
 use codex_core::protocol::AskForApproval;
+use codex_core::{
+    AuthManager, BUILT_IN_OSS_MODEL_PROVIDER_ID, CodexAuth, INTERACTIVE_SESSION_SOURCES,
+    RolloutRecorder, find_conversation_path_by_id_str, get_platform_sandbox,
+};
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
-use std::fs::OpenOptions;
-use std::path::PathBuf;
 use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
@@ -80,16 +77,15 @@ mod wrapping;
 #[cfg(test)]
 pub mod test_backend;
 
-use crate::onboarding::TrustDirectorySelection;
-use crate::onboarding::WSL_INSTRUCTIONS;
-use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
-use crate::onboarding::onboarding_screen::run_onboarding_app;
-use crate::tui::Tui;
+use std::io::Write as _;
+
 pub use cli::Cli;
 pub use markdown_render::render_markdown_text;
-pub use public_widgets::composer_input::ComposerAction;
-pub use public_widgets::composer_input::ComposerInput;
-use std::io::Write as _;
+pub use public_widgets::composer_input::{ComposerAction, ComposerInput};
+
+use crate::onboarding::onboarding_screen::{OnboardingScreenArgs, run_onboarding_app};
+use crate::onboarding::{TrustDirectorySelection, WSL_INSTRUCTIONS};
+use crate::tui::Tui;
 
 // (tests access modules directly within the crate)
 
@@ -561,13 +557,12 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use codex_core::config::ConfigOverrides;
-    use codex_core::config::ConfigToml;
-    use codex_core::config::ProjectConfig;
+    use codex_core::config::{ConfigOverrides, ConfigToml, ProjectConfig};
     use codex_core::set_windows_sandbox_enabled;
     use serial_test::serial;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     #[serial]

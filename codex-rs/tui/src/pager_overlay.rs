@@ -2,31 +2,20 @@ use std::io::Result;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::history_cell::HistoryCell;
-use crate::history_cell::UserHistoryCell;
-use crate::key_hint;
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::buffer::{Buffer, Cell};
+use ratatui::layout::Rect;
+use ratatui::style::{Style, Stylize};
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{Clear, Paragraph, Widget, WidgetRef, Wrap};
+
+use crate::history_cell::{HistoryCell, UserHistoryCell};
 use crate::key_hint::KeyBinding;
 use crate::render::Insets;
-use crate::render::renderable::InsetRenderable;
-use crate::render::renderable::Renderable;
+use crate::render::renderable::{InsetRenderable, Renderable};
 use crate::style::user_message_style;
-use crate::tui;
 use crate::tui::TuiEvent;
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use ratatui::buffer::Buffer;
-use ratatui::buffer::Cell;
-use ratatui::layout::Rect;
-use ratatui::style::Style;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::text::Span;
-use ratatui::text::Text;
-use ratatui::widgets::Clear;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Widget;
-use ratatui::widgets::WidgetRef;
-use ratatui::widgets::Wrap;
+use crate::{key_hint, tui};
 
 pub(crate) enum Overlay {
     Transcript(TranscriptOverlay),
@@ -578,23 +567,22 @@ fn render_offset_content(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use codex_core::protocol::ReviewDecision;
-    use insta::assert_snapshot;
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
 
-    use crate::exec_cell::CommandOutput;
-    use crate::history_cell;
-    use crate::history_cell::HistoryCell;
-    use crate::history_cell::new_patch_event;
-    use codex_core::protocol::FileChange;
+    use codex_core::protocol::{FileChange, ReviewDecision};
     use codex_protocol::parse_command::ParsedCommand;
+    use insta::assert_snapshot;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::text::Text;
+
+    use super::*;
+    use crate::exec_cell::CommandOutput;
+    use crate::history_cell;
+    use crate::history_cell::{HistoryCell, new_patch_event};
 
     #[derive(Debug)]
     struct TestCell {

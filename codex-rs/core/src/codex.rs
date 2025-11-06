@@ -4,134 +4,83 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use crate::AuthManager;
-use crate::client_common::REVIEW_PROMPT;
-use crate::features::Feature;
-use crate::function_tool::FunctionCallError;
-use crate::mcp::auth::McpAuthStatusEntry;
-use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
-use crate::parse_command::parse_command;
-use crate::parse_turn_item;
-use crate::response_processing::process_items;
-use crate::terminal;
-use crate::user_notification::UserNotifier;
-use crate::util::error_or_panic;
-use async_channel::Receiver;
-use async_channel::Sender;
+use async_channel::{Receiver, Sender};
+use codex_async_utils::OrCancelExt;
+use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
+use codex_protocol::config_types::{
+    ReasoningEffort as ReasoningEffortConfig, ReasoningSummary as ReasoningSummaryConfig,
+};
 use codex_protocol::items::TurnItem;
-use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::HasLegacyEvent;
-use codex_protocol::protocol::ItemCompletedEvent;
-use codex_protocol::protocol::ItemStartedEvent;
-use codex_protocol::protocol::RawResponseItemEvent;
-use codex_protocol::protocol::ReviewRequest;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::TaskStartedEvent;
-use codex_protocol::protocol::TurnAbortReason;
-use codex_protocol::protocol::TurnContextItem;
+use codex_protocol::models::{
+    ContentItem, FunctionCallOutputPayload, ResponseInputItem, ResponseItem,
+};
+use codex_protocol::protocol::{
+    FileChange, HasLegacyEvent, InitialHistory, ItemCompletedEvent, ItemStartedEvent,
+    RawResponseItemEvent, ReviewRequest, RolloutItem, SessionSource, TaskStartedEvent,
+    TurnAbortReason, TurnContextItem,
+};
+use codex_protocol::user_input::UserInput;
+use codex_utils_readiness::{Readiness, ReadinessFlag};
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
-use mcp_types::CallToolResult;
-use mcp_types::ListResourceTemplatesRequestParams;
-use mcp_types::ListResourceTemplatesResult;
-use mcp_types::ListResourcesRequestParams;
-use mcp_types::ListResourcesResult;
-use mcp_types::ReadResourceRequestParams;
-use mcp_types::ReadResourceResult;
+use mcp_types::{
+    CallToolResult, ListResourceTemplatesRequestParams, ListResourceTemplatesResult,
+    ListResourcesRequestParams, ListResourcesResult, ReadResourceRequestParams, ReadResourceResult,
+};
 use serde_json;
 use serde_json::Value;
-use tokio::sync::Mutex;
-use tokio::sync::oneshot;
+use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
-use tracing::error;
-use tracing::info;
-use tracing::warn;
+use tracing::{debug, error, info, warn};
 
-use crate::ModelProviderInfo;
 use crate::client::ModelClient;
-use crate::client_common::Prompt;
-use crate::client_common::ResponseEvent;
+use crate::client_common::{Prompt, REVIEW_PROMPT, ResponseEvent};
 use crate::config::Config;
-use crate::config::types::McpServerTransportConfig;
-use crate::config::types::ShellEnvironmentPolicy;
+use crate::config::types::{McpServerTransportConfig, ShellEnvironmentPolicy};
 use crate::context_manager::ContextManager;
 use crate::environment_context::EnvironmentContext;
-use crate::error::CodexErr;
-use crate::error::Result as CodexResult;
+use crate::error::{CodexErr, Result as CodexResult};
 #[cfg(test)]
 use crate::exec::StreamOutput;
+use crate::features::Feature;
+use crate::function_tool::FunctionCallError;
+use crate::mcp::auth::McpAuthStatusEntry;
 // Removed: legacy executor wiring replaced by ToolOrchestrator flows.
 // legacy normalize_exec_result no longer used after orchestrator migration
 use crate::mcp::auth::compute_auth_statuses;
-use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::{DEFAULT_STARTUP_TIMEOUT, McpConnectionManager};
 use crate::model_family::find_family_for_model;
 use crate::openai_model_info::get_model_info;
+use crate::parse_command::parse_command;
 use crate::project_doc::get_user_instructions;
-use crate::protocol::AgentMessageContentDeltaEvent;
-use crate::protocol::AgentReasoningSectionBreakEvent;
-use crate::protocol::ApplyPatchApprovalRequestEvent;
-use crate::protocol::AskForApproval;
-use crate::protocol::BackgroundEventEvent;
-use crate::protocol::DeprecationNoticeEvent;
-use crate::protocol::ErrorEvent;
-use crate::protocol::Event;
-use crate::protocol::EventMsg;
-use crate::protocol::ExecApprovalRequestEvent;
-use crate::protocol::Op;
-use crate::protocol::RateLimitSnapshot;
-use crate::protocol::ReasoningContentDeltaEvent;
-use crate::protocol::ReasoningRawContentDeltaEvent;
-use crate::protocol::ReviewDecision;
-use crate::protocol::SandboxCommandAssessment;
-use crate::protocol::SandboxPolicy;
-use crate::protocol::SessionConfiguredEvent;
-use crate::protocol::StreamErrorEvent;
-use crate::protocol::Submission;
-use crate::protocol::TokenCountEvent;
-use crate::protocol::TokenUsage;
-use crate::protocol::TurnDiffEvent;
-use crate::rollout::RolloutRecorder;
-use crate::rollout::RolloutRecorderParams;
-use crate::shell;
-use crate::state::ActiveTurn;
-use crate::state::SessionServices;
-use crate::state::SessionState;
-use crate::tasks::GhostSnapshotTask;
-use crate::tasks::ReviewTask;
-use crate::tasks::SessionTask;
-use crate::tasks::SessionTaskContext;
+use crate::protocol::{
+    AgentMessageContentDeltaEvent, AgentReasoningSectionBreakEvent, ApplyPatchApprovalRequestEvent,
+    AskForApproval, BackgroundEventEvent, DeprecationNoticeEvent, ErrorEvent, Event, EventMsg,
+    ExecApprovalRequestEvent, Op, RateLimitSnapshot, ReasoningContentDeltaEvent,
+    ReasoningRawContentDeltaEvent, ReviewDecision, SandboxCommandAssessment, SandboxPolicy,
+    SessionConfiguredEvent, StreamErrorEvent, Submission, TokenCountEvent, TokenUsage,
+    TurnDiffEvent,
+};
+use crate::response_processing::process_items;
+use crate::rollout::{RolloutRecorder, RolloutRecorderParams};
+use crate::state::{ActiveTurn, SessionServices, SessionState};
+use crate::tasks::{GhostSnapshotTask, ReviewTask, SessionTask, SessionTaskContext};
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::sandboxing::ApprovalStore;
-use crate::tools::spec::ToolsConfig;
-use crate::tools::spec::ToolsConfigParams;
+use crate::tools::spec::{ToolsConfig, ToolsConfigParams};
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecSessionManager;
-use crate::user_instructions::DeveloperInstructions;
-use crate::user_instructions::UserInstructions;
-use crate::user_notification::UserNotification;
-use crate::util::backoff;
-use codex_async_utils::OrCancelExt;
-use codex_otel::otel_event_manager::OtelEventManager;
-use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::InitialHistory;
-use codex_protocol::user_input::UserInput;
-use codex_utils_readiness::Readiness;
-use codex_utils_readiness::ReadinessFlag;
+use crate::user_instructions::{DeveloperInstructions, UserInstructions};
+use crate::user_notification::{UserNotification, UserNotifier};
+use crate::util::{backoff, error_or_panic};
+use crate::{AuthManager, ModelProviderInfo, parse_turn_item, shell, terminal};
 
 pub mod compact;
-use self::compact::build_compacted_history;
-use self::compact::collect_user_messages;
+use self::compact::{build_compacted_history, collect_user_messages};
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -1338,30 +1287,20 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
 
 /// Operation handlers
 mod handlers {
-    use crate::codex::Session;
-    use crate::codex::SessionSettingsUpdate;
-    use crate::codex::TurnContext;
+    use std::sync::Arc;
 
-    use crate::codex::spawn_review_thread;
+    use codex_protocol::custom_prompts::CustomPrompt;
+    use codex_protocol::protocol::{
+        ErrorEvent, Event, EventMsg, ListCustomPromptsResponseEvent, Op, ReviewDecision,
+        ReviewRequest, TurnAbortReason,
+    };
+    use codex_protocol::user_input::UserInput;
+    use tracing::{info, warn};
+
+    use crate::codex::{Session, SessionSettingsUpdate, TurnContext, spawn_review_thread};
     use crate::config::Config;
     use crate::mcp::auth::compute_auth_statuses;
-    use crate::tasks::CompactTask;
-    use crate::tasks::RegularTask;
-    use crate::tasks::UndoTask;
-    use crate::tasks::UserShellCommandTask;
-    use codex_protocol::custom_prompts::CustomPrompt;
-    use codex_protocol::protocol::ErrorEvent;
-    use codex_protocol::protocol::Event;
-    use codex_protocol::protocol::EventMsg;
-    use codex_protocol::protocol::ListCustomPromptsResponseEvent;
-    use codex_protocol::protocol::Op;
-    use codex_protocol::protocol::ReviewDecision;
-    use codex_protocol::protocol::ReviewRequest;
-    use codex_protocol::protocol::TurnAbortReason;
-    use codex_protocol::user_input::UserInput;
-    use std::sync::Arc;
-    use tracing::info;
-    use tracing::warn;
+    use crate::tasks::{CompactTask, RegularTask, UndoTask, UserShellCommandTask};
 
     pub async fn interrupt(sess: &Arc<Session>) {
         sess.interrupt_task().await;
@@ -2294,49 +2233,39 @@ fn is_mcp_client_startup_timeout_error(error: &anyhow::Error) -> bool {
         || error_message.contains("timed out handshaking with MCP server")
 }
 
-use crate::features::Features;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
+use crate::features::Features;
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config::ConfigOverrides;
-    use crate::config::ConfigToml;
-    use crate::config::types::McpServerConfig;
-    use crate::config::types::McpServerTransportConfig;
-    use crate::exec::ExecToolCallOutput;
-    use crate::mcp::auth::McpAuthStatusEntry;
-    use crate::tools::format_exec_output_str;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::{Duration, Duration as StdDuration};
 
-    use crate::protocol::CompactedItem;
-    use crate::protocol::InitialHistory;
-    use crate::protocol::ResumedHistory;
-    use crate::state::TaskKind;
-    use crate::tasks::SessionTask;
-    use crate::tasks::SessionTaskContext;
-    use crate::tools::ToolRouter;
-    use crate::tools::context::ToolInvocation;
-    use crate::tools::context::ToolOutput;
-    use crate::tools::context::ToolPayload;
-    use crate::tools::handlers::ShellHandler;
-    use crate::tools::registry::ToolHandler;
-    use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_app_server_protocol::AuthMode;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ResponseItem;
+    use codex_protocol::models::{ContentItem, ResponseItem};
     use codex_protocol::protocol::McpAuthStatus;
-    use std::time::Duration;
-    use tokio::time::sleep;
-
-    use mcp_types::ContentBlock;
-    use mcp_types::TextContent;
+    use mcp_types::{ContentBlock, TextContent};
     use pretty_assertions::assert_eq;
     use serde::Deserialize;
     use serde_json::json;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::time::Duration as StdDuration;
+    use tokio::time::sleep;
+
+    use super::*;
+    use crate::config::types::{McpServerConfig, McpServerTransportConfig};
+    use crate::config::{ConfigOverrides, ConfigToml};
+    use crate::exec::ExecToolCallOutput;
+    use crate::mcp::auth::McpAuthStatusEntry;
+    use crate::protocol::{CompactedItem, InitialHistory, ResumedHistory};
+    use crate::state::TaskKind;
+    use crate::tasks::{SessionTask, SessionTaskContext};
+    use crate::tools::context::{ToolInvocation, ToolOutput, ToolPayload};
+    use crate::tools::handlers::ShellHandler;
+    use crate::tools::registry::ToolHandler;
+    use crate::tools::{ToolRouter, format_exec_output_str};
+    use crate::turn_diff_tracker::TurnDiffTracker;
 
     #[test]
     fn reconstruct_history_matches_live_compactions() {
@@ -2934,11 +2863,11 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_escalated_permissions_when_policy_not_on_request() {
-        use crate::exec::ExecParams;
-        use crate::protocol::AskForApproval;
-        use crate::protocol::SandboxPolicy;
-        use crate::turn_diff_tracker::TurnDiffTracker;
         use std::collections::HashMap;
+
+        use crate::exec::ExecParams;
+        use crate::protocol::{AskForApproval, SandboxPolicy};
+        use crate::turn_diff_tracker::TurnDiffTracker;
 
         let (session, mut turn_context_raw) = make_session_and_context();
         // Ensure policy is NOT OnRequest so the early rejection path triggers

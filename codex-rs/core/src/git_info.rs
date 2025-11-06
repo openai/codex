@@ -1,15 +1,12 @@
 use std::collections::HashSet;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use codex_app_server_protocol::GitSha;
 use codex_protocol::protocol::GitInfo;
 use futures::future::join_all;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::process::Command;
-use tokio::time::Duration as TokioDuration;
-use tokio::time::timeout;
+use tokio::time::{Duration as TokioDuration, timeout};
 
 /// Return `true` if the project folder specified by the `Config` is inside a
 /// Git repository.
@@ -597,12 +594,13 @@ pub async fn current_branch_name(cwd: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use core_test_support::skip_if_sandbox;
     use std::fs;
     use std::path::PathBuf;
+
+    use core_test_support::skip_if_sandbox;
     use tempfile::TempDir;
+
+    use super::*;
 
     // Helper function to create a test git repository
     async fn create_test_git_repo(temp_dir: &TempDir) -> PathBuf {
@@ -672,8 +670,7 @@ mod tests {
     #[tokio::test]
     async fn test_recent_commits_orders_and_limits() {
         skip_if_sandbox!();
-        use tokio::time::Duration;
-        use tokio::time::sleep;
+        use tokio::time::{Duration, sleep};
 
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let repo_path = create_test_git_repo(&temp_dir).await;

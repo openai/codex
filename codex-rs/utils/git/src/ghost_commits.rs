@@ -1,23 +1,16 @@
 use std::collections::HashSet;
 use std::ffi::OsString;
-use std::fs;
-use std::io;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use tempfile::Builder;
 
-use crate::GhostCommit;
-use crate::GitToolingError;
-use crate::operations::apply_repo_prefix_to_force_include;
-use crate::operations::ensure_git_repository;
-use crate::operations::normalize_relative_path;
-use crate::operations::repo_subdir;
-use crate::operations::resolve_head;
-use crate::operations::resolve_repository_root;
-use crate::operations::run_git_for_status;
-use crate::operations::run_git_for_stdout;
-use crate::operations::run_git_for_stdout_all;
+use crate::operations::{
+    apply_repo_prefix_to_force_include, ensure_git_repository, normalize_relative_path,
+    repo_subdir, resolve_head, resolve_repository_root, run_git_for_status, run_git_for_stdout,
+    run_git_for_stdout_all,
+};
+use crate::{GhostCommit, GitToolingError};
 
 /// Default commit message used for ghost commits when none is provided.
 const DEFAULT_COMMIT_MESSAGE: &str = "codex snapshot";
@@ -356,11 +349,13 @@ fn default_commit_identity() -> Vec<(OsString, OsString)> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::operations::run_git_for_stdout;
+    use std::process::Command;
+
     use assert_matches::assert_matches;
     use pretty_assertions::assert_eq;
-    use std::process::Command;
+
+    use super::*;
+    use crate::operations::run_git_for_stdout;
 
     /// Runs a git command in the test repository and asserts success.
     fn run_git_in(repo_path: &Path, args: &[&str]) {

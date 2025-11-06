@@ -1,37 +1,28 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::app_event::AppEvent;
-use crate::app_event_sender::AppEventSender;
-use crate::bottom_pane::BottomPaneView;
-use crate::bottom_pane::CancellationEvent;
-use crate::bottom_pane::list_selection_view::ListSelectionView;
-use crate::bottom_pane::list_selection_view::SelectionItem;
-use crate::bottom_pane::list_selection_view::SelectionViewParams;
-use crate::diff_render::DiffSummary;
-use crate::exec_command::strip_bash_lc_and_escape;
-use crate::history_cell;
-use crate::key_hint;
-use crate::key_hint::KeyBinding;
-use crate::render::highlight::highlight_bash_to_lines;
-use crate::render::renderable::ColumnRenderable;
-use crate::render::renderable::Renderable;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDecision;
-use codex_core::protocol::SandboxCommandAssessment;
-use codex_core::protocol::SandboxRiskLevel;
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
-use crossterm::event::KeyModifiers;
+use codex_core::protocol::{
+    FileChange, Op, ReviewDecision, SandboxCommandAssessment, SandboxRiskLevel,
+};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::text::Span;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Wrap;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Wrap};
+
+use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::list_selection_view::{
+    ListSelectionView, SelectionItem, SelectionViewParams,
+};
+use crate::bottom_pane::{BottomPaneView, CancellationEvent};
+use crate::diff_render::DiffSummary;
+use crate::exec_command::strip_bash_lc_and_escape;
+use crate::key_hint::KeyBinding;
+use crate::render::highlight::highlight_bash_to_lines;
+use crate::render::renderable::{ColumnRenderable, Renderable};
+use crate::{history_cell, key_hint};
 
 /// Request coming from the agent that needs user approval.
 #[derive(Clone, Debug)]
@@ -424,10 +415,11 @@ fn patch_options() -> Vec<ApprovalOption> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::app_event::AppEvent;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
+
+    use super::*;
+    use crate::app_event::AppEvent;
 
     fn make_exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {

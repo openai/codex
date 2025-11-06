@@ -1,20 +1,11 @@
-use rmcp::ClientHandler;
-use rmcp::RoleClient;
-use rmcp::model::CancelledNotificationParam;
-use rmcp::model::ClientInfo;
-use rmcp::model::CreateElicitationRequestParam;
-use rmcp::model::CreateElicitationResult;
-use rmcp::model::ElicitationAction;
-use rmcp::model::LoggingLevel;
-use rmcp::model::LoggingMessageNotificationParam;
-use rmcp::model::ProgressNotificationParam;
-use rmcp::model::ResourceUpdatedNotificationParam;
-use rmcp::service::NotificationContext;
-use rmcp::service::RequestContext;
-use tracing::debug;
-use tracing::error;
-use tracing::info;
-use tracing::warn;
+use rmcp::model::{
+    CancelledNotificationParam, ClientInfo, CreateElicitationRequestParam, CreateElicitationResult,
+    ElicitationAction, LoggingLevel, LoggingMessageNotificationParam, ProgressNotificationParam,
+    ResourceUpdatedNotificationParam,
+};
+use rmcp::service::{NotificationContext, RequestContext};
+use rmcp::{ClientHandler, RoleClient};
+use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone)]
 pub(crate) struct LoggingClientHandler {

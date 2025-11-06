@@ -1,12 +1,13 @@
 mod macos;
 
-use crate::config::CONFIG_TOML_FILE;
-use macos::load_managed_admin_config_layer;
 use std::io;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use macos::load_managed_admin_config_layer;
 use tokio::fs;
 use toml::Value as TomlValue;
+
+use crate::config::CONFIG_TOML_FILE;
 
 #[cfg(unix)]
 const CODEX_MANAGED_CONFIG_SYSTEM_PATH: &str = "/etc/codex/managed_config.toml";
@@ -175,8 +176,9 @@ fn apply_managed_layers(layers: LoadedConfigLayers) -> TomlValue {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[tokio::test]
     async fn merges_managed_config_layer_on_top() {

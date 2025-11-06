@@ -1,16 +1,13 @@
-use crate::spawn::CODEX_SANDBOX_ENV_VAR;
-use http::Error as HttpError;
-use reqwest::IntoUrl;
-use reqwest::Method;
-use reqwest::Response;
-use reqwest::header::HeaderName;
-use reqwest::header::HeaderValue;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::sync::LazyLock;
-use std::sync::Mutex;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, Mutex, OnceLock};
+
+use http::Error as HttpError;
+use reqwest::header::{HeaderName, HeaderValue};
+use reqwest::{IntoUrl, Method, Response};
+use serde::Serialize;
+
+use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 
 /// Set this to add a suffix to the User-Agent string.
 ///
@@ -282,8 +279,9 @@ fn is_sandboxed() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use core_test_support::skip_if_no_network;
+
+    use super::*;
 
     #[test]
     fn test_get_codex_user_agent() {
@@ -295,11 +293,8 @@ mod tests {
     async fn test_create_client_sets_default_headers() {
         skip_if_no_network!();
 
-        use wiremock::Mock;
-        use wiremock::MockServer;
-        use wiremock::ResponseTemplate;
-        use wiremock::matchers::method;
-        use wiremock::matchers::path;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let client = create_client();
 

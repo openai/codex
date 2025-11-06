@@ -1,26 +1,18 @@
-use std::fmt;
-use std::io;
 use std::io::Write;
+use std::{fmt, io};
 
-use crate::wrapping::word_wrap_lines_borrowed;
-use crossterm::Command;
 use crossterm::cursor::MoveTo;
-use crossterm::queue;
-use crossterm::style::Color as CColor;
-use crossterm::style::Colors;
-use crossterm::style::Print;
-use crossterm::style::SetAttribute;
-use crossterm::style::SetBackgroundColor;
-use crossterm::style::SetColors;
-use crossterm::style::SetForegroundColor;
-use crossterm::terminal::Clear;
-use crossterm::terminal::ClearType;
+use crossterm::style::{
+    Color as CColor, Colors, Print, SetAttribute, SetBackgroundColor, SetColors, SetForegroundColor,
+};
+use crossterm::terminal::{Clear, ClearType};
+use crossterm::{Command, queue};
 use ratatui::layout::Size;
 use ratatui::prelude::Backend;
-use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::text::Line;
-use ratatui::text::Span;
+use ratatui::style::{Color, Modifier};
+use ratatui::text::{Line, Span};
+
+use crate::wrapping::word_wrap_lines_borrowed;
 
 /// Insert `lines` above the viewport using the terminal's backend writer
 /// (avoids direct stdout references).
@@ -284,11 +276,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use ratatui::layout::Rect;
+    use ratatui::style::Color;
+
     use super::*;
     use crate::markdown_render::render_markdown_text;
     use crate::test_backend::VT100Backend;
-    use ratatui::layout::Rect;
-    use ratatui::style::Color;
 
     #[test]
     fn writes_bold_then_regular_spans() {

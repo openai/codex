@@ -1,9 +1,7 @@
 use serde::Serialize;
 
-use crate::arg_matcher::ArgMatcher;
-use crate::arg_matcher::ArgMatcherCardinality;
-use crate::error::Error;
-use crate::error::Result;
+use crate::arg_matcher::{ArgMatcher, ArgMatcherCardinality};
+use crate::error::{Error, Result};
 use crate::valid_exec::MatchedArg;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

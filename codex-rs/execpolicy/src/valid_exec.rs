@@ -1,6 +1,7 @@
+use serde::Serialize;
+
 use crate::arg_type::ArgType;
 use crate::error::Result;
-use serde::Serialize;
 
 /// exec() invocation that has been accepted by a `Policy`.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]

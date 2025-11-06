@@ -1,6 +1,6 @@
-use serde::Deserialize;
-use serde::Serialize;
 use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct ZshShell {
@@ -45,9 +45,9 @@ impl Shell {
 
 #[cfg(unix)]
 fn detect_default_user_shell() -> Shell {
-    use libc::getpwuid;
-    use libc::getuid;
     use std::ffi::CStr;
+
+    use libc::{getpwuid, getuid};
 
     unsafe {
         let uid = getuid();
@@ -131,9 +131,10 @@ pub async fn default_user_shell() -> Shell {
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
-    use super::*;
     use std::path::PathBuf;
     use std::process::Command;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_current_shell_detects_zsh() {
@@ -180,9 +181,7 @@ mod tests {
         for (input, expected_cmd, expected_output) in cases {
             use std::collections::HashMap;
 
-            use crate::exec::ExecParams;
-            use crate::exec::SandboxType;
-            use crate::exec::process_exec_tool_call;
+            use crate::exec::{ExecParams, SandboxType, process_exec_tool_call};
             use crate::protocol::SandboxPolicy;
 
             let temp_home = tempfile::tempdir().unwrap();
@@ -277,9 +276,7 @@ mod macos_tests {
         for (input, expected_cmd, expected_output) in cases {
             use std::collections::HashMap;
 
-            use crate::exec::ExecParams;
-            use crate::exec::SandboxType;
-            use crate::exec::process_exec_tool_call;
+            use crate::exec::{ExecParams, SandboxType, process_exec_tool_call};
             use crate::protocol::SandboxPolicy;
 
             let temp_home = tempfile::tempdir().unwrap();

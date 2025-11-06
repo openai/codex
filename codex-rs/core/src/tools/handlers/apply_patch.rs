@@ -1,29 +1,19 @@
 use std::collections::BTreeMap;
 
-use crate::apply_patch;
-use crate::apply_patch::InternalApplyPatchInvocation;
-use crate::apply_patch::convert_apply_patch_to_protocol;
-use crate::client_common::tools::FreeformTool;
-use crate::client_common::tools::FreeformToolFormat;
-use crate::client_common::tools::ResponsesApiTool;
-use crate::client_common::tools::ToolSpec;
-use crate::function_tool::FunctionCallError;
-use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
-use crate::tools::context::ToolPayload;
-use crate::tools::events::ToolEmitter;
-use crate::tools::events::ToolEventCtx;
-use crate::tools::orchestrator::ToolOrchestrator;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
-use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
-use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
-use crate::tools::sandboxing::ToolCtx;
-use crate::tools::spec::ApplyPatchToolArgs;
-use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+use crate::apply_patch;
+use crate::apply_patch::{InternalApplyPatchInvocation, convert_apply_patch_to_protocol};
+use crate::client_common::tools::{FreeformTool, FreeformToolFormat, ResponsesApiTool, ToolSpec};
+use crate::function_tool::FunctionCallError;
+use crate::tools::context::{ToolInvocation, ToolOutput, ToolPayload};
+use crate::tools::events::{ToolEmitter, ToolEventCtx};
+use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::registry::{ToolHandler, ToolKind};
+use crate::tools::runtimes::apply_patch::{ApplyPatchRequest, ApplyPatchRuntime};
+use crate::tools::sandboxing::ToolCtx;
+use crate::tools::spec::{ApplyPatchToolArgs, JsonSchema};
 
 pub struct ApplyPatchHandler;
 

@@ -1,6 +1,4 @@
-use anyhow::Context;
-use anyhow::Result;
-use anyhow::anyhow;
+use anyhow::{Context, Result, anyhow};
 use zeroize::Zeroize;
 
 /// Use a generous buffer size to avoid truncation and to allow for longer API
@@ -39,8 +37,7 @@ pub(crate) fn read_auth_header_from_stdin() -> Result<&'static str> {
 /// in memory, protected by mlock(2).
 #[cfg(unix)]
 fn read_from_unix_stdin(buffer: &mut [u8]) -> std::io::Result<usize> {
-    use libc::c_void;
-    use libc::read;
+    use libc::{c_void, read};
 
     // Perform a single read(2) call into the provided buffer slice.
     // Looping and newline/EOF handling are managed by the caller.
@@ -163,10 +160,7 @@ where
 
 #[cfg(unix)]
 fn mlock_str(value: &str) {
-    use libc::_SC_PAGESIZE;
-    use libc::c_void;
-    use libc::mlock;
-    use libc::sysconf;
+    use libc::{_SC_PAGESIZE, c_void, mlock, sysconf};
 
     if value.is_empty() {
         return;
@@ -220,9 +214,10 @@ fn validate_auth_header_bytes(key_bytes: &[u8]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::VecDeque;
     use std::io;
+
+    use super::*;
 
     #[test]
     fn reads_key_with_no_newlines() {

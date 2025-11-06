@@ -1,26 +1,21 @@
 use std::time::Instant;
 
-use super::model::CommandOutput;
-use super::model::ExecCall;
-use super::model::ExecCell;
-use crate::exec_command::strip_bash_lc_and_escape;
-use crate::history_cell::HistoryCell;
-use crate::render::highlight::highlight_bash_to_lines;
-use crate::render::line_utils::prefix_lines;
-use crate::render::line_utils::push_owned_lines;
-use crate::shimmer::shimmer_spans;
-use crate::wrapping::RtOptions;
-use crate::wrapping::word_wrap_line;
-use crate::wrapping::word_wrap_lines;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::elapsed::format_duration;
 use codex_protocol::parse_command::ParsedCommand;
 use itertools::Itertools;
 use ratatui::prelude::*;
-use ratatui::style::Modifier;
-use ratatui::style::Stylize;
+use ratatui::style::{Modifier, Stylize};
 use textwrap::WordSplitter;
 use unicode_width::UnicodeWidthStr;
+
+use super::model::{CommandOutput, ExecCall, ExecCell};
+use crate::exec_command::strip_bash_lc_and_escape;
+use crate::history_cell::HistoryCell;
+use crate::render::highlight::highlight_bash_to_lines;
+use crate::render::line_utils::{prefix_lines, push_owned_lines};
+use crate::shimmer::shimmer_spans;
+use crate::wrapping::{RtOptions, word_wrap_line, word_wrap_lines};
 
 pub(crate) const TOOL_CALL_MAX_LINES: usize = 5;
 const USER_SHELL_TOOL_CALL_MAX_LINES: usize = 50;

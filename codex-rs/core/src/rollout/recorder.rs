@@ -1,38 +1,33 @@
 //! Persist Codex session rollouts (.jsonl) so sessions can be replayed or inspected later.
 
-use std::fs::File;
-use std::fs::{self};
+use std::fs::{
+    File, {self},
+};
 use std::io::Error as IoError;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use codex_protocol::ConversationId;
+use codex_protocol::protocol::{
+    InitialHistory, ResumedHistory, RolloutItem, RolloutLine, SessionMeta, SessionMetaLine,
+    SessionSource,
+};
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc::Sender;
-use tokio::sync::mpsc::{self};
+use tokio::sync::mpsc::{
+    Sender, {self},
+};
 use tokio::sync::oneshot;
-use tracing::info;
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::SESSIONS_SUBDIR;
-use super::list::ConversationsPage;
-use super::list::Cursor;
-use super::list::get_conversations;
+use super::list::{ConversationsPage, Cursor, get_conversations};
 use super::policy::is_persisted_response_item;
 use crate::config::Config;
 use crate::default_client::originator;
 use crate::git_info::collect_git_info;
-use codex_protocol::protocol::InitialHistory;
-use codex_protocol::protocol::ResumedHistory;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SessionMeta;
-use codex_protocol::protocol::SessionMetaLine;
-use codex_protocol::protocol::SessionSource;
 
 /// Records all [`ResponseItem`]s for a session and flushes them to disk after
 /// every update.

@@ -1,22 +1,17 @@
-use anyhow::Result;
-use app_test_support::McpProcess;
-use app_test_support::to_response;
-use codex_app_server_protocol::GetUserSavedConfigResponse;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::Profile;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::SandboxSettings;
-use codex_app_server_protocol::Tools;
-use codex_app_server_protocol::UserSavedConfig;
-use codex_core::protocol::AskForApproval;
-use codex_protocol::config_types::ForcedLoginMethod;
-use codex_protocol::config_types::ReasoningEffort;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::SandboxMode;
-use codex_protocol::config_types::Verbosity;
-use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::Path;
+
+use anyhow::Result;
+use app_test_support::{McpProcess, to_response};
+use codex_app_server_protocol::{
+    GetUserSavedConfigResponse, JSONRPCResponse, Profile, RequestId, SandboxSettings, Tools,
+    UserSavedConfig,
+};
+use codex_core::protocol::AskForApproval;
+use codex_protocol::config_types::{
+    ForcedLoginMethod, ReasoningEffort, ReasoningSummary, SandboxMode, Verbosity,
+};
+use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
 

@@ -6,54 +6,38 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
-use anyhow::anyhow;
+use anyhow::{Result, anyhow};
 use futures::FutureExt;
-use mcp_types::CallToolRequestParams;
-use mcp_types::CallToolResult;
-use mcp_types::InitializeRequestParams;
-use mcp_types::InitializeResult;
-use mcp_types::ListResourceTemplatesRequestParams;
-use mcp_types::ListResourceTemplatesResult;
-use mcp_types::ListResourcesRequestParams;
-use mcp_types::ListResourcesResult;
-use mcp_types::ListToolsRequestParams;
-use mcp_types::ListToolsResult;
-use mcp_types::ReadResourceRequestParams;
-use mcp_types::ReadResourceResult;
+use mcp_types::{
+    CallToolRequestParams, CallToolResult, InitializeRequestParams, InitializeResult,
+    ListResourceTemplatesRequestParams, ListResourceTemplatesResult, ListResourcesRequestParams,
+    ListResourcesResult, ListToolsRequestParams, ListToolsResult, ReadResourceRequestParams,
+    ReadResourceResult,
+};
 use reqwest::header::HeaderMap;
-use rmcp::model::CallToolRequestParam;
-use rmcp::model::InitializeRequestParam;
-use rmcp::model::PaginatedRequestParam;
-use rmcp::model::ReadResourceRequestParam;
-use rmcp::service::RoleClient;
-use rmcp::service::RunningService;
-use rmcp::service::{self};
+use rmcp::model::{
+    CallToolRequestParam, InitializeRequestParam, PaginatedRequestParam, ReadResourceRequestParam,
+};
+use rmcp::service::{
+    RoleClient, RunningService, {self},
+};
 use rmcp::transport::StreamableHttpClientTransport;
-use rmcp::transport::auth::AuthClient;
-use rmcp::transport::auth::OAuthState;
+use rmcp::transport::auth::{AuthClient, OAuthState};
 use rmcp::transport::child_process::TokioChildProcess;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::BufReader;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time;
-use tracing::info;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::load_oauth_tokens;
 use crate::logging_client_handler::LoggingClientHandler;
-use crate::oauth::OAuthCredentialsStoreMode;
-use crate::oauth::OAuthPersistor;
-use crate::oauth::StoredOAuthTokens;
-use crate::utils::apply_default_headers;
-use crate::utils::build_default_headers;
-use crate::utils::convert_call_tool_result;
-use crate::utils::convert_to_mcp;
-use crate::utils::convert_to_rmcp;
-use crate::utils::create_env_for_mcp_server;
-use crate::utils::run_with_timeout;
+use crate::oauth::{OAuthCredentialsStoreMode, OAuthPersistor, StoredOAuthTokens};
+use crate::utils::{
+    apply_default_headers, build_default_headers, convert_call_tool_result, convert_to_mcp,
+    convert_to_rmcp, create_env_for_mcp_server, run_with_timeout,
+};
 
 enum PendingTransport {
     ChildProcess(TokioChildProcess),

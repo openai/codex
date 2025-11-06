@@ -1,14 +1,12 @@
 #![cfg(target_os = "linux")]
-use codex_core::config::types::ShellEnvironmentPolicy;
-use codex_core::error::CodexErr;
-use codex_core::error::SandboxErr;
-use codex_core::exec::ExecParams;
-use codex_core::exec::SandboxType;
-use codex_core::exec::process_exec_tool_call;
-use codex_core::exec_env::create_env;
-use codex_core::protocol::SandboxPolicy;
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+use codex_core::config::types::ShellEnvironmentPolicy;
+use codex_core::error::{CodexErr, SandboxErr};
+use codex_core::exec::{ExecParams, SandboxType, process_exec_tool_call};
+use codex_core::exec_env::create_env;
+use codex_core::protocol::SandboxPolicy;
 use tempfile::NamedTempFile;
 
 // At least on GitHub CI, the arm64 tests appear to need longer timeouts.

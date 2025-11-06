@@ -5,29 +5,17 @@ use std::fs;
 use assert_matches::assert_matches;
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
+use codex_core::protocol::{AskForApproval, EventMsg, Op, SandboxPolicy};
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::user_input::UserInput;
-use core_test_support::assert_regex_match;
-use core_test_support::responses;
-use core_test_support::responses::ev_apply_patch_function_call;
-use core_test_support::responses::ev_assistant_message;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_function_call;
-use core_test_support::responses::ev_local_shell_call;
-use core_test_support::responses::ev_response_created;
-use core_test_support::responses::sse;
-use core_test_support::responses::start_mock_server;
-use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
-use serde_json::Value;
-use serde_json::json;
+use core_test_support::responses::{
+    ev_apply_patch_function_call, ev_assistant_message, ev_completed, ev_function_call,
+    ev_local_shell_call, ev_response_created, sse, start_mock_server,
+};
+use core_test_support::test_codex::{TestCodex, test_codex};
+use core_test_support::{assert_regex_match, responses, skip_if_no_network, wait_for_event};
+use serde_json::{Value, json};
 use wiremock::matchers::any;
 
 fn extract_output_text(item: &Value) -> Option<&str> {

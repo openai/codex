@@ -1,15 +1,11 @@
 #![expect(clippy::expect_used)]
 
-use tempfile::TempDir;
-
-use codex_core::CodexConversation;
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use codex_core::config::ConfigToml;
-use regex_lite::Regex;
-
 #[cfg(target_os = "linux")]
 use assert_cmd::cargo::cargo_bin;
+use codex_core::CodexConversation;
+use codex_core::config::{Config, ConfigOverrides, ConfigToml};
+use regex_lite::Regex;
+use tempfile::TempDir;
 
 pub mod responses;
 pub mod test_codex;
@@ -150,8 +146,7 @@ pub async fn wait_for_event_with_timeout<F>(
 where
     F: FnMut(&codex_core::protocol::EventMsg) -> bool,
 {
-    use tokio::time::Duration;
-    use tokio::time::timeout;
+    use tokio::time::{Duration, timeout};
     loop {
         // Allow a bit more time to accommodate async startup work (e.g. config IO, tool discovery)
         let ev = timeout(wait_time.max(Duration::from_secs(5)), codex.next_event())
@@ -173,16 +168,13 @@ pub fn sandbox_network_env_var() -> &'static str {
 }
 
 pub mod fs_wait {
-    use anyhow::Result;
-    use anyhow::anyhow;
-    use notify::RecursiveMode;
-    use notify::Watcher;
-    use std::path::Path;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::mpsc;
     use std::sync::mpsc::RecvTimeoutError;
-    use std::time::Duration;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
+
+    use anyhow::{Result, anyhow};
+    use notify::{RecursiveMode, Watcher};
     use tokio::task;
     use walkdir::WalkDir;
 

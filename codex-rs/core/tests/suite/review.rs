@@ -1,40 +1,26 @@
-use codex_core::CodexAuth;
-use codex_core::CodexConversation;
-use codex_core::ContentItem;
-use codex_core::ConversationManager;
-use codex_core::ModelProviderInfo;
-use codex_core::REVIEW_PROMPT;
-use codex_core::ResponseItem;
-use codex_core::built_in_model_providers;
-use codex_core::config::Config;
-use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExitedReviewModeEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewCodeLocation;
-use codex_core::protocol::ReviewFinding;
-use codex_core::protocol::ReviewLineRange;
-use codex_core::protocol::ReviewOutputEvent;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::RolloutItem;
-use codex_core::protocol::RolloutLine;
-use codex_protocol::user_input::UserInput;
-use core_test_support::load_default_config_for_test;
-use core_test_support::load_sse_fixture_with_id_from_str;
-use core_test_support::skip_if_no_network;
-use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_with_timeout;
-use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use codex_core::config::Config;
+use codex_core::protocol::{
+    ENVIRONMENT_CONTEXT_OPEN_TAG, EventMsg, ExitedReviewModeEvent, Op, ReviewCodeLocation,
+    ReviewFinding, ReviewLineRange, ReviewOutputEvent, ReviewRequest, RolloutItem, RolloutLine,
+};
+use codex_core::{
+    CodexAuth, CodexConversation, ContentItem, ConversationManager, ModelProviderInfo,
+    REVIEW_PROMPT, ResponseItem, built_in_model_providers,
+};
+use codex_protocol::user_input::UserInput;
+use core_test_support::{
+    load_default_config_for_test, load_sse_fixture_with_id_from_str, skip_if_no_network,
+    wait_for_event, wait_for_event_with_timeout,
+};
+use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt as _;
 use uuid::Uuid;
-use wiremock::Mock;
-use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Verify that submitting `Op::Review` spawns a child task and emits
 /// EnteredReviewMode -> ExitedReviewMode(None) -> TaskComplete

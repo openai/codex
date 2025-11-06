@@ -1,47 +1,28 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_core::AuthManager;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::CLIENT_ID;
-use codex_core::auth::login_with_api_key;
-use codex_core::auth::read_openai_api_key_from_env;
-use codex_login::ServerOptions;
-use codex_login::ShutdownHandle;
-use codex_login::run_login_server;
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
-use crossterm::event::KeyModifiers;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Constraint;
-use ratatui::layout::Layout;
-use ratatui::layout::Rect;
-use ratatui::prelude::Widget;
-use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::widgets::Block;
-use ratatui::widgets::BorderType;
-use ratatui::widgets::Borders;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::WidgetRef;
-use ratatui::widgets::Wrap;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
 use codex_app_server_protocol::AuthMode;
+use codex_core::AuthManager;
+use codex_core::auth::{
+    AuthCredentialsStoreMode, CLIENT_ID, login_with_api_key, read_openai_api_key_from_env,
+};
+use codex_login::{ServerOptions, ShutdownHandle, run_login_server};
 use codex_protocol::config_types::ForcedLoginMethod;
-use std::sync::RwLock;
-
-use crate::LoginStatus;
-use crate::onboarding::onboarding_screen::KeyboardHandler;
-use crate::onboarding::onboarding_screen::StepStateProvider;
-use crate::shimmer::shimmer_spans;
-use crate::tui::FrameRequester;
-use std::path::PathBuf;
-use std::sync::Arc;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::prelude::Widget;
+use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, WidgetRef, Wrap};
 
 use super::onboarding_screen::StepState;
+use crate::LoginStatus;
+use crate::onboarding::onboarding_screen::{KeyboardHandler, StepStateProvider};
+use crate::shimmer::shimmer_spans;
+use crate::tui::FrameRequester;
 
 #[derive(Clone)]
 pub(crate) enum SignInState {
@@ -646,11 +627,11 @@ impl WidgetRef for AuthModeWidget {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use codex_core::auth::AuthCredentialsStoreMode;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
-    use codex_core::auth::AuthCredentialsStoreMode;
+    use super::*;
 
     fn widget_forced_chatgpt() -> (AuthModeWidget, TempDir) {
         let codex_home = TempDir::new().unwrap();

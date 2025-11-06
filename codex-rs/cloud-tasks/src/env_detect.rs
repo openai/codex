@@ -1,8 +1,7 @@
-use reqwest::header::CONTENT_TYPE;
-use reqwest::header::HeaderMap;
 use std::collections::HashMap;
-use tracing::info;
-use tracing::warn;
+
+use reqwest::header::{CONTENT_TYPE, HeaderMap};
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct CodeEnvironment {

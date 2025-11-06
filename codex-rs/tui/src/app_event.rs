@@ -2,16 +2,12 @@ use std::path::PathBuf;
 
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::model_presets::ModelPreset;
-use codex_core::protocol::ConversationPathResponseEvent;
-use codex_core::protocol::Event;
+use codex_core::protocol::{AskForApproval, ConversationPathResponseEvent, Event, SandboxPolicy};
+use codex_core::protocol_config_types::ReasoningEffort;
 use codex_file_search::FileMatch;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::history_cell::HistoryCell;
-
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol_config_types::ReasoningEffort;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]

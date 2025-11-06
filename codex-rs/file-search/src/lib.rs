@@ -1,21 +1,16 @@
-use ignore::WalkBuilder;
-use ignore::overrides::OverrideBuilder;
-use nucleo_matcher::Matcher;
-use nucleo_matcher::Utf32Str;
-use nucleo_matcher::pattern::AtomKind;
-use nucleo_matcher::pattern::CaseMatching;
-use nucleo_matcher::pattern::Normalization;
-use nucleo_matcher::pattern::Pattern;
-use serde::Serialize;
 use std::cell::UnsafeCell;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::num::NonZero;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+use ignore::WalkBuilder;
+use ignore::overrides::OverrideBuilder;
+use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
+use nucleo_matcher::{Matcher, Utf32Str};
+use serde::Serialize;
 use tokio::process::Command;
 
 mod cli;

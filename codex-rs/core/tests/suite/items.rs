@@ -1,30 +1,17 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Ok;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ItemCompletedEvent;
-use codex_core::protocol::ItemStartedEvent;
-use codex_core::protocol::Op;
+use codex_core::protocol::{EventMsg, ItemCompletedEvent, ItemStartedEvent, Op};
 use codex_protocol::items::TurnItem;
 use codex_protocol::user_input::UserInput;
-use core_test_support::responses::ev_assistant_message;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_message_item_added;
-use core_test_support::responses::ev_output_text_delta;
-use core_test_support::responses::ev_reasoning_item;
-use core_test_support::responses::ev_reasoning_item_added;
-use core_test_support::responses::ev_reasoning_summary_text_delta;
-use core_test_support::responses::ev_reasoning_text_delta;
-use core_test_support::responses::ev_response_created;
-use core_test_support::responses::ev_web_search_call_added;
-use core_test_support::responses::ev_web_search_call_done;
-use core_test_support::responses::mount_sse_once_match;
-use core_test_support::responses::sse;
-use core_test_support::responses::start_mock_server;
-use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event_match;
+use core_test_support::responses::{
+    ev_assistant_message, ev_completed, ev_message_item_added, ev_output_text_delta,
+    ev_reasoning_item, ev_reasoning_item_added, ev_reasoning_summary_text_delta,
+    ev_reasoning_text_delta, ev_response_created, ev_web_search_call_added,
+    ev_web_search_call_done, mount_sse_once_match, sse, start_mock_server,
+};
+use core_test_support::test_codex::{TestCodex, test_codex};
+use core_test_support::{skip_if_no_network, wait_for_event_match};
 use pretty_assertions::assert_eq;
 use wiremock::matchers::any;
 

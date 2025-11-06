@@ -1,14 +1,10 @@
-use crate::ApplyOutcome;
-use crate::AttemptStatus;
-use crate::CloudBackend;
-use crate::DiffSummary;
-use crate::Result;
-use crate::TaskId;
-use crate::TaskStatus;
-use crate::TaskSummary;
-use crate::TurnAttempt;
-use crate::api::TaskText;
 use chrono::Utc;
+
+use crate::api::TaskText;
+use crate::{
+    ApplyOutcome, AttemptStatus, CloudBackend, DiffSummary, Result, TaskId, TaskStatus,
+    TaskSummary, TurnAttempt,
+};
 
 #[derive(Clone, Default)]
 pub struct MockClient;

@@ -1,52 +1,33 @@
-use codex_app_server_protocol::AuthMode;
-use codex_core::CodexAuth;
-use codex_core::ContentItem;
-use codex_core::ConversationManager;
-use codex_core::LocalShellAction;
-use codex_core::LocalShellExecAction;
-use codex_core::LocalShellStatus;
-use codex_core::ModelClient;
-use codex_core::ModelProviderInfo;
-use codex_core::NewConversation;
-use codex_core::Prompt;
-use codex_core::ResponseEvent;
-use codex_core::ResponseItem;
-use codex_core::WireApi;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::built_in_model_providers;
-use codex_core::error::CodexErr;
-use codex_core::model_family::find_family_for_model;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SessionSource;
-use codex_otel::otel_event_manager::OtelEventManager;
-use codex_protocol::ConversationId;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::models::ReasoningItemReasoningSummary;
-use codex_protocol::models::WebSearchAction;
-use codex_protocol::user_input::UserInput;
-use core_test_support::load_default_config_for_test;
-use core_test_support::load_sse_fixture_with_id;
-use core_test_support::responses;
-use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_with_timeout;
-use futures::StreamExt;
-use serde_json::json;
 use std::io::Write;
 use std::sync::Arc;
+
+use codex_app_server_protocol::AuthMode;
+use codex_core::auth::AuthCredentialsStoreMode;
+use codex_core::error::CodexErr;
+use codex_core::model_family::find_family_for_model;
+use codex_core::protocol::{EventMsg, Op, SessionSource};
+use codex_core::{
+    CodexAuth, ContentItem, ConversationManager, LocalShellAction, LocalShellExecAction,
+    LocalShellStatus, ModelClient, ModelProviderInfo, NewConversation, Prompt, ResponseEvent,
+    ResponseItem, WireApi, built_in_model_providers,
+};
+use codex_otel::otel_event_manager::OtelEventManager;
+use codex_protocol::ConversationId;
+use codex_protocol::models::{
+    ReasoningItemContent, ReasoningItemReasoningSummary, WebSearchAction,
+};
+use codex_protocol::user_input::UserInput;
+use core_test_support::test_codex::{TestCodex, test_codex};
+use core_test_support::{
+    load_default_config_for_test, load_sse_fixture_with_id, responses, skip_if_no_network,
+    wait_for_event, wait_for_event_with_timeout,
+};
+use futures::StreamExt;
+use serde_json::json;
 use tempfile::TempDir;
 use uuid::Uuid;
-use wiremock::Mock;
-use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::body_string_contains;
-use wiremock::matchers::header_regex;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
-use wiremock::matchers::query_param;
+use wiremock::matchers::{body_string_contains, header_regex, method, path, query_param};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Build minimal SSE stream with completed marker using the JSON fixture.
 fn sse_completed(id: &str) -> String {

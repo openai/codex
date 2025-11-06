@@ -1,37 +1,22 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use mcp_types::CallToolResult;
-use mcp_types::ContentBlock;
-use mcp_types::ListResourceTemplatesRequestParams;
-use mcp_types::ListResourceTemplatesResult;
-use mcp_types::ListResourcesRequestParams;
-use mcp_types::ListResourcesResult;
-use mcp_types::ReadResourceRequestParams;
-use mcp_types::ReadResourceResult;
-use mcp_types::Resource;
-use mcp_types::ResourceTemplate;
-use mcp_types::TextContent;
-use serde::Deserialize;
-use serde::Serialize;
+use mcp_types::{
+    CallToolResult, ContentBlock, ListResourceTemplatesRequestParams, ListResourceTemplatesResult,
+    ListResourcesRequestParams, ListResourcesResult, ReadResourceRequestParams, ReadResourceResult,
+    Resource, ResourceTemplate, TextContent,
+};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
+use crate::codex::{Session, TurnContext};
 use crate::function_tool::FunctionCallError;
-use crate::protocol::EventMsg;
-use crate::protocol::McpInvocation;
-use crate::protocol::McpToolCallBeginEvent;
-use crate::protocol::McpToolCallEndEvent;
-use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
-use crate::tools::context::ToolPayload;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::protocol::{EventMsg, McpInvocation, McpToolCallBeginEvent, McpToolCallEndEvent};
+use crate::tools::context::{ToolInvocation, ToolOutput, ToolPayload};
+use crate::tools::registry::{ToolHandler, ToolKind};
 
 pub struct McpResourceHandler;
 
@@ -668,11 +653,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use mcp_types::ListResourcesResult;
-    use mcp_types::ResourceTemplate;
+    use mcp_types::{ListResourcesResult, ResourceTemplate};
     use pretty_assertions::assert_eq;
     use serde_json::json;
+
+    use super::*;
 
     fn resource(uri: &str, name: &str) -> Resource {
         Resource {

@@ -1,24 +1,14 @@
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::Op;
-use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::user_input::UserInput;
-use core_test_support::responses::ev_assistant_message;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_custom_tool_call;
-use core_test_support::responses::ev_function_call;
-use core_test_support::responses::mount_sse;
-use core_test_support::responses::mount_sse_once;
-use core_test_support::responses::sse;
-use core_test_support::responses::start_mock_server;
-use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event_with_timeout;
 use std::time::Duration;
-use tracing_test::traced_test;
 
-use core_test_support::responses::ev_local_shell_call;
+use codex_protocol::protocol::{AskForApproval, EventMsg, Op, ReviewDecision, SandboxPolicy};
+use codex_protocol::user_input::UserInput;
+use core_test_support::responses::{
+    ev_assistant_message, ev_completed, ev_custom_tool_call, ev_function_call, ev_local_shell_call,
+    mount_sse, mount_sse_once, sse, start_mock_server,
+};
+use core_test_support::test_codex::{TestCodex, test_codex};
+use core_test_support::wait_for_event_with_timeout;
+use tracing_test::traced_test;
 
 #[tokio::test]
 #[traced_test]

@@ -1,15 +1,14 @@
-use crate::key_hint;
-use crate::key_hint::KeyBinding;
-use crate::render::line_utils::prefix_lines;
-use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::text::Span;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Widget;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Widget};
+
+use crate::key_hint;
+use crate::key_hint::KeyBinding;
+use crate::render::line_utils::prefix_lines;
+use crate::ui_consts::FOOTER_INDENT_COLS;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FooterProps {
@@ -373,10 +372,11 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use insta::assert_snapshot;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    use super::*;
 
     fn snapshot_footer(name: &str, props: FooterProps) {
         let height = footer_height(props).max(1);

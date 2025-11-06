@@ -1,11 +1,8 @@
-use crate::render::renderable::Renderable;
-use crate::render::renderable::RowRenderable;
-use ratatui::style::Style;
-use ratatui::style::Styled as _;
-use ratatui::style::Stylize as _;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Wrap;
+use ratatui::style::{Style, Styled as _, Stylize as _};
+use ratatui::widgets::{Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
+
+use crate::render::renderable::{Renderable, RowRenderable};
 
 pub(crate) fn selection_option_row(
     index: usize,

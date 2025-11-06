@@ -2,14 +2,10 @@ use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
 
-use anyhow::Context;
-use anyhow::Result;
-use anyhow::anyhow;
+use anyhow::{Context, Result, anyhow};
 use mcp_types::CallToolResult;
 use reqwest::ClientBuilder;
-use reqwest::header::HeaderMap;
-use reqwest::header::HeaderName;
-use reqwest::header::HeaderValue;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rmcp::model::CallToolResult as RmcpCallToolResult;
 use rmcp::service::ServiceError;
 use serde_json::Value;
@@ -202,14 +198,15 @@ pub(crate) const DEFAULT_ENV_VARS: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::ffi::OsString;
+
     use mcp_types::ContentBlock;
     use pretty_assertions::assert_eq;
     use rmcp::model::CallToolResult as RmcpCallToolResult;
     use serde_json::json;
-
     use serial_test::serial;
-    use std::ffi::OsString;
+
+    use super::*;
 
     struct EnvVarGuard {
         key: String,

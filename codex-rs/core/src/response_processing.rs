@@ -1,9 +1,7 @@
-use crate::codex::Session;
-use crate::codex::TurnContext;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::{FunctionCallOutputPayload, ResponseInputItem, ResponseItem};
 use tracing::warn;
+
+use crate::codex::{Session, TurnContext};
 
 /// Process streamed `ResponseItem`s from the model into the pair of:
 /// - items we should record in conversation history; and

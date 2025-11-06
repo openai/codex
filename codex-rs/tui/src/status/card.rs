@@ -1,38 +1,29 @@
-use crate::history_cell::CompositeHistoryCell;
-use crate::history_cell::HistoryCell;
-use crate::history_cell::PlainHistoryCell;
-use crate::history_cell::with_border_with_inner_width;
-use crate::version::CODEX_CLI_VERSION;
-use chrono::DateTime;
-use chrono::Local;
-use codex_common::create_config_summary_entries;
-use codex_core::config::Config;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::TokenUsage;
-use codex_protocol::ConversationId;
-use ratatui::prelude::*;
-use ratatui::style::Stylize;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use chrono::{DateTime, Local};
+use codex_common::create_config_summary_entries;
+use codex_core::config::Config;
+use codex_core::protocol::{SandboxPolicy, TokenUsage};
+use codex_protocol::ConversationId;
+use ratatui::prelude::*;
+use ratatui::style::Stylize;
+
 use super::account::StatusAccountDisplay;
-use super::format::FieldFormatter;
-use super::format::line_display_width;
-use super::format::push_label;
-use super::format::truncate_line_to_width;
-use super::helpers::compose_account_display;
-use super::helpers::compose_agents_summary;
-use super::helpers::compose_model_display;
-use super::helpers::format_directory_display;
-use super::helpers::format_tokens_compact;
-use super::rate_limits::RateLimitSnapshotDisplay;
-use super::rate_limits::StatusRateLimitData;
-use super::rate_limits::StatusRateLimitRow;
-use super::rate_limits::compose_rate_limit_data;
-use super::rate_limits::format_status_limit_summary;
-use super::rate_limits::render_status_limit_progress_bar;
-use crate::wrapping::RtOptions;
-use crate::wrapping::word_wrap_lines;
+use super::format::{FieldFormatter, line_display_width, push_label, truncate_line_to_width};
+use super::helpers::{
+    compose_account_display, compose_agents_summary, compose_model_display,
+    format_directory_display, format_tokens_compact,
+};
+use super::rate_limits::{
+    RateLimitSnapshotDisplay, StatusRateLimitData, StatusRateLimitRow, compose_rate_limit_data,
+    format_status_limit_summary, render_status_limit_progress_bar,
+};
+use crate::history_cell::{
+    CompositeHistoryCell, HistoryCell, PlainHistoryCell, with_border_with_inner_width,
+};
+use crate::version::CODEX_CLI_VERSION;
+use crate::wrapping::{RtOptions, word_wrap_lines};
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {

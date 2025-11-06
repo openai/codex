@@ -7,35 +7,24 @@
 //! request payload that Codex would send to the model and assert that the
 //! model-visible history matches the expected sequence of messages.
 
-use super::compact::COMPACT_WARNING_MESSAGE;
-use super::compact::FIRST_REPLY;
-use super::compact::SUMMARY_TEXT;
-use super::compact::TEST_COMPACT_PROMPT;
-use codex_core::CodexAuth;
-use codex_core::CodexConversation;
-use codex_core::ConversationManager;
-use codex_core::ModelProviderInfo;
-use codex_core::NewConversation;
-use codex_core::built_in_model_providers;
-use codex_core::config::Config;
-use codex_core::config::OPENAI_DEFAULT_MODEL;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::WarningEvent;
-use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_protocol::user_input::UserInput;
-use core_test_support::load_default_config_for_test;
-use core_test_support::responses::ev_assistant_message;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::mount_sse_once_match;
-use core_test_support::responses::sse;
-use core_test_support::wait_for_event;
-use pretty_assertions::assert_eq;
-use serde_json::Value;
-use serde_json::json;
 use std::sync::Arc;
+
+use codex_core::config::{Config, OPENAI_DEFAULT_MODEL};
+use codex_core::protocol::{EventMsg, Op, WarningEvent};
+use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_core::{
+    CodexAuth, CodexConversation, ConversationManager, ModelProviderInfo, NewConversation,
+    built_in_model_providers,
+};
+use codex_protocol::user_input::UserInput;
+use core_test_support::responses::{ev_assistant_message, ev_completed, mount_sse_once_match, sse};
+use core_test_support::{load_default_config_for_test, wait_for_event};
+use pretty_assertions::assert_eq;
+use serde_json::{Value, json};
 use tempfile::TempDir;
 use wiremock::MockServer;
+
+use super::compact::{COMPACT_WARNING_MESSAGE, FIRST_REPLY, SUMMARY_TEXT, TEST_COMPACT_PROMPT};
 
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
 const COMPACT_PROMPT_MARKER: &str =

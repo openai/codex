@@ -1,6 +1,5 @@
 use mcp_types::ContentBlock as McpContentBlock;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use ts_rs::TS;
 

@@ -1,16 +1,10 @@
 use multimap::MultiMap;
-use regex_lite::Error as RegexError;
-use regex_lite::Regex;
+use regex_lite::{Error as RegexError, Regex};
 
-use crate::ExecCall;
-use crate::Forbidden;
-use crate::MatchedExec;
-use crate::NegativeExamplePassedCheck;
-use crate::ProgramSpec;
-use crate::error::Error;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::policy_parser::ForbiddenProgramRegex;
 use crate::program::PositiveExampleFailedCheck;
+use crate::{ExecCall, Forbidden, MatchedExec, NegativeExamplePassedCheck, ProgramSpec};
 
 pub struct Policy {
     programs: MultiMap<String, ProgramSpec>,

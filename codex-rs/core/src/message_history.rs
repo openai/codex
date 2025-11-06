@@ -14,27 +14,22 @@
 //! the file descriptor is opened with the `O_APPEND` flag. POSIX guarantees
 //! that writes up to `PIPE_BUF` bytes are atomic in that case.
 
-use std::fs::File;
-use std::fs::OpenOptions;
-use std::io::Result;
-use std::io::Write;
+use std::fs::{File, OpenOptions};
+use std::io::{Result, Write};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-
-use serde::Deserialize;
-use serde::Serialize;
-
 use std::time::Duration;
+
+use codex_protocol::ConversationId;
+use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 
 use crate::config::Config;
 use crate::config::types::HistoryPersistence;
-
-use codex_protocol::ConversationId;
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 
 /// Filename that stores the message history inside `~/.codex`.
 const HISTORY_FILENAME: &str = "history.jsonl";
@@ -188,8 +183,7 @@ pub(crate) async fn history_metadata(config: &Config) -> (u64, usize) {
 /// locking API.
 #[cfg(unix)]
 pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<HistoryEntry> {
-    use std::io::BufRead;
-    use std::io::BufReader;
+    use std::io::{BufRead, BufReader};
     use std::os::unix::fs::MetadataExt;
 
     let path = history_filepath(config);

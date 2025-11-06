@@ -4,9 +4,7 @@ use codex_protocol::models::ResponseItem;
 
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
-use crate::protocol::RateLimitSnapshot;
-use crate::protocol::TokenUsage;
-use crate::protocol::TokenUsageInfo;
+use crate::protocol::{RateLimitSnapshot, TokenUsage, TokenUsageInfo};
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {

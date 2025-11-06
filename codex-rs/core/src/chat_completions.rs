@@ -1,40 +1,31 @@
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
+use bytes::Bytes;
+use codex_otel::otel_event_manager::OtelEventManager;
+use codex_protocol::models::{
+    ContentItem, FunctionCallOutputContentItem, ReasoningItemContent, ResponseItem,
+};
+use codex_protocol::protocol::{SessionSource, SubAgentSource};
+use eventsource_stream::Eventsource;
+use futures::{Stream, StreamExt, TryStreamExt};
+use reqwest::StatusCode;
+use serde_json::json;
+use tokio::sync::mpsc;
+use tokio::time::timeout;
+use tracing::{debug, trace};
+
 use crate::ModelProviderInfo;
-use crate::client_common::Prompt;
-use crate::client_common::ResponseEvent;
-use crate::client_common::ResponseStream;
+use crate::client_common::{Prompt, ResponseEvent, ResponseStream};
 use crate::default_client::CodexHttpClient;
-use crate::error::CodexErr;
-use crate::error::ConnectionFailedError;
-use crate::error::ResponseStreamFailed;
-use crate::error::Result;
-use crate::error::RetryLimitReachedError;
-use crate::error::UnexpectedResponseError;
+use crate::error::{
+    CodexErr, ConnectionFailedError, ResponseStreamFailed, Result, RetryLimitReachedError,
+    UnexpectedResponseError,
+};
 use crate::model_family::ModelFamily;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::util::backoff;
-use bytes::Bytes;
-use codex_otel::otel_event_manager::OtelEventManager;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
-use eventsource_stream::Eventsource;
-use futures::Stream;
-use futures::StreamExt;
-use futures::TryStreamExt;
-use reqwest::StatusCode;
-use serde_json::json;
-use std::pin::Pin;
-use std::task::Context;
-use std::task::Poll;
-use tokio::sync::mpsc;
-use tokio::time::timeout;
-use tracing::debug;
-use tracing::trace;
 
 /// Implementation for the classic Chat Completions API.
 pub(crate) async fn stream_chat_completions(

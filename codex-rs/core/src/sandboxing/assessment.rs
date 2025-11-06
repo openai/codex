@@ -1,27 +1,22 @@
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use crate::AuthManager;
-use crate::ModelProviderInfo;
-use crate::client::ModelClient;
-use crate::client_common::Prompt;
-use crate::client_common::ResponseEvent;
-use crate::config::Config;
-use crate::protocol::SandboxPolicy;
 use askama::Template;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::SandboxCommandAssessment;
-use codex_protocol::protocol::SessionSource;
+use codex_protocol::models::{ContentItem, ResponseItem};
+use codex_protocol::protocol::{SandboxCommandAssessment, SessionSource};
 use futures::StreamExt;
 use serde_json::json;
 use tokio::time::timeout;
 use tracing::warn;
+
+use crate::client::ModelClient;
+use crate::client_common::{Prompt, ResponseEvent};
+use crate::config::Config;
+use crate::protocol::SandboxPolicy;
+use crate::{AuthManager, ModelProviderInfo};
 
 const SANDBOX_ASSESSMENT_TIMEOUT: Duration = Duration::from_secs(5);
 

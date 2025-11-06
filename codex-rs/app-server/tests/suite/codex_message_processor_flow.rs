@@ -1,37 +1,25 @@
+use std::env;
+use std::path::Path;
+
 use anyhow::Result;
-use app_test_support::McpProcess;
-use app_test_support::create_final_assistant_message_sse_response;
-use app_test_support::create_mock_chat_completions_server;
-use app_test_support::create_shell_sse_response;
-use app_test_support::to_response;
-use codex_app_server_protocol::AddConversationListenerParams;
-use codex_app_server_protocol::AddConversationSubscriptionResponse;
-use codex_app_server_protocol::ExecCommandApprovalParams;
-use codex_app_server_protocol::InputItem;
-use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::NewConversationParams;
-use codex_app_server_protocol::NewConversationResponse;
-use codex_app_server_protocol::RemoveConversationListenerParams;
-use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::SendUserMessageParams;
-use codex_app_server_protocol::SendUserMessageResponse;
-use codex_app_server_protocol::SendUserTurnParams;
-use codex_app_server_protocol::SendUserTurnResponse;
-use codex_app_server_protocol::ServerRequest;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol_config_types::ReasoningEffort;
-use codex_core::protocol_config_types::ReasoningSummary;
+use app_test_support::{
+    McpProcess, create_final_assistant_message_sse_response, create_mock_chat_completions_server,
+    create_shell_sse_response, to_response,
+};
+use codex_app_server_protocol::{
+    AddConversationListenerParams, AddConversationSubscriptionResponse, ExecCommandApprovalParams,
+    InputItem, JSONRPCNotification, JSONRPCResponse, NewConversationParams,
+    NewConversationResponse, RemoveConversationListenerParams,
+    RemoveConversationSubscriptionResponse, RequestId, SendUserMessageParams,
+    SendUserMessageResponse, SendUserTurnParams, SendUserTurnResponse, ServerRequest,
+};
+use codex_core::protocol::{AskForApproval, SandboxPolicy};
+use codex_core::protocol_config_types::{ReasoningEffort, ReasoningSummary};
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::{Event, EventMsg};
 use pretty_assertions::assert_eq;
-use std::env;
-use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 

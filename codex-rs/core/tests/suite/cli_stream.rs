@@ -1,17 +1,14 @@
+use std::time::Duration;
+
 use assert_cmd::Command as AssertCommand;
 use assert_cmd::cargo::cargo_bin;
 use codex_core::RolloutRecorder;
 use codex_core::protocol::GitInfo;
-use core_test_support::fs_wait;
-use core_test_support::skip_if_no_network;
-use std::time::Duration;
+use core_test_support::{fs_wait, skip_if_no_network};
 use tempfile::TempDir;
 use uuid::Uuid;
-use wiremock::Mock;
-use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Tests streaming chat completions through the CLI using a mock server.
 /// This test:

@@ -1,7 +1,7 @@
-use schemars::JsonSchema;
-use serde::Deserialize;
-use serde::Serialize;
 use std::path::PathBuf;
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// Base namespace for custom prompt slash commands (without trailing colon).

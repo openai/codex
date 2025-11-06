@@ -1,5 +1,4 @@
-use clap::Args;
-use clap::Parser;
+use clap::{Args, Parser};
 use codex_common::CliConfigOverrides;
 
 #[derive(Parser, Debug, Default)]

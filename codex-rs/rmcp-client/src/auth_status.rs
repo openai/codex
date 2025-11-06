@@ -1,20 +1,16 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use anyhow::Error;
-use anyhow::Result;
+use anyhow::{Error, Result};
 use codex_protocol::protocol::McpAuthStatus;
-use reqwest::Client;
-use reqwest::StatusCode;
-use reqwest::Url;
 use reqwest::header::HeaderMap;
+use reqwest::{Client, StatusCode, Url};
 use serde::Deserialize;
 use tracing::debug;
 
 use crate::OAuthCredentialsStoreMode;
 use crate::oauth::has_oauth_tokens;
-use crate::utils::apply_default_headers;
-use crate::utils::build_default_headers;
+use crate::utils::{apply_default_headers, build_default_headers};
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const OAUTH_DISCOVERY_HEADER: &str = "MCP-Protocol-Version";

@@ -1,35 +1,28 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::fs::File;
-use std::fs::{self};
+use std::fs::{
+    File, {self},
+};
 use std::io::Write;
 use std::path::Path;
 
+use anyhow::Result;
+use codex_protocol::ConversationId;
+use codex_protocol::models::{ContentItem, ResponseItem};
+use codex_protocol::protocol::{
+    CompactedItem, EventMsg, RolloutItem, RolloutLine, SessionMeta, SessionMetaLine, SessionSource,
+    UserMessageEvent,
+};
 use tempfile::TempDir;
-use time::OffsetDateTime;
-use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
+use time::{OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
 
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
-use crate::rollout::list::ConversationItem;
-use crate::rollout::list::ConversationsPage;
-use crate::rollout::list::Cursor;
-use crate::rollout::list::get_conversation;
-use crate::rollout::list::get_conversations;
-use anyhow::Result;
-use codex_protocol::ConversationId;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::CompactedItem;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SessionMeta;
-use codex_protocol::protocol::SessionMetaLine;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::UserMessageEvent;
+use crate::rollout::list::{
+    ConversationItem, ConversationsPage, Cursor, get_conversation, get_conversations,
+};
 
 const NO_SOURCE_FILTER: &[SessionSource] = &[];
 const TEST_PROVIDER: &str = "test-provider";

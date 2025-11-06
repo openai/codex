@@ -7,21 +7,17 @@ mod ghost_commits;
 mod operations;
 mod platform;
 
-pub use apply::ApplyGitRequest;
-pub use apply::ApplyGitResult;
-pub use apply::apply_git_patch;
-pub use apply::extract_paths_from_patch;
-pub use apply::parse_git_apply_output;
-pub use apply::stage_paths;
+pub use apply::{
+    ApplyGitRequest, ApplyGitResult, apply_git_patch, extract_paths_from_patch,
+    parse_git_apply_output, stage_paths,
+};
 pub use errors::GitToolingError;
-pub use ghost_commits::CreateGhostCommitOptions;
-pub use ghost_commits::create_ghost_commit;
-pub use ghost_commits::restore_ghost_commit;
-pub use ghost_commits::restore_to_commit;
+pub use ghost_commits::{
+    CreateGhostCommitOptions, create_ghost_commit, restore_ghost_commit, restore_to_commit,
+};
 pub use platform::create_symlink;
 use schemars::JsonSchema;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 type CommitID = String;

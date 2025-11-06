@@ -1,19 +1,16 @@
 use std::collections::HashMap;
 
 use base64::Engine;
+use codex_git::GhostCommit;
+use codex_utils_image::error::ImageProcessingError;
 use codex_utils_image::load_and_resize_to_fit;
-use mcp_types::CallToolResult;
-use mcp_types::ContentBlock;
-use serde::Deserialize;
-use serde::Deserializer;
-use serde::Serialize;
+use mcp_types::{CallToolResult, ContentBlock};
+use schemars::JsonSchema;
 use serde::ser::Serializer;
+use serde::{Deserialize, Deserializer, Serialize};
 use ts_rs::TS;
 
 use crate::user_input::UserInput;
-use codex_git::GhostCommit;
-use codex_utils_image::error::ImageProcessingError;
-use schemars::JsonSchema;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -483,11 +480,11 @@ impl std::ops::Deref for FunctionCallOutputPayload {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use anyhow::Result;
-    use mcp_types::ImageContent;
-    use mcp_types::TextContent;
+    use mcp_types::{ImageContent, TextContent};
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn serializes_success_as_plain_string() -> Result<()> {

@@ -1,22 +1,18 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use codex_protocol::models::{FunctionCallOutputPayload, ResponseInputItem};
+use codex_utils_readiness::Readiness;
 use tokio::sync::RwLock;
 use tokio_util::either::Either;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
+use crate::codex::{Session, TurnContext};
 use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::SharedTurnDiffTracker;
-use crate::tools::context::ToolPayload;
-use crate::tools::router::ToolCall;
-use crate::tools::router::ToolRouter;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
-use codex_utils_readiness::Readiness;
+use crate::tools::context::{SharedTurnDiffTracker, ToolPayload};
+use crate::tools::router::{ToolCall, ToolRouter};
 
 pub(crate) struct ToolCallRuntime {
     router: Arc<ToolRouter>,

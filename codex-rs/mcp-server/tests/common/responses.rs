@@ -1,5 +1,6 @@
-use serde_json::json;
 use std::path::Path;
+
+use serde_json::json;
 
 pub fn create_shell_sse_response(
     command: Vec<String>,

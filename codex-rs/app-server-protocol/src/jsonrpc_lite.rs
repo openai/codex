@@ -2,8 +2,7 @@
 //! "jsonrpc": "2.0" field.
 
 use schemars::JsonSchema;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 pub const JSONRPC_VERSION: &str = "2.0";

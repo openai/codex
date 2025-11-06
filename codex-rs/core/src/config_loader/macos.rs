@@ -1,16 +1,18 @@
 use std::io;
+
 use toml::Value as TomlValue;
 
 #[cfg(target_os = "macos")]
 mod native {
-    use super::*;
+    use std::ffi::c_void;
+
     use base64::Engine;
     use base64::prelude::BASE64_STANDARD;
     use core_foundation::base::TCFType;
-    use core_foundation::string::CFString;
-    use core_foundation::string::CFStringRef;
-    use std::ffi::c_void;
+    use core_foundation::string::{CFString, CFStringRef};
     use tokio::task;
+
+    use super::*;
 
     pub(crate) async fn load_managed_admin_config_layer(
         override_base64: Option<&str>,

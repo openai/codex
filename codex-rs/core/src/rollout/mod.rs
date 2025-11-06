@@ -13,8 +13,7 @@ pub mod recorder;
 
 pub use codex_protocol::protocol::SessionMeta;
 pub use list::find_conversation_path_by_id_str;
-pub use recorder::RolloutRecorder;
-pub use recorder::RolloutRecorderParams;
+pub use recorder::{RolloutRecorder, RolloutRecorderParams};
 
 #[cfg(test)]
 pub mod tests;

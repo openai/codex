@@ -4,10 +4,10 @@
 //! default so CI stays deterministic and free. Developers can run them locally with
 //! `cargo test --test live_cli -- --ignored` provided they set a valid `OPENAI_API_KEY`.
 
+use std::process::{Command, Stdio};
+
 use assert_cmd::prelude::*;
 use predicates::prelude::*;
-use std::process::Command;
-use std::process::Stdio;
 use tempfile::TempDir;
 
 fn require_api_key() -> String {
@@ -18,8 +18,7 @@ fn require_api_key() -> String {
 /// Helper that spawns the binary inside a TempDir with minimal flags. Returns (Assert, TempDir).
 fn run_live(prompt: &str) -> (assert_cmd::assert::Assert, TempDir) {
     #![expect(clippy::unwrap_used)]
-    use std::io::Read;
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::thread;
 
     let dir = TempDir::new().unwrap();

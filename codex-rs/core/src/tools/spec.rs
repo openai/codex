@@ -1,19 +1,16 @@
-use crate::client_common::tools::ResponsesApiTool;
-use crate::client_common::tools::ToolSpec;
-use crate::features::Feature;
-use crate::features::Features;
+use std::collections::{BTreeMap, HashMap};
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Value as JsonValue, json};
+
+use crate::client_common::tools::{ResponsesApiTool, ToolSpec};
+use crate::features::{Feature, Features};
 use crate::model_family::ModelFamily;
 use crate::tools::handlers::PLAN_TOOL;
-use crate::tools::handlers::apply_patch::ApplyPatchToolType;
-use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
-use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
+use crate::tools::handlers::apply_patch::{
+    ApplyPatchToolType, create_apply_patch_freeform_tool, create_apply_patch_json_tool,
+};
 use crate::tools::registry::ToolRegistryBuilder;
-use serde::Deserialize;
-use serde::Serialize;
-use serde_json::Value as JsonValue;
-use serde_json::json;
-use std::collections::BTreeMap;
-use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub enum ConfigShellToolType {
@@ -863,18 +860,13 @@ pub(crate) fn build_specs(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
 ) -> ToolRegistryBuilder {
-    use crate::tools::handlers::ApplyPatchHandler;
-    use crate::tools::handlers::GrepFilesHandler;
-    use crate::tools::handlers::ListDirHandler;
-    use crate::tools::handlers::McpHandler;
-    use crate::tools::handlers::McpResourceHandler;
-    use crate::tools::handlers::PlanHandler;
-    use crate::tools::handlers::ReadFileHandler;
-    use crate::tools::handlers::ShellHandler;
-    use crate::tools::handlers::TestSyncHandler;
-    use crate::tools::handlers::UnifiedExecHandler;
-    use crate::tools::handlers::ViewImageHandler;
     use std::sync::Arc;
+
+    use crate::tools::handlers::{
+        ApplyPatchHandler, GrepFilesHandler, ListDirHandler, McpHandler, McpResourceHandler,
+        PlanHandler, ReadFileHandler, ShellHandler, TestSyncHandler, UnifiedExecHandler,
+        ViewImageHandler,
+    };
 
     let mut builder = ToolRegistryBuilder::new();
 
@@ -1002,13 +994,13 @@ pub(crate) fn build_specs(
 
 #[cfg(test)]
 mod tests {
-    use crate::client_common::tools::FreeformTool;
-    use crate::model_family::find_family_for_model;
-    use crate::tools::registry::ConfiguredToolSpec;
     use mcp_types::ToolInputSchema;
     use pretty_assertions::assert_eq;
 
     use super::*;
+    use crate::client_common::tools::FreeformTool;
+    use crate::model_family::find_family_for_model;
+    use crate::tools::registry::ConfiguredToolSpec;
 
     fn tool_name(tool: &ToolSpec) -> &str {
         match tool {
@@ -1109,8 +1101,7 @@ mod tests {
         let (tools, _) = build_specs(&config, None).build();
 
         // Build actual map name -> spec
-        use std::collections::BTreeMap;
-        use std::collections::HashSet;
+        use std::collections::{BTreeMap, HashSet};
         let mut actual: BTreeMap<String, ToolSpec> = BTreeMap::new();
         let mut duplicate_names = Vec::new();
         for t in &tools {

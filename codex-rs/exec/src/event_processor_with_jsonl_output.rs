@@ -2,58 +2,26 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 
-use crate::event_processor::CodexStatus;
-use crate::event_processor::EventProcessor;
-use crate::event_processor::handle_last_message;
-use crate::exec_events::AgentMessageItem;
-use crate::exec_events::CommandExecutionItem;
-use crate::exec_events::CommandExecutionStatus;
-use crate::exec_events::ErrorItem;
-use crate::exec_events::FileChangeItem;
-use crate::exec_events::FileUpdateChange;
-use crate::exec_events::ItemCompletedEvent;
-use crate::exec_events::ItemStartedEvent;
-use crate::exec_events::ItemUpdatedEvent;
-use crate::exec_events::McpToolCallItem;
-use crate::exec_events::McpToolCallItemError;
-use crate::exec_events::McpToolCallItemResult;
-use crate::exec_events::McpToolCallStatus;
-use crate::exec_events::PatchApplyStatus;
-use crate::exec_events::PatchChangeKind;
-use crate::exec_events::ReasoningItem;
-use crate::exec_events::ThreadErrorEvent;
-use crate::exec_events::ThreadEvent;
-use crate::exec_events::ThreadItem;
-use crate::exec_events::ThreadItemDetails;
-use crate::exec_events::ThreadStartedEvent;
-use crate::exec_events::TodoItem;
-use crate::exec_events::TodoListItem;
-use crate::exec_events::TurnCompletedEvent;
-use crate::exec_events::TurnFailedEvent;
-use crate::exec_events::TurnStartedEvent;
-use crate::exec_events::Usage;
-use crate::exec_events::WebSearchItem;
 use codex_core::config::Config;
-use codex_core::protocol::AgentMessageEvent;
-use codex_core::protocol::AgentReasoningEvent;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecCommandBeginEvent;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::McpToolCallBeginEvent;
-use codex_core::protocol::McpToolCallEndEvent;
-use codex_core::protocol::PatchApplyBeginEvent;
-use codex_core::protocol::PatchApplyEndEvent;
-use codex_core::protocol::SessionConfiguredEvent;
-use codex_core::protocol::TaskCompleteEvent;
-use codex_core::protocol::TaskStartedEvent;
-use codex_core::protocol::WebSearchEndEvent;
-use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_core::protocol::{
+    AgentMessageEvent, AgentReasoningEvent, Event, EventMsg, ExecCommandBeginEvent,
+    ExecCommandEndEvent, FileChange, McpToolCallBeginEvent, McpToolCallEndEvent,
+    PatchApplyBeginEvent, PatchApplyEndEvent, SessionConfiguredEvent, TaskCompleteEvent,
+    TaskStartedEvent, WebSearchEndEvent,
+};
+use codex_protocol::plan_tool::{StepStatus, UpdatePlanArgs};
 use serde_json::Value as JsonValue;
-use tracing::error;
-use tracing::warn;
+use tracing::{error, warn};
+
+use crate::event_processor::{CodexStatus, EventProcessor, handle_last_message};
+use crate::exec_events::{
+    AgentMessageItem, CommandExecutionItem, CommandExecutionStatus, ErrorItem, FileChangeItem,
+    FileUpdateChange, ItemCompletedEvent, ItemStartedEvent, ItemUpdatedEvent, McpToolCallItem,
+    McpToolCallItemError, McpToolCallItemResult, McpToolCallStatus, PatchApplyStatus,
+    PatchChangeKind, ReasoningItem, ThreadErrorEvent, ThreadEvent, ThreadItem, ThreadItemDetails,
+    ThreadStartedEvent, TodoItem, TodoListItem, TurnCompletedEvent, TurnFailedEvent,
+    TurnStartedEvent, Usage, WebSearchItem,
+};
 
 pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,

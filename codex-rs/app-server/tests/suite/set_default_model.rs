@@ -1,13 +1,12 @@
+use std::path::Path;
+
 use anyhow::Result;
-use app_test_support::McpProcess;
-use app_test_support::to_response;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::SetDefaultModelParams;
-use codex_app_server_protocol::SetDefaultModelResponse;
+use app_test_support::{McpProcess, to_response};
+use codex_app_server_protocol::{
+    JSONRPCResponse, RequestId, SetDefaultModelParams, SetDefaultModelResponse,
+};
 use codex_core::config::ConfigToml;
 use pretty_assertions::assert_eq;
-use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 

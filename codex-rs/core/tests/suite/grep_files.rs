@@ -1,28 +1,21 @@
 #![cfg(not(target_os = "windows"))]
 
-use anyhow::Result;
-use codex_core::model_family::find_family_for_model;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::user_input::UserInput;
-use core_test_support::responses;
-use core_test_support::responses::ev_assistant_message;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_function_call;
-use core_test_support::responses::ev_response_created;
-use core_test_support::responses::sse;
-use core_test_support::responses::start_mock_server;
-use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
-use serde_json::Value;
 use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command as StdCommand;
+
+use anyhow::Result;
+use codex_core::model_family::find_family_for_model;
+use codex_core::protocol::{AskForApproval, EventMsg, Op, SandboxPolicy};
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::user_input::UserInput;
+use core_test_support::responses::{
+    ev_assistant_message, ev_completed, ev_function_call, ev_response_created, sse,
+    start_mock_server,
+};
+use core_test_support::test_codex::{TestCodex, test_codex};
+use core_test_support::{responses, skip_if_no_network, wait_for_event};
+use serde_json::Value;
 use wiremock::matchers::any;
 
 const MODEL_WITH_TOOL: &str = "test-gpt-5-codex";

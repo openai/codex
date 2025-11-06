@@ -1,12 +1,9 @@
 use std::sync::Arc;
 
-use codex_core::CodexConversation;
-use codex_core::ConversationManager;
-use codex_core::NewConversation;
 use codex_core::config::Config;
 use codex_core::protocol::Op;
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::mpsc::unbounded_channel;
+use codex_core::{CodexConversation, ConversationManager, NewConversation};
+use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;

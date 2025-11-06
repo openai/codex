@@ -5,11 +5,12 @@
 //! booleans through multiple types, call sites consult a single `Features`
 //! container attached to `Config`.
 
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde::Deserialize;
+
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
-use serde::Deserialize;
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 
 mod legacy;
 pub(crate) use legacy::LegacyFeatureToggles;

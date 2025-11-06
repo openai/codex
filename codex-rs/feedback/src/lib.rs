@@ -1,14 +1,13 @@
 use std::collections::VecDeque;
 use std::fs;
-use std::io::Write;
-use std::io::{self};
+use std::io::{
+    Write, {self},
+};
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::Result;
-use anyhow::anyhow;
+use anyhow::{Result, anyhow};
 use codex_protocol::ConversationId;
 use tracing_subscriber::fmt::writer::MakeWriter;
 
@@ -180,15 +179,10 @@ impl CodexLogSnapshot {
         use std::str::FromStr;
         use std::sync::Arc;
 
-        use sentry::Client;
-        use sentry::ClientOptions;
-        use sentry::protocol::Attachment;
-        use sentry::protocol::Envelope;
-        use sentry::protocol::EnvelopeItem;
-        use sentry::protocol::Event;
-        use sentry::protocol::Level;
+        use sentry::protocol::{Attachment, Envelope, EnvelopeItem, Event, Level};
         use sentry::transports::DefaultTransportFactory;
         use sentry::types::Dsn;
+        use sentry::{Client, ClientOptions};
 
         // Build Sentry client
         let client = Client::from_config(ClientOptions {
@@ -226,8 +220,7 @@ impl CodexLogSnapshot {
             ..Default::default()
         };
         if let Some(r) = reason {
-            use sentry::protocol::Exception;
-            use sentry::protocol::Values;
+            use sentry::protocol::{Exception, Values};
 
             event.exception = Values::from(vec![Exception {
                 ty: title.clone(),

@@ -1,8 +1,7 @@
 use std::time::Duration;
 
 use rand::Rng;
-use tracing::debug;
-use tracing::error;
+use tracing::{debug, error};
 
 const INITIAL_DELAY_MS: u64 = 200;
 const BACKOFF_FACTOR: f64 = 2.0;

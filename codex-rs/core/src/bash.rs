@@ -1,6 +1,4 @@
-use tree_sitter::Node;
-use tree_sitter::Parser;
-use tree_sitter::Tree;
+use tree_sitter::{Node, Parser, Tree};
 use tree_sitter_bash::LANGUAGE as BASH;
 
 /// Parse the provided bash source using tree-sitter-bash, returning a Tree on

@@ -1,27 +1,18 @@
+use std::path::Path;
+
 use anyhow::Result;
-use app_test_support::ChatGptAuthFixture;
-use app_test_support::McpProcess;
-use app_test_support::to_response;
-use app_test_support::write_chatgpt_auth;
-use codex_app_server_protocol::GetAccountRateLimitsResponse;
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::LoginApiKeyParams;
-use codex_app_server_protocol::RateLimitSnapshot;
-use codex_app_server_protocol::RateLimitWindow;
-use codex_app_server_protocol::RequestId;
+use app_test_support::{ChatGptAuthFixture, McpProcess, to_response, write_chatgpt_auth};
+use codex_app_server_protocol::{
+    GetAccountRateLimitsResponse, JSONRPCError, JSONRPCResponse, LoginApiKeyParams,
+    RateLimitSnapshot, RateLimitWindow, RequestId,
+};
 use codex_core::auth::AuthCredentialsStoreMode;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
-use wiremock::Mock;
-use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::header;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
+use wiremock::matchers::{header, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;

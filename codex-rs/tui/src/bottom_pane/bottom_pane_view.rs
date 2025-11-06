@@ -1,8 +1,8 @@
-use crate::bottom_pane::ApprovalRequest;
-use crate::render::renderable::Renderable;
 use crossterm::event::KeyEvent;
 
 use super::CancellationEvent;
+use crate::bottom_pane::ApprovalRequest;
+use crate::render::renderable::Renderable;
 
 /// Trait implemented by every view that can be shown in the bottom pane.
 pub(crate) trait BottomPaneView: Renderable {

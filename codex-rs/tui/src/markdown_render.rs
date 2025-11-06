@@ -1,19 +1,9 @@
+use pulldown_cmark::{CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use ratatui::style::{Style, Stylize};
+use ratatui::text::{Line, Span, Text};
+
 use crate::render::line_utils::line_to_static;
-use crate::wrapping::RtOptions;
-use crate::wrapping::word_wrap_line;
-use pulldown_cmark::CodeBlockKind;
-use pulldown_cmark::CowStr;
-use pulldown_cmark::Event;
-use pulldown_cmark::HeadingLevel;
-use pulldown_cmark::Options;
-use pulldown_cmark::Parser;
-use pulldown_cmark::Tag;
-use pulldown_cmark::TagEnd;
-use ratatui::style::Style;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::text::Span;
-use ratatui::text::Text;
+use crate::wrapping::{RtOptions, word_wrap_line};
 
 #[derive(Clone, Debug)]
 struct IndentContext {
@@ -496,9 +486,10 @@ mod markdown_render_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_eq;
     use ratatui::text::Text;
+
+    use super::*;
 
     fn lines_to_strings(text: &Text<'_>) -> Vec<String> {
         text.lines

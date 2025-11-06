@@ -2,13 +2,10 @@
 
 use anyhow::Ok;
 use codex_core::features::Feature;
-use codex_core::protocol::DeprecationNoticeEvent;
-use codex_core::protocol::EventMsg;
+use codex_core::protocol::{DeprecationNoticeEvent, EventMsg};
 use core_test_support::responses::start_mock_server;
-use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event_match;
+use core_test_support::test_codex::{TestCodex, test_codex};
+use core_test_support::{skip_if_no_network, wait_for_event_match};
 use pretty_assertions::assert_eq;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

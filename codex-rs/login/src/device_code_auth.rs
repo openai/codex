@@ -1,15 +1,16 @@
+use std::io::{
+    Write, {self},
+};
+use std::time::{Duration, Instant};
+
 use reqwest::StatusCode;
-use serde::Deserialize;
-use serde::Serialize;
-use serde::de::Deserializer;
-use serde::de::{self};
-use std::time::Duration;
-use std::time::Instant;
+use serde::de::{
+    Deserializer, {self},
+};
+use serde::{Deserialize, Serialize};
 
 use crate::pkce::PkceCodes;
 use crate::server::ServerOptions;
-use std::io::Write;
-use std::io::{self};
 
 const ANSI_YELLOW: &str = "\x1b[93m";
 const ANSI_BOLD: &str = "\x1b[1m";

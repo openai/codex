@@ -20,9 +20,7 @@ pub fn create_symlink(
     link_target: &Path,
     destination: &Path,
 ) -> Result<(), GitToolingError> {
-    use std::os::windows::fs::FileTypeExt;
-    use std::os::windows::fs::symlink_dir;
-    use std::os::windows::fs::symlink_file;
+    use std::os::windows::fs::{FileTypeExt, symlink_dir, symlink_file};
 
     let metadata = std::fs::symlink_metadata(source)?;
     if metadata.file_type().is_symlink_dir() {

@@ -1,33 +1,21 @@
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyModifiers;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use itertools::Itertools as _;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Constraint;
-use ratatui::layout::Layout;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::text::Span;
-use ratatui::widgets::Block;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Widget;
-
-use crate::app_event_sender::AppEventSender;
-use crate::key_hint::KeyBinding;
-use crate::render::Insets;
-use crate::render::RectExt as _;
-use crate::render::renderable::ColumnRenderable;
-use crate::render::renderable::Renderable;
-use crate::style::user_message_style;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Paragraph, Widget};
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
-use super::selection_popup_common::GenericDisplayRow;
-use super::selection_popup_common::measure_rows_height;
-use super::selection_popup_common::render_rows;
+use super::selection_popup_common::{GenericDisplayRow, measure_rows_height, render_rows};
+use crate::app_event_sender::AppEventSender;
+use crate::key_hint::KeyBinding;
+use crate::render::renderable::{ColumnRenderable, Renderable};
+use crate::render::{Insets, RectExt as _};
+use crate::style::user_message_style;
 
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
@@ -428,12 +416,13 @@ impl Renderable for ListSelectionView {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::app_event::AppEvent;
-    use crate::bottom_pane::popup_consts::standard_popup_hint_line;
     use insta::assert_snapshot;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
+
+    use super::*;
+    use crate::app_event::AppEvent;
+    use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 
     fn make_selection_view(subtitle: Option<&str>) -> ListSelectionView {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();

@@ -1,8 +1,7 @@
 use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::fs::FileType;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use codex_utils_string::take_bytes_at_char_boundary;
@@ -10,11 +9,8 @@ use serde::Deserialize;
 use tokio::fs;
 
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
-use crate::tools::context::ToolPayload;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::context::{ToolInvocation, ToolOutput, ToolPayload};
+use crate::tools::registry::{ToolHandler, ToolKind};
 
 pub struct ListDirHandler;
 
@@ -272,8 +268,9 @@ impl From<&FileType> for DirEntryKind {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[tokio::test]
     async fn lists_directory_entries() {

@@ -1,14 +1,11 @@
-use anyhow::Result;
-use app_test_support::McpProcess;
-use app_test_support::create_mock_chat_completions_server;
-use app_test_support::to_response;
-use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ThreadStartParams;
-use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::ThreadStartedNotification;
 use std::path::Path;
+
+use anyhow::Result;
+use app_test_support::{McpProcess, create_mock_chat_completions_server, to_response};
+use codex_app_server_protocol::{
+    JSONRPCNotification, JSONRPCResponse, RequestId, ThreadStartParams, ThreadStartResponse,
+    ThreadStartedNotification,
+};
 use tempfile::TempDir;
 use tokio::time::timeout;
 

@@ -1,6 +1,5 @@
 use base64::Engine;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Default)]
@@ -131,8 +130,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde::Serialize;
+
+    use super::*;
 
     #[test]
     fn id_token_info_parses_email_and_plan() {

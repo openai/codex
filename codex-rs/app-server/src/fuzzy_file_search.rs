@@ -1,7 +1,5 @@
-use std::num::NonZero;
-use std::num::NonZeroUsize;
-use std::path::Path;
-use std::path::PathBuf;
+use std::num::{NonZero, NonZeroUsize};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 

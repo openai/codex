@@ -1,27 +1,17 @@
 #![cfg(not(target_os = "windows"))]
 
 use std::os::unix::fs::PermissionsExt;
+use std::time::Duration;
 
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
+use codex_core::protocol::{EventMsg, Op};
 use codex_protocol::user_input::UserInput;
-use core_test_support::fs_wait;
-use core_test_support::responses;
-use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
+use core_test_support::test_codex::{TestCodex, test_codex};
+use core_test_support::{fs_wait, responses, skip_if_no_network, wait_for_event};
 use pretty_assertions::assert_eq;
-use serde_json::Value;
-use serde_json::json;
+use responses::{ev_assistant_message, ev_completed, sse, start_mock_server};
+use serde_json::{Value, json};
 use tempfile::TempDir;
 use wiremock::matchers::any;
-
-use responses::ev_assistant_message;
-use responses::ev_completed;
-use responses::sse;
-use responses::start_mock_server;
-use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "flaky on ubuntu-24.04-arm - aarch64-unknown-linux-gnu"]

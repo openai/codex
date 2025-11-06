@@ -1,23 +1,15 @@
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
-use crossterm::event::KeyModifiers;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::widgets::Clear;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::WidgetRef;
-use ratatui::widgets::Wrap;
-
-use crate::ascii_animation::AsciiAnimation;
-use crate::onboarding::onboarding_screen::KeyboardHandler;
-use crate::onboarding::onboarding_screen::StepStateProvider;
-use crate::tui::FrameRequester;
+use ratatui::widgets::{Clear, Paragraph, WidgetRef, Wrap};
 
 use super::onboarding_screen::StepState;
+use crate::ascii_animation::AsciiAnimation;
+use crate::onboarding::onboarding_screen::{KeyboardHandler, StepStateProvider};
+use crate::tui::FrameRequester;
 
 const MIN_ANIMATION_HEIGHT: u16 = 20;
 const MIN_ANIMATION_WIDTH: u16 = 60;
@@ -89,9 +81,10 @@ impl StepStateProvider for WelcomeWidget {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+
+    use super::*;
 
     static VARIANT_A: [&str; 1] = ["frame-a"];
     static VARIANT_B: [&str; 1] = ["frame-b"];

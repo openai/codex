@@ -8,20 +8,15 @@ ready‑to‑spawn environment.
 
 pub mod assessment;
 
-use crate::exec::ExecToolCallOutput;
-use crate::exec::SandboxType;
-use crate::exec::StdoutStream;
-use crate::exec::execute_exec_env;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use crate::exec::{ExecToolCallOutput, SandboxType, StdoutStream, execute_exec_env};
 use crate::landlock::create_linux_sandbox_command_args;
 use crate::protocol::SandboxPolicy;
-use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
-use crate::seatbelt::create_seatbelt_command_args;
-use crate::spawn::CODEX_SANDBOX_ENV_VAR;
-use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use crate::seatbelt::{MACOS_PATH_TO_SEATBELT_EXECUTABLE, create_seatbelt_command_args};
+use crate::spawn::{CODEX_SANDBOX_ENV_VAR, CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR};
 use crate::tools::sandboxing::SandboxablePreference;
-use std::collections::HashMap;
-use std::path::Path;
-use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub struct CommandSpec {

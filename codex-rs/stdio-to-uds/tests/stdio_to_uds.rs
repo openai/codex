@@ -1,6 +1,6 @@
-use std::io::ErrorKind;
-use std::io::Read;
-use std::io::Write;
+use std::io::{ErrorKind, Read, Write};
+#[cfg(unix)]
+use std::os::unix::net::UnixListener;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -8,10 +8,6 @@ use std::time::Duration;
 use anyhow::Context;
 use assert_cmd::Command;
 use pretty_assertions::assert_eq;
-
-#[cfg(unix)]
-use std::os::unix::net::UnixListener;
-
 #[cfg(windows)]
 use uds_windows::UnixListener;
 

@@ -1,16 +1,8 @@
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
-use wiremock::BodyPrintLimit;
-use wiremock::Match;
-use wiremock::Mock;
-use wiremock::MockBuilder;
-use wiremock::MockServer;
-use wiremock::Respond;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path_regex;
+use wiremock::matchers::{method, path_regex};
+use wiremock::{BodyPrintLimit, Match, Mock, MockBuilder, MockServer, Respond, ResponseTemplate};
 
 #[derive(Debug, Clone)]
 pub struct ResponseMock {
@@ -451,8 +443,7 @@ pub async fn start_mock_server() -> MockServer {
 /// POST to `/v1/responses`. Panics if more requests are received than bodies
 /// provided. Also asserts the exact number of expected calls.
 pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> ResponseMock {
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct SeqResponder {
         num_calls: AtomicUsize,

@@ -1,5 +1,6 @@
-use async_trait::async_trait;
 use std::future::Future;
+
+use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -32,11 +33,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
     use std::time::Duration;
+
+    use pretty_assertions::assert_eq;
     use tokio::task;
     use tokio::time::sleep;
+
+    use super::*;
 
     #[tokio::test]
     async fn returns_ok_when_future_completes_first() {

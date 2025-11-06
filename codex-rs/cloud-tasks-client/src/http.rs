@@ -1,20 +1,12 @@
-use crate::ApplyOutcome;
-use crate::ApplyStatus;
-use crate::AttemptStatus;
-use crate::CloudBackend;
-use crate::CloudTaskError;
-use crate::DiffSummary;
-use crate::Result;
-use crate::TaskId;
-use crate::TaskStatus;
-use crate::TaskSummary;
-use crate::TurnAttempt;
-use crate::api::TaskText;
-use chrono::DateTime;
-use chrono::Utc;
-
+use chrono::{DateTime, Utc};
 use codex_backend_client as backend;
 use codex_backend_client::CodeTaskDetailsResponseExt;
+
+use crate::api::TaskText;
+use crate::{
+    ApplyOutcome, ApplyStatus, AttemptStatus, CloudBackend, CloudTaskError, DiffSummary, Result,
+    TaskId, TaskStatus, TaskSummary, TurnAttempt,
+};
 
 #[derive(Clone)]
 pub struct HttpClient {
@@ -110,10 +102,12 @@ impl CloudBackend for HttpClient {
 }
 
 mod api {
-    use super::*;
-    use serde_json::Value;
     use std::cmp::Ordering;
     use std::collections::HashMap;
+
+    use serde_json::Value;
+
+    use super::*;
 
     pub(crate) struct Tasks<'a> {
         base_url: &'a str,

@@ -1,16 +1,12 @@
 use async_trait::async_trait;
+use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
 use tokio::fs;
 
 use crate::function_tool::FunctionCallError;
-use crate::protocol::EventMsg;
-use crate::protocol::ViewImageToolCallEvent;
-use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
-use crate::tools::context::ToolPayload;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
-use codex_protocol::user_input::UserInput;
+use crate::protocol::{EventMsg, ViewImageToolCallEvent};
+use crate::tools::context::{ToolInvocation, ToolOutput, ToolPayload};
+use crate::tools::registry::{ToolHandler, ToolKind};
 
 pub struct ViewImageHandler;
 

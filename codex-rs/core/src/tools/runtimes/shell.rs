@@ -4,27 +4,21 @@ Runtime: shell
 Executes shell requests under the orchestrator: asks for approval when needed,
 builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
+use std::path::PathBuf;
+
+use codex_protocol::protocol::{AskForApproval, ReviewDecision};
+use futures::future::BoxFuture;
+
 use crate::command_safety::is_dangerous_command::command_might_be_dangerous;
 use crate::command_safety::is_safe_command::is_known_safe_command;
 use crate::exec::ExecToolCallOutput;
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::execute_env;
 use crate::tools::runtimes::build_command_spec;
-use crate::tools::sandboxing::Approvable;
-use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ProvidesSandboxRetryData;
-use crate::tools::sandboxing::SandboxAttempt;
-use crate::tools::sandboxing::SandboxRetryData;
-use crate::tools::sandboxing::Sandboxable;
-use crate::tools::sandboxing::SandboxablePreference;
-use crate::tools::sandboxing::ToolCtx;
-use crate::tools::sandboxing::ToolError;
-use crate::tools::sandboxing::ToolRuntime;
-use crate::tools::sandboxing::with_cached_approval;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::ReviewDecision;
-use futures::future::BoxFuture;
-use std::path::PathBuf;
+use crate::tools::sandboxing::{
+    Approvable, ApprovalCtx, ProvidesSandboxRetryData, SandboxAttempt, SandboxRetryData,
+    Sandboxable, SandboxablePreference, ToolCtx, ToolError, ToolRuntime, with_cached_approval,
+};
 
 #[derive(Clone, Debug)]
 pub struct ShellRequest {

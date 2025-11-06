@@ -1,25 +1,16 @@
 use std::collections::HashMap;
 
-use anyhow::Context;
-use anyhow::Result;
-use anyhow::anyhow;
-use anyhow::bail;
+use anyhow::{Context, Result, anyhow, bail};
 use clap::ArgGroup;
 use codex_common::CliConfigOverrides;
 use codex_common::format_env_display::format_env_display;
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::config::find_codex_home;
-use codex_core::config::load_global_mcp_servers;
-use codex_core::config::types::McpServerConfig;
-use codex_core::config::types::McpServerTransportConfig;
+use codex_core::config::types::{McpServerConfig, McpServerTransportConfig};
+use codex_core::config::{Config, ConfigOverrides, find_codex_home, load_global_mcp_servers};
 use codex_core::features::Feature;
 use codex_core::mcp::auth::compute_auth_statuses;
 use codex_core::protocol::McpAuthStatus;
-use codex_rmcp_client::delete_oauth_tokens;
-use codex_rmcp_client::perform_oauth_login;
-use codex_rmcp_client::supports_oauth_login;
+use codex_rmcp_client::{delete_oauth_tokens, perform_oauth_login, supports_oauth_login};
 
 /// [experimental] Launch Codex as an MCP server or manage configured MCP servers.
 ///

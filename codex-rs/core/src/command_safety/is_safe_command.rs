@@ -175,8 +175,9 @@ fn is_valid_sed_n_arg(arg: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::string::ToString;
+
+    use super::*;
 
     fn vec_str(args: &[&str]) -> Vec<String> {
         args.iter().map(ToString::to_string).collect()

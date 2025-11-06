@@ -1,20 +1,16 @@
+use std::path::Path;
+use std::time::Duration;
+
 use anyhow::Result;
-use app_test_support::McpProcess;
-use app_test_support::to_response;
-use codex_app_server_protocol::CancelLoginChatGptParams;
-use codex_app_server_protocol::CancelLoginChatGptResponse;
-use codex_app_server_protocol::GetAuthStatusParams;
-use codex_app_server_protocol::GetAuthStatusResponse;
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::LoginChatGptResponse;
-use codex_app_server_protocol::LogoutChatGptResponse;
-use codex_app_server_protocol::RequestId;
+use app_test_support::{McpProcess, to_response};
+use codex_app_server_protocol::{
+    CancelLoginChatGptParams, CancelLoginChatGptResponse, GetAuthStatusParams,
+    GetAuthStatusResponse, JSONRPCError, JSONRPCResponse, LoginChatGptResponse,
+    LogoutChatGptResponse, RequestId,
+};
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_login::login_with_api_key;
 use serial_test::serial;
-use std::path::Path;
-use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 

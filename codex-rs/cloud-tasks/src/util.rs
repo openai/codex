@@ -57,10 +57,7 @@ pub fn extract_chatgpt_account_id(token: &str) -> Option<String> {
 /// Build headers for ChatGPT-backed requests: `User-Agent`, optional `Authorization`,
 /// and optional `ChatGPT-Account-Id`.
 pub async fn build_chatgpt_headers() -> HeaderMap {
-    use reqwest::header::AUTHORIZATION;
-    use reqwest::header::HeaderName;
-    use reqwest::header::HeaderValue;
-    use reqwest::header::USER_AGENT;
+    use reqwest::header::{AUTHORIZATION, HeaderName, HeaderValue, USER_AGENT};
 
     set_user_agent_suffix("codex_cloud_tasks_tui");
     let ua = codex_core::default_client::get_codex_user_agent();

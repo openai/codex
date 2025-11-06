@@ -1,41 +1,28 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::path::PathBuf;
+use std::time::Duration;
+use std::{env, fs};
+
 use anyhow::Result;
 use codex_core::model_family::find_family_for_model;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
+use codex_core::protocol::{
+    ApplyPatchApprovalRequestEvent, AskForApproval, EventMsg, ExecApprovalRequestEvent, Op,
+    SandboxPolicy,
+};
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::user_input::UserInput;
-use core_test_support::responses::ev_apply_patch_function_call;
-use core_test_support::responses::ev_assistant_message;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_function_call;
-use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_sse_once;
-use core_test_support::responses::sse;
-use core_test_support::responses::start_mock_server;
-use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_with_timeout;
+use core_test_support::responses::{
+    ev_apply_patch_function_call, ev_assistant_message, ev_completed, ev_function_call,
+    ev_response_created, mount_sse_once, sse, start_mock_server,
+};
+use core_test_support::test_codex::{TestCodex, test_codex};
+use core_test_support::{skip_if_no_network, wait_for_event, wait_for_event_with_timeout};
 use pretty_assertions::assert_eq;
-use serde_json::Value;
-use serde_json::json;
-use std::env;
-use std::fs;
-use std::path::PathBuf;
-use std::time::Duration;
-use wiremock::Mock;
-use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
+use serde_json::{Value, json};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[derive(Clone, Copy)]
 enum TargetPath {

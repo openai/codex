@@ -1,5 +1,4 @@
-use codex_execpolicy::Error;
-use codex_execpolicy::parse_sed_command;
+use codex_execpolicy::{Error, parse_sed_command};
 
 #[test]
 fn parses_simple_print_command() {

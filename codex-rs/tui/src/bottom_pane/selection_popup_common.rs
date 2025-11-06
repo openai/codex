@@ -4,14 +4,12 @@ use ratatui::layout::Rect;
 // below no longer requires it.
 use ratatui::style::Color;
 use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
 
-use crate::key_hint::KeyBinding;
-
 use super::scroll_state::ScrollState;
+use crate::key_hint::KeyBinding;
 
 /// A generic representation of a display row for selection popups.
 pub(crate) struct GenericDisplayRow {
@@ -185,8 +183,7 @@ pub(crate) fn render_rows(
         }
 
         // Wrap with subsequent indent aligned to the description column.
-        use crate::wrapping::RtOptions;
-        use crate::wrapping::word_wrap_line;
+        use crate::wrapping::{RtOptions, word_wrap_line};
         let options = RtOptions::new(area.width as usize)
             .initial_indent(Line::from(""))
             .subsequent_indent(Line::from(" ".repeat(desc_col)));
@@ -242,8 +239,7 @@ pub(crate) fn measure_rows_height(
 
     let desc_col = compute_desc_col(rows_all, start_idx, visible_items, content_width);
 
-    use crate::wrapping::RtOptions;
-    use crate::wrapping::word_wrap_line;
+    use crate::wrapping::{RtOptions, word_wrap_line};
     let mut total: u16 = 0;
     for row in rows_all
         .iter()

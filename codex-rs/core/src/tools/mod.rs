@@ -9,10 +9,11 @@ pub mod runtimes;
 pub mod sandboxing;
 pub mod spec;
 
-use crate::context_manager::format_output_for_model_body;
-use crate::exec::ExecToolCallOutput;
 pub use router::ToolRouter;
 use serde::Serialize;
+
+use crate::context_manager::format_output_for_model_body;
+use crate::exec::ExecToolCallOutput;
 
 // Telemetry preview limits: keep log events smaller than model budgets.
 pub(crate) const TELEMETRY_PREVIEW_MAX_BYTES: usize = 2 * 1024; // 2 KiB

@@ -1,19 +1,13 @@
-use std::path::Component;
-use std::path::Path;
-use std::path::PathBuf;
-
-use codex_apply_patch::ApplyPatchAction;
-use codex_apply_patch::ApplyPatchFileChange;
-
-use crate::exec::SandboxType;
-
-use crate::protocol::AskForApproval;
-use crate::protocol::SandboxPolicy;
-
+use std::path::{Component, Path, PathBuf};
 #[cfg(target_os = "windows")]
 use std::sync::atomic::AtomicBool;
 #[cfg(target_os = "windows")]
 use std::sync::atomic::Ordering;
+
+use codex_apply_patch::{ApplyPatchAction, ApplyPatchFileChange};
+
+use crate::exec::SandboxType;
+use crate::protocol::{AskForApproval, SandboxPolicy};
 
 #[cfg(target_os = "windows")]
 static WINDOWS_SANDBOX_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -190,8 +184,9 @@ fn is_write_patch_constrained_to_writable_paths(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn test_writable_roots_constraint() {
