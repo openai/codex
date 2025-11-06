@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::AuthManager;
 use crate::RolloutRecorder;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::McpStartupJobHandle;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_notification::UserNotifier;
@@ -11,6 +12,7 @@ use tokio::sync::Mutex;
 
 pub(crate) struct SessionServices {
     pub(crate) mcp_connection_manager: McpConnectionManager,
+    pub(crate) mcp_startup: Mutex<Option<McpStartupJobHandle>>,
     pub(crate) unified_exec_manager: UnifiedExecSessionManager,
     pub(crate) notifier: UserNotifier,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,

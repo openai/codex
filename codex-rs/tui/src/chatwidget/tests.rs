@@ -288,6 +288,8 @@ fn make_chatwidget_manual() -> (
         stream_controller: None,
         running_commands: HashMap::new(),
         task_complete_pending: false,
+        mcp_startup_status: None,
+        mcp_startup_task_running: false,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),

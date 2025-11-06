@@ -8,8 +8,6 @@ use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
-use crate::mcp::auth::McpAuthStatusEntry;
-use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::response_processing::process_items;
@@ -56,7 +54,6 @@ use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
-use crate::config::types::McpServerTransportConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
 use crate::environment_context::EnvironmentContext;
@@ -68,6 +65,7 @@ use crate::exec::StreamOutput;
 // legacy normalize_exec_result no longer used after orchestrator migration
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::spawn_startup_job;
 use crate::model_family::find_family_for_model;
 use crate::openai_model_info::get_model_info;
 use crate::project_doc::get_user_instructions;
@@ -474,21 +472,13 @@ impl Session {
             ),
         };
 
-        // Error messages to dispatch after SessionConfigured is sent.
-        let mut post_session_configured_events = Vec::<Event>::new();
-
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize RolloutRecorder with new or resumed session info
-        // - spin up MCP connection manager
         // - perform default shell discovery
         // - load history metadata
         let rollout_fut = RolloutRecorder::new(&config, rollout_params);
 
-        let mcp_fut = McpConnectionManager::new(
-            config.mcp_servers.clone(),
-            config.mcp_oauth_credentials_store_mode,
-        );
         let default_shell_fut = shell::default_user_shell();
         let history_meta_fut = crate::message_history::history_metadata(&config);
         let auth_statuses_fut = compute_auth_statuses(
@@ -497,15 +487,8 @@ impl Session {
         );
 
         // Join all independent futures.
-        let (
-            rollout_recorder,
-            mcp_res,
-            default_shell,
-            (history_log_id, history_entry_count),
-            auth_statuses,
-        ) = tokio::join!(
+        let (rollout_recorder, default_shell, (history_log_id, history_entry_count), auth_statuses) = tokio::join!(
             rollout_fut,
-            mcp_fut,
             default_shell_fut,
             history_meta_fut,
             auth_statuses_fut
@@ -517,34 +500,7 @@ impl Session {
         })?;
         let rollout_path = rollout_recorder.rollout_path.clone();
 
-        // Handle MCP manager result and record any startup failures.
-        let (mcp_connection_manager, failed_clients) = match mcp_res {
-            Ok((mgr, failures)) => (mgr, failures),
-            Err(e) => {
-                let message = format!("Failed to create MCP connection manager: {e:#}");
-                error!("{message}");
-                post_session_configured_events.push(Event {
-                    id: INITIAL_SUBMIT_ID.to_owned(),
-                    msg: EventMsg::Error(ErrorEvent { message }),
-                });
-                (McpConnectionManager::default(), Default::default())
-            }
-        };
-
-        // Surface individual client start-up failures to the user.
-        if !failed_clients.is_empty() {
-            for (server_name, err) in failed_clients {
-                let auth_entry = auth_statuses.get(&server_name);
-                let display_message = mcp_init_error_display(&server_name, auth_entry, &err);
-                warn!("MCP client for `{server_name}` failed to start: {err:#}");
-                post_session_configured_events.push(Event {
-                    id: INITIAL_SUBMIT_ID.to_owned(),
-                    msg: EventMsg::Error(ErrorEvent {
-                        message: display_message,
-                    }),
-                });
-            }
-        }
+        let mut post_session_configured_events = Vec::<Event>::new();
 
         for (alias, feature) in session_configuration.features.legacy_feature_usages() {
             let canonical = feature.key();
@@ -590,7 +546,8 @@ impl Session {
         let state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
-            mcp_connection_manager,
+            mcp_connection_manager: McpConnectionManager::default(),
+            mcp_startup: Mutex::new(None),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(config.notify.clone()),
             rollout: Mutex::new(Some(rollout_recorder)),
@@ -629,6 +586,29 @@ impl Session {
         .chain(post_session_configured_events.into_iter());
         for event in events {
             sess.send_event_raw(event).await;
+        }
+
+        // Start MCP servers in the background and stream startup updates.
+        match spawn_startup_job(
+            config.mcp_servers.clone(),
+            config.mcp_oauth_credentials_store_mode,
+            sess.services.mcp_connection_manager.clone(),
+            tx_event.clone(),
+            auth_statuses.clone(),
+        ) {
+            Ok(handle) => {
+                let mut guard = sess.services.mcp_startup.lock().await;
+                *guard = Some(handle);
+            }
+            Err(e) => {
+                let message = format!("Failed to start MCP startup job: {e:#}");
+                error!("{message}");
+                sess.send_event_raw(Event {
+                    id: INITIAL_SUBMIT_ID.to_owned(),
+                    msg: EventMsg::Error(ErrorEvent { message }),
+                })
+                .await;
+            }
         }
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
@@ -1251,6 +1231,16 @@ impl Session {
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
     }
+
+    async fn cancel_mcp_startup(&self) {
+        let handle = {
+            let mut guard = self.services.mcp_startup.lock().await;
+            guard.take()
+        };
+        if let Some(handle) = handle {
+            handle.cancel();
+        }
+    }
 }
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
@@ -1508,9 +1498,8 @@ mod handlers {
     }
 
     pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
-        // This is a cheap lookup from the connection manager's cache.
-        let tools = sess.services.mcp_connection_manager.list_all_tools();
-        let (auth_status_entries, resources, resource_templates) = tokio::join!(
+        let (tools, auth_status_entries, resources, resource_templates) = tokio::join!(
+            sess.services.mcp_connection_manager.list_all_tools(),
             compute_auth_statuses(
                 config.mcp_servers.iter(),
                 config.mcp_oauth_credentials_store_mode,
@@ -1874,7 +1863,7 @@ async fn run_turn(
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
-    let mcp_tools = sess.services.mcp_connection_manager.list_all_tools();
+    let mcp_tools = sess.services.mcp_connection_manager.list_all_tools().await;
     let router = Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         Some(mcp_tools),
@@ -2240,59 +2229,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
     })
 }
 
-fn mcp_init_error_display(
-    server_name: &str,
-    entry: Option<&McpAuthStatusEntry>,
-    err: &anyhow::Error,
-) -> String {
-    if let Some(McpServerTransportConfig::StreamableHttp {
-        url,
-        bearer_token_env_var,
-        http_headers,
-        ..
-    }) = &entry.map(|entry| &entry.config.transport)
-        && url == "https://api.githubcopilot.com/mcp/"
-        && bearer_token_env_var.is_none()
-        && http_headers.as_ref().map(HashMap::is_empty).unwrap_or(true)
-    {
-        // GitHub only supports OAUth for first party MCP clients.
-        // That means that the user has to specify a personal access token either via bearer_token_env_var or http_headers.
-        // https://github.com/github/github-mcp-server/issues/921#issuecomment-3221026448
-        format!(
-            "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
-        )
-    } else if is_mcp_client_auth_required_error(err) {
-        format!(
-            "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
-        )
-    } else if is_mcp_client_startup_timeout_error(err) {
-        let startup_timeout_secs = match entry {
-            Some(entry) => match entry.config.startup_timeout_sec {
-                Some(timeout) => timeout,
-                None => DEFAULT_STARTUP_TIMEOUT,
-            },
-            None => DEFAULT_STARTUP_TIMEOUT,
-        }
-        .as_secs();
-        format!(
-            "MCP client for `{server_name}` timed out after {startup_timeout_secs} seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.{server_name}]\nstartup_timeout_sec = XX"
-        )
-    } else {
-        format!("MCP client for `{server_name}` failed to start: {err:#}")
-    }
-}
-
-fn is_mcp_client_auth_required_error(error: &anyhow::Error) -> bool {
-    // StreamableHttpError::AuthRequired from the MCP SDK.
-    error.to_string().contains("Auth required")
-}
-
-fn is_mcp_client_startup_timeout_error(error: &anyhow::Error) -> bool {
-    let error_message = error.to_string();
-    error_message.contains("request timed out")
-        || error_message.contains("timed out handshaking with MCP server")
-}
-
 use crate::features::Features;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
@@ -2302,10 +2238,7 @@ mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
-    use crate::config::types::McpServerConfig;
-    use crate::config::types::McpServerTransportConfig;
     use crate::exec::ExecToolCallOutput;
-    use crate::mcp::auth::McpAuthStatusEntry;
     use crate::tools::format_exec_output_str;
 
     use crate::protocol::CompactedItem;
@@ -2324,7 +2257,6 @@ mod tests {
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
-    use codex_protocol::protocol::McpAuthStatus;
     use std::time::Duration;
     use tokio::time::sleep;
 
@@ -2539,6 +2471,7 @@ mod tests {
 
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
+            mcp_startup: Mutex::new(None),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
@@ -2615,6 +2548,7 @@ mod tests {
 
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
+            mcp_startup: Mutex::new(None),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
@@ -2797,7 +2731,13 @@ mod tests {
         let (session, turn_context, _rx) = make_session_and_context_with_rx();
         let router = ToolRouter::from_config(
             &turn_context.tools_config,
-            Some(session.services.mcp_connection_manager.list_all_tools()),
+            Some(
+                session
+                    .services
+                    .mcp_connection_manager
+                    .list_all_tools()
+                    .await,
+            ),
         );
         let item = ResponseItem::CustomToolCall {
             id: None,
@@ -3058,88 +2998,4 @@ mod tests {
         assert!(exec_output.output.contains("hi"));
     }
 
-    #[test]
-    fn mcp_init_error_display_prompts_for_github_pat() {
-        let server_name = "github";
-        let entry = McpAuthStatusEntry {
-            config: McpServerConfig {
-                transport: McpServerTransportConfig::StreamableHttp {
-                    url: "https://api.githubcopilot.com/mcp/".to_string(),
-                    bearer_token_env_var: None,
-                    http_headers: None,
-                    env_http_headers: None,
-                },
-                enabled: true,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                enabled_tools: None,
-                disabled_tools: None,
-            },
-            auth_status: McpAuthStatus::Unsupported,
-        };
-        let err = anyhow::anyhow!("OAuth is unsupported");
-
-        let display = mcp_init_error_display(server_name, Some(&entry), &err);
-
-        let expected = format!(
-            "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
-        );
-
-        assert_eq!(expected, display);
-    }
-
-    #[test]
-    fn mcp_init_error_display_prompts_for_login_when_auth_required() {
-        let server_name = "example";
-        let err = anyhow::anyhow!("Auth required for server");
-
-        let display = mcp_init_error_display(server_name, None, &err);
-
-        let expected = format!(
-            "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
-        );
-
-        assert_eq!(expected, display);
-    }
-
-    #[test]
-    fn mcp_init_error_display_reports_generic_errors() {
-        let server_name = "custom";
-        let entry = McpAuthStatusEntry {
-            config: McpServerConfig {
-                transport: McpServerTransportConfig::StreamableHttp {
-                    url: "https://example.com".to_string(),
-                    bearer_token_env_var: Some("TOKEN".to_string()),
-                    http_headers: None,
-                    env_http_headers: None,
-                },
-                enabled: true,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                enabled_tools: None,
-                disabled_tools: None,
-            },
-            auth_status: McpAuthStatus::Unsupported,
-        };
-        let err = anyhow::anyhow!("boom");
-
-        let display = mcp_init_error_display(server_name, Some(&entry), &err);
-
-        let expected = format!("MCP client for `{server_name}` failed to start: {err:#}");
-
-        assert_eq!(expected, display);
-    }
-
-    #[test]
-    fn mcp_init_error_display_includes_startup_timeout_hint() {
-        let server_name = "slow";
-        let err = anyhow::anyhow!("request timed out");
-
-        let display = mcp_init_error_display(server_name, None, &err);
-
-        assert_eq!(
-            "MCP client for `slow` timed out after 10 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",
-            display
-        );
-    }
 }

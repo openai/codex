@@ -182,6 +182,42 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ts_msg!(self, "  {}", details.style(self.dimmed));
                 }
             }
+            EventMsg::McpStartupUpdate(update) => {
+                let status_text = match update.status {
+                    codex_core::protocol::McpStartupStatus::Starting => "starting".to_string(),
+                    codex_core::protocol::McpStartupStatus::Ready => "ready".to_string(),
+                    codex_core::protocol::McpStartupStatus::Cancelled => "cancelled".to_string(),
+                    codex_core::protocol::McpStartupStatus::Failed { ref error } => {
+                        format!("failed: {error}")
+                    }
+                };
+                ts_msg!(
+                    self,
+                    "{} {} {}",
+                    "mcp:".style(self.cyan),
+                    update.server,
+                    status_text
+                );
+            }
+            EventMsg::McpStartupComplete(summary) => {
+                let mut parts = Vec::new();
+                if !summary.ready.is_empty() {
+                    parts.push(format!("ready: {}", summary.ready.join(", ")));
+                }
+                if !summary.failed.is_empty() {
+                    let servers: Vec<_> = summary.failed.iter().map(|f| f.server.clone()).collect();
+                    parts.push(format!("failed: {}", servers.join(", ")));
+                }
+                if !summary.cancelled.is_empty() {
+                    parts.push(format!("cancelled: {}", summary.cancelled.join(", ")));
+                }
+                let joined = if parts.is_empty() {
+                    "no servers".to_string()
+                } else {
+                    parts.join("; ")
+                };
+                ts_msg!(self, "{} {}", "mcp startup:".style(self.cyan), joined);
+            }
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 ts_msg!(self, "{}", message.style(self.dimmed));
             }
