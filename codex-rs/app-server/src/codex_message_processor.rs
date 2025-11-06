@@ -1206,6 +1206,8 @@ impl CodexMessageProcessor {
                 let rollout_path = new_conv.session_configured.rollout_path.clone();
                 let fallback_provider = self.config.model_provider_id.as_str();
 
+                // A bit hacky, but the summary contains a lot of useful information for the thread
+                // that unfortunately does not get returned from conversation_manager.new_conversation().
                 let thread = match read_summary_from_rollout(
                     rollout_path.as_path(),
                     fallback_provider,
@@ -1222,7 +1224,7 @@ impl CodexMessageProcessor {
                             id: conversation_id.to_string(),
                             preview: String::new(),
                             model_provider: self.config.model_provider_id.clone(),
-                            created_at: 0,
+                            created_at: chrono::Utc::now().timestamp(),
                         }
                     }
                 };
@@ -2865,6 +2867,10 @@ fn summary_to_thread(summary: ConversationSummary) -> Thread {
         preview,
         timestamp,
         model_provider,
+        cwd: _,
+        cli_version: _,
+        source: _,
+        git_info: _,
     } = summary;
 
     let created_at = parse_created_at(timestamp.as_deref());
