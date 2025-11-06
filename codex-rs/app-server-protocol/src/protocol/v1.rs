@@ -123,11 +123,8 @@ pub struct ConversationSummary {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub struct ConversationGitInfo {
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub sha: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub origin_url: Option<String>,
 }
 
