@@ -2725,7 +2725,7 @@ async fn read_summary_from_rollout(
         model_provider,
         cwd: session_meta.cwd,
         cli_version: session_meta.cli_version,
-        source: session_meta.source.clone(),
+        source: session_meta.source,
         git_info,
     })
 }
