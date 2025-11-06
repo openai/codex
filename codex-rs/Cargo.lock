@@ -971,6 +971,7 @@ dependencies = [
  "codex-arg0",
  "codex-chatgpt",
  "codex-cloud-tasks",
+ "codex-code-review",
  "codex-common",
  "codex-core",
  "codex-exec",
@@ -985,14 +986,17 @@ dependencies = [
  "codex-tui",
  "codex-windows-sandbox",
  "ctor 0.5.0",
+ "dirs",
  "owo-colors",
  "predicates",
  "pretty_assertions",
+ "serde",
  "serde_json",
  "supports-color",
  "tempfile",
  "tokio",
  "toml",
+ "tracing",
 ]
 
 [[package]]
@@ -1034,6 +1038,35 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.17",
+]
+
+[[package]]
+name = "codex-code-review"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "async-trait",
+ "chrono",
+ "codex-async-utils",
+ "codex-core",
+ "codex-git",
+ "codex-ollama",
+ "codex-protocol",
+ "futures",
+ "ignore",
+ "log",
+ "notify",
+ "regex-lite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-stream",
+ "tokio-test",
+ "tracing",
+ "walkdir",
 ]
 
 [[package]]

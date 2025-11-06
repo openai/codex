@@ -38,7 +38,7 @@ members = [
     "utils/pty",
     "utils/readiness",
     "utils/string",
-    "utils/tokenizer",
+    "utils/tokenizer", "code-review",
 ]
 resolver = "2"
 
@@ -61,6 +61,7 @@ codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
 codex-chatgpt = { path = "chatgpt" }
+codex-code-review = { path = "code-review" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }

@@ -1,0 +1,37 @@
+[package]
+name = "codex-code-review"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# Internal dependencies
+codex-core = { workspace = true }
+codex-ollama = { workspace = true }
+codex-protocol = { workspace = true }
+codex-git = { workspace = true }
+codex-async-utils = { workspace = true }
+
+# External dependencies
+anyhow = { workspace = true }
+async-channel = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+ignore = { workspace = true }
+log = { workspace = true }
+notify = { workspace = true }
+regex-lite = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = { workspace = true }
+tracing = { workspace = true }
+walkdir = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio-test = { workspace = true }
+
+[lints]
+workspace = true

@@ -26,8 +26,10 @@ use std::path::PathBuf;
 use supports_color::Stream;
 
 mod mcp_cmd;
+mod review_cmd;
 
 use crate::mcp_cmd::McpCli;
+use crate::review_cmd::ReviewCli;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::features::is_known_feature_key;
@@ -113,6 +115,10 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
+
+    /// [experimental] Continuous code review with local AI
+    #[clap(visible_alias = "r")]
+    Review(ReviewCli),
 }
 
 #[derive(Debug, Parser)]
@@ -506,6 +512,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::GenerateTs(gen_cli)) => {
             codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
+        }
+        Some(Subcommand::Review(review_cli)) => {
+            review_cmd::run_review_command(review_cli).await?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {

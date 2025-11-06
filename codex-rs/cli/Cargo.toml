@@ -23,6 +23,7 @@ codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-cloud-tasks = { path = "../cloud-tasks" }
+codex-code-review = { workspace = true }
 codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
 codex-exec = { workspace = true }
@@ -36,10 +37,13 @@ codex-rmcp-client = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
 codex-tui = { workspace = true }
 ctor = { workspace = true }
+dirs = { workspace = true }
 owo-colors = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
 toml = { workspace = true }
+tracing = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
