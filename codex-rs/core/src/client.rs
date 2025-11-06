@@ -864,7 +864,27 @@ async fn process_sse<S>(
                 if let Some(resp_val) = event.response {
                     match serde_json::from_value::<ResponseCompleted>(resp_val) {
                         Ok(r) => {
-                            response_completed = Some(r);
+                            if let Some(token_usage) = &r.usage {
+                                otel_event_manager.sse_event_completed(
+                                    token_usage.input_tokens,
+                                    token_usage.output_tokens,
+                                    token_usage
+                                        .input_tokens_details
+                                        .as_ref()
+                                        .map(|d| d.cached_tokens),
+                                    token_usage
+                                        .output_tokens_details
+                                        .as_ref()
+                                        .map(|d| d.reasoning_tokens),
+                                    token_usage.total_tokens,
+                                );
+                            }
+                            let event = ResponseEvent::Completed {
+                                response_id: r.id.clone(),
+                                token_usage: r.usage.map(Into::into),
+                            };
+                            let _ = tx_event.send(Ok(event)).await;
+                            return;
                         }
                         Err(e) => {
                             let error = format!("failed to parse ResponseCompleted: {e}");

@@ -1773,7 +1773,9 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Approaching rate limits".to_string()),
-            subtitle: Some(format!("Switch to {display_name} for lower credit usage?")),
+            subtitle: Some(format!(
+                "You've used over 90% of your limit. Switch to {display_name} for lower credit usage?"
+            )),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
