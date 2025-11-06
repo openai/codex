@@ -69,28 +69,14 @@ pub fn stdout_supports_truecolor() -> bool {
 /// and we cache the result in `stdout_supports_truecolor` so we only attempt it once.
 #[cfg(windows)]
 fn enable_vt_stdout() -> std::io::Result<()> {
-    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-    use windows_sys::Win32::System::Console::GetConsoleMode;
-    use windows_sys::Win32::System::Console::GetStdHandle;
-    use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
-    use windows_sys::Win32::System::Console::SetConsoleMode;
-
-    unsafe {
-        let handle = GetStdHandle(STD_OUTPUT_HANDLE);
-        if handle == INVALID_HANDLE_VALUE || handle == 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let mut mode: u32 = 0;
-        if GetConsoleMode(handle, &mut mode) == 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // Idempotent if already enabled.
-        if SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) == 0 {
-            return Err(std::io::Error::last_os_error());
-        }
+    match crossterm::ansi_support::enable_ansi_support() {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "ANSI support unavailable",
+        )),
+        Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{e}"))),
     }
-    Ok(())
 }
 
 pub fn requery_default_colors() {
