@@ -115,6 +115,11 @@ pub(crate) enum AppEvent {
     OpenFeedbackConsent {
         category: FeedbackCategory,
     },
+
+    /// Kick off a /migrate workflow after collecting the migration summary.
+    StartMigrationWorkflow {
+        label: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

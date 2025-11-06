@@ -52,6 +52,7 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use pathdiff::diff_paths;
 use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -86,6 +87,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::markdown::append_markdown;
+use crate::migration::prepare_workspace;
 #[cfg(target_os = "windows")]
 use crate::onboarding::WSL_INSTRUCTIONS;
 use crate::render::Insets;
@@ -1235,8 +1237,7 @@ impl ChatWidget {
                 self.submit_user_message(INIT_PROMPT.to_string().into());
             }
             SlashCommand::Migrate => {
-                const MIGRATE_PROMPT: &str = include_str!("../prompt_for_migrate_command.md");
-                self.submit_user_message(MIGRATE_PROMPT.to_string().into());
+                self.open_migration_prompt();
             }
             SlashCommand::Compact => {
                 self.clear_token_usage();
@@ -2424,6 +2425,68 @@ impl ChatWidget {
             }),
         );
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_migration_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Plan a migration".to_string(),
+            "Example: Gradually replace the billing monolith with Rust services".to_string(),
+            Some(
+                "Codex will create migration_<name> artifacts before generating the plan."
+                    .to_string(),
+            ),
+            Box::new(move |summary: String| {
+                let trimmed = summary.trim();
+                if trimmed.is_empty() {
+                    return;
+                }
+                tx.send(AppEvent::StartMigrationWorkflow {
+                    label: trimmed.to_string(),
+                });
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn start_migration_workflow(&mut self, label: String) {
+        let trimmed = label.trim();
+        if trimmed.is_empty() {
+            self.add_error_message(
+                "Please describe the migration before running /migrate.".to_string(),
+            );
+            return;
+        }
+        let workspace = match prepare_workspace(&self.config.cwd, trimmed) {
+            Ok(ws) => ws,
+            Err(err) => {
+                self.add_error_message(format!("Failed to set up migration workspace: {err}"));
+                return;
+            }
+        };
+        let workspace_rel = self.relative_to_cwd(&workspace.dir_path);
+        let plan_rel = self.relative_to_cwd(&workspace.plan_path);
+        let log_rel = self.relative_to_cwd(&workspace.progress_log_path);
+        let info = format!(
+            "Created `{workspace_rel}` with `{plan_rel}` for the plan and `{log_rel}` for async updates."
+        );
+        self.add_info_message(
+            info,
+            Some("Keep the plan and progress log updated as tasks complete.".to_string()),
+        );
+
+        const MIGRATE_PROMPT_TEXT: &str = include_str!("../prompt_for_migrate_command.md");
+        let prompt = format!(
+            "{MIGRATE_PROMPT_TEXT}\n\n### Workspace context\n- Migration codename: {trimmed}\n- Shared workspace: `{workspace_rel}`\n- Canonical plan file: `{plan_rel}`\n- Progress log for multi-agent updates: `{log_rel}`\n\nPopulate `{plan_rel}` with the plan you produce and mirror incremental updates in `{log_rel}` so parallel workstreams stay synchronized.",
+        );
+        self.submit_user_message(prompt.into());
+    }
+
+    fn relative_to_cwd(&self, path: &Path) -> String {
+        diff_paths(path, &self.config.cwd)
+            .unwrap_or_else(|| path.to_path_buf())
+            .display()
+            .to_string()
     }
 
     pub(crate) fn token_usage(&self) -> TokenUsage {

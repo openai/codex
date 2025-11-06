@@ -369,6 +369,9 @@ impl App {
             AppEvent::OpenFeedbackConsent { category } => {
                 self.chat_widget.open_feedback_consent(category);
             }
+            AppEvent::StartMigrationWorkflow { label } => {
+                self.chat_widget.start_migration_workflow(label);
+            }
             AppEvent::ShowWindowsAutoModeInstructions => {
                 self.chat_widget.open_windows_auto_mode_instructions();
             }

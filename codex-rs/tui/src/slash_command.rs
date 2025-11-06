@@ -40,7 +40,9 @@ impl SlashCommand {
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
-            SlashCommand::Migrate => "plan a large migration by generating numbered tasks",
+            SlashCommand::Migrate => {
+                "spin up a migration workspace and produce a collaborative plan"
+            }
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
