@@ -773,8 +773,6 @@ fn repo_root_and_rel_for_path(path: &Path) -> (Option<PathBuf>, Option<PathBuf>)
     (None, None)
 }
 
-
-
 #[cfg(windows)]
 fn rel_path_case_insensitive(root: &Path, path: &Path) -> Option<PathBuf> {
     let r = root.to_string_lossy().replace('\\', "/");
