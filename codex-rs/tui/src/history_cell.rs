@@ -49,6 +49,7 @@ use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use std::any::Any;
 use std::collections::HashMap;
+use std::env;
 use std::io::Cursor;
 use std::path::Path;
 use std::path::PathBuf;
@@ -689,10 +690,11 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
+        let env = env::var("CODEX_TITLE_CUSTOM").ok();
         // Title line rendered inside the box: ">_ OpenAI Codex (vX)"
         let title_spans: Vec<Span<'static>> = vec![
             Span::from(">_ ").dim(),
-            Span::from("OpenAI Codex").bold(),
+            Span::from(env.unwrap_or_else(|| "OpenAI Codex".to_string())).bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{})", self.version)).dim(),
         ];
