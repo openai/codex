@@ -21,6 +21,7 @@ thiserror = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
 clap = { version = "4", features = ["derive"] }
+pathdiff = "0.2"
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

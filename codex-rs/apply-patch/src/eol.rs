@@ -12,6 +12,7 @@
 //! - Normalization only happens on final disk writes; previews/summaries may remain LF.
 //! - Trailing newline presence is preserved exactly; we do not add or remove it.
 
+use pathdiff::diff_paths;
 #[cfg(feature = "eol-cache")]
 use std::collections::HashMap;
 use std::path::Path;
@@ -149,7 +150,10 @@ pub fn git_core_eol(repo_root: &Path) -> Option<Eol> {
 pub fn git_check_attr_eol(repo_root: &Path, rel_path: &Path) -> Option<Eol> {
     #[cfg(all(test, feature = "eol-cache"))]
     RAW_ATTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let rel = rel_path.to_string_lossy().replace('\\', "/");
+    // Normalize to repo-relative path with forward slashes, regardless of OS.
+    // This avoids git check-attr mismatches on macOS/Linux when absolute paths
+    // or OS-native separators are used.
+    let rel_key = rel_attr_key(repo_root, rel_path);
     let out = std::process::Command::new("git")
         .arg("-C")
         .arg(repo_root)
@@ -158,7 +162,7 @@ pub fn git_check_attr_eol(repo_root: &Path, rel_path: &Path) -> Option<Eol> {
         .arg("text")
         .arg("binary")
         .arg("--")
-        .arg(rel)
+        .arg(rel_key)
         .output()
         .ok()?;
     if !out.status.success() {
@@ -314,6 +318,15 @@ pub fn decide_eol(repo_root: Option<&Path>, rel_path: Option<&Path>, is_new_file
     Eol::Lf
 }
 
+/// Compute a repo-relative attribute lookup key using forward slashes.
+/// Falls back to the provided path's display string if a relative path
+/// cannot be determined (should be rare).
+fn rel_attr_key(repo_root: &Path, path: &Path) -> String {
+    let rel: std::path::PathBuf = diff_paths(path, repo_root).unwrap_or_else(|| path.to_path_buf());
+    let s = rel.to_string_lossy().replace('\\', "/");
+    s.trim_start_matches('/').to_string()
+}
+
 // Test instrumentation and unit tests for caching
 #[cfg(all(test, feature = "eol-cache"))]
 static RAW_CORE_EOL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -343,10 +356,16 @@ mod tests {
     use super::*;
     #[cfg(feature = "eol-cache")]
     use tempfile::tempdir;
+    use std::sync::Mutex;
+
+    // Serialize tests that touch global RAW_* counters to avoid flakiness
+    // when tests run in parallel.
+    static TEST_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     #[cfg(feature = "eol-cache")]
     #[test]
     fn test_core_eol_cached_only_runs_git_once() {
+        let _g = TEST_MUTEX.lock().unwrap();
         reset_git_counters();
         let dir = tempdir().unwrap();
         std::process::Command::new("git")
@@ -374,6 +393,7 @@ mod tests {
     #[cfg(feature = "eol-cache")]
     #[test]
     fn test_attrs_cache_and_invalidate() {
+        let _g = TEST_MUTEX.lock().unwrap();
         reset_git_counters();
         let dir = tempdir().unwrap();
         std::process::Command::new("git")
@@ -410,6 +430,26 @@ mod tests {
         } else {
             assert_ne!(a, b);
         }
+    }
+
+    #[test]
+    fn test_gitattributes_eol_crlf_cross_platform() {
+        let _g = TEST_MUTEX.lock().unwrap();
+        // Ensure that git_check_attr_eol correctly detects CRLF via .gitattributes
+        // on all platforms, regardless of absolute vs. relative path inputs.
+        let dir = tempdir().unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        std::fs::write(dir.path().join(".gitattributes"), "*.txt text eol=crlf\n").unwrap();
+        let file = dir.path().join("foo.txt");
+        std::fs::write(&file, "line1\n").unwrap();
+        // Pass absolute path intentionally; helper should normalize.
+        let result = git_check_attr_eol(dir.path(), &file);
+        assert_eq!(result, Some(Eol::Crlf));
     }
 }
 

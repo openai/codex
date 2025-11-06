@@ -592,6 +592,15 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
                 }
                 let (repo_root, rel) = repo_root_and_rel_for_path(path);
                 let mut target = eol::decide_eol(repo_root.as_deref(), rel.as_deref(), true);
+                // If attribute lookup failed due to path relativity issues, try again
+                // using the absolute path, letting eol.rs normalize to repo-relative.
+                if let Some(root) = repo_root.as_deref()
+                    && matches!(target, eol::Eol::Lf | eol::Eol::Unknown)
+                {
+                    if let Some(attr) = eol::git_check_attr_eol_cached(root, path) {
+                        target = attr;
+                    }
+                }
                 // Allow explicit Detect override via CLI/env only.
                 use crate::eol::AssumeEol;
                 use crate::eol::Eol;
