@@ -67,7 +67,7 @@ impl From<DiffSummary> for Box<dyn Renderable> {
             rows.push(Box::new(path));
             rows.push(Box::new(RtLine::from("")));
             rows.push(Box::new(InsetRenderable::new(
-                row.change,
+                Box::new(row.change) as Box<dyn Renderable>,
                 Insets::tlbr(0, 2, 0, 0),
             )));
         }
