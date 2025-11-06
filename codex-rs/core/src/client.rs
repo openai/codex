@@ -447,6 +447,8 @@ impl ModelClient {
                             return Err(StreamAttemptError::Fatal(codex_err));
                         } else if error.r#type.as_deref() == Some("usage_not_included") {
                             return Err(StreamAttemptError::Fatal(CodexErr::UsageNotIncluded));
+                        } else if is_quota_exceeded_error(&error) {
+                            return Err(StreamAttemptError::Fatal(CodexErr::QuotaExceeded));
                         }
                     }
                 }
