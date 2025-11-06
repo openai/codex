@@ -1,4 +1,4 @@
-//! 3D/4D Git Visualization for TUI - Kamui4D-exceeding implementation
+﻿//! 3D/4D Git Visualization for TUI - Kamui4D-exceeding implementation
 //!
 //! Features:
 //! - Terminal-based 3D ASCII visualization
@@ -7,13 +7,13 @@
 //! - Supports 100,000+ commits
 //!
 //! Performance:
-//! - Git analysis: 5s → 0.05s (CUDA)
+//! - Git analysis: 5s 竊・0.05s (CUDA)
 //! - Rendering: 60fps sustained
 //! - Memory: < 100MB for 100,000 commits
 
 use anyhow::Result;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Canvas, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph};`nuse ratatui::widgets::canvas::Canvas;
 use std::path::Path;
 use std::time::Instant;
 
@@ -276,7 +276,7 @@ impl GitVisualizer3D {
         let canvas = Canvas::default()
             .block(
                 Block::default()
-                    .title("Git 3D Visualizer - Kamui4D超え")
+                    .title("Git 3D Visualizer - Kamui4D雜・∴")
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Cyan)),
             )
@@ -288,7 +288,7 @@ impl GitVisualizer3D {
                     if let Some((x, y)) = self.project_to_2d(commit.pos) {
                         // Check if in bounds
                         if x.abs() <= 50.0 && y.abs() <= 50.0 {
-                            ctx.print(x, y, "●".fg(commit.color));
+                            ctx.print(x, y, "笳・.fg(commit.color));
                         }
                     }
                 }
@@ -303,7 +303,7 @@ impl GitVisualizer3D {
         let fps = self.fps_counter.get_fps();
 
         let status_text = format!(
-            "Commits: {} | CUDA: {} | FPS: {:.1} | Camera: ({:.1}, {:.1}, {:.1}) | Rotation: {:.2}°",
+            "Commits: {} | CUDA: {} | FPS: {:.1} | Camera: ({:.1}, {:.1}, {:.1}) | Rotation: {:.2}ﾂｰ",
             self.commits.len(),
             cuda_status,
             fps,

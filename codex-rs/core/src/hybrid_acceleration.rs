@@ -2,7 +2,6 @@
 //!
 //! Coordinates Windows AI API and CUDA for maximum performance
 
-use anyhow::Context;
 use anyhow::Result;
 use tracing::debug;
 use tracing::info;
@@ -67,6 +66,11 @@ pub async fn execute_with_acceleration(
             };
 
             execute_with_windows_ai(prompt, &win_opts).await
+        }
+
+        #[cfg(all(target_os = "windows", not(feature = "windows-ai")))]
+        AccelerationMode::WindowsAI => {
+            anyhow::bail!("Windows AI feature not enabled")
         }
 
         #[cfg(feature = "cuda")]
