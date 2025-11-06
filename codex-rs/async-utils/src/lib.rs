@@ -96,7 +96,7 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().dangling_artifacts.is_none());
     }
-
+}
     #[tokio::test]
     async fn returns_err_when_token_already_cancelled() {
         let token = CancellationToken::new();
@@ -108,7 +108,7 @@ mod tests {
         }
         .or_cancel(&token)
         .await;
-
+    ｝
         assert!(result.is_err());
         assert!(result.unwrap_err().dangling_artifacts.is_none());
     }
