@@ -592,40 +592,15 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
                 }
                 let (repo_root, rel) = repo_root_and_rel_for_path(path);
                 let mut target = eol::decide_eol(repo_root.as_deref(), rel.as_deref(), true);
-                if matches!(target, eol::Eol::Unknown)
-                    && let (Some(root), Some(relp)) = (repo_root.as_deref(), rel.as_deref())
-                    && let Some(e) = eol::git_check_attr_eol_cached(root, relp)
-                {
-                    // Use repo-relative path for .gitattributes lookups; absolute
-                    // paths can fail to match patterns on some platforms.
-                    target = e;
-                }
-                // Optional detect-from-buffer fallback for non-git dir, per policy.
+                // Allow explicit Detect override via CLI/env only.
                 use crate::eol::AssumeEol;
                 use crate::eol::Eol;
                 use crate::eol::get_assume_eol;
-                match get_assume_eol() {
-                    AssumeEol::Detect => {
-                        let det = eol::detect_eol_from_bytes(contents.as_bytes());
-                        if matches!(det, Eol::Lf | Eol::Crlf) {
-                            target = det;
-                        }
+                if matches!(get_assume_eol(), AssumeEol::Detect) {
+                    let det = eol::detect_eol_from_bytes(contents.as_bytes());
+                    if matches!(det, Eol::Lf | Eol::Crlf) {
+                        target = det;
                     }
-                    AssumeEol::Unspecified => {
-                        if repo_root.is_none() && !likely_in_git_repo(path.parent()) {
-                            let det = eol::detect_eol_from_bytes(contents.as_bytes());
-                            if matches!(det, Eol::Lf | Eol::Crlf) {
-                                target = det;
-                            }
-                        }
-                        // Ensure .gitattributes wins absent overrides
-                        if let (Some(root), Some(relp)) = (repo_root.as_deref(), rel.as_deref())
-                            && let Some(attr) = eol::git_check_attr_eol_cached(root, relp)
-                        {
-                            target = attr;
-                        }
-                    }
-                    _ => {}
                 }
                 let final_contents = match target {
                     eol::Eol::Crlf => {
@@ -798,17 +773,7 @@ fn repo_root_and_rel_for_path(path: &Path) -> (Option<PathBuf>, Option<PathBuf>)
     (None, None)
 }
 
-// Heuristic: walk up from `dir` to determine if there is a .git directory/file.
-fn likely_in_git_repo(mut dir: Option<&Path>) -> bool {
-    while let Some(d) = dir {
-        let marker = d.join(".git");
-        if marker.exists() {
-            return true;
-        }
-        dir = d.parent();
-    }
-    false
-}
+
 
 #[cfg(windows)]
 fn rel_path_case_insensitive(root: &Path, path: &Path) -> Option<PathBuf> {
@@ -1744,7 +1709,7 @@ PATCH"#,
     // user/system core.eol). We validate core.eol directly and .gitattributes above.
 
     #[test]
-    fn test_new_file_eol_from_core_eol_lf() {
+    fn test_new_file_ignores_core_eol_defaults_to_lf() {
         let dir = tempdir().unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
         std::process::Command::new("git")
@@ -1753,7 +1718,7 @@ PATCH"#,
             .status()
             .unwrap();
         std::process::Command::new("git")
-            .args(["config", "core.eol", "lf"])
+            .args(["config", "core.eol", "crlf"])
             .status()
             .unwrap();
 
@@ -1773,6 +1738,7 @@ PATCH"#,
             .assert()
             .success();
         let contents = fs::read(&path).unwrap();
+        // Should default to LF despite core.eol=crlf
         assert!(!contents.windows(2).any(|w| w == b"\r\n"));
         assert!(contents.contains(&b'\n'));
     }
