@@ -1148,10 +1148,10 @@ mod tests {
 
     fn assert_model_tools(model_family: &str, features: &Features, expected_tools: &[&str]) {
         let model_family = find_family_for_model(model_family)
-            .expect(format!("{model_family} should be a valid model family").as_str());
+            .unwrap_or_else(|| panic!("{model_family} should be a valid model family"));
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: features,
+            features,
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
