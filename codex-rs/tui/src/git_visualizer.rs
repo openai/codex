@@ -304,7 +304,7 @@ impl GitVisualizer3D {
         let fps = self.fps_counter.get_fps();
 
         let status_text = format!(
-            "Commits: {} | CUDA: {} | FPS: {:.1} | Camera: ({:.1}, {:.1}, {:.1}) | Rotation: {:.2}",
+            "Commits: {} | CUDA: {} | FPS: {:.1} | Camera: ({:.1}, {:.1}, {:.1}) | Rotation: {:.2}ﾂｰ",
             self.commits.len(),
             cuda_status,
             fps,
