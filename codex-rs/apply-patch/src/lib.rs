@@ -593,9 +593,11 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
                 let (repo_root, rel) = repo_root_and_rel_for_path(path);
                 let mut target = eol::decide_eol(repo_root.as_deref(), rel.as_deref(), true);
                 if matches!(target, eol::Eol::Unknown)
-                    && let Some(root) = repo_root.as_deref()
-                    && let Some(e) = eol::git_check_attr_eol(root, path)
+                    && let (Some(root), Some(relp)) = (repo_root.as_deref(), rel.as_deref())
+                    && let Some(e) = eol::git_check_attr_eol_cached(root, relp)
                 {
+                    // Use repo-relative path for .gitattributes lookups; absolute
+                    // paths can fail to match patterns on some platforms.
                     target = e;
                 }
                 // Optional detect-from-buffer fallback for non-git dir, per policy.
