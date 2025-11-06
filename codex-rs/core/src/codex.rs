@@ -3002,5 +3002,4 @@ mod tests {
         pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
         assert!(exec_output.output.contains("hi"));
     }
-
 }
