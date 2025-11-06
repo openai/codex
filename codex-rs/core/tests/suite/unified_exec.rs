@@ -11,6 +11,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::user_input::UserInput;
+use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -1357,10 +1358,14 @@ PY
     let outputs = collect_tool_outputs(&bodies)?;
     let large_output = outputs.get(call_id).expect("missing large output summary");
 
-    assert!(
-        large_output.output.contains("[... omitted"),
-        "expected omission marker in formatted output, got {:?}",
-        large_output.output
+    assert_regex_match(
+        concat!(
+            r"(?s)",
+            r"line-0.*?",
+            r"\[\.{3} omitted \d+ of \d+ lines \.{3}\].*?",
+            r"line-299",
+        ),
+        &large_output.output,
     );
 
     Ok(())
