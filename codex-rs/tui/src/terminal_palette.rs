@@ -1,6 +1,7 @@
 use crate::color::perceptual_distance;
 use ratatui::style::Color;
 use std::sync::LazyLock;
+use std::sync::OnceLock;
 use std::sync::Mutex;
 
 /// Returns the closest color to the target color that the terminal can display.
@@ -70,16 +71,30 @@ pub fn stdout_supports_truecolor() -> bool {
 /// and we cache the result in `stdout_supports_truecolor` so we only attempt it once.
 #[cfg(windows)]
 fn enable_vt_stdout() -> std::io::Result<()> {
-    match crossterm::ansi_support::enable_ansi_support() {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "ANSI support unavailable",
-        )),
-        Err(e) => Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("{e}"),
-        )),
+    use std::io;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::{
+        GetConsoleMode, SetConsoleMode, GetStdHandle, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+        STD_OUTPUT_HANDLE,
+    };
+
+    unsafe {
+        let handle = GetStdHandle(STD_OUTPUT_HANDLE);
+        if handle == 0 || handle == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+
+        let mut mode: u32 = 0;
+        if GetConsoleMode(handle, &mut mode) == 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        let new_mode = mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        if SetConsoleMode(handle, new_mode) == 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok(())
     }
 }
 
