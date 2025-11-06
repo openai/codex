@@ -1,4 +1,3 @@
-use crate::acl::dacl_has_write_allow_for_sid;
 use crate::token::world_sid;
 use crate::winutil::to_wide;
 use anyhow::anyhow;
@@ -22,8 +21,22 @@ use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
+use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
+use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
+use windows_sys::Win32::Storage::FileSystem::FILE_APPEND_DATA;
+use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_EA;
+use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES;
+const GENERIC_ALL_MASK: u32 = 0x1000_0000;
+const GENERIC_WRITE_MASK: u32 = 0x4000_0000;
 use windows_sys::Win32::Security::ACL;
 use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+use windows_sys::Win32::Security::ACL_SIZE_INFORMATION;
+use windows_sys::Win32::Security::AclSizeInformation;
+use windows_sys::Win32::Security::GetAclInformation;
+use windows_sys::Win32::Security::GetAce;
+use windows_sys::Win32::Security::ACCESS_ALLOWED_ACE;
+use windows_sys::Win32::Security::ACE_HEADER;
+use windows_sys::Win32::Security::EqualSid;
 
 fn unique_push(set: &mut HashSet<PathBuf>, out: &mut Vec<PathBuf>, p: PathBuf) {
     if let Ok(abs) = p.canonicalize() {
@@ -135,7 +148,13 @@ unsafe fn path_has_world_write_allow(path: &Path) -> Result<bool> {
 
     let mut world = world_sid()?;
     let psid_world = world.as_mut_ptr() as *mut c_void;
-    let has = dacl_has_write_allow_for_sid(p_dacl, psid_world);
+    // Very fast mask-based check for world-writable grants (includes GENERIC_*).
+    if !dacl_quick_world_write_mask_allows(p_dacl, psid_world) {
+        if !p_sd.is_null() { LocalFree(p_sd as HLOCAL); }
+        return Ok(false);
+    }
+    // Quick detector flagged a write grant for Everyone: treat as writable.
+    let has = true;
     if !p_sd.is_null() {
         LocalFree(p_sd as HLOCAL);
     }
@@ -236,4 +255,55 @@ pub fn audit_everyone_writable(
         Some(cwd),
     );
     Ok(())
+}
+// Fast mask-based check: does the DACL contain any ACCESS_ALLOWED ACE for
+// Everyone that includes generic or specific write bits? Skips inherit-only
+// ACEs (do not apply to the current object).
+unsafe fn dacl_quick_world_write_mask_allows(p_dacl: *mut ACL, psid_world: *mut c_void) -> bool {
+    if p_dacl.is_null() {
+        return false;
+    }
+    const INHERIT_ONLY_ACE: u8 = 0x08;
+    let mut info: ACL_SIZE_INFORMATION = std::mem::zeroed();
+    let ok = GetAclInformation(
+        p_dacl as *const ACL,
+        &mut info as *mut _ as *mut c_void,
+        std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+        AclSizeInformation,
+    );
+    if ok == 0 {
+        return false;
+    }
+    for i in 0..(info.AceCount as usize) {
+        let mut p_ace: *mut c_void = std::ptr::null_mut();
+        if GetAce(p_dacl as *const ACL, i as u32, &mut p_ace) == 0 {
+            continue;
+        }
+        let hdr = &*(p_ace as *const ACE_HEADER);
+        if hdr.AceType != 0 { // ACCESS_ALLOWED_ACE_TYPE
+            continue;
+        }
+        if (hdr.AceFlags & INHERIT_ONLY_ACE) != 0 {
+            continue;
+        }
+        let base = p_ace as usize;
+        let sid_ptr = (base
+            + std::mem::size_of::<ACE_HEADER>()
+            + std::mem::size_of::<u32>()) as *mut c_void; // skip header + mask
+        if EqualSid(sid_ptr, psid_world) != 0 {
+            let ace = &*(p_ace as *const ACCESS_ALLOWED_ACE);
+            let mask = ace.Mask;
+            let writey = FILE_GENERIC_WRITE
+                | FILE_WRITE_DATA
+                | FILE_APPEND_DATA
+                | FILE_WRITE_EA
+                | FILE_WRITE_ATTRIBUTES
+                | GENERIC_WRITE_MASK
+                | GENERIC_ALL_MASK;
+            if (mask & writey) != 0 {
+                return true;
+            }
+        }
+    }
+    false
 }

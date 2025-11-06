@@ -72,10 +72,13 @@ pub(crate) enum AppEvent {
         preset: ApprovalPreset,
     },
 
-    /// Open the Windows world-writable directories warning when enabling Auto mode.
+    /// Open the Windows world-writable directories warning.
+    /// If `preset` is `Some`, the confirmation will apply the provided
+    /// approval/sandbox configuration on Continue; if `None`, it performs no
+    /// policy change and only acknowledges/dismisses the warning.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWorldWritableWarningConfirmation {
-        preset: ApprovalPreset,
+        preset: Option<ApprovalPreset>,
     },
 
     /// Show Windows Subsystem for Linux setup instructions for auto mode.

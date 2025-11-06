@@ -191,7 +191,7 @@ impl App {
                 let cwd = app.config.cwd.clone();
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
-                Self::spawn_world_writable_scan(cwd, env_map, tx);
+                Self::spawn_world_writable_scan(cwd, env_map, tx, false);
             }
         }
 
@@ -472,7 +472,7 @@ impl App {
                         let env_map: std::collections::HashMap<String, String> =
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
-                        Self::spawn_world_writable_scan(cwd, env_map, tx);
+                        Self::spawn_world_writable_scan(cwd, env_map, tx, false);
                     }
                 }
             }
@@ -625,14 +625,20 @@ impl App {
         cwd: PathBuf,
         env_map: std::collections::HashMap<String, String>,
         tx: AppEventSender,
+        apply_preset_on_continue: bool,
     ) {
         tokio::task::spawn_blocking(move || {
-            if codex_windows_sandbox::preflight_audit_everyone_writable(&cwd, &env_map).is_err()
-                && let Some(preset) = codex_common::approval_presets::builtin_approval_presets()
-                    .into_iter()
-                    .find(|p| p.id == "auto")
-            {
-                tx.send(AppEvent::OpenWorldWritableWarningConfirmation { preset });
+            if codex_windows_sandbox::preflight_audit_everyone_writable(&cwd, &env_map).is_err() {
+                if apply_preset_on_continue {
+                    if let Some(preset) = codex_common::approval_presets::builtin_approval_presets()
+                        .into_iter()
+                        .find(|p| p.id == "auto")
+                    {
+                        tx.send(AppEvent::OpenWorldWritableWarningConfirmation { preset: Some(preset) });
+                    }
+                } else {
+                    tx.send(AppEvent::OpenWorldWritableWarningConfirmation { preset: None });
+                }
             }
         });
     }

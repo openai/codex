@@ -1897,7 +1897,7 @@ impl ChatWidget {
                         let preset_clone = preset.clone();
                         vec![Box::new(move |tx| {
                             tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
-                                preset: preset_clone.clone(),
+                                preset: Some(preset_clone.clone()),
                             });
                         })]
                     } else {
@@ -2027,9 +2027,14 @@ impl ChatWidget {
     }
 
     #[cfg(target_os = "windows")]
-    pub(crate) fn open_world_writable_warning_confirmation(&mut self, preset: ApprovalPreset) {
-        let approval = preset.approval;
-        let sandbox = preset.sandbox;
+    pub(crate) fn open_world_writable_warning_confirmation(
+        &mut self,
+        preset: Option<ApprovalPreset>,
+    ) {
+        let (approval, sandbox) = match &preset {
+            Some(p) => (Some(p.approval), Some(p.sandbox.clone())),
+            None => (None, None),
+        };
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let title_line = Line::from("Auto mode has unprotected directories").bold();
         let info_line = Line::from(vec![
@@ -2046,13 +2051,12 @@ impl ChatWidget {
         // Build actions ensuring acknowledgement happens before applying the new sandbox policy,
         // so downstream policy-change hooks don't re-trigger the warning.
         let mut accept_actions: Vec<SelectionAction> = Vec::new();
-        {
-            let s = sandbox.clone();
-            // Suppress the immediate re-scan once after user confirms continue.
-            accept_actions.push(Box::new(|tx| {
-                tx.send(AppEvent::SkipNextWorldWritableScan);
-            }));
-            accept_actions.extend(Self::approval_preset_actions(approval, s));
+        // Suppress the immediate re-scan once after user confirms continue.
+        accept_actions.push(Box::new(|tx| {
+            tx.send(AppEvent::SkipNextWorldWritableScan);
+        }));
+        if let (Some(approval), Some(sandbox)) = (approval, sandbox.clone()) {
+            accept_actions.extend(Self::approval_preset_actions(approval, sandbox));
         }
 
         let mut accept_and_remember_actions: Vec<SelectionAction> = Vec::new();
@@ -2060,11 +2064,17 @@ impl ChatWidget {
             tx.send(AppEvent::UpdateWorldWritableWarningAcknowledged(true));
             tx.send(AppEvent::PersistWorldWritableWarningAcknowledged);
         }));
-        accept_and_remember_actions.extend(Self::approval_preset_actions(approval, sandbox));
+        if let (Some(approval), Some(sandbox)) = (approval, sandbox) {
+            accept_and_remember_actions.extend(Self::approval_preset_actions(approval, sandbox));
+        }
 
-        let deny_actions: Vec<SelectionAction> = vec![Box::new(|tx| {
-            tx.send(AppEvent::OpenApprovalsPopup);
-        })];
+        let deny_actions: Vec<SelectionAction> = if preset.is_some() {
+            vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenApprovalsPopup);
+            })]
+        } else {
+            Vec::new()
+        };
 
         let items = vec![
             SelectionItem {
@@ -2099,7 +2109,11 @@ impl ChatWidget {
     }
 
     #[cfg(not(target_os = "windows"))]
-    pub(crate) fn open_world_writable_warning_confirmation(&mut self, _preset: ApprovalPreset) {}
+    pub(crate) fn open_world_writable_warning_confirmation(
+        &mut self,
+        _preset: Option<ApprovalPreset>,
+    ) {
+    }
 
     #[cfg(target_os = "windows")]
     pub(crate) fn open_windows_auto_mode_instructions(&mut self) {
