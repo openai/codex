@@ -16,10 +16,11 @@ use crate::key_hint::KeyBinding;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
-use crate::text_formatting::truncate_text;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_core::protocol::SandboxCommandAssessment;
+use codex_core::protocol::SandboxRiskLevel;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -39,6 +40,7 @@ pub(crate) enum ApprovalRequest {
         id: String,
         command: Vec<String>,
         reason: Option<String>,
+        risk: Option<SandboxCommandAssessment>,
     },
     ApplyPatch {
         id: String,
@@ -105,9 +107,9 @@ impl ApprovalOverlay {
             ),
         };
 
-        let header = Box::new(ColumnRenderable::new([
-            Box::new(Line::from(title.bold())),
-            Box::new(Line::from("")),
+        let header = Box::new(ColumnRenderable::with([
+            Line::from(title.bold()).into(),
+            Line::from("").into(),
             header,
         ]));
 
@@ -160,11 +162,8 @@ impl ApprovalOverlay {
     }
 
     fn handle_exec_decision(&self, id: &str, command: &[String], decision: ReviewDecision) {
-        if let Some(lines) = build_exec_history_lines(command.to_vec(), decision) {
-            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                history_cell::new_user_approval_decision(lines),
-            )));
-        }
+        let cell = history_cell::new_approval_decision_cell(command.to_vec(), decision);
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         self.app_event_tx.send(AppEvent::CodexOp(Op::ExecApproval {
             id: id.to_string(),
             decision,
@@ -261,10 +260,6 @@ impl BottomPaneView for ApprovalOverlay {
         self.enqueue_request(request);
         None
     }
-
-    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        self.list.cursor_pos(area)
-    }
 }
 
 impl Renderable for ApprovalOverlay {
@@ -274,6 +269,10 @@ impl Renderable for ApprovalOverlay {
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.list.render(area, buf);
+    }
+
+    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        self.list.cursor_pos(area)
     }
 }
 
@@ -289,12 +288,17 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 id,
                 command,
                 reason,
+                risk,
             } => {
+                let reason = reason.filter(|item| !item.is_empty());
+                let has_reason = reason.is_some();
                 let mut header: Vec<Line<'static>> = Vec::new();
-                if let Some(reason) = reason
-                    && !reason.is_empty()
-                {
+                if let Some(reason) = reason {
                     header.push(Line::from(vec!["Reason: ".into(), reason.italic()]));
+                }
+                if let Some(risk) = risk.as_ref() {
+                    header.extend(render_risk_lines(risk));
+                } else if has_reason {
                     header.push(Line::from(""));
                 }
                 let full_cmd = strip_bash_lc_and_escape(&command);
@@ -315,22 +319,45 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 changes,
             } => {
                 let mut header: Vec<Box<dyn Renderable>> = Vec::new();
-                header.push(DiffSummary::new(changes, cwd).into());
                 if let Some(reason) = reason
                     && !reason.is_empty()
                 {
-                    header.push(Box::new(Line::from("")));
                     header.push(Box::new(
-                        Paragraph::new(reason.italic()).wrap(Wrap { trim: false }),
+                        Paragraph::new(Line::from_iter(["Reason: ".into(), reason.italic()]))
+                            .wrap(Wrap { trim: false }),
                     ));
+                    header.push(Box::new(Line::from("")));
                 }
+                header.push(DiffSummary::new(changes, cwd).into());
                 Self {
                     variant: ApprovalVariant::ApplyPatch { id },
-                    header: Box::new(ColumnRenderable::new(header)),
+                    header: Box::new(ColumnRenderable::with(header)),
                 }
             }
         }
     }
+}
+
+fn render_risk_lines(risk: &SandboxCommandAssessment) -> Vec<Line<'static>> {
+    let level_span = match risk.risk_level {
+        SandboxRiskLevel::Low => "LOW".green().bold(),
+        SandboxRiskLevel::Medium => "MEDIUM".cyan().bold(),
+        SandboxRiskLevel::High => "HIGH".red().bold(),
+    };
+
+    let mut lines = Vec::new();
+
+    let description = risk.description.trim();
+    if !description.is_empty() {
+        lines.push(Line::from(vec![
+            "Summary: ".into(),
+            description.to_string().into(),
+        ]));
+    }
+
+    lines.push(vec!["Risk: ".into(), level_span].into());
+    lines.push(Line::from(""));
+    lines
 }
 
 #[derive(Clone)]
@@ -395,91 +422,11 @@ fn patch_options() -> Vec<ApprovalOption> {
     ]
 }
 
-fn build_exec_history_lines(
-    command: Vec<String>,
-    decision: ReviewDecision,
-) -> Option<Vec<Line<'static>>> {
-    use ReviewDecision::*;
-
-    let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
-        Approved => {
-            let snippet = Span::from(exec_snippet(&command)).dim();
-            (
-                "✔ ".green(),
-                vec![
-                    "You ".into(),
-                    "approved".bold(),
-                    " codex to run ".into(),
-                    snippet,
-                    " this time".bold(),
-                ],
-            )
-        }
-        ApprovedForSession => {
-            let snippet = Span::from(exec_snippet(&command)).dim();
-            (
-                "✔ ".green(),
-                vec![
-                    "You ".into(),
-                    "approved".bold(),
-                    " codex to run ".into(),
-                    snippet,
-                    " every time this session".bold(),
-                ],
-            )
-        }
-        Denied => {
-            let snippet = Span::from(exec_snippet(&command)).dim();
-            (
-                "✗ ".red(),
-                vec![
-                    "You ".into(),
-                    "did not approve".bold(),
-                    " codex to run ".into(),
-                    snippet,
-                ],
-            )
-        }
-        Abort => {
-            let snippet = Span::from(exec_snippet(&command)).dim();
-            (
-                "✗ ".red(),
-                vec![
-                    "You ".into(),
-                    "canceled".bold(),
-                    " the request to run ".into(),
-                    snippet,
-                ],
-            )
-        }
-    };
-
-    let mut lines = Vec::new();
-    let mut spans = Vec::new();
-    spans.push(symbol);
-    spans.extend(summary);
-    lines.push(Line::from(spans));
-    Some(lines)
-}
-
-fn truncate_exec_snippet(full_cmd: &str) -> String {
-    let mut snippet = match full_cmd.split_once('\n') {
-        Some((first, _)) => format!("{first} ..."),
-        None => full_cmd.to_string(),
-    };
-    snippet = truncate_text(&snippet, 80);
-    snippet
-}
-
-fn exec_snippet(command: &[String]) -> String {
-    let full_cmd = strip_bash_lc_and_escape(command);
-    truncate_exec_snippet(&full_cmd)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn make_exec_request() -> ApprovalRequest {
@@ -487,6 +434,7 @@ mod tests {
             id: "test".to_string(),
             command: vec!["echo".to_string(), "hi".to_string()],
             reason: Some("reason".to_string()),
+            risk: None,
         }
     }
 
@@ -528,6 +476,7 @@ mod tests {
             id: "test".into(),
             command,
             reason: None,
+            risk: None,
         };
 
         let view = ApprovalOverlay::new(exec_request, tx);
@@ -547,6 +496,33 @@ mod tests {
                 .any(|line| line.contains("echo hello world")),
             "expected header to include command snippet, got {rendered:?}"
         );
+    }
+
+    #[test]
+    fn exec_history_cell_wraps_with_two_space_indent() {
+        let command = vec![
+            "/bin/zsh".into(),
+            "-lc".into(),
+            "git add tui/src/render/mod.rs tui/src/render/renderable.rs".into(),
+        ];
+        let cell = history_cell::new_approval_decision_cell(command, ReviewDecision::Approved);
+        let lines = cell.display_lines(28);
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+        let expected = vec![
+            "✔ You approved codex to run".to_string(),
+            "  git add tui/src/render/".to_string(),
+            "  mod.rs tui/src/render/".to_string(),
+            "  renderable.rs this time".to_string(),
+        ];
+        assert_eq!(rendered, expected);
     }
 
     #[test]

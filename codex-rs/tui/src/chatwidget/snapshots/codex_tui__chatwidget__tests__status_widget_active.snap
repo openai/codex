@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 1577
 expression: terminal.backend()
 ---
 "                                                                                "
@@ -8,5 +9,4 @@ expression: terminal.backend()
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  ? for shortcuts                                                               "
-"                                                                                "
+"  100% context left · ? for shortcuts                                           "
