@@ -3,10 +3,8 @@
 //! Precedence used when choosing EOLs for writes:
 //! - CLI/env override wins (lf|crlf|git|detect)
 //! - .gitattributes (path-specific) → lf/crlf/native; binary or -text => Unknown (skip)
-//! - git core.eol
-//! - git core.autocrlf (true => CRLF, input => LF)
-//! - OS native
-//! - Detect from content (for existing use original bytes; for new use patch content)
+//! - For new files only: if no attribute matches, default to LF (not OS/native)
+//! - Detect from content (existing files only; callers sniff original bytes)
 //!
 //! Notes:
 //! - Existing files: when no CLI/env override, callers should infer from the bytes
@@ -119,6 +117,7 @@ pub fn normalize_to_eol_preserve_eof(mut s: String, target: Eol) -> String {
     s
 }
 
+#[cfg(test)]
 pub fn git_core_eol(repo_root: &Path) -> Option<Eol> {
     #[cfg(all(test, feature = "eol-cache"))]
     RAW_CORE_EOL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -144,29 +143,8 @@ pub fn git_core_eol(repo_root: &Path) -> Option<Eol> {
     }
 }
 
-pub fn git_core_autocrlf(repo_root: &Path) -> Option<Eol> {
-    #[cfg(all(test, feature = "eol-cache"))]
-    RAW_AUTOCRLF.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("config")
-        .arg("--get")
-        .arg("core.autocrlf")
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let val = String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .to_ascii_lowercase();
-    match val.as_str() {
-        "true" => Some(Eol::Crlf),
-        "input" => Some(Eol::Lf),
-        _ => None,
-    }
-}
+// Helper for core.autocrlf was used in production previously; tests rely on
+// core.eol coverage now, so this is intentionally omitted.
 
 pub fn git_check_attr_eol(repo_root: &Path, rel_path: &Path) -> Option<Eol> {
     #[cfg(all(test, feature = "eol-cache"))]
@@ -236,11 +214,8 @@ pub fn git_check_attr_eol(repo_root: &Path, rel_path: &Path) -> Option<Eol> {
 // Caching layer
 #[cfg(feature = "eol-cache")]
 type AttrKey = (PathBuf, String);
-#[cfg(feature = "eol-cache")]
+#[cfg(all(test, feature = "eol-cache"))]
 static CORE_EOL_CACHE: LazyLock<std::sync::Mutex<HashMap<PathBuf, Option<Eol>>>> =
-    LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
-#[cfg(feature = "eol-cache")]
-static AUTOCRLF_CACHE: LazyLock<std::sync::Mutex<HashMap<PathBuf, Option<Eol>>>> =
     LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 #[cfg(feature = "eol-cache")]
 static ATTRS_CACHE: LazyLock<std::sync::Mutex<HashMap<AttrKey, Option<Eol>>>> =
@@ -260,7 +235,7 @@ pub(crate) fn norm_rel_key(rel: &Path) -> String {
     }
 }
 
-#[cfg(feature = "eol-cache")]
+#[cfg(all(test, feature = "eol-cache"))]
 fn git_core_eol_cached(repo_root: &Path) -> Option<Eol> {
     let key = canonical_repo_root(repo_root);
     if let Ok(mut m) = CORE_EOL_CACHE.lock() {
@@ -273,28 +248,9 @@ fn git_core_eol_cached(repo_root: &Path) -> Option<Eol> {
     }
     git_core_eol(repo_root)
 }
-#[cfg(not(feature = "eol-cache"))]
-fn git_core_eol_cached(repo_root: &Path) -> Option<Eol> {
-    git_core_eol(repo_root)
-}
+// Only used by tests; no non-test variant needed.
 
-#[cfg(feature = "eol-cache")]
-fn git_core_autocrlf_cached(repo_root: &Path) -> Option<Eol> {
-    let key = canonical_repo_root(repo_root);
-    if let Ok(mut m) = AUTOCRLF_CACHE.lock() {
-        if let Some(v) = m.get(&key) {
-            return *v;
-        }
-        let v = git_core_autocrlf(&key);
-        m.insert(key, v);
-        return v;
-    }
-    git_core_autocrlf(repo_root)
-}
-#[cfg(not(feature = "eol-cache"))]
-fn git_core_autocrlf_cached(repo_root: &Path) -> Option<Eol> {
-    git_core_autocrlf(repo_root)
-}
+// Note: git_core_autocrlf_* no longer used in production code; omitted outside tests.
 
 #[cfg(feature = "eol-cache")]
 pub(crate) fn git_check_attr_eol_cached(repo_root: &Path, rel_path: &Path) -> Option<Eol> {
@@ -330,25 +286,15 @@ pub fn decide_eol(repo_root: Option<&Path>, rel_path: Option<&Path>, is_new_file
         AssumeEol::Lf => return Eol::Lf,
         AssumeEol::Crlf => return Eol::Crlf,
         AssumeEol::Git => {
-            if let Some(root) = repo_root {
-                if let Some(rel) = rel_path
-                    && let Some(e) = git_check_attr_eol_cached(root, rel)
-                {
-                    return e;
-                }
-                if let Some(e) = git_core_eol_cached(root) {
-                    return e;
-                }
-                if let Some(e) = git_core_autocrlf_cached(root) {
-                    return e;
-                }
+            // Respect only path-specific attributes. Avoid global git core.*
+            // settings to keep behavior deterministic across runners.
+            if let (Some(root), Some(rel)) = (repo_root, rel_path)
+                && let Some(e) = git_check_attr_eol_cached(root, rel)
+            {
+                return e;
             }
-            // If git unavailable, fall through to OS native for new files; Unknown for existing
-            return if is_new_file {
-                os_native_eol()
-            } else {
-                Eol::Unknown
-            };
+            // No attribute match: default to LF for new files, Unknown for existing.
+            return if is_new_file { Eol::Lf } else { Eol::Unknown };
         }
         AssumeEol::Detect | AssumeEol::Unspecified => {}
     }
@@ -358,23 +304,14 @@ pub fn decide_eol(repo_root: Option<&Path>, rel_path: Option<&Path>, is_new_file
         return Eol::Unknown;
     }
 
-    // New file without explicit CLI override: consult git if available
-    if let Some(root) = repo_root {
-        if let Some(rel) = rel_path
-            && let Some(e) = git_check_attr_eol_cached(root, rel)
-        {
-            return e;
-        }
-        if let Some(e) = git_core_eol_cached(root) {
-            return e;
-        }
-        if let Some(e) = git_core_autocrlf_cached(root) {
-            return e;
-        }
+    // New file without explicit CLI override: consult .gitattributes only,
+    // otherwise default to LF. Ignore git core.* to avoid host variability.
+    if let (Some(root), Some(rel)) = (repo_root, rel_path)
+        && let Some(e) = git_check_attr_eol_cached(root, rel)
+    {
+        return e;
     }
-
-    // OS native fallback for new files
-    os_native_eol()
+    Eol::Lf
 }
 
 // Test instrumentation and unit tests for caching
