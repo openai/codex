@@ -225,7 +225,7 @@ impl CodexMessageProcessor {
                 self.handle_list_conversations(request_id, params).await;
             }
             ClientRequest::ModelList { request_id, params } => {
-                self.list_models(request_id, params).await;
+                self.(request_id, params).await;
             }
             ClientRequest::LoginAccount { request_id, params } => {
                 self.login_v2(request_id, params).await;
@@ -1542,8 +1542,8 @@ impl CodexMessageProcessor {
         Ok((items, next_cursor))
     }
 
-    async fn list_models(&self, request_id: RequestId, params: ListModelsParams) {
-        let ListModelsParams { page_size, cursor } = params;
+    async fn list_models(&self, request_id: RequestId, params: ModelListParams) {
+        let ModelListParams { limit, cursor } = params;
         let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
         let models = supported_models(auth_mode);
         let total = models.len();
