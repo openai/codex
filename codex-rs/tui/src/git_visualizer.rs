@@ -13,7 +13,8 @@
 
 use anyhow::Result;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph};`nuse ratatui::widgets::canvas::Canvas;
+use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::canvas::Canvas;
 use std::path::Path;
 use std::time::Instant;
 
@@ -303,7 +304,7 @@ impl GitVisualizer3D {
         let fps = self.fps_counter.get_fps();
 
         let status_text = format!(
-            "Commits: {} | CUDA: {} | FPS: {:.1} | Camera: ({:.1}, {:.1}, {:.1}) | Rotation: {:.2}ﾂｰ",
+            "Commits: {} | CUDA: {} | FPS: {:.1} | Camera: ({:.1}, {:.1}, {:.1}) | Rotation: {:.2}",
             self.commits.len(),
             cuda_status,
             fps,
