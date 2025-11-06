@@ -298,10 +298,34 @@ impl GitVisualizer3D {
         frame.render_widget(canvas, area);
     }
 
+<<<<<<< HEAD
     /// Render status bar (temporarily simplified)
     fn render_status(&self, _frame: &mut Frame, _area: Rect) {
         // Temporarily disabled due to string encoding issue
         // TODO: Fix and re-enable
+=======
+    /// Render status bar
+    fn render_status(&self, frame: &mut Frame, area: Rect) {
+        let cuda_status = if self.cuda_enabled { "ON" } else { "OFF" };
+        let fps = self.fps_counter.get_fps();
+
+        let status_text = format!(
+            "Commits: {} | CUDA: {} | FPS: {:.1} | Camera: ({:.1}, {:.1}, {:.1}) | Rotation: {:.2}ﾂｰ",
+            self.commits.len(),
+            cuda_status,
+            fps,
+            self.camera_pos.0,
+            self.camera_pos.1,
+            self.camera_pos.2,
+            self.rotation.to_degrees()
+        );
+
+        let paragraph = Paragraph::new(status_text)
+            .block(Block::default().borders(Borders::ALL))
+            .style(Style::default().fg(Color::Cyan));
+
+        frame.render_widget(paragraph, area);
+>>>>>>> origin/main
     }
 
     /// Rotate camera
