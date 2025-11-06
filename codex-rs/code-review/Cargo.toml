@@ -20,7 +20,9 @@ futures = { workspace = true }
 ignore = { workspace = true }
 log = { workspace = true }
 notify = { workspace = true }
+regex = "1.11"
 regex-lite = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
