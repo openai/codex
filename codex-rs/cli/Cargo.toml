@@ -7,6 +7,10 @@ version = { workspace = true }
 name = "codex"
 path = "src/main.rs"
 
+[[bin]]
+name = "migrate-cli"
+path = "src/bin/migrate_cli.rs"
+
 [lib]
 name = "codex_cli"
 path = "src/lib.rs"
@@ -16,6 +20,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 clap_complete = { workspace = true }
 codex-app-server = { workspace = true }
@@ -37,6 +42,8 @@ codex-stdio-to-uds = { workspace = true }
 codex-tui = { workspace = true }
 ctor = { workspace = true }
 owo-colors = { workspace = true }
+pathdiff = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
 toml = { workspace = true }

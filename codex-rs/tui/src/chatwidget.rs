@@ -86,6 +86,8 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::markdown::append_markdown;
+use crate::migration::build_continue_migration_prompt;
+use crate::migration::build_migration_prompt;
 #[cfg(target_os = "windows")]
 use crate::onboarding::WSL_INSTRUCTIONS;
 use crate::render::Insets;
@@ -1233,6 +1235,12 @@ impl ChatWidget {
                 }
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
                 self.submit_user_message(INIT_PROMPT.to_string().into());
+            }
+            SlashCommand::Migrate => {
+                self.open_migrate_prompt();
+            }
+            SlashCommand::ContinueMigration => {
+                self.app_event_tx.send(AppEvent::ContinueMigration);
             }
             SlashCommand::Compact => {
                 self.clear_token_usage();
@@ -2417,6 +2425,50 @@ impl ChatWidget {
                         user_facing_hint: trimmed,
                     },
                 }));
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn start_migration(&mut self, summary: String) {
+        let summary = summary.trim();
+        if summary.is_empty() {
+            return;
+        }
+        let prompt = build_migration_prompt(summary);
+        self.add_info_message(
+            format!("Prompting Codex to run `migrate-cli plan \"{summary}\"`."),
+            Some(
+                "The tool scaffolds migrations/migration_<slug> with plan.md, journal.md, tasks.json, and runs/."
+                    .to_string(),
+            ),
+        );
+        self.submit_user_message(prompt.into());
+    }
+
+    pub(crate) fn continue_migration(&mut self) {
+        self.add_info_message(
+            "Prompting Codex to resume the active migration via `migrate-cli execute`.".to_string(),
+            Some(
+                "It will print the next task brief, mark it running, and remind you to update plan.md + journal.md."
+                    .to_string(),
+            ),
+        );
+        self.submit_user_message(build_continue_migration_prompt().into());
+    }
+
+    fn open_migrate_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Describe the migration".to_string(),
+            "Example: Phase 2 – move billing to Postgres".to_string(),
+            Some("We'll ask Codex to run `migrate-cli plan` once you press Enter.".to_string()),
+            Box::new(move |prompt: String| {
+                let trimmed = prompt.trim().to_string();
+                if trimmed.is_empty() {
+                    return;
+                }
+                tx.send(AppEvent::StartMigration { summary: trimmed });
             }),
         );
         self.bottom_pane.show_view(Box::new(view));

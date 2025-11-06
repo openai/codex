@@ -102,6 +102,14 @@ pub(crate) enum AppEvent {
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
 
+    /// Kick off the `/migrate` workflow after the user names the migration.
+    StartMigration {
+        summary: String,
+    },
+
+    /// Prompt Codex to resume a migration via migrate-cli execute.
+    ContinueMigration,
+
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
 

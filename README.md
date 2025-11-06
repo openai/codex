@@ -80,6 +80,7 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
   - [Example prompts](./docs/getting-started.md#example-prompts)
   - [Custom prompts](./docs/prompts.md)
   - [Memory with AGENTS.md](./docs/getting-started.md#memory-with-agentsmd)
+- [**Migrations**](./docs/migrations.md)
 - [**Configuration**](./docs/config.md)
   - [Example config](./docs/example-config.md)
 - [**Sandbox & approvals**](./docs/sandbox.md)

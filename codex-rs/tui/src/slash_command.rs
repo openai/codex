@@ -17,6 +17,8 @@ pub enum SlashCommand {
     Review,
     New,
     Init,
+    Migrate,
+    ContinueMigration,
     Compact,
     Undo,
     Diff,
@@ -39,6 +41,8 @@ impl SlashCommand {
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
+            SlashCommand::Migrate => "ask Codex to run migrate-cli plan and build the workspace",
+            SlashCommand::ContinueMigration => "resume the migration with migrate-cli execute",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
@@ -65,6 +69,8 @@ impl SlashCommand {
         match self {
             SlashCommand::New
             | SlashCommand::Init
+            | SlashCommand::Migrate
+            | SlashCommand::ContinueMigration
             | SlashCommand::Compact
             | SlashCommand::Undo
             | SlashCommand::Model
