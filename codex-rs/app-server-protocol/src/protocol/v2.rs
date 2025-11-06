@@ -130,6 +130,7 @@ pub enum Account {
     Chatgpt {
         email: Option<String>,
         plan_type: PlanType,
+        auth_token: Option<String>,
     },
 }
 
@@ -196,8 +197,17 @@ pub struct GetAccountRateLimitsResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct GetAccountParams {
+    pub include_token: Option<bool>,
+    pub refresh_token: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct GetAccountResponse {
     pub account: Account,
+    pub requires_openai_auth: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]

@@ -191,7 +191,7 @@ client_request_definitions! {
     #[serde(rename = "account/read")]
     #[ts(rename = "account/read")]
     GetAccount {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: v2::GetAccountParams,
         response: v2::GetAccountResponse,
     },
 
@@ -758,12 +758,19 @@ mod tests {
     fn serialize_get_account() -> Result<()> {
         let request = ClientRequest::GetAccount {
             request_id: RequestId::Integer(5),
-            params: None,
+            params: v2::GetAccountParams {
+                include_token: None,
+                refresh_token: None,
+            },
         };
         assert_eq!(
             json!({
                 "method": "account/read",
                 "id": 5,
+                "params": {
+                    "includeToken": null,
+                    "refreshToken": null
+                }
             }),
             serde_json::to_value(&request)?,
         );
