@@ -4,6 +4,7 @@ use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
@@ -29,7 +30,9 @@ use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::FuzzyFileSearchParams;
 use codex_app_server_protocol::FuzzyFileSearchResponse;
+use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
+use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::GetConversationSummaryParams;
@@ -102,6 +105,7 @@ use codex_core::NewConversation;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
 use codex_core::auth::CLIENT_ID;
+use codex_core::auth::CodexAuth;
 use codex_core::auth::login_with_api_key;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -270,12 +274,8 @@ impl CodexMessageProcessor {
             ClientRequest::CancelLoginAccount { request_id, params } => {
                 self.cancel_login_v2(request_id, params).await;
             }
-            ClientRequest::GetAccount {
-                request_id,
-                params: _,
-            } => {
-                self.send_unimplemented_error(request_id, "account/read")
-                    .await;
+            ClientRequest::GetAccount { request_id, params } => {
+                self.get_account(request_id, params).await;
             }
             ClientRequest::ResumeConversation { request_id, params } => {
                 self.handle_resume_conversation(request_id, params).await;
@@ -846,6 +846,82 @@ impl CodexMessageProcessor {
             }
         };
 
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn maybe_read_token(&self, auth: &CodexAuth, include_token: bool) -> Option<String> {
+        if include_token {
+            match auth.get_token().await {
+                Ok(tok) if !tok.is_empty() => Some(tok),
+                Ok(_) => None,
+                Err(err) => {
+                    tracing::warn!("failed to read auth token for account: {err}");
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    }
+
+    async fn get_account(&self, request_id: RequestId, params: GetAccountParams) {
+        let include_token = params.include_token.unwrap_or(false);
+        let do_refresh = params.refresh_token.unwrap_or(false);
+
+        if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
+            tracing::warn!("failed to refresh token while getting account: {err}");
+        }
+
+        // Whether auth is required for the active model provider.
+        let requires_openai_auth = self.config.model_provider.requires_openai_auth;
+
+        if !requires_openai_auth {
+            let response = GetAccountResponse {
+                account: None,
+                requires_openai_auth,
+            };
+            self.outgoing.send_response(request_id, response).await;
+            return;
+        }
+
+        let account = match self.auth_manager.auth() {
+            Some(auth) => Some(match auth.mode {
+                AuthMode::ApiKey => {
+                    let api_key = self.maybe_read_token(&auth, include_token).await;
+                    Account::ApiKey { api_key }
+                }
+                AuthMode::ChatGPT => {
+                    let email = auth.get_account_email();
+                    let plan_type = auth.account_plan_type();
+                    let auth_token = self.maybe_read_token(&auth, include_token).await;
+
+                    match (email, plan_type) {
+                        (Some(email), Some(plan_type)) => Account::Chatgpt {
+                            email,
+                            plan_type,
+                            auth_token,
+                        },
+                        _ => {
+                            let error = JSONRPCErrorError {
+                                code: INVALID_REQUEST_ERROR_CODE,
+                                message:
+                                    "email and plan type are required for chatgpt authentication"
+                                        .to_string(),
+                                data: None,
+                            };
+                            self.outgoing.send_error(request_id, error).await;
+                            return;
+                        }
+                    }
+                }
+            }),
+            None => None,
+        };
+
+        let response = GetAccountResponse {
+            account,
+            requires_openai_auth,
+        };
         self.outgoing.send_response(request_id, response).await;
     }
 

@@ -263,6 +263,7 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v1::LogoutChatGptResponse,
     },
+    /// DEPRECATED in favor of GetAccount
     GetAuthStatus {
         params: v1::GetAuthStatusParams,
         response: v1::GetAuthStatusResponse,
@@ -780,7 +781,7 @@ mod tests {
     #[test]
     fn account_serializes_fields_in_camel_case() -> Result<()> {
         let api_key = v2::Account::ApiKey {
-            api_key: "secret".to_string(),
+            api_key: Some("secret".to_string()),
         };
         assert_eq!(
             json!({
@@ -791,14 +792,16 @@ mod tests {
         );
 
         let chatgpt = v2::Account::Chatgpt {
-            email: Some("user@example.com".to_string()),
+            email: "user@example.com".to_string(),
             plan_type: PlanType::Plus,
+            auth_token: None,
         };
         assert_eq!(
             json!({
                 "type": "chatgpt",
                 "email": "user@example.com",
                 "planType": "plus",
+                "authToken": null,
             }),
             serde_json::to_value(&chatgpt)?,
         );

@@ -123,12 +123,12 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
 pub enum Account {
     #[serde(rename = "apiKey", rename_all = "camelCase")]
     #[ts(rename = "apiKey", rename_all = "camelCase")]
-    ApiKey { api_key: String },
+    ApiKey { api_key: Option<String> },
 
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
     Chatgpt {
-        email: Option<String>,
+        email: String,
         plan_type: PlanType,
         auth_token: Option<String>,
     },
@@ -206,7 +206,7 @@ pub struct GetAccountParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct GetAccountResponse {
-    pub account: Account,
+    pub account: Option<Account>,
     pub requires_openai_auth: bool,
 }
 
