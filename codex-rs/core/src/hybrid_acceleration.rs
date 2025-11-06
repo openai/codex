@@ -57,7 +57,7 @@ pub async fn execute_with_acceleration(
         }
 
         #[cfg(all(target_os = "windows", feature = "windows-ai"))]
-            use crate::windows_ai_integration::WindowsAiOptions;
+        AccelerationMode::WindowsAI => {
             use crate::windows_ai_integration::execute_with_windows_ai;
 
             let win_opts = WindowsAiOptions {
