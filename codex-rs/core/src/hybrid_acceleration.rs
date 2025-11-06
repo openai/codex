@@ -1,4 +1,4 @@
-//! Hybrid Acceleration Layer
+﻿//! Hybrid Acceleration Layer
 //!
 //! Coordinates Windows AI API and CUDA for maximum performance
 
@@ -56,7 +56,7 @@ pub async fn execute_with_acceleration(
             Ok(format!("CPU execution: {prompt}"))
         }
 
-        #[cfg(all(target_os = "windows", feature = "windows-ai"))]`r`n        AccelerationMode::WindowsAI => {
+        #[cfg(all(target_os = "windows", feature = "windows-ai"))]
             use crate::windows_ai_integration::WindowsAiOptions;
             use crate::windows_ai_integration::execute_with_windows_ai;
 
