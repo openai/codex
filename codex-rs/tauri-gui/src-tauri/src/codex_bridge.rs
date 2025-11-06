@@ -144,12 +144,12 @@ impl CodexBridge {
         info!("Listing plans");
 
         let output = Command::new(&self.codex_bin_path)
-            .arg("blueprint")
+            .arg("plan")
             .arg("list")
             .output()?;
 
         if !output.status.success() {
-            return Err(anyhow::anyhow!("Failed to list blueprints"));
+            return Err(anyhow::anyhow!("Failed to list plans"));
         }
 
         // Parse output (simplified)

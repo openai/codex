@@ -1,4 +1,4 @@
-﻿//! 3D/4D Git Visualization for TUI - Kamui4D-exceeding implementation
+//! 3D/4D Git Visualization for TUI - Kamui4D-exceeding implementation
 //!
 //! Features:
 //! - Terminal-based 3D ASCII visualization
@@ -18,7 +18,7 @@ use ratatui::widgets::canvas::Canvas;
 use std::path::Path;
 use std::time::Instant;
 
-/// 3D commit node for visualization
+/// 4D commit node for visualization (xyz + time)
 #[derive(Debug, Clone)]
 pub struct CommitNode3D {
     /// 3D position (x, y, z)
@@ -31,9 +31,15 @@ pub struct CommitNode3D {
     pub changes: usize,
     /// Color based on change type
     pub color: Color,
+    /// Timestamp (4th dimension - time axis)
+    pub timestamp: i64,
+    /// Commit age in days (for time filtering)
+    pub age_days: f32,
+    /// Heat level (commit frequency) - Kamui4D style
+    pub heat: f32,
 }
 
-/// 3D Git Visualizer
+/// 4D Git Visualizer (xyz + time axis)
 pub struct GitVisualizer3D {
     /// All commits to visualize
     commits: Vec<CommitNode3D>,
@@ -47,6 +53,29 @@ pub struct GitVisualizer3D {
     fps_counter: FpsCounter,
     /// CUDA status
     cuda_enabled: bool,
+    /// Time axis control (4th dimension)
+    time_control: TimelineControl,
+    /// Current time filter (Unix timestamp)
+    current_time: i64,
+    /// Time playback mode
+    playback_active: bool,
+    /// Playback speed multiplier
+    playback_speed: f32,
+}
+
+/// Timeline control for 4D visualization
+#[derive(Debug, Clone)]
+pub struct TimelineControl {
+    /// Start time (earliest commit)
+    pub start_time: i64,
+    /// End time (latest commit)
+    pub end_time: i64,
+    /// Current position in timeline
+    pub current_time: i64,
+    /// Playback speed (1.0 = real-time, 10.0 = 10x)
+    pub speed: f32,
+    /// Time window size (seconds to show)
+    pub window_size: i64,
 }
 
 /// FPS Counter
