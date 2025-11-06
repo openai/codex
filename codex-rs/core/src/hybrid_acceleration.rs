@@ -56,8 +56,7 @@ pub async fn execute_with_acceleration(
             Ok(format!("CPU execution: {prompt}"))
         }
 
-        #[cfg(target_os = "windows")]
-        AccelerationMode::WindowsAI => {
+        #[cfg(all(target_os = "windows", feature = "windows-ai"))]`r`n        AccelerationMode::WindowsAI => {
             use crate::windows_ai_integration::WindowsAiOptions;
             use crate::windows_ai_integration::execute_with_windows_ai;
 
@@ -198,3 +197,4 @@ impl std::fmt::Display for AccelerationCapabilities {
         }
     }
 }
+
