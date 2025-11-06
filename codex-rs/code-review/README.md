@@ -253,15 +253,24 @@ codex review configure --init
 | **Models** | Fixed | ✅ Your choice |
 | **Context** | API limits | ✅ Hardware limits |
 
+## Recent Enhancements (Phase 3 & 4)
+
+- ✅ **Linter Integration** - Clippy, ESLint, Pylint support
+- ✅ **AST Analysis** - Deep Rust code analysis with syn
+- ✅ **AI Response Caching** - Intelligent caching to reduce API calls
+- ✅ **Test Generation** - AI-powered unit test creation
+- ✅ **Git Integration** - Auto-commit improvements with detailed messages
+- ✅ **Enhanced Analyzer** - Multi-source analysis with deduplication
+
 ## Future Enhancements
 
-- [ ] Integration with linters (clippy, eslint, pylint)
-- [ ] Automatic test generation
-- [ ] Git hooks integration
+- [ ] More linters (gofmt, black, prettier, Shellcheck)
+- [ ] Git hooks integration (pre-commit)
 - [ ] Web UI for session viewing
-- [ ] Multi-language support expansion
+- [ ] IDE plugins (VS Code, IntelliJ)
 - [ ] RAG (Retrieval Augmented Generation) for large codebases
 - [ ] Model ensembles for better accuracy
+- [ ] Distributed analysis across multiple machines
 
 ## Contributing
 

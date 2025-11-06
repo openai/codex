@@ -1,6 +1,8 @@
 //! Linter integrations for code review
 
 pub mod clippy;
+pub mod eslint;
+pub mod pylint;
 pub mod generic;
 
 use anyhow::Result;
@@ -20,9 +22,6 @@ pub trait Linter: Send + Sync {
 
     /// Run linter on a file
     async fn lint_file(&self, file_path: &Path) -> Result<Vec<Issue>>;
-
-    /// Run linter on content
-    async fn lint_content(&self, content: &str, language: &str) -> Result<Vec<Issue>>;
 
     /// Get supported file extensions
     fn supported_extensions(&self) -> Vec<&str>;
@@ -88,6 +87,8 @@ impl Default for LinterRegistry {
 
         // Register built-in linters
         registry.register(Box::new(clippy::ClippyLinter::new()));
+        registry.register(Box::new(eslint::ESLintLinter::new()));
+        registry.register(Box::new(pylint::PylintLinter::new()));
 
         registry
     }

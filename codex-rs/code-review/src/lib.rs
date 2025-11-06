@@ -31,6 +31,7 @@
 //! # }
 //! ```
 
+mod ai_cache;
 mod ai_client;
 mod analyzer;
 mod ast_analyzer;

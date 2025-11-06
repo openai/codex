@@ -1,0 +1,114 @@
+# Codex Code Review Configuration Example
+# Copy this file to .codex/review-config.toml in your project
+
+[review]
+# Enable continuous code review
+enabled = true
+
+# Patterns to watch (glob patterns)
+watch_patterns = [
+    "src/**/*.rs",
+    "src/**/*.py",
+    "src/**/*.js",
+    "src/**/*.ts",
+]
+
+# Patterns to ignore
+ignore_patterns = [
+    "target/**",
+    "node_modules/**",
+    "**/*.test.js",
+    "**/*.test.ts",
+    "**/tests/**",
+]
+
+[triggers]
+# When to trigger reviews
+on_save = true           # Review on file save
+on_commit = false        # Review before commit
+periodic_minutes = 30    # Periodic review interval (0 = disabled)
+on_pull_request = false  # Review on PR creation
+
+[policy]
+# Auto-fix settings
+auto_fix_style = true           # Automatically fix style issues
+auto_fix_imports = true         # Automatically organize imports
+auto_apply_safe_fixes = false   # Apply fixes with high confidence
+min_confidence_threshold = 0.8  # Minimum confidence for auto-apply (0.0-1.0)
+
+# Severity thresholds
+fail_on_error = false     # Fail build on errors
+fail_on_warning = false   # Fail build on warnings
+max_issues_per_file = 50  # Maximum issues to report per file
+
+[local_ai]
+# Local AI model configuration (Ollama)
+
+# Model for code generation and improvements
+coding_model = "deepseek-coder:33b"
+
+# Model for code review and analysis
+review_model = "codellama:13b-instruct"
+
+# Model for quick checks
+quick_check_model = "qwen2.5-coder:7b"
+
+# Ollama server URL
+ollama_base_url = "http://localhost:11434"
+
+# Performance settings
+concurrent_requests = 3   # Number of concurrent AI requests
+timeout_secs = 120       # Request timeout in seconds
+
+# Caching settings
+enable_cache = true
+cache_ttl_hours = 1
+max_cache_entries = 1000
+
+[analysis]
+# Analysis settings
+
+# Complexity limits
+max_complexity = 10           # Maximum cyclomatic complexity
+max_function_lines = 100      # Maximum function length
+
+# Coverage targets
+min_test_coverage = 0.8       # Minimum test coverage (0.0-1.0)
+require_doc_comments = true   # Require documentation for public APIs
+
+# Analysis depth
+deep_analysis = true          # Enable deep AST analysis
+use_ai = true                # Enable AI-powered analysis
+use_linters = true           # Enable linter integration
+parallel_analysis = true      # Analyze files in parallel
+
+[linters]
+# Linter-specific settings
+
+[linters.clippy]
+enabled = true
+# Additional clippy flags
+flags = ["-W", "clippy::all", "-W", "clippy::pedantic"]
+
+[linters.eslint]
+enabled = true
+# Path to eslint config (optional)
+# config_file = ".eslintrc.json"
+
+[linters.pylint]
+enabled = true
+# Path to pylint config (optional)
+# config_file = ".pylintrc"
+
+[git]
+# Git integration settings
+auto_commit = false            # Automatically commit fixes
+commit_prefix = "refactor: "  # Prefix for auto-commit messages
+create_backup_branch = true   # Create backup before major changes
+
+[notifications]
+# Notification settings (future feature)
+enabled = false
+webhook_url = ""
+notify_on_issues = false
+notify_on_improvements = true

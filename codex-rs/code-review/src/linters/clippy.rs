@@ -159,12 +159,6 @@ impl Linter for ClippyLinter {
         Ok(file_issues)
     }
 
-    async fn lint_content(&self, _content: &str, _language: &str) -> Result<Vec<Issue>> {
-        // Clippy requires actual files in a Cargo project
-        warn!("Clippy doesn't support linting content directly");
-        Ok(vec![])
-    }
-
     fn supported_extensions(&self) -> Vec<&str> {
         vec!["rs"]
     }

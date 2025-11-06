@@ -108,11 +108,6 @@ impl Linter for GenericLinter {
         }
     }
 
-    async fn lint_content(&self, _content: &str, _language: &str) -> Result<Vec<Issue>> {
-        // Most linters require files
-        Ok(vec![])
-    }
-
     fn supported_extensions(&self) -> Vec<&str> {
         self.extensions.iter().map(|s| s.as_str()).collect()
     }

@@ -3,9 +3,11 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+use crate::ai_cache::AICache;
 use crate::analyzer::{Issue, IssueSeverity, Suggestion, SuggestionType, Impact};
 use crate::config::LocalAIConfig;
 
@@ -13,6 +15,7 @@ use crate::config::LocalAIConfig;
 pub struct AIClient {
     config: LocalAIConfig,
     client: reqwest::Client,
+    cache: Option<Arc<AICache>>,
 }
 
 impl AIClient {
@@ -22,7 +25,17 @@ impl AIClient {
             .timeout(Duration::from_secs(config.timeout_secs))
             .build()?;
 
-        Ok(Self { config, client })
+        Ok(Self {
+            config,
+            client,
+            cache: None,
+        })
+    }
+
+    /// Enable caching with specified cache
+    pub fn with_cache(mut self, cache: Arc<AICache>) -> Self {
+        self.cache = Some(cache);
+        self
     }
 
     /// Get the coding model name
@@ -106,6 +119,15 @@ impl AIClient {
 
     /// Call Ollama API
     pub async fn call_ollama(&self, model: &str, prompt: &str) -> Result<String> {
+        // Check cache first
+        if let Some(cache) = &self.cache {
+            let cache_key = AICache::generate_key(prompt, model);
+            if let Some(cached_response) = cache.get(&cache_key).await {
+                debug!("Using cached response for model: {}", model);
+                return Ok(cached_response);
+            }
+        }
+
         let request = OllamaRequest {
             model: model.to_string(),
             prompt: prompt.to_string(),
@@ -138,6 +160,12 @@ impl AIClient {
             .json()
             .await
             .context("Failed to parse Ollama response")?;
+
+        // Cache the response
+        if let Some(cache) = &self.cache {
+            let cache_key = AICache::generate_key(prompt, model);
+            cache.put(cache_key, ollama_response.response.clone(), 3600).await; // 1 hour TTL
+        }
 
         Ok(ollama_response.response)
     }
