@@ -153,11 +153,18 @@ client_request_definitions! {
         response: v2::ModelListResponse,
     },
 
-    #[serde(rename = "account/login")]
-    #[ts(rename = "account/login")]
+    #[serde(rename = "account/login/start")]
+    #[ts(rename = "account/login/start")]
     LoginAccount {
         params: v2::LoginAccountParams,
         response: v2::LoginAccountResponse,
+    },
+
+    #[serde(rename = "account/login/cancel")]
+    #[ts(rename = "account/login/cancel")]
+    CancelLoginAccount {
+        params: v2::CancelLoginAccountParams,
+        response: v2::CancelLoginAccountResponse,
     },
 
     #[serde(rename = "account/logout")]
@@ -247,6 +254,7 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v1::LoginChatGptResponse,
     },
+    // DEPRECATED in favor of CancelLoginAccount
     CancelLoginChatGpt {
         params: v1::CancelLoginChatGptParams,
         response: v1::CancelLoginChatGptResponse,
@@ -526,8 +534,15 @@ server_notification_definitions! {
     AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
 
+    #[serde(rename = "account/login/completed")]
+    #[ts(rename = "account/login/completed")]
+    #[strum(serialize = "account/login/completed")]
+    AccountLoginCompleted(v2::AccountLoginCompletedNotification),
+
     /// DEPRECATED NOTIFICATIONS below
     AuthStatusChange(v1::AuthStatusChangeNotification),
+
+    /// Deprecated: use `account/login/completed` instead.
     LoginChatGptComplete(v1::LoginChatGptCompleteNotification),
     SessionConfigured(v1::SessionConfiguredNotification),
 }
@@ -692,7 +707,7 @@ mod tests {
         };
         assert_eq!(
             json!({
-                "method": "account/login",
+                "method": "account/login/start",
                 "id": 2,
                 "params": {
                     "type": "apiKey",
@@ -708,11 +723,11 @@ mod tests {
     fn serialize_account_login_chatgpt() -> Result<()> {
         let request = ClientRequest::LoginAccount {
             request_id: RequestId::Integer(3),
-            params: v2::LoginAccountParams::ChatGpt,
+            params: v2::LoginAccountParams::Chatgpt,
         };
         assert_eq!(
             json!({
-                "method": "account/login",
+                "method": "account/login/start",
                 "id": 3,
                 "params": {
                     "type": "chatgpt"
@@ -768,7 +783,7 @@ mod tests {
             serde_json::to_value(&api_key)?,
         );
 
-        let chatgpt = v2::Account::ChatGpt {
+        let chatgpt = v2::Account::Chatgpt {
             email: Some("user@example.com".to_string()),
             plan_type: PlanType::Plus,
         };

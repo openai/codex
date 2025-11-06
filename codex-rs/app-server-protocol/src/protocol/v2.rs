@@ -15,7 +15,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use ts_rs::TS;
-use uuid::Uuid;
 
 // Macro to declare a camelCased API v2 enum mirroring a core enum which
 // tends to use kebab-case.
@@ -128,7 +127,7 @@ pub enum Account {
 
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
-    ChatGpt {
+    Chatgpt {
         email: Option<String>,
         plan_type: PlanType,
     },
@@ -139,8 +138,8 @@ pub enum Account {
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum LoginAccountParams {
-    #[serde(rename = "apiKey")]
-    #[ts(rename = "apiKey")]
+    #[serde(rename = "apiKey", rename_all = "camelCase")]
+    #[ts(rename = "apiKey", rename_all = "camelCase")]
     ApiKey {
         #[serde(rename = "apiKey")]
         #[ts(rename = "apiKey")]
@@ -148,21 +147,39 @@ pub enum LoginAccountParams {
     },
     #[serde(rename = "chatgpt")]
     #[ts(rename = "chatgpt")]
-    ChatGpt,
+    Chatgpt,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum LoginAccountResponse {
+    #[serde(rename = "apiKey", rename_all = "camelCase")]
+    #[ts(rename = "apiKey", rename_all = "camelCase")]
+    ApiKey {},
+    #[serde(rename = "chatgpt", rename_all = "camelCase")]
+    #[ts(rename = "chatgpt", rename_all = "camelCase")]
+    Chatgpt {
+        // Use plain String for identifiers to avoid TS/JSON Schema quirks around uuid-specific types.
+        // Convert to/from UUIDs at the application layer as needed.
+        login_id: String,
+        /// URL the client should open in a browser to initiate the OAuth flow.
+        auth_url: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct LoginAccountResponse {
-    /// Only set if the login method is ChatGPT.
-    #[schemars(with = "String")]
-    pub login_id: Option<Uuid>,
-
-    /// URL the client should open in a browser to initiate the OAuth flow.
-    /// Only set if the login method is ChatGPT.
-    pub auth_url: Option<String>,
+pub struct CancelLoginAccountParams {
+    pub login_id: String,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CancelLoginAccountResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -337,7 +354,7 @@ pub struct Thread {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AccountUpdatedNotification {
-    pub auth_method: Option<AuthMode>,
+    pub auth_mode: Option<AuthMode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -668,4 +685,15 @@ impl From<CoreRateLimitWindow> for RateLimitWindow {
             resets_at: value.resets_at,
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountLoginCompletedNotification {
+    // Use plain String for identifiers to avoid TS/JSON Schema quirks around uuid-specific types.
+    // Convert to/from UUIDs at the application layer as needed.
+    pub login_id: Option<String>,
+    pub success: bool,
+    pub error: Option<String>,
 }

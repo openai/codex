@@ -132,6 +132,8 @@ struct RunningCommand {
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
+const NUDGE_MODEL_SLUG: &str = "gpt-5-codex";
+const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
 
 #[derive(Default)]
 struct RateLimitWarningState {
@@ -230,6 +232,14 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) feedback: codex_feedback::CodexFeedback,
 }
 
+#[derive(Default)]
+enum RateLimitSwitchPromptState {
+    #[default]
+    Idle,
+    Pending,
+    Shown,
+}
+
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -242,6 +252,7 @@ pub(crate) struct ChatWidget {
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
     rate_limit_warnings: RateLimitWarningState,
+    rate_limit_switch_prompt: RateLimitSwitchPromptState,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
@@ -463,6 +474,8 @@ impl ChatWidget {
         self.notify(Notification::AgentTurnComplete {
             response: last_agent_message.unwrap_or_default(),
         });
+
+        self.maybe_show_pending_rate_limit_prompt();
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -497,6 +510,27 @@ impl ChatWidget {
                     .and_then(|window| window.window_minutes),
             );
 
+            let high_usage = snapshot
+                .secondary
+                .as_ref()
+                .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
+                .unwrap_or(false)
+                || snapshot
+                    .primary
+                    .as_ref()
+                    .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
+                    .unwrap_or(false);
+
+            if high_usage
+                && self.config.model != NUDGE_MODEL_SLUG
+                && !matches!(
+                    self.rate_limit_switch_prompt,
+                    RateLimitSwitchPromptState::Shown
+                )
+            {
+                self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
+            }
+
             let display = crate::status::rate_limit_snapshot_display(&snapshot, Local::now());
             self.rate_limit_snapshot = Some(display);
 
@@ -518,6 +552,7 @@ impl ChatWidget {
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
         self.stream_controller = None;
+        self.maybe_show_pending_rate_limit_prompt();
     }
 
     fn on_error(&mut self, message: String) {
@@ -1001,6 +1036,7 @@ impl ChatWidget {
             token_info: None,
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
+            rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -1067,6 +1103,7 @@ impl ChatWidget {
             token_info: None,
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
+            rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -1666,6 +1703,85 @@ impl ChatWidget {
         ));
     }
 
+    fn lower_cost_preset(&self) -> Option<ModelPreset> {
+        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
+        builtin_model_presets(auth_mode)
+            .into_iter()
+            .find(|preset| preset.model == NUDGE_MODEL_SLUG)
+    }
+
+    fn maybe_show_pending_rate_limit_prompt(&mut self) {
+        if !matches!(
+            self.rate_limit_switch_prompt,
+            RateLimitSwitchPromptState::Pending
+        ) {
+            return;
+        }
+        if let Some(preset) = self.lower_cost_preset() {
+            self.open_rate_limit_switch_prompt(preset);
+            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Shown;
+        } else {
+            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
+        }
+    }
+
+    fn open_rate_limit_switch_prompt(&mut self, preset: ModelPreset) {
+        let switch_model = preset.model.to_string();
+        let display_name = preset.display_name.to_string();
+        let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
+
+        let switch_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                model: Some(switch_model.clone()),
+                effort: Some(Some(default_effort)),
+                summary: None,
+            }));
+            tx.send(AppEvent::UpdateModel(switch_model.clone()));
+            tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
+        })];
+
+        let keep_actions: Vec<SelectionAction> = Vec::new();
+        let description = if preset.description.is_empty() {
+            Some("Uses fewer credits for upcoming turns.".to_string())
+        } else {
+            Some(preset.description.to_string())
+        };
+
+        let items = vec![
+            SelectionItem {
+                name: format!("Switch to {display_name}"),
+                description,
+                selected_description: None,
+                is_current: false,
+                actions: switch_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Keep current model".to_string(),
+                description: None,
+                selected_description: None,
+                is_current: false,
+                actions: keep_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Approaching rate limits".to_string()),
+            subtitle: Some(format!(
+                "You've used over 90% of your limit. Switch to {display_name} for lower credit usage?"
+            )),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
     /// Open a popup to choose the model (stage 1). After selecting a model,
     /// a second popup is shown to choose the reasoning effort.
     pub(crate) fn open_model_popup(&mut self) {
@@ -1682,6 +1798,7 @@ impl ChatWidget {
             };
             let is_current = preset.model == current_model;
             let preset_for_action = preset;
+            let single_supported_effort = preset_for_action.supported_reasoning_efforts.len() == 1;
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 tx.send(AppEvent::OpenReasoningPopup {
                     model: preset_for_action,
@@ -1692,7 +1809,7 @@ impl ChatWidget {
                 description,
                 is_current,
                 actions,
-                dismiss_on_select: false,
+                dismiss_on_select: single_supported_effort,
                 ..Default::default()
             });
         }
@@ -1729,6 +1846,15 @@ impl ChatWidget {
                 stored: Some(default_effort),
                 display: default_effort,
             });
+        }
+
+        if choices.len() == 1 {
+            if let Some(effort) = choices.first().and_then(|c| c.stored) {
+                self.apply_model_and_effort(preset.model.to_string(), Some(effort));
+            } else {
+                self.apply_model_and_effort(preset.model.to_string(), None);
+            }
+            return;
         }
 
         let default_choice: Option<ReasoningEffortConfig> = choices
@@ -1769,7 +1895,7 @@ impl ChatWidget {
 
             let warning = "⚠ High reasoning effort can quickly consume Plus plan rate limits.";
             let show_warning =
-                preset.model == "gpt-5-codex" && effort == ReasoningEffortConfig::High;
+                preset.model.starts_with("gpt-5-codex") && effort == ReasoningEffortConfig::High;
             let selected_description = show_warning.then(|| {
                 description
                     .as_ref()
@@ -1824,6 +1950,32 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
+    }
+
+    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                model: Some(model.clone()),
+                effort: Some(effort),
+                summary: None,
+            }));
+        self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
+        self.app_event_tx
+            .send(AppEvent::UpdateReasoningEffort(effort));
+        self.app_event_tx.send(AppEvent::PersistModelSelection {
+            model: model.clone(),
+            effort,
+        });
+        tracing::info!(
+            "Selected model: {}, Selected effort: {}",
+            model,
+            effort
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "default".to_string())
+        );
     }
 
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
