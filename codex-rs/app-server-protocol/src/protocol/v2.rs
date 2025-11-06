@@ -168,13 +168,10 @@ pub enum LoginAccountResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type")]
-#[ts(tag = "type")]
+#[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub enum CancelLoginAccountParams {
-    #[serde(rename = "chatgpt", rename_all = "camelCase")]
-    #[ts(rename = "chatgpt", rename_all = "camelCase")]
-    Chatgpt { login_id: String },
+pub struct CancelLoginAccountParams {
+    pub login_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

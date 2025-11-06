@@ -683,27 +683,26 @@ impl CodexMessageProcessor {
     }
 
     async fn cancel_login_v2(&mut self, request_id: RequestId, params: CancelLoginAccountParams) {
-        match params {
-            CancelLoginAccountParams::Chatgpt { login_id } => match Uuid::parse_str(&login_id) {
-                Ok(uuid) => match self.cancel_login_chatgpt_common(uuid).await {
-                    Ok(()) => {
-                        self.outgoing
-                            .send_response(request_id, CancelLoginAccountResponse {})
-                            .await;
-                    }
-                    Err(error) => {
-                        self.outgoing.send_error(request_id, error).await;
-                    }
-                },
-                Err(_) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid login id: {login_id}"),
-                        data: None,
-                    };
+        let login_id = params.login_id;
+        match Uuid::parse_str(&login_id) {
+            Ok(uuid) => match self.cancel_login_chatgpt_common(uuid).await {
+                Ok(()) => {
+                    self.outgoing
+                        .send_response(request_id, CancelLoginAccountResponse {})
+                        .await;
+                }
+                Err(error) => {
                     self.outgoing.send_error(request_id, error).await;
                 }
             },
+            Err(_) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("invalid login id: {login_id}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
         }
     }
 

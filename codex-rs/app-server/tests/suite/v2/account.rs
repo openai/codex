@@ -241,7 +241,7 @@ async fn login_account_chatgpt_start() -> Result<()> {
     );
 
     let cancel_id = mcp
-        .send_cancel_login_account_request(CancelLoginAccountParams::Chatgpt {
+        .send_cancel_login_account_request(CancelLoginAccountParams {
             login_id: login_id.clone(),
         })
         .await?;
