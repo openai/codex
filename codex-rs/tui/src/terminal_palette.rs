@@ -1,6 +1,7 @@
 use crate::color::perceptual_distance;
 use ratatui::style::Color;
 use std::sync::LazyLock;
+#[cfg(windows)]
 use std::sync::OnceLock;
 use std::sync::Mutex;
 
