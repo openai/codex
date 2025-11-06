@@ -2,6 +2,7 @@ use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecOutputStream;
 use codex_core::protocol::Op;
 use codex_core::protocol::TurnAbortReason;
 use core_test_support::load_default_config_for_test;
@@ -175,10 +176,11 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
         .await?;
 
     let begin_event = wait_for_event_match(&test.codex, |ev| match ev {
-        EventMsg::UserCommandBegin(event) => Some(event.clone()),
+        EventMsg::ExecCommandBegin(event) => Some(event.clone()),
         _ => None,
     })
     .await;
+    assert!(begin_event.is_user_shell_command);
     if begin_event.command.last() != Some(&command) {
         let expected_tokens = shlex::split(&command).unwrap_or_else(|| vec![command.clone()]);
         assert_eq!(
@@ -189,20 +191,22 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     }
 
     let delta_event = wait_for_event_match(&test.codex, |ev| match ev {
-        EventMsg::UserCommandOutputDelta(event) => Some(event.clone()),
+        EventMsg::ExecCommandOutputDelta(event) => Some(event.clone()),
         _ => None,
     })
     .await;
+    assert!(delta_event.is_user_shell_command);
     assert_eq!(delta_event.stream, ExecOutputStream::Stdout);
     let chunk_text =
         String::from_utf8(delta_event.chunk.clone()).expect("user command chunk is valid utf-8");
     assert_eq!(chunk_text.trim(), "not-set");
 
     let end_event = wait_for_event_match(&test.codex, |ev| match ev {
-        EventMsg::UserCommandEnd(event) => Some(event.clone()),
+        EventMsg::ExecCommandEnd(event) => Some(event.clone()),
         _ => None,
     })
     .await;
+    assert!(end_event.is_user_shell_command);
     assert_eq!(end_event.exit_code, 0);
     assert_eq!(end_event.stdout.trim(), "not-set");
 
