@@ -225,7 +225,7 @@ impl CodexMessageProcessor {
                 self.handle_list_conversations(request_id, params).await;
             }
             ClientRequest::ModelList { request_id, params } => {
-                self.(request_id, params).await;
+                self.list_models(request_id, params).await;
             }
             ClientRequest::LoginAccount { request_id, params } => {
                 self.login_v2(request_id, params).await;
