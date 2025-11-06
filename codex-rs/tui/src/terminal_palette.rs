@@ -1,9 +1,9 @@
 use crate::color::perceptual_distance;
 use ratatui::style::Color;
 use std::sync::LazyLock;
+use std::sync::Mutex;
 #[cfg(windows)]
 use std::sync::OnceLock;
-use std::sync::Mutex;
 
 /// Returns the closest color to the target color that the terminal can display.
 pub fn best_color(target: (u8, u8, u8)) -> Color {
@@ -75,8 +75,8 @@ fn enable_vt_stdout() -> std::io::Result<()> {
     use std::io;
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::System::Console::{
-        GetConsoleMode, SetConsoleMode, GetStdHandle, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
-        STD_OUTPUT_HANDLE,
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode, GetStdHandle, STD_OUTPUT_HANDLE,
+        SetConsoleMode,
     };
 
     unsafe {
