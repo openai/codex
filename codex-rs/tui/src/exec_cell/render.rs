@@ -140,8 +140,7 @@ pub(crate) fn output_lines(
 
 pub(crate) fn spinner(start_time: Option<Instant>) -> Span<'static> {
     let elapsed = start_time.map(|st| st.elapsed()).unwrap_or_default();
-    if crate::terminal_palette::stdout_supports_truecolor()
-    {
+    if crate::terminal_palette::stdout_supports_truecolor() {
         shimmer_spans("•")[0].clone()
     } else {
         let blink_on = (elapsed.as_millis() / 600).is_multiple_of(2);
