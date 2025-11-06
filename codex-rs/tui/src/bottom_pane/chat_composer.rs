@@ -78,6 +78,30 @@ struct AttachedImage {
     path: PathBuf,
 }
 
+/// Returns true if `key_event` should be treated as a plain Enter (submit),
+/// accounting for terminals that do not support keyboard enhancement flags
+/// (notably some Windows consoles) and may not reliably report Shift for Enter.
+fn is_plain_enter(enhanced_keys_supported: bool, key_event: &KeyEvent) -> bool {
+    if key_event.code != KeyCode::Enter {
+        return false;
+    }
+    // Only act on press/repeat, ignore releases.
+    if key_event.kind != KeyEventKind::Press && key_event.kind != KeyEventKind::Repeat {
+        return false;
+    }
+    if enhanced_keys_supported {
+        // When enhancements are supported, we can reliably distinguish Shift+Enter
+        // for inserting a newline. Only a bare Enter submits.
+        key_event.modifiers == KeyModifiers::NONE
+    } else {
+        // Without enhancements, some terminals may spuriously set SHIFT on Enter
+        // or fail to disambiguate modifiers. Treat Enter as submit as long as
+        // Ctrl/Alt are NOT held (those are reserved for other chords).
+        !key_event.modifiers.contains(KeyModifiers::CONTROL)
+            && !key_event.modifiers.contains(KeyModifiers::ALT)
+    }
+}
+
 enum PromptSelectionMode {
     Completion,
     Submit,
@@ -97,6 +121,8 @@ pub(crate) struct ChatComposer {
     ctrl_c_quit_hint: bool,
     esc_backtrack_hint: bool,
     use_shift_enter_hint: bool,
+    // Whether the terminal reports reliable modifier keys for Enter (Shift+Enter newline).
+    enhanced_keys_supported: bool,
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
@@ -142,6 +168,7 @@ impl ChatComposer {
             ctrl_c_quit_hint: false,
             esc_backtrack_hint: false,
             use_shift_enter_hint,
+            enhanced_keys_supported,
             dismissed_file_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
@@ -472,11 +499,7 @@ impl ChatComposer {
                 }
                 (InputResult::None, true)
             }
-            KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
+            input @ KeyEvent { code: KeyCode::Enter, .. } if is_plain_enter(self.enhanced_keys_supported, &input) => {
                 // If the current line starts with a custom prompt name and includes
                 // positional args for a numeric-style template, expand and submit
                 // immediately regardless of the popup selection.
@@ -605,14 +628,8 @@ impl ChatComposer {
                 self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
             }
-            KeyEvent {
-                code: KeyCode::Tab, ..
-            }
-            | KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
+            KeyEvent { code: KeyCode::Tab, .. }
+            | input @ KeyEvent { code: KeyCode::Enter, .. } if is_plain_enter(self.enhanced_keys_supported, &input) => {
                 let Some(sel) = popup.selected_match() else {
                     self.active_popup = ActivePopup::None;
                     return (InputResult::None, true);
@@ -887,11 +904,7 @@ impl ChatComposer {
                 }
                 self.handle_input_basic(key_event)
             }
-            KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
+            input @ KeyEvent { code: KeyCode::Enter, .. } if is_plain_enter(self.enhanced_keys_supported, &input) => {
                 // If the first line is a bare built-in slash command (no args),
                 // dispatch it even when the slash popup isn't visible. This preserves
                 // the workflow: type a prefix ("/di"), press Tab to complete to
