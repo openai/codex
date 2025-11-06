@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use anyhow::Result;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -10,7 +8,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event_with_timeout;
+use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -53,8 +51,7 @@ async fn quota_exceeded_emits_single_error_event() -> Result<()> {
     let mut error_events = 0;
 
     loop {
-        let event =
-            wait_for_event_with_timeout(&test.codex, |_| true, Duration::from_secs(5)).await;
+        let event = wait_for_event(&test.codex, |_| true).await;
 
         match event {
             EventMsg::Error(err) => {
