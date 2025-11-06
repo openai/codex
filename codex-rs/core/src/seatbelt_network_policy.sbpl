@@ -18,7 +18,6 @@
     ; Read network configuration.
     (global-name "com.apple.SystemConfiguration.DNSConfiguration")
     (global-name "com.apple.SystemConfiguration.configd")
-    (global-name "com.apple.SystemConfiguration.SystemConfiguration")
 )
 
 (allow sysctl-read
