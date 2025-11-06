@@ -6,6 +6,7 @@
 (allow system-socket)
 
 (allow mach-lookup
+    ; Used to look up the _CS_DARWIN_USER_CACHE_DIR in the sandbox.
     (global-name "com.apple.bsd.dirhelper")
     (global-name "com.apple.system.opendirectoryd.membership")
 
