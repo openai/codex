@@ -6,9 +6,9 @@ use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::ListModelsParams;
-use codex_app_server_protocol::ListModelsResponse;
 use codex_app_server_protocol::Model;
+use codex_app_server_protocol::ModelListParams;
+use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_app_server_protocol::RequestId;
 use codex_protocol::config_types::ReasoningEffort;
@@ -27,8 +27,8 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
-        .send_list_models_request(ListModelsParams {
-            page_size: Some(100),
+        .send_list_models_request(ModelListParams {
+            limit: Some(100),
             cursor: None,
         })
         .await?;
@@ -39,7 +39,10 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
     )
     .await??;
 
-    let ListModelsResponse { items, next_cursor } = to_response::<ListModelsResponse>(response)?;
+    let ModelListResponse {
+        data: items,
+        next_cursor,
+    } = to_response::<ModelListResponse>(response)?;
 
     let expected_models = vec![
         Model {
@@ -111,8 +114,8 @@ async fn list_models_pagination_works() -> Result<()> {
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let first_request = mcp
-        .send_list_models_request(ListModelsParams {
-            page_size: Some(1),
+        .send_list_models_request(ModelListParams {
+            limit: Some(1),
             cursor: None,
         })
         .await?;
@@ -123,18 +126,18 @@ async fn list_models_pagination_works() -> Result<()> {
     )
     .await??;
 
-    let ListModelsResponse {
-        items: first_items,
+    let ModelListResponse {
+        data: first_items,
         next_cursor: first_cursor,
-    } = to_response::<ListModelsResponse>(first_response)?;
+    } = to_response::<ModelListResponse>(first_response)?;
 
     assert_eq!(first_items.len(), 1);
     assert_eq!(first_items[0].id, "gpt-5-codex");
     let next_cursor = first_cursor.ok_or_else(|| anyhow!("cursor for second page"))?;
 
     let second_request = mcp
-        .send_list_models_request(ListModelsParams {
-            page_size: Some(1),
+        .send_list_models_request(ModelListParams {
+            limit: Some(1),
             cursor: Some(next_cursor.clone()),
         })
         .await?;
@@ -145,10 +148,10 @@ async fn list_models_pagination_works() -> Result<()> {
     )
     .await??;
 
-    let ListModelsResponse {
-        items: second_items,
+    let ModelListResponse {
+        data: second_items,
         next_cursor: second_cursor,
-    } = to_response::<ListModelsResponse>(second_response)?;
+    } = to_response::<ModelListResponse>(second_response)?;
 
     assert_eq!(second_items.len(), 1);
     assert_eq!(second_items[0].id, "gpt-5");
@@ -164,8 +167,8 @@ async fn list_models_rejects_invalid_cursor() -> Result<()> {
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
-        .send_list_models_request(ListModelsParams {
-            page_size: None,
+        .send_list_models_request(ModelListParams {
+            limit: None,
             cursor: Some("invalid".to_string()),
         })
         .await?;
