@@ -81,11 +81,7 @@ impl CodexBridge {
     }
 
     /// Create a new plan
-    pub async fn create_plan(
-        &self,
-        description: String,
-        mode: Option<String>,
-    ) -> Result<Plan> {
+    pub async fn create_plan(&self, description: String, mode: Option<String>) -> Result<Plan> {
         info!("Creating plan: {}", description);
 
         let mode = mode.unwrap_or_else(|| "orchestrated".to_string());
@@ -213,10 +209,7 @@ impl CodexBridge {
 
 // Tauri commands that use CodexBridge
 #[tauri::command]
-pub async fn codex_create_plan(
-    description: String,
-    mode: Option<String>,
-) -> Result<Plan, String> {
+pub async fn codex_create_plan(description: String, mode: Option<String>) -> Result<Plan, String> {
     let bridge = CodexBridge::new().map_err(|e| e.to_string())?;
     bridge
         .create_plan(description, mode)
@@ -227,10 +220,7 @@ pub async fn codex_create_plan(
 #[tauri::command]
 pub async fn codex_execute_plan(id: String) -> Result<ExecutionResult, String> {
     let bridge = CodexBridge::new().map_err(|e| e.to_string())?;
-    bridge
-        .execute_plan(id)
-        .await
-        .map_err(|e| e.to_string())
+    bridge.execute_plan(id).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

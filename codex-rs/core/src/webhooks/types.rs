@@ -73,12 +73,7 @@ pub struct CompetitionScore {
 
 impl WebhookPayload {
     /// Create a new webhook payload
-    pub fn new(
-        plan_id: String,
-        title: String,
-        state: PlanState,
-        summary: String,
-    ) -> Self {
+    pub fn new(plan_id: String, title: String, state: PlanState, summary: String) -> Self {
         Self {
             plan_id,
             title,
