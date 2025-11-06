@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use codex_core::config::Config;
 use codex_core::config::types::Notifications;
