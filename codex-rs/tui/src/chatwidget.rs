@@ -40,8 +40,6 @@ use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
-use codex_core::protocol::UserCommandBeginEvent;
-use codex_core::protocol::UserCommandEndEvent;
 use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
@@ -673,30 +671,6 @@ impl ChatWidget {
         self.defer_or_handle(|q| q.push_exec_end(ev), |s| s.handle_exec_end_now(ev2));
     }
 
-    fn on_user_command_begin(&mut self, ev: UserCommandBeginEvent) {
-        self.flush_answer_stream_with_separator();
-        let ev2 = ev.clone();
-        self.defer_or_handle(
-            |q| q.push_user_command_begin(ev),
-            |s| s.handle_user_command_begin_now(ev2),
-        );
-    }
-
-    fn on_user_command_output_delta(
-        &mut self,
-        _ev: codex_core::protocol::UserCommandOutputDeltaEvent,
-    ) {
-        // TODO: Handle streaming exec output if/when implemented
-    }
-
-    fn on_user_command_end(&mut self, ev: UserCommandEndEvent) {
-        let ev2 = ev.clone();
-        self.defer_or_handle(
-            |q| q.push_user_command_end(ev),
-            |s| s.handle_user_command_end_now(ev2),
-        );
-    }
-
     fn on_mcp_tool_call_begin(&mut self, ev: McpToolCallBeginEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_mcp_begin(ev), |s| s.handle_mcp_begin_now(ev2));
@@ -855,23 +829,20 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn handle_command_end_internal(
-        &mut self,
-        call_id: String,
-        aggregated_output: String,
-        formatted_output: String,
-        exit_code: i32,
-        duration: std::time::Duration,
-        default_is_user_shell_command: bool,
-    ) {
+    pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
+        let ExecCommandEndEvent {
+            call_id,
+            is_user_shell_command,
+            aggregated_output,
+            formatted_output,
+            exit_code,
+            duration,
+            ..
+        } = ev;
         let running = self.running_commands.remove(&call_id);
         let (command, parsed, is_user_shell_command) = match running {
             Some(rc) => (rc.command, rc.parsed_cmd, rc.is_user_shell_command),
-            None => (
-                vec![call_id.clone()],
-                Vec::new(),
-                default_is_user_shell_command,
-            ),
+            None => (vec![call_id.clone()], Vec::new(), is_user_shell_command),
         };
 
         let needs_new = self
@@ -907,44 +878,6 @@ impl ChatWidget {
                 self.flush_active_cell();
             }
         }
-    }
-
-    pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
-        let ExecCommandEndEvent {
-            call_id,
-            aggregated_output,
-            formatted_output,
-            exit_code,
-            duration,
-            ..
-        } = ev;
-        self.handle_command_end_internal(
-            call_id,
-            aggregated_output,
-            formatted_output,
-            exit_code,
-            duration,
-            false,
-        );
-    }
-
-    pub(crate) fn handle_user_command_end_now(&mut self, ev: UserCommandEndEvent) {
-        let UserCommandEndEvent {
-            call_id,
-            aggregated_output,
-            formatted_output,
-            exit_code,
-            duration,
-            ..
-        } = ev;
-        self.handle_command_end_internal(
-            call_id,
-            aggregated_output,
-            formatted_output,
-            exit_code,
-            duration,
-            true,
-        );
     }
 
     pub(crate) fn handle_patch_apply_end_now(
@@ -995,13 +928,14 @@ impl ChatWidget {
         });
     }
 
-    fn handle_command_begin_internal(
-        &mut self,
-        call_id: String,
-        command: Vec<String>,
-        parsed_cmd: Vec<ParsedCommand>,
-        is_user_shell_command: bool,
-    ) {
+    pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
+        let ExecCommandBeginEvent {
+            call_id,
+            command,
+            parsed_cmd,
+            is_user_shell_command,
+            ..
+        } = ev;
         self.running_commands.insert(
             call_id.clone(),
             RunningCommand {
@@ -1034,27 +968,6 @@ impl ChatWidget {
         }
 
         self.request_redraw();
-    }
-
-    pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
-        let ExecCommandBeginEvent {
-            call_id,
-            command,
-            parsed_cmd,
-            is_user_shell_command,
-            ..
-        } = ev;
-        self.handle_command_begin_internal(call_id, command, parsed_cmd, is_user_shell_command);
-    }
-
-    pub(crate) fn handle_user_command_begin_now(&mut self, ev: UserCommandBeginEvent) {
-        let UserCommandBeginEvent {
-            call_id,
-            command,
-            parsed_cmd,
-            ..
-        } = ev;
-        self.handle_command_begin_internal(call_id, command, parsed_cmd, true);
     }
 
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
@@ -1576,8 +1489,7 @@ impl ChatWidget {
         match msg {
             EventMsg::AgentMessageDelta(_)
             | EventMsg::AgentReasoningDelta(_)
-            | EventMsg::ExecCommandOutputDelta(_)
-            | EventMsg::UserCommandOutputDelta(_) => {}
+            | EventMsg::ExecCommandOutputDelta(_) => {}
             _ => {
                 tracing::trace!("handle_codex_event: {:?}", msg);
             }
@@ -1630,12 +1542,9 @@ impl ChatWidget {
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
-            EventMsg::UserCommandBegin(ev) => self.on_user_command_begin(ev),
-            EventMsg::UserCommandOutputDelta(delta) => self.on_user_command_output_delta(delta),
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),
             EventMsg::ExecCommandEnd(ev) => self.on_exec_command_end(ev),
-            EventMsg::UserCommandEnd(ev) => self.on_user_command_end(ev),
             EventMsg::ViewImageToolCall(ev) => self.on_view_image_tool_call(ev),
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),

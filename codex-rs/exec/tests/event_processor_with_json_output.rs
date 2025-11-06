@@ -650,6 +650,7 @@ fn exec_command_end_success_produces_completed_command_item() {
         "c2",
         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "1".to_string(),
+            is_user_shell_command: false,
             stdout: String::new(),
             stderr: String::new(),
             aggregated_output: "hi\n".to_string(),
@@ -710,6 +711,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
         "c2",
         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "2".to_string(),
+            is_user_shell_command: false,
             stdout: String::new(),
             stderr: String::new(),
             aggregated_output: String::new(),
@@ -744,6 +746,7 @@ fn exec_command_end_without_begin_is_ignored() {
         "c1",
         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "no-begin".to_string(),
+            is_user_shell_command: false,
             stdout: String::new(),
             stderr: String::new(),
             aggregated_output: String::new(),
