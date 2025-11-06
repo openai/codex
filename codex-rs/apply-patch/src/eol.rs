@@ -438,6 +438,30 @@ mod tests {
     }
 
     #[test]
+    fn test_gitattributes_nested_path_crlf() {
+        let _g = TEST_MUTEX.lock().unwrap();
+        let dir = tempdir().unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        // Apply CRLF to everything under nested/
+        std::fs::write(
+            dir.path().join(".gitattributes"),
+            "nested/** text eol=crlf\n",
+        )
+        .unwrap();
+
+        let nested = dir.path().join("nested").join("sub").join("foo.txt");
+        std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        std::fs::write(&nested, "line1\n").unwrap();
+        let result = git_check_attr_eol(dir.path(), &nested);
+        assert_eq!(result, Some(Eol::Crlf));
+    }
+
+    #[test]
     fn test_parse_git_check_attr_eol_stdout() {
         assert!(matches!(
             super::parse_git_check_attr_eol_stdout("foo.txt: eol: crlf\n"),

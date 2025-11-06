@@ -1739,6 +1739,25 @@ PATCH"#,
         assert!(contents.contains(&b'\n'));
     }
 
+    #[test]
+    fn test_new_file_eol_when_attr_missing_defaults_to_lf() {
+        use assert_cmd::prelude::*;
+        use std::process::Command as PCommand;
+        let dir = tempdir().unwrap();
+        // No .gitattributes
+        let path = dir.path().join("noattr.txt");
+        let patch = wrap_patch(&format!("*** Add File: {}\n+hello\n+world", path.display()));
+        PCommand::cargo_bin("apply_patch")
+            .unwrap()
+            .current_dir(dir.path())
+            .arg(&patch)
+            .assert()
+            .success();
+        let contents = std::fs::read(&path).unwrap();
+        assert!(!contents.windows(2).any(|w| w == b"\r\n"));
+        assert!(contents.contains(&b'\n'));
+    }
+
     // core.autocrlf precedence is environment dependent (can be masked by
     // user/system core.eol). We validate core.eol directly and .gitattributes above.
 
