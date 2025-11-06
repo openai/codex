@@ -30,9 +30,7 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
     let pos_f =
         (elapsed_since_start().as_secs_f32() % sweep_seconds) / sweep_seconds * (period as f32);
     let pos = pos_f as usize;
-    let has_true_color = supports_color::on_cached(supports_color::Stream::Stdout)
-        .map(|level| level.has_16m)
-        .unwrap_or(false);
+    let has_true_color = crate::terminal_palette::stdout_supports_truecolor();
     let band_half_width = 5.0;
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(chars.len());

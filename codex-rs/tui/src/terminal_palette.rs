@@ -1,12 +1,13 @@
 use crate::color::perceptual_distance;
 use ratatui::style::Color;
+use std::sync::OnceLock;
 
 /// Returns the closest color to the target color that the terminal can display.
 pub fn best_color(target: (u8, u8, u8)) -> Color {
     let Some(color_level) = supports_color::on_cached(supports_color::Stream::Stdout) else {
         return Color::default();
     };
-    if stdout_has_truecolor(&color_level) {
+    if stdout_supports_truecolor() {
         let (r, g, b) = target;
         #[allow(clippy::disallowed_methods)]
         Color::Rgb(r, g, b)
@@ -25,31 +26,47 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
     }
 }
 
-#[cfg(not(windows))]
-fn stdout_has_truecolor(level: &supports_color::ColorLevel) -> bool {
-    level.has_16m
-}
-
-#[cfg(windows)]
-fn stdout_has_truecolor(level: &supports_color::ColorLevel) -> bool {
-    if level.has_16m {
-        return true;
+/// Returns true if stdout supports truecolor (24-bit), using a single shared decision.
+///
+/// - On non-Windows, this is simply `supports_color`'s 16m capability.
+/// - On Windows, we upgrade to truecolor on Windows Terminal if Virtual Terminal
+///   Processing can be enabled successfully. This probing happens once and is cached.
+pub fn stdout_supports_truecolor() -> bool {
+    #[cfg(windows)]
+    {
+        static TRUECOLOR: OnceLock<bool> = OnceLock::new();
+        *TRUECOLOR.get_or_init(|| {
+            let has = supports_color::on_cached(supports_color::Stream::Stdout)
+                .map(|level| level.has_16m)
+                .unwrap_or(false);
+            if has {
+                return true;
+            }
+            // Upgrade to truecolor on Windows Terminal when VT processing is available.
+            // We only attempt to enable VT once per process to avoid per-frame overhead.
+            std::env::var_os("WT_SESSION").is_some() && enable_vt_stdout().is_ok()
+        })
     }
-    // Upgrade to truecolor on Windows Terminal when VT processing is available.
-    std::env::var_os("WT_SESSION").is_some() && enable_vt_stdout().is_ok()
+    #[cfg(not(windows))]
+    {
+        supports_color::on_cached(supports_color::Stream::Stdout)
+            .map(|level| level.has_16m)
+            .unwrap_or(false)
+    }
 }
 
 /// Enables Virtual Terminal Processing (ANSI escape sequence handling) on Windows for stdout.
 ///
-/// This ensures that ANSI SGR sequences (including 24‑bit truecolor) are interpreted by the
+/// This ensures that ANSI SGR sequences (including 24-bit truecolor) are interpreted by the
 /// Windows console pipeline. We use this as a lightweight capability gate before upgrading to
 /// truecolor on Windows Terminal:
 ///
-/// - If enabling VT processing succeeds, we can safely emit 24‑bit color.
-/// - If it fails (e.g., legacy consoles or non‑TTY), we do not upgrade and fall back to the
+/// - If enabling VT processing succeeds, we can safely emit 24-bit color.
+/// - If it fails (e.g., legacy consoles or non-TTY), we do not upgrade and fall back to the
 ///   base `supports_color` decision to avoid printing raw escape sequences.
 ///
-/// Calling this repeatedly is idempotent (it simply sets the corresponding console mode flag).
+/// Calling this repeatedly is idempotent (it simply sets the corresponding console mode flag),
+/// and we cache the result in `stdout_supports_truecolor` so we only attempt it once.
 #[cfg(windows)]
 fn enable_vt_stdout() -> std::io::Result<()> {
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
@@ -98,49 +115,60 @@ pub fn default_bg() -> Option<(u8, u8, u8)> {
     default_colors().map(|c| c.bg)
 }
 
+// -------------------------------------------------------------------------------------------------
+// Shared cache utility for default terminal colors
+// -------------------------------------------------------------------------------------------------
+
+/// Small helper cache that remembers whether initialization was attempted and stores a value.
+///
+/// Used to memoize the terminal's default foreground/background colors. We expose both
+/// `get_or_init_with` for the first successful query and `refresh_with` for a manual re-query.
+/// If a first query fails, we remember the failure to avoid repeated failed probes, unless
+/// a subsequent explicit refresh is performed.
+struct Cache<T> {
+    attempted: bool,
+    value: Option<T>,
+}
+
+impl<T> Default for Cache<T> {
+    fn default() -> Self {
+        Self {
+            attempted: false,
+            value: None,
+        }
+    }
+}
+
+impl<T: Copy> Cache<T> {
+    /// Returns the cached value if available; otherwise runs `init` once and caches its result.
+    fn get_or_init_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
+        if !self.attempted {
+            self.value = init();
+            self.attempted = true;
+        }
+        self.value
+    }
+
+    /// Re-runs `init` and replaces the cached value. Marks the cache as attempted.
+    fn refresh_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
+        self.value = init();
+        self.attempted = true;
+        self.value
+    }
+}
+
+fn default_colors_cache() -> &'static std::sync::Mutex<Cache<DefaultColors>> {
+    static CACHE: OnceLock<std::sync::Mutex<Cache<DefaultColors>>> = OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(Cache::default()))
+}
+
 #[cfg(all(unix, not(test)))]
 mod imp {
+    use super::default_colors_cache;
     use super::DefaultColors;
     use crossterm::style::Color as CrosstermColor;
     use crossterm::style::query_background_color;
     use crossterm::style::query_foreground_color;
-    use std::sync::Mutex;
-    use std::sync::OnceLock;
-
-    struct Cache<T> {
-        attempted: bool,
-        value: Option<T>,
-    }
-
-    impl<T> Default for Cache<T> {
-        fn default() -> Self {
-            Self {
-                attempted: false,
-                value: None,
-            }
-        }
-    }
-
-    impl<T: Copy> Cache<T> {
-        fn get_or_init_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
-            if !self.attempted {
-                self.value = init();
-                self.attempted = true;
-            }
-            self.value
-        }
-
-        fn refresh_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
-            self.value = init();
-            self.attempted = true;
-            self.value
-        }
-    }
-
-    fn default_colors_cache() -> &'static Mutex<Cache<DefaultColors>> {
-        static CACHE: OnceLock<Mutex<Cache<DefaultColors>>> = OnceLock::new();
-        CACHE.get_or_init(|| Mutex::new(Cache::default()))
-    }
 
     pub(super) fn default_colors() -> Option<DefaultColors> {
         let cache = default_colors_cache();
@@ -174,44 +202,8 @@ mod imp {
 
 #[cfg(all(windows, not(test)))]
 mod imp {
+    use super::default_colors_cache;
     use super::DefaultColors;
-    use std::sync::Mutex;
-    use std::sync::OnceLock;
-
-    struct Cache<T> {
-        attempted: bool,
-        value: Option<T>,
-    }
-
-    impl<T> Default for Cache<T> {
-        fn default() -> Self {
-            Self {
-                attempted: false,
-                value: None,
-            }
-        }
-    }
-
-    impl<T: Copy> Cache<T> {
-        fn get_or_init_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
-            if !self.attempted {
-                self.value = init();
-                self.attempted = true;
-            }
-            self.value
-        }
-
-        fn refresh_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
-            self.value = init();
-            self.attempted = true;
-            self.value
-        }
-    }
-
-    fn default_colors_cache() -> &'static Mutex<Cache<DefaultColors>> {
-        static CACHE: OnceLock<Mutex<Cache<DefaultColors>>> = OnceLock::new();
-        CACHE.get_or_init(|| Mutex::new(Cache::default()))
-    }
 
     pub(super) fn default_colors() -> Option<DefaultColors> {
         let cache = default_colors_cache();
