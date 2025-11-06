@@ -987,7 +987,8 @@ impl CodexMessageProcessor {
 
     async fn list_models(&self, request_id: RequestId, params: ListModelsParams) {
         let ListModelsParams { page_size, cursor } = params;
-        let models = supported_models();
+        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
+        let models = supported_models(auth_mode);
         let total = models.len();
 
         if total == 0 {
