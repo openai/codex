@@ -53,10 +53,10 @@ const PRESETS: &[ModelPreset] = &[
         is_default: true,
     },
     ModelPreset {
-        id: "desertfox",
-        model: "desertfox",
-        display_name: "desertfox",
-        description: "???",
+        id: "gpt-5-codex-mini",
+        model: "gpt-5-codex-mini",
+        display_name: "gpt-5-codex-mini",
+        description: "Optimized for codex. Cheaper, faster, and less capable.",
         default_reasoning_effort: ReasoningEffort::Medium,
         supported_reasoning_efforts: &[
             ReasoningEffortPreset {
@@ -99,10 +99,10 @@ const PRESETS: &[ModelPreset] = &[
 ];
 
 pub fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
-    let allow_desertfox = matches!(auth_mode, Some(AuthMode::ChatGPT));
+    let allow_codex_mini = matches!(auth_mode, Some(AuthMode::ChatGPT));
     PRESETS
         .iter()
-        .filter(|preset| allow_desertfox || preset.id != "desertfox")
+        .filter(|preset| allow_codex_mini || preset.id != "gpt-5-codex-mini")
         .copied()
         .collect()
 }
