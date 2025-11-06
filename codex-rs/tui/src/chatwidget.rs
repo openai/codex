@@ -524,15 +524,15 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
-    fn on_warning(&mut self, message: String) {
-        self.add_to_history(history_cell::new_warning_event(message));
+    fn on_warning(&mut self, message: impl Into<String>) {
+        self.add_to_history(history_cell::new_warning_event(message.into()));
         self.request_redraw();
     }
 
     fn on_mcp_startup_update(&mut self, ev: McpStartupUpdateEvent) {
         let mut status = self.mcp_startup_status.take().unwrap_or_default();
         if let McpStartupStatus::Failed { error } = &ev.status {
-            self.on_warning(format!("MCP `{}` failed to start: {error}", ev.server));
+            self.on_warning(error);
         }
         status.insert(ev.server, ev.status);
         self.mcp_startup_status = Some(status);
