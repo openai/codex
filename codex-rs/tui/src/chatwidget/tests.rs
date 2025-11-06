@@ -462,6 +462,18 @@ fn rate_limit_switch_prompt_defers_until_task_complete() {
     ));
 }
 
+#[test]
+fn rate_limit_switch_prompt_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+    chat.config.model = "gpt-5".to_string();
+
+    chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
+    chat.maybe_show_pending_rate_limit_prompt();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("rate_limit_switch_prompt_popup", popup);
+}
+
 // (removed experimental resize snapshot test)
 
 #[test]
