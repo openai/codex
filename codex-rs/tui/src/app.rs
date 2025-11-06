@@ -634,7 +634,9 @@ impl App {
                         .into_iter()
                         .find(|p| p.id == "auto")
                     {
-                        tx.send(AppEvent::OpenWorldWritableWarningConfirmation { preset: Some(preset) });
+                        tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
+                            preset: Some(preset),
+                        });
                     }
                 } else {
                     tx.send(AppEvent::OpenWorldWritableWarningConfirmation { preset: None });
