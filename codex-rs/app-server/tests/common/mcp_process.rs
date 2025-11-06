@@ -14,6 +14,7 @@ use anyhow::Context;
 use assert_cmd::prelude::*;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::ArchiveConversationParams;
+use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginChatGptParams;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
@@ -21,11 +22,17 @@ use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InterruptConversationParams;
+use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::JSONRPCNotification;
+use codex_app_server_protocol::JSONRPCRequest;
+use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::RemoveConversationListenerParams;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ResumeConversationParams;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserTurnParams;
@@ -35,13 +42,8 @@ use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadStartParams;
-
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCRequest;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::TurnInterruptParams;
+use codex_app_server_protocol::TurnStartParams;
 use std::process::Command as StdCommand;
 use tokio::process::Command;
 
@@ -248,7 +250,7 @@ impl McpProcess {
     }
 
     /// Send a `feedback/upload` JSON-RPC request.
-    pub async fn send_upload_feedback_request(
+    pub async fn send_feedback_upload_request(
         &mut self,
         params: FeedbackUploadParams,
     ) -> anyhow::Result<i64> {
@@ -347,6 +349,24 @@ impl McpProcess {
         self.send_request("loginChatGpt", None).await
     }
 
+    /// Send a `turn/start` JSON-RPC request (v2).
+    pub async fn send_turn_start_request(
+        &mut self,
+        params: TurnStartParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("turn/start", params).await
+    }
+
+    /// Send a `turn/interrupt` JSON-RPC request (v2).
+    pub async fn send_turn_interrupt_request(
+        &mut self,
+        params: TurnInterruptParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("turn/interrupt", params).await
+    }
+
     /// Send a `cancelLoginChatGpt` JSON-RPC request.
     pub async fn send_cancel_login_chat_gpt_request(
         &mut self,
@@ -384,6 +404,15 @@ impl McpProcess {
             "type": "chatgpt"
         });
         self.send_request("account/login/start", Some(params)).await
+    }
+
+    /// Send an `account/login/cancel` JSON-RPC request.
+    pub async fn send_cancel_login_account_request(
+        &mut self,
+        params: CancelLoginAccountParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("account/login/cancel", params).await
     }
 
     /// Send a `fuzzyFileSearch` JSON-RPC request.

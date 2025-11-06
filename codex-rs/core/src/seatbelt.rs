@@ -1,4 +1,7 @@
+#![cfg(target_os = "macos")]
+
 use std::collections::HashMap;
+use std::ffi::CStr;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::process::Child;
@@ -9,6 +12,7 @@ use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 
 const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
+const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");
 
 /// When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
 /// to defend against an attacker trying to inject a malicious version on the
@@ -44,27 +48,24 @@ pub(crate) fn create_seatbelt_command_args(
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
 ) -> Vec<String> {
-    let (file_write_policy, extra_cli_args) = {
+    let (file_write_policy, file_write_dir_params) = {
         if sandbox_policy.has_full_disk_write_access() {
             // Allegedly, this is more permissive than `(allow file-write*)`.
             (
                 r#"(allow file-write* (regex #"^/"))"#.to_string(),
-                Vec::<String>::new(),
+                Vec::new(),
             )
         } else {
             let writable_roots = sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
 
             let mut writable_folder_policies: Vec<String> = Vec::new();
-            let mut cli_args: Vec<String> = Vec::new();
+            let mut file_write_params = Vec::new();
 
             for (index, wr) in writable_roots.iter().enumerate() {
                 // Canonicalize to avoid mismatches like /var vs /private/var on macOS.
                 let canonical_root = wr.root.canonicalize().unwrap_or_else(|_| wr.root.clone());
                 let root_param = format!("WRITABLE_ROOT_{index}");
-                cli_args.push(format!(
-                    "-D{root_param}={}",
-                    canonical_root.to_string_lossy()
-                ));
+                file_write_params.push((root_param.clone(), canonical_root));
 
                 if wr.read_only_subpaths.is_empty() {
                     writable_folder_policies.push(format!("(subpath (param \"{root_param}\"))"));
@@ -76,9 +77,9 @@ pub(crate) fn create_seatbelt_command_args(
                     for (subpath_index, ro) in wr.read_only_subpaths.iter().enumerate() {
                         let canonical_ro = ro.canonicalize().unwrap_or_else(|_| ro.clone());
                         let ro_param = format!("WRITABLE_ROOT_{index}_RO_{subpath_index}");
-                        cli_args.push(format!("-D{ro_param}={}", canonical_ro.to_string_lossy()));
                         require_parts
                             .push(format!("(require-not (subpath (param \"{ro_param}\")))"));
+                        file_write_params.push((ro_param, canonical_ro));
                     }
                     let policy_component = format!("(require-all {} )", require_parts.join(" "));
                     writable_folder_policies.push(policy_component);
@@ -86,13 +87,13 @@ pub(crate) fn create_seatbelt_command_args(
             }
 
             if writable_folder_policies.is_empty() {
-                ("".to_string(), Vec::<String>::new())
+                ("".to_string(), Vec::new())
             } else {
                 let file_write_policy = format!(
                     "(allow file-write*\n{}\n)",
                     writable_folder_policies.join(" ")
                 );
-                (file_write_policy, cli_args)
+                (file_write_policy, file_write_params)
             }
         }
     };
@@ -105,7 +106,7 @@ pub(crate) fn create_seatbelt_command_args(
 
     // TODO(mbolin): apply_patch calls must also honor the SandboxPolicy.
     let network_policy = if sandbox_policy.has_full_network_access() {
-        "(allow network-outbound)\n(allow network-inbound)\n(allow system-socket)"
+        MACOS_SEATBELT_NETWORK_POLICY
     } else {
         ""
     };
@@ -114,17 +115,49 @@ pub(crate) fn create_seatbelt_command_args(
         "{MACOS_SEATBELT_BASE_POLICY}\n{file_read_policy}\n{file_write_policy}\n{network_policy}"
     );
 
+    let dir_params = [file_write_dir_params, macos_dir_params()].concat();
+
     let mut seatbelt_args: Vec<String> = vec!["-p".to_string(), full_policy];
-    seatbelt_args.extend(extra_cli_args);
+    let definition_args = dir_params
+        .into_iter()
+        .map(|(key, value)| format!("-D{key}={value}", value = value.to_string_lossy()));
+    seatbelt_args.extend(definition_args);
     seatbelt_args.push("--".to_string());
     seatbelt_args.extend(command);
     seatbelt_args
+}
+
+/// Wraps libc::confstr to return a String.
+fn confstr(name: libc::c_int) -> Option<String> {
+    let mut buf = vec![0_i8; (libc::PATH_MAX as usize) + 1];
+    let len = unsafe { libc::confstr(name, buf.as_mut_ptr(), buf.len()) };
+    if len == 0 {
+        return None;
+    }
+    // confstr guarantees NUL-termination when len > 0.
+    let cstr = unsafe { CStr::from_ptr(buf.as_ptr()) };
+    cstr.to_str().ok().map(ToString::to_string)
+}
+
+/// Wraps confstr to return a canonicalized PathBuf.
+fn confstr_path(name: libc::c_int) -> Option<PathBuf> {
+    let s = confstr(name)?;
+    let path = PathBuf::from(s);
+    path.canonicalize().ok().or(Some(path))
+}
+
+fn macos_dir_params() -> Vec<(String, PathBuf)> {
+    if let Some(p) = confstr_path(libc::_CS_DARWIN_USER_CACHE_DIR) {
+        return vec![("DARWIN_USER_CACHE_DIR".to_string(), p)];
+    }
+    vec![]
 }
 
 #[cfg(test)]
 mod tests {
     use super::MACOS_SEATBELT_BASE_POLICY;
     use super::create_seatbelt_command_args;
+    use super::macos_dir_params;
     use crate::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::fs;
@@ -134,11 +167,6 @@ mod tests {
 
     #[test]
     fn create_seatbelt_args_with_read_only_git_subpath() {
-        if cfg!(target_os = "windows") {
-            // /tmp does not exist on Windows, so skip this test.
-            return;
-        }
-
         // Create a temporary workspace with two writable roots: one containing
         // a top-level .git directory and one without it.
         let tmp = TempDir::new().expect("tempdir");
@@ -199,6 +227,12 @@ mod tests {
             format!("-DWRITABLE_ROOT_2={}", cwd.to_string_lossy()),
         ];
 
+        expected_args.extend(
+            macos_dir_params()
+                .into_iter()
+                .map(|(key, value)| format!("-D{key}={value}", value = value.to_string_lossy())),
+        );
+
         expected_args.extend(vec![
             "--".to_string(),
             "/bin/echo".to_string(),
@@ -210,11 +244,6 @@ mod tests {
 
     #[test]
     fn create_seatbelt_args_for_cwd_as_git_repo() {
-        if cfg!(target_os = "windows") {
-            // /tmp does not exist on Windows, so skip this test.
-            return;
-        }
-
         // Create a temporary workspace with two writable roots: one containing
         // a top-level .git directory and one without it.
         let tmp = TempDir::new().expect("tempdir");
@@ -291,6 +320,12 @@ mod tests {
         if let Some(p) = tmpdir_env_var {
             expected_args.push(format!("-DWRITABLE_ROOT_2={p}"));
         }
+
+        expected_args.extend(
+            macos_dir_params()
+                .into_iter()
+                .map(|(key, value)| format!("-D{key}={value}", value = value.to_string_lossy())),
+        );
 
         expected_args.extend(vec![
             "--".to_string(),

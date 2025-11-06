@@ -5,6 +5,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::exec_env::create_env;
 use codex_core::landlock::spawn_command_under_linux_sandbox;
+#[cfg(target_os = "macos")]
 use codex_core::seatbelt::spawn_command_under_seatbelt;
 use codex_core::spawn::StdioPolicy;
 use codex_protocol::config_types::SandboxMode;
@@ -14,6 +15,7 @@ use crate::SeatbeltCommand;
 use crate::WindowsCommand;
 use crate::exit_status::handle_exit_status;
 
+#[cfg(target_os = "macos")]
 pub async fn run_command_under_seatbelt(
     command: SeatbeltCommand,
     codex_linux_sandbox_exe: Option<PathBuf>,
@@ -31,6 +33,14 @@ pub async fn run_command_under_seatbelt(
         SandboxType::Seatbelt,
     )
     .await
+}
+
+#[cfg(not(target_os = "macos"))]
+pub async fn run_command_under_seatbelt(
+    _command: SeatbeltCommand,
+    _codex_linux_sandbox_exe: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    anyhow::bail!("Seatbelt sandbox is only available on macOS");
 }
 
 pub async fn run_command_under_landlock(
@@ -72,6 +82,7 @@ pub async fn run_command_under_windows(
 }
 
 enum SandboxType {
+    #[cfg(target_os = "macos")]
     Seatbelt,
     Landlock,
     Windows,
@@ -168,6 +179,7 @@ async fn run_command_under_sandbox(
     }
 
     let mut child = match sandbox_type {
+        #[cfg(target_os = "macos")]
         SandboxType::Seatbelt => {
             spawn_command_under_seatbelt(
                 command,

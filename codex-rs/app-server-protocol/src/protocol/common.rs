@@ -133,6 +133,18 @@ client_request_definitions! {
         params: v2::ThreadCompactParams,
         response: v2::ThreadCompactResponse,
     },
+    #[serde(rename = "turn/start")]
+    #[ts(rename = "turn/start")]
+    TurnStart {
+        params: v2::TurnStartParams,
+        response: v2::TurnStartResponse,
+    },
+    #[serde(rename = "turn/interrupt")]
+    #[ts(rename = "turn/interrupt")]
+    TurnInterrupt {
+        params: v2::TurnInterruptParams,
+        response: v2::TurnInterruptResponse,
+    },
 
     #[serde(rename = "model/list")]
     #[ts(rename = "model/list")]
@@ -146,6 +158,13 @@ client_request_definitions! {
     LoginAccount {
         params: v2::LoginAccountParams,
         response: v2::LoginAccountResponse,
+    },
+
+    #[serde(rename = "account/login/cancel")]
+    #[ts(rename = "account/login/cancel")]
+    CancelLoginAccount {
+        params: v2::CancelLoginAccountParams,
+        response: v2::CancelLoginAccountResponse,
     },
 
     #[serde(rename = "account/logout")]
@@ -235,6 +254,7 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v1::LoginChatGptResponse,
     },
+    // DEPRECATED in favor of CancelLoginAccount
     CancelLoginChatGpt {
         params: v1::CancelLoginChatGptParams,
         response: v1::CancelLoginChatGptResponse,

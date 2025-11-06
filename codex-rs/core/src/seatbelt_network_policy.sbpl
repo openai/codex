@@ -1,0 +1,30 @@
+; when network access is enabled, these policies are added after those in seatbelt_base_policy.sbpl
+; Ref https://source.chromium.org/chromium/chromium/src/+/main:sandbox/policy/mac/network.sb;drc=f8f264d5e4e7509c913f4c60c2639d15905a07e4
+
+(allow network-outbound)
+(allow network-inbound)
+(allow system-socket)
+
+(allow mach-lookup
+    ; Used to look up the _CS_DARWIN_USER_CACHE_DIR in the sandbox.
+    (global-name "com.apple.bsd.dirhelper")
+    (global-name "com.apple.system.opendirectoryd.membership")
+
+    ; Communicate with the security server for TLS certificate information.
+    (global-name "com.apple.SecurityServer")
+    (global-name "com.apple.networkd")
+    (global-name "com.apple.ocspd")
+    (global-name "com.apple.trustd.agent")
+
+    ; Read network configuration.
+    (global-name "com.apple.SystemConfiguration.DNSConfiguration")
+    (global-name "com.apple.SystemConfiguration.configd")
+)
+
+(allow sysctl-read
+  (sysctl-name-regex #"^net.routetable")
+)
+
+(allow file-write*
+  (subpath (param "DARWIN_USER_CACHE_DIR"))
+)

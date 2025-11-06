@@ -5,7 +5,7 @@ expression: popup
   Select Model and Effort
   Switch the model for this and future Codex CLI sessions
 
-› 1. gpt-5-codex (current)  Optimized for coding tasks with many tools.
+› 1. gpt-5-codex (current)  Optimized for codex.
   2. gpt-5                  Broad world knowledge with strong general
                             reasoning.
 

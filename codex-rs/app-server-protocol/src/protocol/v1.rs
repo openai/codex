@@ -374,11 +374,9 @@ pub enum InputItem {
     LocalImage { path: PathBuf },
 }
 
-// Deprecated in favor of AccountLoginCompletedNotification.
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
-/// Deprecated: use `account/login/completed` instead.
+/// Deprecated in favor of AccountLoginCompletedNotification.
 pub struct LoginChatGptCompleteNotification {
     #[schemars(with = "String")]
     pub login_id: Uuid,

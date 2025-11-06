@@ -34,7 +34,7 @@ const PRESETS: &[ModelPreset] = &[
         id: "gpt-5-codex",
         model: "gpt-5-codex",
         display_name: "gpt-5-codex",
-        description: "Optimized for coding tasks with many tools.",
+        description: "Optimized for codex.",
         default_reasoning_effort: ReasoningEffort::Medium,
         supported_reasoning_efforts: &[
             ReasoningEffortPreset {
@@ -51,6 +51,24 @@ const PRESETS: &[ModelPreset] = &[
             },
         ],
         is_default: true,
+    },
+    ModelPreset {
+        id: "gpt-5-codex-mini",
+        model: "gpt-5-codex-mini",
+        display_name: "gpt-5-codex-mini",
+        description: "Optimized for codex. Cheaper, faster, but less capable.",
+        default_reasoning_effort: ReasoningEffort::Medium,
+        supported_reasoning_efforts: &[
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::Medium,
+                description: "Dynamically adjusts reasoning based on the task",
+            },
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::High,
+                description: "Maximizes reasoning depth for complex or ambiguous problems",
+            },
+        ],
+        is_default: false,
     },
     ModelPreset {
         id: "gpt-5",
@@ -80,8 +98,13 @@ const PRESETS: &[ModelPreset] = &[
     },
 ];
 
-pub fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
-    PRESETS.to_vec()
+pub fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
+    let allow_codex_mini = matches!(auth_mode, Some(AuthMode::ChatGPT));
+    PRESETS
+        .iter()
+        .filter(|preset| allow_codex_mini || preset.id != "gpt-5-codex-mini")
+        .copied()
+        .collect()
 }
 
 #[cfg(test)]
