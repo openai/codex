@@ -1270,19 +1270,18 @@ impl CodexMessageProcessor {
         } = params;
         let page_size = page_size.unwrap_or(25).max(1);
 
-        let (items, next_cursor) = match self
+        match self
             .list_conversations_common(page_size, cursor, model_providers)
             .await
         {
-            Ok(result) => result,
+            Ok((items, next_cursor)) => {
+                let response = ListConversationsResponse { items, next_cursor };
+                self.outgoing.send_response(request_id, response).await;
+            }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
-                return;
             }
         };
-
-        let response = ListConversationsResponse { items, next_cursor };
-        self.outgoing.send_response(request_id, response).await;
     }
 
     async fn list_conversations_common(

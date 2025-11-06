@@ -17,13 +17,11 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
-use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
-use std::env;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -185,10 +183,7 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
-    if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!("Skipping v2 exec approval toggle test due to sandbox network disabled.");
-        return Ok(());
-    }
+    skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().to_path_buf();
@@ -475,7 +470,7 @@ fn create_config_toml(
             r#"
 model = "mock-model"
 approval_policy = "{approval_policy}"
-sandbox_mode = "workspace-write"
+sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
 
