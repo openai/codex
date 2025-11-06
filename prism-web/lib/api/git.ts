@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Git Analysis API Client
  * 
  * Communicates with Rust CLI via child process execution

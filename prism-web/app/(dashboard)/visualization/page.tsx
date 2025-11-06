@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState, useEffect } from 'react'
 import { Scene3D } from '../../../components/visualizations/Scene3DInstanced'
@@ -67,10 +67,10 @@ export default function VisualizationPage() {
               onChange={(e) => setViewMode(e.target.value as any)}
               className="px-4 py-2 bg-gray-800 text-white rounded-lg border border-gray-700 focus:outline-none focus:ring-2 focus:ring-purple-500"
             >
-              <option value="commits">📊 Commits</option>
-              <option value="heatmap">🔥 Heatmap</option>
-              <option value="branches">🌿 Branches</option>
-              <option value="all">🌐 All</option>
+              <option value="commits">投 Commits</option>
+              <option value="heatmap">櫨 Heatmap</option>
+              <option value="branches">諺 Branches</option>
+              <option value="all">倹 All</option>
             </select>
 
             {/* Repo Path Input */}
@@ -86,7 +86,7 @@ export default function VisualizationPage() {
               onClick={loadData}
               className="px-6 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg font-semibold transition"
             >
-              🔄 Reload
+              売 Reload
             </button>
           </div>
         </div>
@@ -94,19 +94,19 @@ export default function VisualizationPage() {
         {/* Error Display */}
         {error && (
           <div className="bg-red-500/20 border border-red-500 text-red-200 px-4 py-3 rounded-lg mb-6">
-            ❌ {error}
+            笶・{error}
           </div>
         )}
 
         {/* Loading State */}
         {loading ? (
           <div className="text-center text-gray-400 py-20">
-            <div className="animate-spin text-6xl mb-4">⏳</div>
+            <div className="animate-spin text-6xl mb-4">竢ｳ</div>
             <p>Analyzing repository...</p>
           </div>
         ) : commits.length === 0 ? (
           <div className="text-center text-gray-400 py-20">
-            <div className="text-6xl mb-4">📂</div>
+            <div className="text-6xl mb-4">唐</div>
             <p className="text-xl">No Git repository found</p>
             <p className="text-sm mt-2">Make sure you're in a Git repository directory</p>
           </div>
@@ -143,7 +143,7 @@ export default function VisualizationPage() {
               <div className="p-4 border-b border-gray-700">
                 <h2 className="text-xl font-bold text-white">3D Commit Graph</h2>
                 <p className="text-sm text-gray-400">
-                  Drag to rotate • Scroll to zoom • Click commits to select
+                  Drag to rotate 窶｢ Scroll to zoom 窶｢ Click commits to select
                 </p>
               </div>
               <div className="h-[600px]">

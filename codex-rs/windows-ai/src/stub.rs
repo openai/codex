@@ -10,7 +10,7 @@ impl WindowsAiRuntimeImpl {
     pub fn new() -> Result<Self> {
         anyhow::bail!("Windows AI is only available on Windows 11 25H2+")
     }
-    
+
     pub async fn get_gpu_stats(&self) -> Result<GpuStats> {
         anyhow::bail!("Windows AI is only available on Windows")
     }
@@ -19,4 +19,3 @@ impl WindowsAiRuntimeImpl {
 pub fn check_windows_ai_available() -> bool {
     false
 }
-

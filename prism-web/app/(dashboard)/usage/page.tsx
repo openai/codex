@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState } from 'react'
 import { useUsageTracking } from '../../../lib/hooks/useUsageTracking'
@@ -25,7 +25,7 @@ export default function UsagePage() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 p-8 flex items-center justify-center">
         <div className="text-center text-gray-400">
-          <div className="animate-spin text-6xl mb-4">⏳</div>
+          <div className="animate-spin text-6xl mb-4">竢ｳ</div>
           <p>Loading usage data...</p>
         </div>
       </div>
@@ -36,7 +36,7 @@ export default function UsagePage() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 p-8 flex items-center justify-center">
         <div className="text-center">
-          <div className="text-6xl mb-4">❌</div>
+          <div className="text-6xl mb-4">笶・/div>
           <p className="text-red-400 text-xl">{error}</p>
         </div>
       </div>
@@ -109,7 +109,7 @@ export default function UsagePage() {
                   <div>
                     <div className="text-white font-semibold">{model}</div>
                     <div className="text-sm text-gray-400">
-                      {stats.count} requests · {stats.tokens.toLocaleString()} tokens
+                      {stats.count} requests ﾂｷ {stats.tokens.toLocaleString()} tokens
                     </div>
                   </div>
                   <div className="text-right">

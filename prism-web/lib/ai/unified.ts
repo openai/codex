@@ -1,4 +1,4 @@
-// Unified AI Interface for Multi-LLM support
+﻿// Unified AI Interface for Multi-LLM support
 import { createOpenAIClient, chatWithOpenAI, chatWithOpenAINonStreaming } from './openai'
 import { createAnthropicClient, chatWithClaude, chatWithClaudeNonStreaming } from './anthropic'
 import type { AIProvider, AIMessage, ChatOptions, ChatResponse } from './types'
@@ -91,7 +91,7 @@ export function suggestModel(taskType: 'code' | 'chat' | 'analysis' | 'review'):
   }
 }
 
-// Estimate cost per 1K tokens (2025年11月最新)
+// Estimate cost per 1K tokens (2025蟷ｴ11譛域怙譁ｰ)
 export function estimateCost(provider: AIProvider, model: string): {
   input: number // $ per 1K tokens
   output: number // $ per 1K tokens

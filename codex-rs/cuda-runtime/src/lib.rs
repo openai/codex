@@ -67,86 +67,86 @@ impl CudaRuntime {
             let inner = cuda_impl::CudaRuntimeImpl::new(device_id)?;
             Ok(Self { inner })
         }
-        
+
         #[cfg(not(feature = "cuda"))]
         {
             let _ = device_id;
             anyhow::bail!("CUDA support not compiled (use --features cuda)")
         }
     }
-    
+
     /// Get device information
     pub fn get_device_info(&self) -> Result<CudaDeviceInfo> {
         #[cfg(feature = "cuda")]
         {
             self.inner.get_device_info()
         }
-        
+
         #[cfg(not(feature = "cuda"))]
         {
             anyhow::bail!("CUDA not available")
         }
     }
-    
+
     /// Check if CUDA is available
     pub fn is_available() -> bool {
         #[cfg(feature = "cuda")]
         {
             cuda_impl::is_cuda_available()
         }
-        
+
         #[cfg(not(feature = "cuda"))]
         {
             false
         }
     }
-    
+
     /// Get number of CUDA devices
     pub fn device_count() -> usize {
         #[cfg(feature = "cuda")]
         {
             cuda_impl::get_device_count()
         }
-        
+
         #[cfg(not(feature = "cuda"))]
         {
             0
         }
     }
-    
+
     /// Copy data to device
     pub fn copy_to_device<T: Clone>(&self, _data: &[T]) -> Result<DeviceBuffer<T>> {
         #[cfg(feature = "cuda")]
         {
             self.inner.copy_to_device(_data)
         }
-        
+
         #[cfg(not(feature = "cuda"))]
         {
             anyhow::bail!("CUDA not available")
         }
     }
-    
+
     /// Copy data from device
     pub fn copy_from_device<T: Clone>(&self, _buffer: &DeviceBuffer<T>) -> Result<Vec<T>> {
         #[cfg(feature = "cuda")]
         {
             self.inner.copy_from_device(_buffer)
         }
-        
+
         #[cfg(not(feature = "cuda"))]
         {
             anyhow::bail!("CUDA not available")
         }
     }
-    
+
     /// Allocate device memory
     pub fn allocate<T: Clone>(&self, _size: usize) -> Result<DeviceBuffer<T>> {
         #[cfg(feature = "cuda")]
         {
             self.inner.allocate(_size)
         }
-        
+
         #[cfg(not(feature = "cuda"))]
         {
             anyhow::bail!("CUDA not available")
@@ -169,13 +169,13 @@ impl<T> DeviceBuffer<T> {
         {
             self.inner.len()
         }
-        
+
         #[cfg(not(feature = "cuda"))]
         {
             0
         }
     }
-    
+
     /// Check if empty
     pub fn is_empty(&self) -> bool {
         self.len() == 0

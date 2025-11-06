@@ -1,6 +1,6 @@
 pub mod agent_create_cmd;
 pub mod ask_cmd;
-pub mod blueprint_commands;
+pub mod plan_commands;
 pub mod debug_sandbox;
 pub mod delegate_cmd;
 mod exit_status;

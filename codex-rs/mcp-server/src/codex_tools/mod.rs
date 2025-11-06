@@ -37,20 +37,20 @@ impl CodexMcpTool {
             Self::apply_patch(),
             Self::shell(),
         ];
-        
+
         #[cfg(feature = "cuda")]
         {
             tools.push(Self::cuda_execute());
         }
-        
+
         tools
     }
-    
+
     /// CUDA GPU acceleration tool
     #[cfg(feature = "cuda")]
     pub fn cuda_execute() -> Self {
         use serde_json::json;
-        
+
         Self {
             name: "codex_cuda_execute".to_string(),
             description: "Execute GPU-accelerated computation with CUDA".to_string(),
@@ -92,4 +92,3 @@ mod tests {
         assert_eq!(all_tools.len(), 5);
     }
 }
-

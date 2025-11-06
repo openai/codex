@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Git Worker Hook
  * 
  * Manages Git parsing Web Worker

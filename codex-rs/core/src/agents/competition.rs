@@ -3,7 +3,7 @@
 //! Creates multiple git worktrees, executes identical tasks in parallel,
 //! scores results, and auto-merges the winner.
 
-use crate::blueprint::{BlueprintBlock, EvalCriteria};
+use crate::plan::{PlanBlock, EvalCriteria};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -156,7 +156,7 @@ impl WorktreeManager {
 
     /// Create a worktree for a variant
     pub fn create_worktree(&self, variant_name: &str) -> Result<PathBuf> {
-        let branch_name = format!("blueprint-competition-{}", variant_name);
+        let branch_name = format!("plan-competition-{}", variant_name);
         let worktree_path = self.worktree_base.join(variant_name);
 
         // Remove existing worktree if present
@@ -229,7 +229,7 @@ impl WorktreeManager {
 
     /// Archive a variant (rename branch to archived-)
     pub fn archive_variant(&self, variant_name: &str) -> Result<()> {
-        let branch_name = format!("blueprint-competition-{}", variant_name);
+        let branch_name = format!("plan-competition-{}", variant_name);
         let archived_name = format!("archived-{}", branch_name);
 
         let output = Command::new("git")
@@ -385,12 +385,12 @@ impl CompetitionRunner {
     }
 
     /// Run competition
-    pub async fn run_competition(&self, blueprint: &BlueprintBlock) -> Result<CompetitionResult> {
+    pub async fn run_competition(&self, plan: &PlanBlock) -> Result<CompetitionResult> {
         let start = std::time::Instant::now();
 
         info!(
-            "Starting competition with {} variants for blueprint {}",
-            self.config.num_variants, blueprint.id
+            "Starting competition with {} variants for plan {}",
+            self.config.num_variants, plan.id
         );
 
         // Create variants
@@ -409,12 +409,12 @@ impl CompetitionRunner {
             // Score variant
             let score = self
                 .scorer
-                .score_variant(&worktree_path, &blueprint.eval)
+                .score_variant(&worktree_path, &plan.eval)
                 .await?;
 
             variants.push(CompetitionVariant {
                 name: name.clone(),
-                branch: format!("blueprint-competition-{}", name),
+                branch: format!("plan-competition-{}", name),
                 worktree_path,
                 score,
             });

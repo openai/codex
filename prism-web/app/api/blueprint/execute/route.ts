@@ -1,5 +1,5 @@
-/**
- * Blueprint Execution API
+﻿/**
+ * Plan Execution API
  * 
  * Server-Sent Events (SSE) endpoint for real-time execution progress
  */
@@ -20,18 +20,18 @@ interface ExecutionEvent {
 }
 
 export async function POST(request: NextRequest) {
-  const { blueprintId } = await request.json()
+  const { PlanId } = await request.json()
 
-  if (!blueprintId) {
-    return new Response(JSON.stringify({ error: 'Blueprint ID required' }), {
+  if (!PlanId) {
+    return new Response(JSON.stringify({ error: 'Plan ID required' }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' },
     })
   }
 
   try {
-    // Execute blueprint via CLI
-    const { stdout, stderr } = await execAsync(`codex blueprint execute ${blueprintId}`)
+    // Execute Plan via CLI
+    const { stdout, stderr } = await execAsync(`codex Plan execute ${PlanId}`)
 
     return new Response(
       JSON.stringify({
@@ -59,10 +59,10 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams
-  const blueprintId = searchParams.get('blueprintId')
+  const PlanId = searchParams.get('PlanId')
 
-  if (!blueprintId) {
-    return new Response('Blueprint ID required', { status: 400 })
+  if (!PlanId) {
+    return new Response('Plan ID required', { status: 400 })
   }
 
   // Create Server-Sent Events stream
@@ -73,7 +73,7 @@ export async function GET(request: NextRequest) {
       // Send initial connection event
       const connectedEvent: ExecutionEvent = {
         type: 'started',
-        data: { blueprintId },
+        data: { PlanId },
         timestamp: new Date().toISOString(),
       }
       
@@ -103,7 +103,7 @@ export async function GET(request: NextRequest) {
           type: 'completed',
           data: {
             success: true,
-            message: 'Blueprint executed successfully',
+            message: 'Plan executed successfully',
           },
           timestamp: new Date().toISOString(),
         }

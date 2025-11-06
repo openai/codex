@@ -1,4 +1,4 @@
-// OpenAI Integration
+﻿// OpenAI Integration
 import OpenAI from 'openai'
 import type { AIMessage } from './types'
 

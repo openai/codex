@@ -1,4 +1,4 @@
-﻿//! Hybrid Acceleration Layer
+//! Hybrid Acceleration Layer
 //!
 //! Coordinates Windows AI API and CUDA for maximum performance
 
@@ -201,4 +201,3 @@ impl std::fmt::Display for AccelerationCapabilities {
         }
     }
 }
-

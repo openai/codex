@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Level of Detail (LOD) System
  * 
  * Dynamically adjusts rendering detail based on camera distance

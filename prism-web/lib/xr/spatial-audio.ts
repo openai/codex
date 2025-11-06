@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Spatial Audio for VR/AR
  * 3D positional audio for commit nodes
  */
@@ -43,9 +43,9 @@ export class SpatialAudioManager {
 
       this.audioContext = this.listener.context
 
-      console.log('✅ Spatial audio initialized')
+      console.log('笨・Spatial audio initialized')
     } catch (error) {
-      console.error('❌ Failed to initialize spatial audio:', error)
+      console.error('笶・Failed to initialize spatial audio:', error)
     }
   }
 
@@ -158,7 +158,7 @@ export class SpatialAudioManager {
 
     // Load merge sound effect (whoosh or chime)
     // For now, use procedural sound
-    console.log('🔊 Merge sound at', position)
+    console.log('矧 Merge sound at', position)
   }
 
   /**
@@ -167,7 +167,7 @@ export class SpatialAudioManager {
   playBranchSound(position: THREE.Vector3): void {
     if (!this.listener || !this.config.enabled) return
 
-    console.log('🔊 Branch sound at', position)
+    console.log('矧 Branch sound at', position)
   }
 
   /**

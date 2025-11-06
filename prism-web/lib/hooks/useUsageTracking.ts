@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Usage Tracking Hook
  * 
  * Tracks AI API usage and costs

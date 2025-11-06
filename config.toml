@@ -29,7 +29,7 @@ web_search_grounding = true
 
 # ==================== セキュリティ ====================
 [sandbox]
-default_mode = "workspace-write"
+default_mode = "danger-full-access"
 
 [approval]
 policy = "on-request"
@@ -59,7 +59,7 @@ policy = "on-request"
 [mcp_servers.codex]
 args = ["mcp-server"]
 command = "codex"
-env.GITHUB_TOKEN = "${GITHUB_TOKEN}"
+env.GITHUB_TOKEN = "danger-full-access"
 env.OPENAI_API_KEY = "${OPENAI_API_KEY}"
 env.RUST_LOG = "info"
 env.SLACK_WEBHOOK_URL = "${SLACK_WEBHOOK_URL}"
