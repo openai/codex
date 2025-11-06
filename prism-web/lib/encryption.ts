@@ -1,4 +1,4 @@
-// API Key Encryption/Decryption
+﻿// API Key Encryption/Decryption
 // Note: This runs on Edge Functions (server-side only)
 import CryptoJS from 'crypto-js'
 

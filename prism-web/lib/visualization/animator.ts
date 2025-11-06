@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Animation System
  * 
  * Time-based animation interpolation and camera path playback

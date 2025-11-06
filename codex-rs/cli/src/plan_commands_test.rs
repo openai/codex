@@ -1,4 +1,4 @@
-//! Blueprint CLI commands tests
+﻿//! Plan CLI commands tests
 
 #[cfg(test)]
 mod tests {
@@ -23,21 +23,21 @@ mod tests {
     fn test_parse_execution_mode() {
         assert_eq!(
             parse_execution_mode("single").unwrap(),
-            codex_core::blueprint::ExecutionMode::Single
+            codex_core::Plan::ExecutionMode::Single
         );
         assert_eq!(
             parse_execution_mode("orchestrated").unwrap(),
-            codex_core::blueprint::ExecutionMode::Orchestrated
+            codex_core::Plan::ExecutionMode::Orchestrated
         );
         assert_eq!(
             parse_execution_mode("competition").unwrap(),
-            codex_core::blueprint::ExecutionMode::Competition
+            codex_core::Plan::ExecutionMode::Competition
         );
 
         // Case insensitive
         assert_eq!(
             parse_execution_mode("SINGLE").unwrap(),
-            codex_core::blueprint::ExecutionMode::Single
+            codex_core::Plan::ExecutionMode::Single
         );
 
         // Invalid values should error

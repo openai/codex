@@ -1,13 +1,13 @@
-//! Blueprint schema definitions
+//! Plan schema definitions
 //!
-//! Defines the core data structures for Blueprint Mode, including the
-//! BlueprintBlock which represents a complete planning artifact.
+//! Defines the core data structures for plan mode, including the
+//! PlanBlock which represents a complete planning artifact.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Execution mode for blueprint execution
+/// Execution mode for Plan execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionMode {
@@ -35,7 +35,7 @@ impl std::fmt::Display for ExecutionMode {
     }
 }
 
-/// A single work item in the blueprint
+/// A single work item in the Plan
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkItem {
     /// Work item name
@@ -57,7 +57,7 @@ pub struct Risk {
     pub mitigation: String,
 }
 
-/// Evaluation criteria for the blueprint
+/// Evaluation criteria for the Plan
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalCriteria {
     /// Tests that must pass
@@ -114,7 +114,7 @@ pub struct ResearchSource {
     pub confidence: f64,
 }
 
-/// Research block appended to blueprint
+/// Research block appended to Plan
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResearchBlock {
     /// Research query
@@ -135,13 +135,13 @@ pub struct ResearchBlock {
     pub timestamp: DateTime<Utc>,
 }
 
-/// Complete blueprint block
+/// Complete Plan block
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BlueprintBlock {
-    /// Unique blueprint ID (timestamp-based)
+pub struct PlanBlock {
+    /// Unique Plan ID (timestamp-based)
     pub id: String,
 
-    /// Blueprint title
+    /// Plan title
     pub title: String,
 
     /// High-level goal
@@ -181,7 +181,7 @@ pub struct BlueprintBlock {
     pub research: Option<ResearchBlock>,
 
     /// Current state
-    pub state: super::state::BlueprintState,
+    pub state: super::state::PlanState,
 
     /// Whether approval is required
     pub need_approval: bool,
@@ -192,12 +192,12 @@ pub struct BlueprintBlock {
     /// Last updated timestamp
     pub updated_at: DateTime<Utc>,
 
-    /// User who created the blueprint
+    /// User who created the Plan
     pub created_by: Option<String>,
 }
 
-impl BlueprintBlock {
-    /// Create a new blueprint from a goal
+impl PlanBlock {
+    /// Create a new Plan from a goal
     pub fn new(goal: String, title: String) -> Self {
         let now = Utc::now();
         let id = format!(
@@ -221,7 +221,7 @@ impl BlueprintBlock {
             rollback: String::new(),
             artifacts: Vec::new(),
             research: None,
-            state: super::state::BlueprintState::Drafting,
+            state: super::state::PlanState::Drafting,
             need_approval: true,
             created_at: now,
             updated_at: now,
@@ -234,9 +234,9 @@ impl BlueprintBlock {
         self.updated_at = Utc::now();
     }
 
-    /// Check if blueprint can be executed
+    /// Check if Plan can be executed
     pub fn can_execute(&self) -> bool {
-        matches!(self.state, super::state::BlueprintState::Approved { .. })
+        matches!(self.state, super::state::PlanState::Approved { .. })
     }
 
     /// Add a work item
@@ -263,15 +263,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_blueprint_creation() {
-        let bp = BlueprintBlock::new("Add telemetry".to_string(), "feat-telemetry".to_string());
+    fn test_Plan_creation() {
+        let bp = PlanBlock::new("Add telemetry".to_string(), "feat-telemetry".to_string());
 
         assert!(bp.id.contains("feat-telemetry"));
         assert_eq!(bp.goal, "Add telemetry");
-        assert!(matches!(
-            bp.state,
-            super::super::state::BlueprintState::Drafting
-        ));
+        assert!(matches!(bp.state, super::super::state::PlanState::Drafting));
         assert!(!bp.can_execute());
     }
 

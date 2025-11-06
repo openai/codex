@@ -514,8 +514,7 @@ impl McpSearchProvider {
                 mcp_types::ContentBlock::TextContent(text_content) => {
                     let text = &text_content.text;
                     // Try to parse as JSON array of search results
-                    if let Ok(json_results) = serde_json::from_str::<Vec<serde_json::Value>>(text)
-                    {
+                    if let Ok(json_results) = serde_json::from_str::<Vec<serde_json::Value>>(text) {
                         for json_result in json_results {
                             if let Ok(result) = self.parse_single_result(json_result) {
                                 results.push(result);

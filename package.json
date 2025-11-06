@@ -1,27 +1,63 @@
 {
-  "name": "prism-monorepo",
-  "version": "1.2.0",
-  "private": true,
-  "description": "AI-Native Code Intelligence Platform with Multi-LLM Orchestration",
-  "workspaces": [
-    "apps/*",
-    "packages/*"
+  "name": "@zapabob/codex-cli",
+  "version": "2.0.0",
+  "description": "AI-Native OS with 4D Git Visualization & VR/AR Support - The world's first AI operating system with kernel integration",
+  "keywords": [
+    "ai",
+    "coding-assistant",
+    "llm",
+    "git-visualization",
+    "vr",
+    "ar",
+    "quest",
+    "vision-pro",
+    "cuda",
+    "kernel",
+    "sub-agents",
+    "mcp",
+    "deep-research"
   ],
+  "main": "index.js",
+  "bin": {
+    "codex": "./bin/codex"
+  },
   "scripts": {
-    "build": "turbo run build",
-    "dev": "turbo run dev",
-    "lint": "turbo run lint",
-    "type-check": "turbo run type-check",
-    "test": "turbo run test",
-    "clean": "turbo run clean"
+    "postinstall": "node scripts/install-binary.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "devDependencies": {
-    "turbo": "^1.11.0",
-    "typescript": "^5.3.3"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zapabob/codex.git"
   },
+  "author": "zapabob <zapabob@github.com>",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/zapabob/codex/issues"
+  },
+  "homepage": "https://github.com/zapabob/codex#readme",
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
   "engines": {
-    "node": ">=20.0.0",
-    "npm": ">=10.0.0"
-  }
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": [
+    "bin/",
+    "scripts/install-binary.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {},
+  "devDependencies": {}
 }
-

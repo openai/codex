@@ -1,25 +1,25 @@
-//! Blueprint persistence
+//! Plan persistence
 //!
-//! Handles writing blueprints to both Markdown (human-readable) and JSON (machine-readable) formats.
+//! Handles writing Plans to both Markdown (human-readable) and JSON (machine-readable) formats.
 
-use super::schema::BlueprintBlock;
+use super::schema::PlanBlock;
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
 
-/// Blueprint persistence manager
-pub struct BlueprintPersister {
+/// Plan persistence manager
+pub struct PlanPersister {
     /// Base directory for markdown exports
     markdown_dir: PathBuf,
     /// Base directory for JSON logs
     json_dir: PathBuf,
 }
 
-impl BlueprintPersister {
+impl PlanPersister {
     /// Create a new persister with default directories
     pub fn new() -> Result<Self> {
-        let markdown_dir = PathBuf::from("docs/blueprints");
-        let json_dir = PathBuf::from("logs/blueprint");
+        let markdown_dir = PathBuf::from("docs/Plans");
+        let json_dir = PathBuf::from("logs/Plan");
 
         // Ensure directories exist
         fs::create_dir_all(&markdown_dir)?;
@@ -42,57 +42,57 @@ impl BlueprintPersister {
         })
     }
 
-    /// Save blueprint as markdown
-    pub fn save_markdown(&self, blueprint: &BlueprintBlock) -> Result<PathBuf> {
+    /// Save Plan as markdown
+    pub fn save_markdown(&self, plan: &PlanBlock) -> Result<PathBuf> {
         let filename = format!(
             "{}_{}.md",
-            blueprint.created_at.format("%Y-%m-%d"),
-            blueprint.title.to_lowercase().replace(' ', "-")
+            plan.created_at.format("%Y-%m-%d"),
+            plan.title.to_lowercase().replace(' ', "-")
         );
         let path = self.markdown_dir.join(&filename);
 
-        let content = self.to_markdown(blueprint);
+        let content = self.to_markdown(plan);
         fs::write(&path, content)
             .with_context(|| format!("Failed to write markdown to {}", path.display()))?;
 
         Ok(path)
     }
 
-    /// Save blueprint as JSON
-    pub fn save_json(&self, blueprint: &BlueprintBlock) -> Result<PathBuf> {
-        let filename = format!("{}.json", blueprint.id);
+    /// Save Plan as JSON
+    pub fn save_json(&self, plan: &PlanBlock) -> Result<PathBuf> {
+        let filename = format!("{}.json", plan.id);
         let path = self.json_dir.join(&filename);
 
-        let content = serde_json::to_string_pretty(blueprint)
-            .context("Failed to serialize blueprint to JSON")?;
+        let content =
+            serde_json::to_string_pretty(plan).context("Failed to serialize Plan to JSON")?;
         fs::write(&path, content)
             .with_context(|| format!("Failed to write JSON to {}", path.display()))?;
 
         Ok(path)
     }
 
-    /// Load blueprint from JSON
-    pub fn load_json(&self, id: &str) -> Result<BlueprintBlock> {
+    /// Load Plan from JSON
+    pub fn load_json(&self, id: &str) -> Result<PlanBlock> {
         let filename = format!("{}.json", id);
         let path = self.json_dir.join(&filename);
 
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read JSON from {}", path.display()))?;
-        let blueprint: BlueprintBlock =
-            serde_json::from_str(&content).context("Failed to deserialize blueprint from JSON")?;
+        let plan: PlanBlock =
+            serde_json::from_str(&content).context("Failed to deserialize Plan from JSON")?;
 
-        Ok(blueprint)
+        Ok(plan)
     }
 
-    /// Export blueprint (saves both formats)
-    pub fn export(&self, blueprint: &BlueprintBlock) -> Result<(PathBuf, PathBuf)> {
-        let md_path = self.save_markdown(blueprint)?;
-        let json_path = self.save_json(blueprint)?;
+    /// Export Plan (saves both formats)
+    pub fn export(&self, plan: &PlanBlock) -> Result<(PathBuf, PathBuf)> {
+        let md_path = self.save_markdown(plan)?;
+        let json_path = self.save_json(plan)?;
         Ok((md_path, json_path))
     }
 
-    /// List all blueprint IDs
-    pub fn list_blueprints(&self) -> Result<Vec<String>> {
+    /// List all Plan IDs
+    pub fn list_plans(&self) -> Result<Vec<String>> {
         let mut ids = Vec::new();
 
         if !self.json_dir.exists() {
@@ -113,13 +113,13 @@ impl BlueprintPersister {
         Ok(ids)
     }
 
-    /// Convert blueprint to markdown format
-    fn to_markdown(&self, bp: &BlueprintBlock) -> String {
+    /// Convert Plan to markdown format
+    fn to_markdown(&self, bp: &PlanBlock) -> String {
         let mut md = String::new();
 
         // Header
         md.push_str(&format!("# {}\n\n", bp.title));
-        md.push_str(&format!("**Blueprint ID**: `{}`  \n", bp.id));
+        md.push_str(&format!("**Plan ID**: `{}`  \n", bp.id));
         md.push_str(&format!("**Status**: {}  \n", bp.state));
         md.push_str(&format!("**Mode**: {}  \n", bp.mode));
         md.push_str(&format!(
@@ -256,9 +256,9 @@ impl BlueprintPersister {
     }
 }
 
-impl Default for BlueprintPersister {
+impl Default for PlanPersister {
     fn default() -> Self {
-        Self::new().expect("Failed to create default BlueprintPersister")
+        Self::new().expect("Failed to create default PlanPersister")
     }
 }
 
@@ -267,8 +267,8 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn create_test_blueprint() -> BlueprintBlock {
-        let mut bp = BlueprintBlock::new("Test blueprint".to_string(), "test-bp".to_string());
+    fn create_test_Plan() -> PlanBlock {
+        let mut bp = PlanBlock::new("Test Plan".to_string(), "test-bp".to_string());
         bp.assumptions.push("Test assumption".to_string());
         bp.approach = "Test approach".to_string();
         bp
@@ -280,8 +280,8 @@ mod tests {
         let markdown_dir = temp_dir.path().join("markdown");
         let json_dir = temp_dir.path().join("json");
 
-        let persister = BlueprintPersister::with_dirs(markdown_dir, json_dir).unwrap();
-        let bp = create_test_blueprint();
+        let persister = PlanPersister::with_dirs(markdown_dir, json_dir).unwrap();
+        let bp = create_test_Plan();
 
         // Save
         let json_path = persister.save_json(&bp).unwrap();
@@ -299,8 +299,8 @@ mod tests {
         let markdown_dir = temp_dir.path().join("markdown");
         let json_dir = temp_dir.path().join("json");
 
-        let persister = BlueprintPersister::with_dirs(markdown_dir, json_dir).unwrap();
-        let bp = create_test_blueprint();
+        let persister = PlanPersister::with_dirs(markdown_dir, json_dir).unwrap();
+        let bp = create_test_Plan();
 
         let md_path = persister.save_markdown(&bp).unwrap();
         assert!(md_path.exists());
@@ -311,22 +311,22 @@ mod tests {
     }
 
     #[test]
-    fn test_list_blueprints() {
+    fn test_list_plans() {
         let temp_dir = TempDir::new().unwrap();
         let markdown_dir = temp_dir.path().join("markdown");
         let json_dir = temp_dir.path().join("json");
 
-        let persister = BlueprintPersister::with_dirs(markdown_dir, json_dir).unwrap();
+        let persister = PlanPersister::with_dirs(markdown_dir, json_dir).unwrap();
 
         // Initially empty
-        assert_eq!(persister.list_blueprints().unwrap().len(), 0);
+        assert_eq!(persister.list_plans().unwrap().len(), 0);
 
-        // Save a blueprint
-        let bp = create_test_blueprint();
+        // Save a Plan
+        let bp = create_test_Plan();
         persister.save_json(&bp).unwrap();
 
-        // Should list one blueprint
-        let ids = persister.list_blueprints().unwrap();
+        // Should list one Plan
+        let ids = persister.list_plans().unwrap();
         assert_eq!(ids.len(), 1);
         assert_eq!(ids[0], bp.id);
     }

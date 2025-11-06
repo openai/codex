@@ -1,4 +1,4 @@
-//! Blueprint execution logging and rollback
+//! Plan execution logging and rollback
 //!
 //! Provides execution log persistence and rollback capabilities.
 
@@ -42,8 +42,8 @@ pub struct ExecutionLog {
     /// Execution ID
     pub execution_id: String,
 
-    /// Blueprint ID
-    pub blueprint_id: String,
+    /// Plan ID
+    pub plan_id: String,
 
     /// File changes
     pub file_changes: Vec<FileChange>,
@@ -75,10 +75,10 @@ pub struct ExecutionLog {
 
 impl ExecutionLog {
     /// Create a new execution log
-    pub fn new(execution_id: String, blueprint_id: String) -> Self {
+    pub fn new(execution_id: String, plan_id: String) -> Self {
         Self {
             execution_id,
-            blueprint_id,
+            plan_id,
             file_changes: vec![],
             git_commit_before: None,
             git_commit_after: None,
@@ -285,7 +285,7 @@ mod tests {
     fn test_execution_log_creation() {
         let log = ExecutionLog::new("test-exec-1".to_string(), "bp-1".to_string());
         assert_eq!(log.execution_id, "test-exec-1");
-        assert_eq!(log.blueprint_id, "bp-1");
+        assert_eq!(log.plan_id, "bp-1");
         assert!(!log.rolled_back);
     }
 

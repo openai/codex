@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Git Parser Web Worker
  * 
  * Parses Git data and calculates 3D coordinates off the main thread

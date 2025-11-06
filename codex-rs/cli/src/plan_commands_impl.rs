@@ -1,16 +1,16 @@
-//! Blueprint command implementations
+﻿//! Plan command implementations
 //!
-//! Implementation functions for blueprint commands
+//! Implementation functions for Plan commands
 
 use anyhow::Context;
 use anyhow::Result;
 use codex_core::AuthManager;
 use codex_core::agents::AgentRuntime;
-use codex_core::blueprint::BlueprintBlock;
-use codex_core::blueprint::BlueprintExecutor;
-use codex_core::blueprint::ExecutionLog;
-use codex_core::blueprint::ExecutorConfig;
-use codex_core::blueprint::ProgressEvent;
+use codex_core::Plan::PlanBlock;
+use codex_core::Plan::PlanExecutor;
+use codex_core::Plan::ExecutionLog;
+use codex_core::Plan::ExecutorConfig;
+use codex_core::Plan::ProgressEvent;
 use codex_core::config::Config;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
@@ -18,21 +18,21 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-/// Execute a blueprint
-pub async fn execute_blueprint(blueprint_id: &str, blueprint_dir: &PathBuf) -> Result<()> {
-    // Load blueprint
-    let blueprint_file = blueprint_dir.join(format!("{}.json", blueprint_id));
+/// Execute a Plan
+pub async fn execute_Plan(Plan_id: &str, Plan_dir: &PathBuf) -> Result<()> {
+    // Load Plan
+    let Plan_file = Plan_dir.join(format!("{}.json", Plan_id));
 
-    if !blueprint_file.exists() {
-        anyhow::bail!("Blueprint not found: {}", blueprint_id);
+    if !Plan_file.exists() {
+        anyhow::bail!("Plan not found: {}", Plan_id);
     }
 
-    let content = std::fs::read_to_string(&blueprint_file)?;
-    let blueprint: BlueprintBlock = serde_json::from_str(&content)?;
+    let content = std::fs::read_to_string(&Plan_file)?;
+    let Plan: PlanBlock = serde_json::from_str(&content)?;
 
-    println!("🚀 Executing blueprint: {}", blueprint.title);
-    println!("ID: {}", blueprint.id);
-    println!("Mode: {}", blueprint.mode);
+    println!("🚀 Executing Plan: {}", Plan.title);
+    println!("ID: {}", Plan.id);
+    println!("Mode: {}", Plan.mode);
     println!();
 
     // Create progress channel
@@ -108,15 +108,15 @@ pub async fn execute_blueprint(blueprint_id: &str, blueprint_dir: &PathBuf) -> R
 
     let executor_config = ExecutorConfig {
         workspace_dir: std::env::current_dir()?,
-        log_dir: blueprint_dir.parent().unwrap().join("executions"),
+        log_dir: Plan_dir.parent().unwrap().join("executions"),
         ..Default::default()
     };
 
-    let mut executor = BlueprintExecutor::new(runtime, executor_config)?;
+    let mut executor = PlanExecutor::new(runtime, executor_config)?;
     executor.set_progress_channel(progress_tx);
 
-    // Execute blueprint
-    let execution_log = executor.execute(blueprint).await?;
+    // Execute Plan
+    let execution_log = executor.execute(Plan).await?;
 
     // Wait for progress listener to finish
     progress_handle.await?;
@@ -136,8 +136,8 @@ pub async fn execute_blueprint(blueprint_id: &str, blueprint_dir: &PathBuf) -> R
     Ok(())
 }
 
-/// Rollback a blueprint execution
-pub async fn rollback_execution(execution_id: &str, blueprint_dir: &PathBuf) -> Result<()> {
+/// Rollback a Plan execution
+pub async fn rollback_execution(execution_id: &str, Plan_dir: &PathBuf) -> Result<()> {
     println!("🔄 Rolling back execution: {}", execution_id);
 
     let config = Arc::new(Config::load_from_disk_or_default()?);
@@ -160,11 +160,11 @@ pub async fn rollback_execution(execution_id: &str, blueprint_dir: &PathBuf) -> 
 
     let executor_config = ExecutorConfig {
         workspace_dir: std::env::current_dir()?,
-        log_dir: blueprint_dir.parent().unwrap().join("executions"),
+        log_dir: Plan_dir.parent().unwrap().join("executions"),
         ..Default::default()
     };
 
-    let executor = BlueprintExecutor::new(runtime, executor_config)?;
+    let executor = PlanExecutor::new(runtime, executor_config)?;
 
     executor.rollback(execution_id).await?;
 
@@ -175,8 +175,8 @@ pub async fn rollback_execution(execution_id: &str, blueprint_dir: &PathBuf) -> 
 
 /// List execution logs
 pub async fn list_executions(
-    blueprint_id_filter: Option<String>,
-    blueprint_dir: &PathBuf,
+    Plan_id_filter: Option<String>,
+    Plan_dir: &PathBuf,
 ) -> Result<()> {
     let config = Arc::new(Config::load_from_disk_or_default()?);
     let auth_manager = AuthManager::shared(config.codex_home.clone(), false, config.cli_auth_credentials_store_mode);
@@ -198,17 +198,17 @@ pub async fn list_executions(
 
     let executor_config = ExecutorConfig {
         workspace_dir: std::env::current_dir()?,
-        log_dir: blueprint_dir.parent().unwrap().join("executions"),
+        log_dir: Plan_dir.parent().unwrap().join("executions"),
         ..Default::default()
     };
 
-    let executor = BlueprintExecutor::new(runtime, executor_config)?;
+    let executor = PlanExecutor::new(runtime, executor_config)?;
 
     let mut logs = executor.list_executions().await?;
 
     // Apply filter if specified
-    if let Some(ref bp_id) = blueprint_id_filter {
-        logs.retain(|log| log.blueprint_id == *bp_id);
+    if let Some(ref bp_id) = Plan_id_filter {
+        logs.retain(|log| log.Plan_id == *bp_id);
     }
 
     if logs.is_empty() {
@@ -224,7 +224,7 @@ pub async fn list_executions(
 
         println!(
             "{} {} | {} | {}",
-            status_icon, log.execution_id, log.final_state, log.blueprint_id
+            status_icon, log.execution_id, log.final_state, log.Plan_id
         );
         println!(
             "   Started: {} | Duration: {:.2}s",

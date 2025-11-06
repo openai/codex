@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -146,7 +146,7 @@ export default function SignupPage() {
               required
               minLength={6}
               className="w-full px-4 py-3 bg-gray-700/50 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-              placeholder="••••••••"
+              placeholder="窶｢窶｢窶｢窶｢窶｢窶｢窶｢窶｢"
             />
             <p className="mt-1 text-xs text-gray-400">Minimum 6 characters</p>
           </div>

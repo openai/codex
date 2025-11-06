@@ -1,4 +1,4 @@
-// AI Model Pricing Information (2025年11月最新)
+﻿// AI Model Pricing Information (2025蟷ｴ11譛域怙譁ｰ)
 
 export interface ModelPricing {
   provider: 'openai' | 'anthropic'
@@ -20,8 +20,8 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     inputPricePer1K: 0.015,
     outputPricePer1K: 0.060,
     contextWindow: 128000,
-    description: '最高品質のコード生成と複雑な推論',
-    recommendedFor: ['複雑なリファクタリング', 'アーキテクチャ設計', '最高品質コード生成']
+    description: '譛鬮伜刀雉ｪ縺ｮ繧ｳ繝ｼ繝臥函謌舌→隍・尅縺ｪ謗ｨ隲・,
+    recommendedFor: ['隍・尅縺ｪ繝ｪ繝輔ぃ繧ｯ繧ｿ繝ｪ繝ｳ繧ｰ', '繧｢繝ｼ繧ｭ繝・け繝√Ε險ｭ險・, '譛鬮伜刀雉ｪ繧ｳ繝ｼ繝臥函謌・]
   },
   'gpt-5-me': {
     provider: 'openai',
@@ -30,8 +30,8 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     inputPricePer1K: 0.010,
     outputPricePer1K: 0.030,
     contextWindow: 128000,
-    description: 'バランスの取れた性能とコスト',
-    recommendedFor: ['一般的なコーディング', 'コードレビュー', 'バグ修正']
+    description: '繝舌Λ繝ｳ繧ｹ縺ｮ蜿悶ｌ縺滓ｧ閭ｽ縺ｨ繧ｳ繧ｹ繝・,
+    recommendedFor: ['荳闊ｬ逧・↑繧ｳ繝ｼ繝・ぅ繝ｳ繧ｰ', '繧ｳ繝ｼ繝峨Ξ繝薙Η繝ｼ', '繝舌げ菫ｮ豁｣']
   },
   'gpt-5-mini': {
     provider: 'openai',
@@ -40,8 +40,8 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     inputPricePer1K: 0.0005,
     outputPricePer1K: 0.002,
     contextWindow: 128000,
-    description: '高速・低コストの軽量モデル',
-    recommendedFor: ['簡単なコード補完', '構文チェック', '高速処理']
+    description: '鬮倬溘・菴弱さ繧ｹ繝医・霆ｽ驥上Δ繝・Ν',
+    recommendedFor: ['邁｡蜊倥↑繧ｳ繝ｼ繝芽｣懷ｮ・, '讒区枚繝√ぉ繝・け', '鬮倬溷・逅・]
   },
   
   // Anthropic Claude 4 Series
@@ -52,8 +52,8 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     inputPricePer1K: 0.003,
     outputPricePer1K: 0.015,
     contextWindow: 200000,
-    description: '2025年最新の標準モデル、優れたバランス',
-    recommendedFor: ['コードレビュー', '詳細な説明', 'ペアプログラミング']
+    description: '2025蟷ｴ譛譁ｰ縺ｮ讓呎ｺ悶Δ繝・Ν縲∝━繧後◆繝舌Λ繝ｳ繧ｹ',
+    recommendedFor: ['繧ｳ繝ｼ繝峨Ξ繝薙Η繝ｼ', '隧ｳ邏ｰ縺ｪ隱ｬ譏・, '繝壹い繝励Ο繧ｰ繝ｩ繝溘Φ繧ｰ']
   },
   'claude-4.5-haiku': {
     provider: 'anthropic',
@@ -62,8 +62,8 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     inputPricePer1K: 0.0004,
     outputPricePer1K: 0.002,
     contextWindow: 200000,
-    description: '超高速・超低コストモデル',
-    recommendedFor: ['リアルタイム補完', 'クイック質問', '大量処理']
+    description: '雜・ｫ倬溘・雜・ｽ弱さ繧ｹ繝医Δ繝・Ν',
+    recommendedFor: ['繝ｪ繧｢繝ｫ繧ｿ繧､繝陬懷ｮ・, '繧ｯ繧､繝・け雉ｪ蝠・, '螟ｧ驥丞・逅・]
   },
   'claude-4.1-opus': {
     provider: 'anthropic',
@@ -72,8 +72,8 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     inputPricePer1K: 0.015,
     outputPricePer1K: 0.075,
     contextWindow: 200000,
-    description: '最高性能の推論と分析',
-    recommendedFor: ['複雑な問題解決', '深い分析', 'セキュリティ監査']
+    description: '譛鬮俶ｧ閭ｽ縺ｮ謗ｨ隲悶→蛻・梵',
+    recommendedFor: ['隍・尅縺ｪ蝠城｡瑚ｧ｣豎ｺ', '豺ｱ縺・・譫・, '繧ｻ繧ｭ繝･繝ｪ繝・ぅ逶｣譟ｻ']
   }
 }
 

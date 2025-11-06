@@ -22,5 +22,6 @@ pub use auto_orchestrator::{AutoOrchestrator, OrchestratedResult};
 pub use plan_orchestrator::PlanOrchestrator;
 pub use collaboration_store::CollaborationStore;
 pub use conflict_resolver::{ConflictResolver, MergeStrategy};
+pub use plan_orchestrator::PlanOrchestrator;
 pub use resource_manager::{ResourceCapacity, ResourceGuard, ResourceManager, SystemStats};
 pub use task_analyzer::{TaskAnalysis, TaskAnalyzer};

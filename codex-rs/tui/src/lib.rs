@@ -76,7 +76,7 @@ pub mod updates;
 mod version;
 
 mod wrapping;
-pub mod git_visualizer;
+// // pub mod git_visualizer; // Temporarily disabled // Temporarily disabled due to encoding issue
 
 #[cfg(test)]
 pub mod test_backend;

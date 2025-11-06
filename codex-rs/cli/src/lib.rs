@@ -10,6 +10,7 @@ pub mod login;
 pub mod mcp_cmd;
 pub mod pair_program_cmd;
 pub mod parallel_delegate_cmd;
+pub mod plan_commands;
 pub mod research_cmd;
 pub mod webhook_cmd;
 

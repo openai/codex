@@ -1,4 +1,4 @@
-//! Budget enforcement for blueprint execution
+﻿//! Budget enforcement for Plan execution
 //!
 //! Tracks and enforces token and time budgets to prevent runaway costs.
 
@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
-/// Budget tracker for a blueprint execution session
+/// Budget tracker for a Plan execution session
 #[derive(Debug, Clone)]
 pub struct BudgetTracker {
     budget: Budget,

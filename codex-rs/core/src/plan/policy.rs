@@ -1,6 +1,6 @@
-//! Blueprint policy enforcement
+﻿//! Plan policy enforcement
 //!
-//! Defines permission tiers and approval gates for blueprint operations.
+//! Defines permission tiers and approval gates for Plan operations.
 //! Ensures that privileged operations (network, install, destructive commands)
 //! require explicit approval.
 
@@ -39,9 +39,9 @@ pub enum PrivilegedOperation {
     ShellExec,
 }
 
-/// Policy configuration for blueprint operations
+/// Policy configuration for Plan operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BlueprintPolicy {
+pub struct PlanPolicy {
     /// Whether to require approval for network operations
     pub network_requires_approval: bool,
 
@@ -64,7 +64,7 @@ pub struct BlueprintPolicy {
     pub approval_role: ApprovalRole,
 }
 
-impl Default for BlueprintPolicy {
+impl Default for PlanPolicy {
     fn default() -> Self {
         Self {
             network_requires_approval: true,
@@ -114,14 +114,14 @@ pub enum PolicyError {
     OperationNotAllowed { operation: PrivilegedOperation },
 }
 
-/// Policy enforcer for blueprint operations
+/// Policy enforcer for Plan operations
 pub struct PolicyEnforcer {
-    policy: BlueprintPolicy,
+    policy: PlanPolicy,
 }
 
 impl PolicyEnforcer {
     /// Create a new policy enforcer
-    pub fn new(policy: BlueprintPolicy) -> Self {
+    pub fn new(policy: PlanPolicy) -> Self {
         Self { policy }
     }
 
@@ -210,7 +210,7 @@ impl PolicyEnforcer {
 
 impl Default for PolicyEnforcer {
     fn default() -> Self {
-        Self::new(BlueprintPolicy::default())
+        Self::new(PlanPolicy::default())
     }
 }
 
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn test_default_policy() {
-        let policy = BlueprintPolicy::default();
+        let policy = PlanPolicy::default();
         assert!(policy.network_requires_approval);
         assert!(policy.install_requires_approval);
         assert!(policy.research_requires_approval);
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn test_domain_allowlist() {
-        let mut policy = BlueprintPolicy::default();
+        let mut policy = PlanPolicy::default();
         policy.allowed_domains = vec!["example.com".to_string()];
 
         let enforcer = PolicyEnforcer::new(policy);
@@ -250,7 +250,7 @@ mod tests {
 
     #[test]
     fn test_empty_allowlist_allows_all() {
-        let policy = BlueprintPolicy::default(); // Empty allowed_domains
+        let policy = PlanPolicy::default(); // Empty allowed_domains
         let enforcer = PolicyEnforcer::new(policy);
 
         assert!(enforcer.is_domain_allowed("any-domain.com"));

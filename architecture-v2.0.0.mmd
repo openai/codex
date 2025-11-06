@@ -1,0 +1,154 @@
+graph TB
+    subgraph Client["🖥️ Client Layer"]
+        CLI["CLI<br/>codex-cli<br/>Cross-platform binaries"]
+        TUI["TUI<br/>ratatui-based<br/>Rich terminal UI"]
+        VSCode["VSCode Extension<br/>v1.0.0<br/>Blueprint UI<br/>Multi-language support"]
+        Cursor["Cursor IDE<br/>MCP Integration<br/>Composer support"]
+        WebGUI["Web GUI<br/>React + Vite<br/>Dashboard"]
+    end
+
+    subgraph Orchestration["🎯 Orchestration Layer (v1.0.0)"]
+        OrchestratorRPC["Orchestrator RPC Server<br/>16 RPC methods<br/>HMAC-SHA256 auth<br/>TCP/UDS/Named Pipe"]
+        ProtocolClient["Protocol Client<br/>@zapabob/codex-protocol-client<br/>TypeScript SDK<br/>React hooks"]
+        TaskQueue["Single-Writer Queue<br/>Concurrent task management<br/>Priority-based execution"]
+        LockManager["Lock Manager<br/>.codex/lock.json<br/>Repository-level concurrency"]
+    end
+
+    subgraph Core["⚙️ Core Runtime (Rust)"]
+        CoreEngine["Core Engine<br/>codex-core<br/>Session management<br/>Tool execution"]
+        Blueprint["Blueprint Mode<br/>v1.0.0 Complete<br/>3 execution strategies<br/>Budget & Policy enforcement"]
+        TokenBudget["Token Budget<br/>Thread-safe tracking<br/>Per-agent limits"]
+        AuditLog["Audit Logger<br/>Structured logs<br/>Security events"]
+        ProjectDoc["Project Doc<br/>AGENTS.md parser<br/>Language detection<br/>Multi-language support"]
+    end
+
+    subgraph Agents["🤖 Sub-Agent System"]
+        Supervisor["Supervisor<br/>Agent lifecycle<br/>Timeout: 5min<br/>Retry: 3x"]
+        CodeReviewer["Code Reviewer<br/>Multi-Language v1.0.0<br/>8 languages (JA/EN/ZH/KO/FR/DE/ES/PT)<br/>AGENTS.md integration<br/>ReviewLocale"]
+        TestGen["Test Generator<br/>Coverage 80%+<br/>Unit/Integration"]
+        SecAudit["Security Auditor<br/>OWASP Top 10<br/>CVE scanning"]
+        DeepResearch["Deep Researcher<br/>Multi-source<br/>Citation-based"]
+        CustomAgent["Custom Agents<br/>YAML-defined<br/>.codex/agents/"]
+    end
+
+    subgraph Research["🔍 Deep Research Engine"]
+        SearchProvider["Search Provider<br/>Cache TTL: 1h<br/>45x faster"]
+        GeminiCLI["Gemini CLI<br/>OAuth 2.0 PKCE<br/>Google Search Grounding"]
+        DuckDuckGo["DuckDuckGo<br/>Zero-cost<br/>No API key"]
+        Citation["Citation Manager<br/>Source tracking<br/>Confidence scoring"]
+    end
+
+    subgraph MCP["🔌 MCP Integration (15+ Servers)"]
+        CodexMCP["codex mcp-server<br/>Self-hosted<br/>Rust-based"]
+        GeminiMCP["gemini-cli-mcp<br/>Google Search<br/>Gemini 2.5"]
+        ChromeMCP["chrome-devtools<br/>Browser automation"]
+        PlaywrightMCP["playwright<br/>E2E testing"]
+        SequentialMCP["sequential-thinking<br/>CoT reasoning"]
+    end
+
+    subgraph Storage["💾 Storage & Config"]
+        ConfigTOML["config.toml<br/>Model providers<br/>Sandbox settings"]
+        SessionDB["Session DB<br/>Conversation history<br/>Checkpoints"]
+        AgentDefs[".codex/agents/<br/>YAML definitions<br/>Agent configs"]
+        ArtifactArchive["Artifact Archive<br/>_docs/<br/>Implementation logs"]
+        BlueprintStore["Blueprint Store<br/>State persistence<br/>Checkpoint/resume"]
+    end
+
+    subgraph Monitoring["📊 Monitoring & Telemetry (v1.0.0)"]
+        Telemetry["Telemetry Module<br/>Privacy-respecting<br/>SHA-256 hashing<br/>Event tracking"]
+        Webhooks["Webhooks Module<br/>GitHub/Slack/HTTP<br/>HMAC-SHA256<br/>Real-time notifications"]
+    end
+
+    subgraph External["🌐 External Integrations"]
+        GitHub["GitHub API<br/>PR automation<br/>Issue management"]
+        Slack["Slack Webhooks<br/>Real-time notifications"]
+        CustomWebhook["Custom Webhooks<br/>HTTP POST endpoints"]
+        AudioNotif["Audio Notifications<br/>marisa_owattaze.wav<br/>Task completion sound"]
+    end
+
+    subgraph LLM["🤖 LLM Providers"]
+        OpenAI["OpenAI<br/>GPT-5-codex<br/>Primary provider"]
+        Gemini["Google Gemini<br/>2.5 Pro/Flash<br/>Search grounding"]
+        Anthropic["Anthropic<br/>Claude 3.5+<br/>Alternative"]
+        Local["Local/Ollama<br/>Llama models<br/>Privacy-first"]
+    end
+
+    CLI --> OrchestratorRPC
+    TUI --> OrchestratorRPC
+    VSCode --> OrchestratorRPC
+    Cursor --> CodexMCP
+    WebGUI --> ProtocolClient
+    
+    ProtocolClient --> OrchestratorRPC
+    OrchestratorRPC --> TaskQueue
+    OrchestratorRPC --> LockManager
+    TaskQueue --> CoreEngine
+    
+    CoreEngine --> Blueprint
+    CoreEngine --> TokenBudget
+    CoreEngine --> AuditLog
+    CoreEngine --> Supervisor
+    CoreEngine --> ProjectDoc
+    
+    ProjectDoc --> CodeReviewer
+    Supervisor --> CodeReviewer
+    Supervisor --> TestGen
+    Supervisor --> SecAudit
+    Supervisor --> DeepResearch
+    Supervisor --> CustomAgent
+    
+    DeepResearch --> SearchProvider
+    SearchProvider --> GeminiCLI
+    SearchProvider --> DuckDuckGo
+    SearchProvider --> Citation
+    
+    CoreEngine --> CodexMCP
+    CodexMCP --> GeminiMCP
+    CodexMCP --> ChromeMCP
+    CodexMCP --> PlaywrightMCP
+    CodexMCP --> SequentialMCP
+    
+    CoreEngine --> ConfigTOML
+    CoreEngine --> SessionDB
+    Supervisor --> AgentDefs
+    CoreEngine --> ArtifactArchive
+    Blueprint --> BlueprintStore
+    
+    CoreEngine --> Telemetry
+    CoreEngine --> Webhooks
+    Telemetry --> GitHub
+    Webhooks --> Slack
+    Webhooks --> CustomWebhook
+    Supervisor --> AudioNotif
+    
+    CoreEngine --> GitHub
+    CoreEngine --> Slack
+    CoreEngine --> CustomWebhook
+    
+    CoreEngine --> OpenAI
+    GeminiCLI --> Gemini
+    CoreEngine --> Anthropic
+    CoreEngine --> Local
+
+    classDef clientClass fill:#e1f5ff,stroke:#01579b,stroke-width:2px
+    classDef orchClass fill:#fff9c4,stroke:#f57f17,stroke-width:3px
+    classDef coreClass fill:#ffebee,stroke:#c62828,stroke-width:2px
+    classDef agentClass fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef researchClass fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
+    classDef mcpClass fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef storageClass fill:#e0f2f1,stroke:#004d40,stroke-width:2px
+    classDef monitoringClass fill:#f1f8e9,stroke:#558b2f,stroke-width:2px
+    classDef externalClass fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    classDef llmClass fill:#ede7f6,stroke:#311b92,stroke-width:2px
+
+    class CLI,TUI,VSCode,Cursor,WebGUI clientClass
+    class OrchestratorRPC,ProtocolClient,TaskQueue,LockManager orchClass
+    class CoreEngine,Blueprint,TokenBudget,AuditLog,ProjectDoc coreClass
+    class Supervisor,CodeReviewer,TestGen,SecAudit,DeepResearch,CustomAgent agentClass
+    class SearchProvider,GeminiCLI,DuckDuckGo,Citation researchClass
+    class CodexMCP,GeminiMCP,ChromeMCP,PlaywrightMCP,SequentialMCP mcpClass
+    class ConfigTOML,SessionDB,AgentDefs,ArtifactArchive,BlueprintStore storageClass
+    class Telemetry,Webhooks monitoringClass
+    class GitHub,Slack,CustomWebhook,AudioNotif externalClass
+    class OpenAI,Gemini,Anthropic,Local llmClass
+

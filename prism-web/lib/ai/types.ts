@@ -1,4 +1,4 @@
-// Shared AI types
+﻿// Shared AI types
 
 export type AIProvider = 'openai' | 'anthropic'
 

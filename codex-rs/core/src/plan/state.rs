@@ -1,29 +1,29 @@
-//! Blueprint state machine
+﻿//! Plan state machine
 //!
-//! Defines the finite state machine for blueprint lifecycle management.
+//! Defines the finite state machine for Plan lifecycle management.
 //! State transitions are strictly controlled to ensure safety and proper approvals.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Blueprint state machine states
+/// Plan state machine states
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
-pub enum BlueprintState {
-    /// Blueprint is inactive/not started
+pub enum PlanState {
+    /// Plan is inactive/not started
     Inactive,
 
-    /// Blueprint is being drafted
+    /// Plan is being drafted
     Drafting,
 
-    /// Blueprint is pending approval
+    /// Plan is pending approval
     Pending {
         /// Timestamp when moved to pending
         pending_since: DateTime<Utc>,
     },
 
-    /// Blueprint has been approved for execution
+    /// Plan has been approved for execution
     Approved {
         /// Who approved it
         approved_by: String,
@@ -31,7 +31,7 @@ pub enum BlueprintState {
         approved_at: DateTime<Utc>,
     },
 
-    /// Blueprint was rejected
+    /// Plan was rejected
     Rejected {
         /// Reason for rejection
         reason: String,
@@ -41,15 +41,15 @@ pub enum BlueprintState {
         rejected_at: DateTime<Utc>,
     },
 
-    /// Blueprint was superseded by a new version
+    /// Plan was superseded by a new version
     Superseded {
-        /// ID of the new blueprint
+        /// ID of the new Plan
         new_id: String,
         /// When it was superseded
         superseded_at: DateTime<Utc>,
     },
 
-    /// Blueprint is currently executing
+    /// Plan is currently executing
     Executing {
         /// Execution ID
         execution_id: String,
@@ -57,7 +57,7 @@ pub enum BlueprintState {
         started_at: DateTime<Utc>,
     },
 
-    /// Blueprint execution completed successfully
+    /// Plan execution completed successfully
     Completed {
         /// Execution ID
         execution_id: String,
@@ -65,7 +65,7 @@ pub enum BlueprintState {
         completed_at: DateTime<Utc>,
     },
 
-    /// Blueprint execution failed
+    /// Plan execution failed
     Failed {
         /// Execution ID
         execution_id: String,
@@ -76,7 +76,7 @@ pub enum BlueprintState {
     },
 }
 
-impl Default for BlueprintState {
+impl Default for PlanState {
     fn default() -> Self {
         Self::Inactive
     }
@@ -88,7 +88,7 @@ pub enum StateTransitionError {
     #[error("Invalid state transition from {from} to {to}")]
     InvalidTransition { from: String, to: String },
 
-    #[error("Blueprint must be in {required} state, but is in {actual}")]
+    #[error("Plan must be in {required} state, but is in {actual}")]
     InvalidState { required: String, actual: String },
 
     #[error("Approval required but not provided")]
@@ -98,7 +98,7 @@ pub enum StateTransitionError {
     ReasonRequired,
 }
 
-impl BlueprintState {
+impl PlanState {
     /// Check if state allows execution
     pub fn can_execute(&self) -> bool {
         matches!(self, Self::Approved { .. })
@@ -282,7 +282,7 @@ impl BlueprintState {
     }
 }
 
-impl std::fmt::Display for BlueprintState {
+impl std::fmt::Display for PlanState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name())
     }
@@ -295,53 +295,53 @@ mod tests {
     #[test]
     fn test_valid_state_transitions() {
         // Inactive -> Drafting
-        let state = BlueprintState::Inactive;
+        let state = PlanState::Inactive;
         let state = state.start_drafting().unwrap();
-        assert!(matches!(state, BlueprintState::Drafting));
+        assert!(matches!(state, PlanState::Drafting));
 
         // Drafting -> Pending
         let state = state.submit_for_approval().unwrap();
-        assert!(matches!(state, BlueprintState::Pending { .. }));
+        assert!(matches!(state, PlanState::Pending { .. }));
 
         // Pending -> Approved
         let state = state.approve("user1".to_string()).unwrap();
-        assert!(matches!(state, BlueprintState::Approved { .. }));
+        assert!(matches!(state, PlanState::Approved { .. }));
         assert!(state.can_execute());
     }
 
     #[test]
     fn test_rejection_flow() {
-        let state = BlueprintState::Drafting;
+        let state = PlanState::Drafting;
         let state = state.submit_for_approval().unwrap();
 
         // Pending -> Rejected
         let state = state
             .reject("Not ready yet".to_string(), Some("reviewer".to_string()))
             .unwrap();
-        assert!(matches!(state, BlueprintState::Rejected { .. }));
+        assert!(matches!(state, PlanState::Rejected { .. }));
         assert!(state.is_terminal());
 
         // Rejected -> Drafting (rework)
         let state = state.back_to_drafting().unwrap();
-        assert!(matches!(state, BlueprintState::Drafting));
+        assert!(matches!(state, PlanState::Drafting));
     }
 
     #[test]
     fn test_supersede() {
-        let state = BlueprintState::Drafting;
+        let state = PlanState::Drafting;
         let state = state.supersede("new-bp-id".to_string()).unwrap();
-        assert!(matches!(state, BlueprintState::Superseded { .. }));
+        assert!(matches!(state, PlanState::Superseded { .. }));
         assert!(state.is_terminal());
     }
 
     #[test]
     fn test_invalid_transitions() {
         // Can't approve from Drafting
-        let state = BlueprintState::Drafting;
+        let state = PlanState::Drafting;
         assert!(state.approve("user".to_string()).is_err());
 
-        // Can't modify approved blueprint
-        let state = BlueprintState::Approved {
+        // Can't modify approved Plan
+        let state = PlanState::Approved {
             approved_by: "user".to_string(),
             approved_at: Utc::now(),
         };
@@ -350,7 +350,7 @@ mod tests {
 
     #[test]
     fn test_rejection_requires_reason() {
-        let state = BlueprintState::Pending {
+        let state = PlanState::Pending {
             pending_since: Utc::now(),
         };
 

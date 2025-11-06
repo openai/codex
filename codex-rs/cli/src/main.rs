@@ -80,6 +80,18 @@ struct MultitoolCli {
     #[clap(long, global = true)]
     pub cuda_device: Option<i32>,
 
+    /// Use Ollama for local inference
+    #[clap(long, global = true)]
+    pub use_ollama: bool,
+
+    /// Ollama model name
+    #[clap(long, global = true, default_value = "gpt-oss:20b")]
+    pub ollama_model: String,
+
+    /// Ollama server URL
+    #[clap(long, global = true)]
+    pub ollama_url: Option<String>,
+
     #[clap(flatten)]
     interactive: TuiCli,
 
@@ -702,6 +714,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         kernel_accelerated,
         mut interactive,
         subcommand,
+        ..
     } = MultitoolCli::parse();
 
     // Fold --enable/--disable into config overrides so they flow to all subcommands.

@@ -1,4 +1,4 @@
-// Shared encryption utilities for Edge Functions
+﻿// Shared encryption utilities for Edge Functions
 // Uses Deno's built-in Web Crypto API
 
 const ENCRYPTION_SECRET = Deno.env.get('ENCRYPTION_SECRET')
