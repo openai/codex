@@ -1,6 +1,6 @@
-//! DeepResearch integration for Blueprint Mode
+//! DeepResearch integration for plan mode
 //!
-//! Integrates deep research capabilities with blueprint planning phase.
+//! Integrates deep research capabilities with Plan planning phase.
 
 use super::policy::{ApprovalRole, PolicyEnforcer, PrivilegedOperation};
 use super::schema::{ResearchBlock, ResearchSource};
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{debug, info};
 
-/// Research request for blueprint
+/// Research request for Plan
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResearchRequest {
     /// Research query
@@ -219,7 +219,7 @@ impl ResearchIntegration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blueprint::policy::BlueprintPolicy;
+    use crate::plan::policy::PlanPolicy;
 
     #[test]
     fn test_approval_dialog_creation() {
@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn test_requires_approval() {
-        let policy = BlueprintPolicy::default();
+        let policy = PlanPolicy::default();
         let enforcer = Arc::new(PolicyEnforcer::new(policy));
         let integration = ResearchIntegration::new(enforcer);
 

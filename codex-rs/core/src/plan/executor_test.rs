@@ -1,29 +1,29 @@
-//! Blueprint executor tests
+//! Plan executor tests
 
 #[cfg(test)]
 mod tests {
-    use crate::blueprint::{BlueprintBlock, BlueprintState, ExecutionMode, Budget};
+    use crate::plan::{PlanBlock, PlanState, ExecutionMode, Budget};
     use chrono::Utc;
 
     #[test]
-    fn test_blueprint_can_execute() {
-        let mut blueprint = create_test_blueprint();
+    fn test_Plan_can_execute() {
+        let mut Plan = create_test_Plan();
         
         // Should not be executable in Drafting state
-        blueprint.state = BlueprintState::Drafting;
-        assert!(!blueprint.state.can_execute());
+        Plan.state = PlanState::Drafting;
+        assert!(!Plan.state.can_execute());
         
         // Should be executable in Approved state
-        blueprint.state = BlueprintState::Approved {
+        Plan.state = PlanState::Approved {
             approved_by: "test-user".to_string(),
             approved_at: Utc::now(),
         };
-        assert!(blueprint.state.can_execute());
+        assert!(Plan.state.can_execute());
     }
 
     #[test]
     fn test_state_transitions_for_execution() {
-        let state = BlueprintState::Approved {
+        let state = PlanState::Approved {
             approved_by: "test-user".to_string(),
             approved_at: Utc::now(),
         };
@@ -40,7 +40,7 @@ mod tests {
 
     #[test]
     fn test_execution_failure_transition() {
-        let state = BlueprintState::Approved {
+        let state = PlanState::Approved {
             approved_by: "test-user".to_string(),
             approved_at: Utc::now(),
         };
@@ -57,21 +57,21 @@ mod tests {
     #[test]
     fn test_invalid_execution_transition() {
         // Can't execute from Drafting
-        let state = BlueprintState::Drafting;
+        let state = PlanState::Drafting;
         assert!(state.start_execution("exec-3".to_string()).is_err());
 
         // Can't complete from Approved
-        let state = BlueprintState::Approved {
+        let state = PlanState::Approved {
             approved_by: "test-user".to_string(),
             approved_at: Utc::now(),
         };
         assert!(state.complete_execution().is_err());
     }
 
-    fn create_test_blueprint() -> BlueprintBlock {
-        BlueprintBlock {
+    fn create_test_Plan() -> PlanBlock {
+        PlanBlock {
             id: "test-bp-1".to_string(),
-            title: "Test Blueprint".to_string(),
+            title: "Test Plan".to_string(),
             goal: "Test goal".to_string(),
             assumptions: vec![],
             clarifying_questions: vec![],
@@ -84,7 +84,7 @@ mod tests {
             rollback: "git reset".to_string(),
             artifacts: vec![],
             research: None,
-            state: BlueprintState::Drafting,
+            state: PlanState::Drafting,
             need_approval: true,
             created_at: Utc::now(),
             updated_at: Utc::now(),

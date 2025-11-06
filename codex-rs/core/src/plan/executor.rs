@@ -1,10 +1,10 @@
-//! Blueprint execution engine
+//! Plan execution engine
 //!
-//! Handles the execution of approved blueprints with progress tracking,
-//! rollback capabilities, and integration with BlueprintOrchestrator.
+//! Handles the execution of approved Plans with progress tracking,
+//! rollback capabilities, and integration with PlanOrchestrator.
 
-use crate::blueprint::BlueprintBlock;
-use crate::orchestration::{BlueprintOrchestrator, OrchestratedResult};
+use crate::plan::PlanBlock;
+use crate::orchestration::{OrchestratedResult, PlanOrchestrator};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ pub enum ExecutionEvent {
     /// Execution started
     Started {
         execution_id: String,
-        blueprint_id: String,
+        Plan_id: String,
         timestamp: DateTime<Utc>,
     },
 
@@ -86,8 +86,8 @@ pub struct ExecutionResult {
     /// Execution ID
     pub execution_id: String,
 
-    /// Blueprint ID
-    pub blueprint_id: String,
+    /// Plan ID
+    pub Plan_id: String,
 
     /// Success flag
     pub success: bool,
@@ -122,10 +122,10 @@ pub struct TestResult {
     pub error: Option<String>,
 }
 
-/// Blueprint executor
-pub struct BlueprintExecutor {
-    /// Blueprint orchestrator
-    orchestrator: Arc<BlueprintOrchestrator>,
+/// Plan executor
+pub struct PlanExecutor {
+    /// Plan orchestrator
+    orchestrator: Arc<PlanOrchestrator>,
 
     /// Event broadcaster
     event_tx: Arc<RwLock<Option<broadcast::Sender<ExecutionEvent>>>>,
@@ -134,9 +134,9 @@ pub struct BlueprintExecutor {
     log_dir: PathBuf,
 }
 
-impl BlueprintExecutor {
-    /// Create a new blueprint executor
-    pub fn new(orchestrator: Arc<BlueprintOrchestrator>, log_dir: PathBuf) -> Self {
+impl PlanExecutor {
+    /// Create a new Plan executor
+    pub fn new(orchestrator: Arc<PlanOrchestrator>, log_dir: PathBuf) -> Self {
         std::fs::create_dir_all(&log_dir).ok();
 
         Self {
@@ -171,56 +171,49 @@ impl BlueprintExecutor {
         debug!("Execution event: {:?}", event);
     }
 
-    /// Execute a blueprint
-    pub async fn execute(&self, mut blueprint: BlueprintBlock) -> Result<ExecutionResult> {
-        // Verify blueprint is approved
-        if !blueprint.state.can_execute() {
-            anyhow::bail!(
-                "Blueprint {} is not approved (state: {})",
-                blueprint.id,
-                blueprint.state
-            );
+    /// Execute a Plan
+    pub async fn execute(&self, mut Plan: PlanBlock) -> Result<ExecutionResult> {
+        // Verify Plan is approved
+        if !Plan.state.can_execute() {
+            anyhow::bail!("Plan {} is not approved (state: {})", Plan.id, Plan.state);
         }
 
         // Generate execution ID
         let execution_id = Uuid::new_v4().to_string();
         let started_at = Utc::now();
 
-        info!(
-            "Starting execution {} for blueprint {}",
-            execution_id, blueprint.id
-        );
+        info!("Starting execution {} for Plan {}", execution_id, Plan.id);
 
         // Transition to Executing state
-        blueprint.state = blueprint
+        Plan.state = Plan
             .state
             .clone()
             .start_execution(execution_id.clone())
             .context("Failed to transition to Executing state")?;
 
-        blueprint.updated_at = Utc::now();
+        Plan.updated_at = Utc::now();
 
         // Emit started event
         self.emit_event(ExecutionEvent::Started {
             execution_id: execution_id.clone(),
-            blueprint_id: blueprint.id.clone(),
+            Plan_id: Plan.id.clone(),
             timestamp: started_at,
         })
         .await;
 
-        // Execute the blueprint
-        let result = match self.execute_internal(&execution_id, &blueprint).await {
+        // Execute the Plan
+        let result = match self.execute_internal(&execution_id, &Plan).await {
             Ok(orchestrated_result) => {
                 info!("Execution {} completed successfully", execution_id);
 
                 // Transition to Completed state
-                blueprint.state = blueprint
+                Plan.state = Plan
                     .state
                     .clone()
                     .complete_execution()
                     .context("Failed to transition to Completed state")?;
 
-                blueprint.updated_at = Utc::now();
+                Plan.updated_at = Utc::now();
 
                 let completed_at = Utc::now();
                 let duration_secs = (completed_at - started_at).num_seconds() as f64;
@@ -229,14 +222,14 @@ impl BlueprintExecutor {
                 self.emit_event(ExecutionEvent::Completed {
                     execution_id: execution_id.clone(),
                     success: true,
-                    message: "Blueprint executed successfully".to_string(),
+                    message: "Plan executed successfully".to_string(),
                     timestamp: completed_at,
                 })
                 .await;
 
                 ExecutionResult {
                     execution_id: execution_id.clone(),
-                    blueprint_id: blueprint.id.clone(),
+                    Plan_id: Plan.id.clone(),
                     success: true,
                     orchestrated_result: Some(orchestrated_result),
                     files_changed: vec![],
@@ -251,13 +244,13 @@ impl BlueprintExecutor {
                 error!("Execution {} failed: {}", execution_id, e);
 
                 // Transition to Failed state
-                blueprint.state = blueprint
+                Plan.state = Plan
                     .state
                     .clone()
                     .fail_execution(e.to_string())
                     .context("Failed to transition to Failed state")?;
 
-                blueprint.updated_at = Utc::now();
+                Plan.updated_at = Utc::now();
 
                 let completed_at = Utc::now();
                 let duration_secs = (completed_at - started_at).num_seconds() as f64;
@@ -272,7 +265,7 @@ impl BlueprintExecutor {
 
                 ExecutionResult {
                     execution_id: execution_id.clone(),
-                    blueprint_id: blueprint.id.clone(),
+                    Plan_id: Plan.id.clone(),
                     success: false,
                     orchestrated_result: None,
                     files_changed: vec![],
@@ -295,12 +288,12 @@ impl BlueprintExecutor {
     async fn execute_internal(
         &self,
         execution_id: &str,
-        blueprint: &BlueprintBlock,
+        Plan: &PlanBlock,
     ) -> Result<OrchestratedResult> {
         // Emit progress for work items
-        let total_steps = blueprint.work_items.len().max(1);
+        let total_steps = Plan.work_items.len().max(1);
 
-        for (i, work_item) in blueprint.work_items.iter().enumerate() {
+        for (i, work_item) in Plan.work_items.iter().enumerate() {
             self.emit_event(ExecutionEvent::Progress {
                 execution_id: execution_id.to_string(),
                 current_step: i + 1,
@@ -321,7 +314,7 @@ impl BlueprintExecutor {
         // Execute via orchestrator
         let result = self
             .orchestrator
-            .execute_blueprint(blueprint)
+            .execute_Plan(Plan)
             .await
             .context("Orchestrator execution failed")?;
 

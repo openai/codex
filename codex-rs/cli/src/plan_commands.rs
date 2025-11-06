@@ -1,31 +1,31 @@
-//! Blueprint Mode CLI commands
+//! Plan Mode CLI commands
 //!
-//! Provides command-line interface for creating, managing, and executing blueprints.
+//! Provides command-line interface for creating, managing, and executing plan.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use codex_core::blueprint::{BlueprintBlock, BlueprintState, ExecutionMode};
+use codex_core::plan::{ExecutionMode, PlanBlock, PlanState};
 use std::path::PathBuf;
 
-/// Blueprint Mode commands
+/// Plan Mode commands
 #[derive(Debug, Parser)]
-pub struct BlueprintCli {
+pub struct PlanCli {
     #[clap(subcommand)]
-    pub command: BlueprintCommand,
+    pub command: PlanCommand,
 }
 
 #[derive(Debug, Subcommand)]
-pub enum BlueprintCommand {
-    /// Toggle blueprint mode on/off
+pub enum PlanCommand {
+    /// Toggle plan mode on/off
     Toggle {
-        /// Enable or disable blueprint mode
+        /// Enable or disable plan mode
         #[clap(value_parser = parse_bool_flag)]
         enabled: bool,
     },
 
-    /// Create a new blueprint
+    /// Create a new Plan
     Create {
-        /// Blueprint title or goal
+        /// Plan title or goal
         title: String,
 
         /// Execution mode (single, orchestrated, competition)
@@ -41,56 +41,56 @@ pub enum BlueprintCommand {
         budget_time: u64,
     },
 
-    /// List all blueprints
+    /// List all Plans
     List {
         /// Filter by state (drafting, pending, approved, rejected)
         #[clap(long)]
         state: Option<String>,
     },
 
-    /// Approve a blueprint
+    /// Approve a Plan
     Approve {
-        /// Blueprint ID
-        blueprint_id: String,
+        /// Plan ID
+        Plan_id: String,
     },
 
-    /// Reject a blueprint
+    /// Reject a Plan
     Reject {
-        /// Blueprint ID
-        blueprint_id: String,
+        /// Plan ID
+        Plan_id: String,
 
         /// Rejection reason
         #[clap(long)]
         reason: String,
     },
 
-    /// Export a blueprint
+    /// Export a Plan
     Export {
-        /// Blueprint ID
-        blueprint_id: String,
+        /// Plan ID
+        Plan_id: String,
 
         /// Export format (md, json, both)
         #[clap(long, default_value = "both")]
         format: String,
 
         /// Export path
-        #[clap(long, default_value = "docs/blueprints")]
+        #[clap(long, default_value = "docs/Plans")]
         path: PathBuf,
     },
 
-    /// Get blueprint status
+    /// Get Plan status
     Status {
-        /// Blueprint ID
-        blueprint_id: String,
+        /// Plan ID
+        Plan_id: String,
     },
 
-    /// Execute an approved blueprint
+    /// Execute an approved Plan
     Execute {
-        /// Blueprint ID
-        blueprint_id: String,
+        /// Plan ID
+        Plan_id: String,
     },
 
-    /// Rollback a blueprint execution
+    /// Rollback a Plan execution
     Rollback {
         /// Execution ID
         execution_id: String,
@@ -98,9 +98,9 @@ pub enum BlueprintCommand {
 
     /// List execution logs
     Executions {
-        /// Filter by blueprint ID
+        /// Filter by Plan ID
         #[clap(long)]
-        blueprint_id: Option<String>,
+        Plan_id: Option<String>,
     },
 }
 
@@ -113,63 +113,60 @@ fn parse_bool_flag(s: &str) -> Result<bool, String> {
     }
 }
 
-/// Run blueprint CLI command
-pub async fn run_blueprint_command(cli: BlueprintCli) -> Result<()> {
+/// Run Plan CLI command
+pub async fn run_Plan_command(cli: PlanCli) -> Result<()> {
     let home_dir = dirs::home_dir().context("Failed to get home directory")?;
-    let blueprint_dir = home_dir.join(".codex").join("blueprints");
+    let Plan_dir = home_dir.join(".codex").join("Plans");
 
-    std::fs::create_dir_all(&blueprint_dir).context("Failed to create blueprints directory")?;
+    std::fs::create_dir_all(&Plan_dir).context("Failed to create Plans directory")?;
 
     match cli.command {
-        BlueprintCommand::Toggle { enabled } => {
-            toggle_blueprint_mode(enabled, &blueprint_dir)?;
+        PlanCommand::Toggle { enabled } => {
+            toggle_Plan_mode(enabled, &Plan_dir)?;
         }
-        BlueprintCommand::Create {
+        PlanCommand::Create {
             title,
             mode,
             budget_tokens,
             budget_time,
         } => {
-            create_blueprint(title, mode, budget_tokens, budget_time, &blueprint_dir)?;
+            create_Plan(title, mode, budget_tokens, budget_time, &Plan_dir)?;
         }
-        BlueprintCommand::List { state } => {
-            list_blueprints(state, &blueprint_dir)?;
+        PlanCommand::List { state } => {
+            list_Plans(state, &Plan_dir)?;
         }
-        BlueprintCommand::Approve { blueprint_id } => {
-            approve_blueprint(&blueprint_id, &blueprint_dir)?;
+        PlanCommand::Approve { Plan_id } => {
+            approve_Plan(&Plan_id, &Plan_dir)?;
         }
-        BlueprintCommand::Reject {
-            blueprint_id,
-            reason,
-        } => {
-            reject_blueprint(&blueprint_id, &reason, &blueprint_dir)?;
+        PlanCommand::Reject { Plan_id, reason } => {
+            reject_Plan(&Plan_id, &reason, &Plan_dir)?;
         }
-        BlueprintCommand::Export {
-            blueprint_id,
+        PlanCommand::Export {
+            Plan_id,
             format,
             path,
         } => {
-            export_blueprint(&blueprint_id, &format, &path, &blueprint_dir)?;
+            export_Plan(&Plan_id, &format, &path, &Plan_dir)?;
         }
-        BlueprintCommand::Status { blueprint_id } => {
-            get_blueprint_status(&blueprint_id, &blueprint_dir)?;
+        PlanCommand::Status { Plan_id } => {
+            get_Plan_status(&Plan_id, &Plan_dir)?;
         }
-        BlueprintCommand::Execute { blueprint_id } => {
-            execute_blueprint(&blueprint_id, &blueprint_dir).await?;
+        PlanCommand::Execute { Plan_id } => {
+            execute_Plan(&Plan_id, &Plan_dir).await?;
         }
-        BlueprintCommand::Rollback { execution_id } => {
-            rollback_execution(&execution_id, &blueprint_dir).await?;
+        PlanCommand::Rollback { execution_id } => {
+            rollback_execution(&execution_id, &Plan_dir).await?;
         }
-        BlueprintCommand::Executions { blueprint_id } => {
-            list_executions(blueprint_id, &blueprint_dir).await?;
+        PlanCommand::Executions { Plan_id } => {
+            list_executions(Plan_id, &Plan_dir).await?;
         }
     }
 
     Ok(())
 }
 
-fn toggle_blueprint_mode(enabled: bool, blueprint_dir: &PathBuf) -> Result<()> {
-    let state_file = blueprint_dir.join("mode_state.json");
+fn toggle_Plan_mode(enabled: bool, Plan_dir: &PathBuf) -> Result<()> {
+    let state_file = Plan_dir.join("mode_state.json");
 
     let state = serde_json::json!({
         "enabled": enabled,
@@ -180,22 +177,22 @@ fn toggle_blueprint_mode(enabled: bool, blueprint_dir: &PathBuf) -> Result<()> {
         .context("Failed to write mode state")?;
 
     if enabled {
-        println!("✅ Blueprint Mode: ON");
-        println!("📋 All operations are now read-only until blueprints are approved.");
+        println!("✅ plan mode: ON");
+        println!("📋 All operations are now read-only until Plans are approved.");
     } else {
-        println!("✅ Blueprint Mode: OFF");
+        println!("✅ plan mode: OFF");
         println!("🚀 Normal operation resumed.");
     }
 
     Ok(())
 }
 
-fn create_blueprint(
+fn create_Plan(
     title: String,
     mode: ExecutionMode,
     budget_tokens: u64,
     budget_time: u64,
-    blueprint_dir: &PathBuf,
+    Plan_dir: &PathBuf,
 ) -> Result<()> {
     let now = chrono::Utc::now();
     let id = format!(
@@ -204,7 +201,7 @@ fn create_blueprint(
         slug::slugify(&title)
     );
 
-    let blueprint = BlueprintBlock {
+    let Plan = PlanBlock {
         id: id.clone(),
         title: title.clone(),
         goal: title.clone(),
@@ -214,8 +211,8 @@ fn create_blueprint(
         mode,
         work_items: vec![],
         risks: vec![],
-        eval: codex_core::blueprint::EvalCriteria::default(),
-        budget: codex_core::blueprint::Budget {
+        eval: codex_core::Plan::EvalCriteria::default(),
+        budget: codex_core::Plan::Budget {
             session_cap: Some(budget_tokens),
             cap_min: Some(budget_time),
             ..Default::default()
@@ -223,19 +220,19 @@ fn create_blueprint(
         rollback: "Revert changes via git reset".to_string(),
         artifacts: vec![],
         research: None,
-        state: BlueprintState::Drafting,
+        state: PlanState::Drafting,
         need_approval: true,
         created_at: now,
         updated_at: now,
         created_by: Some("cli-user".to_string()),
     };
 
-    let blueprint_file = blueprint_dir.join(format!("{}.json", id));
-    std::fs::write(&blueprint_file, serde_json::to_string_pretty(&blueprint)?)
-        .context("Failed to write blueprint")?;
+    let Plan_file = Plan_dir.join(format!("{}.json", id));
+    std::fs::write(&Plan_file, serde_json::to_string_pretty(&Plan)?)
+        .context("Failed to write Plan")?;
 
-    println!("✅ Blueprint created: {}", id);
-    println!("📋 Status: {:?}", blueprint.state);
+    println!("✅ Plan created: {}", id);
+    println!("📋 Status: {:?}", Plan.state);
     println!("🎯 Mode: {}", mode);
     println!(
         "💰 Budget: {} tokens, {} minutes",
@@ -243,18 +240,17 @@ fn create_blueprint(
     );
     println!();
     println!("Next steps:");
-    println!("  1. Review: codex blueprint status {}", id);
-    println!("  2. Approve: codex blueprint approve {}", id);
+    println!("  1. Review: codex Plan status {}", id);
+    println!("  2. Approve: codex Plan approve {}", id);
     println!("  3. Execute: codex execute {}", id);
 
     Ok(())
 }
 
-fn list_blueprints(state_filter: Option<String>, blueprint_dir: &PathBuf) -> Result<()> {
-    let entries =
-        std::fs::read_dir(blueprint_dir).context("Failed to read blueprints directory")?;
+fn list_Plans(state_filter: Option<String>, Plan_dir: &PathBuf) -> Result<()> {
+    let entries = std::fs::read_dir(Plan_dir).context("Failed to read Plans directory")?;
 
-    let mut blueprints: Vec<BlueprintBlock> = Vec::new();
+    let mut Plans: Vec<PlanBlock> = Vec::new();
 
     for entry in entries {
         let entry = entry?;
@@ -262,15 +258,15 @@ fn list_blueprints(state_filter: Option<String>, blueprint_dir: &PathBuf) -> Res
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(blueprint) = serde_json::from_str::<BlueprintBlock>(&content) {
+                if let Ok(Plan) = serde_json::from_str::<PlanBlock>(&content) {
                     // Apply state filter if specified
                     if let Some(ref filter) = state_filter {
-                        let state_str = format!("{:?}", blueprint.state).to_lowercase();
+                        let state_str = format!("{:?}", Plan.state).to_lowercase();
                         if state_str.contains(&filter.to_lowercase()) {
-                            blueprints.push(blueprint);
+                            plan.push(Plan);
                         }
                     } else {
-                        blueprints.push(blueprint);
+                        plan.push(Plan);
                     }
                 }
             }
@@ -278,27 +274,27 @@ fn list_blueprints(state_filter: Option<String>, blueprint_dir: &PathBuf) -> Res
     }
 
     // Sort by creation date (newest first)
-    blueprints.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    plan.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
-    if blueprints.is_empty() {
-        println!("📋 No blueprints found.");
+    if plan.is_empty() {
+        println!("📋 No Plans found.");
         return Ok(());
     }
 
-    println!("📋 Blueprints ({})", blueprints.len());
+    println!("📋 Plans ({})", plan.len());
     println!();
 
-    for bp in blueprints {
+    for bp in Plans {
         let status_icon = match bp.state {
-            BlueprintState::Inactive => "⚪",
-            BlueprintState::Drafting => "📝",
-            BlueprintState::Pending { .. } => "⏳",
-            BlueprintState::Approved { .. } => "✅",
-            BlueprintState::Rejected { .. } => "❌",
-            BlueprintState::Superseded { .. } => "🔄",
-            BlueprintState::Executing { .. } => "🚀",
-            BlueprintState::Completed { .. } => "🎉",
-            BlueprintState::Failed { .. } => "💥",
+            PlanState::Inactive => "⚪",
+            PlanState::Drafting => "📝",
+            PlanState::Pending { .. } => "⏳",
+            PlanState::Approved { .. } => "✅",
+            PlanState::Rejected { .. } => "❌",
+            PlanState::Superseded { .. } => "🔄",
+            PlanState::Executing { .. } => "🚀",
+            PlanState::Completed { .. } => "🎉",
+            PlanState::Failed { .. } => "💥",
         };
 
         println!(
@@ -316,10 +312,10 @@ fn list_blueprints(state_filter: Option<String>, blueprint_dir: &PathBuf) -> Res
 
         // Show approval/rejection info if available
         match &bp.state {
-            BlueprintState::Approved { approved_by, .. } => {
+            PlanState::Approved { approved_by, .. } => {
                 println!("   Approved by: {}", approved_by);
             }
-            BlueprintState::Rejected { reason, .. } => {
+            PlanState::Rejected { reason, .. } => {
                 println!("   Rejected: {}", reason);
             }
             _ => {}
@@ -331,74 +327,74 @@ fn list_blueprints(state_filter: Option<String>, blueprint_dir: &PathBuf) -> Res
     Ok(())
 }
 
-fn approve_blueprint(blueprint_id: &str, blueprint_dir: &PathBuf) -> Result<()> {
-    let blueprint_file = blueprint_dir.join(format!("{}.json", blueprint_id));
+fn approve_Plan(Plan_id: &str, Plan_dir: &PathBuf) -> Result<()> {
+    let Plan_file = Plan_dir.join(format!("{}.json", Plan_id));
 
-    if !blueprint_file.exists() {
-        anyhow::bail!("Blueprint not found: {}", blueprint_id);
+    if !Plan_file.exists() {
+        anyhow::bail!("Plan not found: {}", Plan_id);
     }
 
-    let content = std::fs::read_to_string(&blueprint_file)?;
-    let mut blueprint: BlueprintBlock = serde_json::from_str(&content)?;
+    let content = std::fs::read_to_string(&Plan_file)?;
+    let mut Plan: PlanBlock = serde_json::from_str(&content)?;
 
-    blueprint.state = blueprint
+    Plan.state = Plan
         .state
         .clone()
         .approve("cli-user".to_string())
-        .context("Failed to approve blueprint")?;
-    blueprint.updated_at = chrono::Utc::now();
+        .context("Failed to approve Plan")?;
+    Plan.updated_at = chrono::Utc::now();
 
-    std::fs::write(&blueprint_file, serde_json::to_string_pretty(&blueprint)?)?;
+    std::fs::write(&Plan_file, serde_json::to_string_pretty(&Plan)?)?;
 
-    println!("✅ Blueprint {} approved", blueprint_id);
+    println!("✅ Plan {} approved", Plan_id);
     println!("🚀 Ready for execution");
     println!();
-    println!("Execute with: codex execute {}", blueprint_id);
+    println!("Execute with: codex execute {}", Plan_id);
 
     Ok(())
 }
 
-fn reject_blueprint(blueprint_id: &str, reason: &str, blueprint_dir: &PathBuf) -> Result<()> {
-    let blueprint_file = blueprint_dir.join(format!("{}.json", blueprint_id));
+fn reject_Plan(Plan_id: &str, reason: &str, Plan_dir: &PathBuf) -> Result<()> {
+    let Plan_file = Plan_dir.join(format!("{}.json", Plan_id));
 
-    if !blueprint_file.exists() {
-        anyhow::bail!("Blueprint not found: {}", blueprint_id);
+    if !Plan_file.exists() {
+        anyhow::bail!("Plan not found: {}", Plan_id);
     }
 
-    let content = std::fs::read_to_string(&blueprint_file)?;
-    let mut blueprint: BlueprintBlock = serde_json::from_str(&content)?;
+    let content = std::fs::read_to_string(&Plan_file)?;
+    let mut Plan: PlanBlock = serde_json::from_str(&content)?;
 
-    blueprint.state = blueprint
+    Plan.state = Plan
         .state
         .clone()
         .reject(reason.to_string(), Some("cli-user".to_string()))
-        .context("Failed to reject blueprint")?;
-    blueprint.updated_at = chrono::Utc::now();
+        .context("Failed to reject Plan")?;
+    Plan.updated_at = chrono::Utc::now();
 
-    std::fs::write(&blueprint_file, serde_json::to_string_pretty(&blueprint)?)?;
+    std::fs::write(&Plan_file, serde_json::to_string_pretty(&Plan)?)?;
 
-    println!("❌ Blueprint {} rejected", blueprint_id);
+    println!("❌ Plan {} rejected", Plan_id);
     println!("📝 Reason: {}", reason);
     println!();
-    println!("You can create a new blueprint based on this feedback.");
+    println!("You can create a new Plan based on this feedback.");
 
     Ok(())
 }
 
-fn export_blueprint(
-    blueprint_id: &str,
+fn export_Plan(
+    Plan_id: &str,
     format: &str,
     export_path: &PathBuf,
-    blueprint_dir: &PathBuf,
+    Plan_dir: &PathBuf,
 ) -> Result<()> {
-    let blueprint_file = blueprint_dir.join(format!("{}.json", blueprint_id));
+    let Plan_file = Plan_dir.join(format!("{}.json", Plan_id));
 
-    if !blueprint_file.exists() {
-        anyhow::bail!("Blueprint not found: {}", blueprint_id);
+    if !Plan_file.exists() {
+        anyhow::bail!("Plan not found: {}", Plan_id);
     }
 
-    let content = std::fs::read_to_string(&blueprint_file)?;
-    let blueprint: BlueprintBlock = serde_json::from_str(&content)?;
+    let content = std::fs::read_to_string(&Plan_file)?;
+    let Plan: PlanBlock = serde_json::from_str(&content)?;
 
     std::fs::create_dir_all(export_path).context("Failed to create export directory")?;
 
@@ -406,15 +402,15 @@ fn export_blueprint(
     let export_json = format == "json" || format == "both";
 
     if export_markdown {
-        let md_path = export_path.join(format!("{}.md", blueprint_id));
-        let markdown = generate_markdown(&blueprint);
+        let md_path = export_path.join(format!("{}.md", Plan_id));
+        let markdown = generate_markdown(&Plan);
         std::fs::write(&md_path, markdown)?;
         println!("📄 Exported markdown: {}", md_path.display());
     }
 
     if export_json {
-        let json_path = export_path.join(format!("{}.json", blueprint_id));
-        std::fs::write(&json_path, serde_json::to_string_pretty(&blueprint)?)?;
+        let json_path = export_path.join(format!("{}.json", Plan_id));
+        std::fs::write(&json_path, serde_json::to_string_pretty(&Plan)?)?;
         println!("📄 Exported JSON: {}", json_path.display());
     }
 
@@ -423,9 +419,9 @@ fn export_blueprint(
     Ok(())
 }
 
-fn generate_markdown(bp: &BlueprintBlock) -> String {
+fn generate_markdown(bp: &PlanBlock) -> String {
     format!(
-        r#"# Blueprint: {}
+        r#"# Plan: {}
 
 **ID**: {}  
 **Status**: {:?}  
@@ -520,54 +516,45 @@ fn generate_markdown(bp: &BlueprintBlock) -> String {
     )
 }
 
-fn get_blueprint_status(blueprint_id: &str, blueprint_dir: &PathBuf) -> Result<()> {
-    let blueprint_file = blueprint_dir.join(format!("{}.json", blueprint_id));
+fn get_Plan_status(Plan_id: &str, Plan_dir: &PathBuf) -> Result<()> {
+    let Plan_file = Plan_dir.join(format!("{}.json", Plan_id));
 
-    if !blueprint_file.exists() {
-        anyhow::bail!("Blueprint not found: {}", blueprint_id);
+    if !Plan_file.exists() {
+        anyhow::bail!("Plan not found: {}", Plan_id);
     }
 
-    let content = std::fs::read_to_string(&blueprint_file)?;
-    let blueprint: BlueprintBlock = serde_json::from_str(&content)?;
+    let content = std::fs::read_to_string(&Plan_file)?;
+    let Plan: PlanBlock = serde_json::from_str(&content)?;
 
-    let status_icon = match &blueprint.state {
-        BlueprintState::Inactive => "⚪",
-        BlueprintState::Drafting => "📝",
-        BlueprintState::Pending { .. } => "⏳",
-        BlueprintState::Approved { .. } => "✅",
-        BlueprintState::Rejected { .. } => "❌",
-        BlueprintState::Superseded { .. } => "🔄",
-        BlueprintState::Executing { .. } => "🚀",
-        BlueprintState::Completed { .. } => "🎉",
-        BlueprintState::Failed { .. } => "💥",
+    let status_icon = match &Plan.state {
+        PlanState::Inactive => "⚪",
+        PlanState::Drafting => "📝",
+        PlanState::Pending { .. } => "⏳",
+        PlanState::Approved { .. } => "✅",
+        PlanState::Rejected { .. } => "❌",
+        PlanState::Superseded { .. } => "🔄",
+        PlanState::Executing { .. } => "🚀",
+        PlanState::Completed { .. } => "🎉",
+        PlanState::Failed { .. } => "💥",
     };
 
-    println!("{} Blueprint: {}", status_icon, blueprint.title);
+    println!("{} Plan: {}", status_icon, Plan.title);
     println!();
-    println!("ID: {}", blueprint.id);
-    println!("Status: {}", blueprint.state);
-    println!("Mode: {}", blueprint.mode);
-    println!(
-        "Created: {}",
-        blueprint.created_at.format("%Y-%m-%d %H:%M:%S")
-    );
-    println!(
-        "Updated: {}",
-        blueprint.updated_at.format("%Y-%m-%d %H:%M:%S")
-    );
+    println!("ID: {}", Plan.id);
+    println!("Status: {}", Plan.state);
+    println!("Mode: {}", Plan.mode);
+    println!("Created: {}", Plan.created_at.format("%Y-%m-%d %H:%M:%S"));
+    println!("Updated: {}", Plan.updated_at.format("%Y-%m-%d %H:%M:%S"));
     println!();
-    println!("Goal: {}", blueprint.goal);
+    println!("Goal: {}", Plan.goal);
     println!();
     println!("Budget:");
-    println!(
-        "  Tokens: {}",
-        blueprint.budget.session_cap.unwrap_or(100000)
-    );
-    println!("  Time: {} minutes", blueprint.budget.cap_min.unwrap_or(30));
+    println!("  Tokens: {}", Plan.budget.session_cap.unwrap_or(100000));
+    println!("  Time: {} minutes", Plan.budget.cap_min.unwrap_or(30));
     println!();
 
-    match &blueprint.state {
-        BlueprintState::Approved {
+    match &Plan.state {
+        PlanState::Approved {
             approved_by,
             approved_at,
         } => {
@@ -577,7 +564,7 @@ fn get_blueprint_status(blueprint_id: &str, blueprint_dir: &PathBuf) -> Result<(
                 approved_at.format("%Y-%m-%d %H:%M:%S")
             );
         }
-        BlueprintState::Rejected {
+        PlanState::Rejected {
             reason,
             rejected_by,
             rejected_at,
@@ -591,21 +578,21 @@ fn get_blueprint_status(blueprint_id: &str, blueprint_dir: &PathBuf) -> Result<(
                 );
             }
         }
-        BlueprintState::Executing {
+        PlanState::Executing {
             execution_id,
             started_at,
         } => {
             println!("Execution ID: {}", execution_id);
             println!("Started at: {}", started_at.format("%Y-%m-%d %H:%M:%S"));
         }
-        BlueprintState::Completed {
+        PlanState::Completed {
             execution_id,
             completed_at,
         } => {
             println!("Execution ID: {}", execution_id);
             println!("Completed at: {}", completed_at.format("%Y-%m-%d %H:%M:%S"));
         }
-        BlueprintState::Failed {
+        PlanState::Failed {
             execution_id,
             error,
             failed_at,
@@ -633,42 +620,42 @@ fn parse_execution_mode(s: &str) -> Result<ExecutionMode, String> {
     }
 }
 
-async fn execute_blueprint(blueprint_id: &str, blueprint_dir: &PathBuf) -> Result<()> {
-    use codex_core::blueprint::{BlueprintExecutor, ExecutionEvent};
-    use codex_core::orchestration::BlueprintOrchestrator;
+async fn execute_Plan(Plan_id: &str, Plan_dir: &PathBuf) -> Result<()> {
+    use codex_core::Plan::{ExecutionEvent, PlanExecutor};
+    use codex_core::orchestration::PlanOrchestrator;
     use std::sync::Arc;
 
-    let blueprint_file = blueprint_dir.join(format!("{}.json", blueprint_id));
+    let Plan_file = Plan_dir.join(format!("{}.json", Plan_id));
 
-    if !blueprint_file.exists() {
-        anyhow::bail!("Blueprint not found: {}", blueprint_id);
+    if !Plan_file.exists() {
+        anyhow::bail!("Plan not found: {}", Plan_id);
     }
 
-    let content = std::fs::read_to_string(&blueprint_file)?;
-    let blueprint: codex_core::blueprint::BlueprintBlock = serde_json::from_str(&content)?;
+    let content = std::fs::read_to_string(&Plan_file)?;
+    let Plan: codex_core::Plan::PlanBlock = serde_json::from_str(&content)?;
 
-    println!("🚀 Executing blueprint: {}", blueprint.title);
-    println!("📋 ID: {}", blueprint.id);
+    println!("🚀 Executing Plan: {}", Plan.title);
+    println!("📋 ID: {}", Plan.id);
     println!("⏱️  Starting execution...");
     println!();
 
     // Note: This is a simplified execution for CLI
-    // Full execution requires BlueprintOrchestrator which needs AgentRuntime
+    // Full execution requires PlanOrchestrator which needs AgentRuntime
     // For now, we just update the state and show a message
 
-    if !blueprint.state.can_execute() {
+    if !Plan.state.can_execute() {
         anyhow::bail!(
-            "Blueprint is not approved. Current state: {}. Please approve it first with: codex blueprint approve {}",
-            blueprint.state,
-            blueprint_id
+            "Plan is not approved. Current state: {}. Please approve it first with: codex Plan approve {}",
+            Plan.state,
+            Plan_id
         );
     }
 
-    println!("✅ Blueprint execution would be triggered here");
+    println!("✅ Plan execution would be triggered here");
     println!("📝 Note: Full orchestrated execution requires agent runtime setup");
     println!();
     println!("Simulated execution steps:");
-    for (i, work_item) in blueprint.work_items.iter().enumerate() {
+    for (i, work_item) in Plan.work_items.iter().enumerate() {
         println!(
             "  {}. {} (files: {})",
             i + 1,
@@ -681,16 +668,16 @@ async fn execute_blueprint(blueprint_id: &str, blueprint_dir: &PathBuf) -> Resul
     println!();
     println!("Next steps:");
     println!(
-        "  1. Check execution logs: codex blueprint executions --blueprint-id {}",
-        blueprint_id
+        "  1. Check execution logs: codex Plan executions --Plan-id {}",
+        Plan_id
     );
-    println!("  2. If needed, rollback: codex blueprint rollback <execution-id>");
+    println!("  2. If needed, rollback: codex Plan rollback <execution-id>");
 
     Ok(())
 }
 
-async fn rollback_execution(execution_id: &str, blueprint_dir: &PathBuf) -> Result<()> {
-    let executions_dir = blueprint_dir.join("executions");
+async fn rollback_execution(execution_id: &str, Plan_dir: &PathBuf) -> Result<()> {
+    let executions_dir = Plan_dir.join("executions");
     let execution_file = executions_dir.join(format!("{}.json", execution_id));
 
     if !execution_file.exists() {
@@ -709,8 +696,8 @@ async fn rollback_execution(execution_id: &str, blueprint_dir: &PathBuf) -> Resu
     Ok(())
 }
 
-async fn list_executions(blueprint_id: Option<String>, blueprint_dir: &PathBuf) -> Result<()> {
-    let executions_dir = blueprint_dir.join("executions");
+async fn list_executions(Plan_id: Option<String>, Plan_dir: &PathBuf) -> Result<()> {
+    let executions_dir = Plan_dir.join("executions");
 
     if !executions_dir.exists() {
         println!("📋 No execution history found.");
@@ -731,8 +718,8 @@ async fn list_executions(blueprint_id: Option<String>, blueprint_dir: &PathBuf) 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if let Ok(result) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(bp_id) = blueprint_id.as_ref() {
-                        if result.get("blueprint_id").and_then(|v| v.as_str()) != Some(bp_id) {
+                    if let Some(bp_id) = Plan_id.as_ref() {
+                        if result.get("Plan_id").and_then(|v| v.as_str()) != Some(bp_id) {
                             continue;
                         }
                     }
@@ -770,5 +757,5 @@ async fn list_executions(blueprint_id: Option<String>, blueprint_dir: &PathBuf) 
 }
 
 #[cfg(test)]
-#[path = "blueprint_commands_test.rs"]
-mod blueprint_commands_test;
+#[path = "Plan_commands_test.rs"]
+mod Plan_commands_test;

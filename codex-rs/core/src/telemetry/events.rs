@@ -72,9 +72,9 @@ pub struct TelemetryEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
 
-    /// Blueprint ID (hashed)
+    /// Plan ID (hashed)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub blueprint_id: Option<String>,
+    pub plan_id: Option<String>,
 
     /// Custom metadata
     #[serde(default)]
@@ -90,7 +90,7 @@ impl TelemetryEvent {
             timestamp: Utc::now(),
             session_id: None,
             user_id: None,
-            blueprint_id: None,
+            plan_id: None,
             metadata: HashMap::new(),
         }
     }
@@ -107,9 +107,9 @@ impl TelemetryEvent {
         self
     }
 
-    /// Set blueprint ID (will be hashed)
-    pub fn with_blueprint_id(mut self, blueprint_id: impl AsRef<str>) -> Self {
-        self.blueprint_id = Some(hash_id(blueprint_id.as_ref()));
+    /// Set plan ID (will be hashed)
+    pub fn with_plan_id(mut self, plan_id: impl AsRef<str>) -> Self {
+        self.plan_id = Some(hash_id(plan_id.as_ref()));
         self
     }
 
