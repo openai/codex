@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -120,10 +121,14 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use pathdiff::diff_paths;
 use strum::IntoEnumIterator;
 
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
+const MIGRATION_PROMPT_TEMPLATE: &str = include_str!("../prompt_for_migrate_command.md");
+const MIGRATION_PLAN_TEMPLATE: &str = include_str!("../migration_plan_template.md");
+const MIGRATION_JOURNAL_TEMPLATE: &str = include_str!("../migration_journal_template.md");
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -1233,6 +1238,9 @@ impl ChatWidget {
                 }
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
                 self.submit_user_message(INIT_PROMPT.to_string().into());
+            }
+            SlashCommand::Migrate => {
+                self.open_migrate_prompt();
             }
             SlashCommand::Compact => {
                 self.clear_token_usage();
@@ -2422,6 +2430,132 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
+    pub(crate) fn start_migration(&mut self, summary: String) {
+        let summary = summary.trim();
+        if summary.is_empty() {
+            return;
+        }
+
+        match self.create_migration_workspace(summary) {
+            Ok(workspace) => {
+                let dir_display = self.relative_display_path(&workspace.dir_path);
+                let plan_display = self.relative_display_path(&workspace.plan_path);
+                let journal_display = self.relative_display_path(&workspace.journal_path);
+                let prompt = self.build_migration_prompt(
+                    summary,
+                    &dir_display,
+                    &plan_display,
+                    &journal_display,
+                );
+                let hint = format!("Plan: {plan_display}\nJournal: {journal_display}",);
+                self.add_info_message(
+                    format!(
+                        "Created migration workspace `{}` at {dir_display}.",
+                        workspace.dir_name
+                    ),
+                    Some(hint),
+                );
+                self.submit_user_message(prompt.into());
+            }
+            Err(err) => {
+                tracing::error!("failed to prepare migration workspace: {err}");
+                self.add_error_message(format!("Failed to prepare migration workspace: {err}"));
+            }
+        }
+    }
+
+    fn open_migrate_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Describe the migration".to_string(),
+            "Example: Phase 2 – move billing to Postgres".to_string(),
+            Some(
+                "We'll create migration_<slug> with plan.md and journal.md once you press Enter."
+                    .to_string(),
+            ),
+            Box::new(move |prompt: String| {
+                let trimmed = prompt.trim().to_string();
+                if trimmed.is_empty() {
+                    return;
+                }
+                tx.send(AppEvent::StartMigration { summary: trimmed });
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn create_migration_workspace(
+        &self,
+        summary: &str,
+    ) -> Result<MigrationWorkspace, std::io::Error> {
+        let slug = sanitize_migration_slug(summary);
+        let base_name = format!("migration_{slug}");
+        let (dir_path, dir_name) = self.next_available_migration_dir(&base_name);
+        fs::create_dir_all(&dir_path)?;
+        let created_at = Local::now().format("%Y-%m-%d %H:%M %Z").to_string();
+        let plan_path = dir_path.join("plan.md");
+        let journal_path = dir_path.join("journal.md");
+        let plan_contents = fill_template(
+            MIGRATION_PLAN_TEMPLATE,
+            &[
+                ("{{MIGRATION_SUMMARY}}", summary),
+                ("{{WORKSPACE_NAME}}", dir_name.as_str()),
+                ("{{CREATED_AT}}", created_at.as_str()),
+            ],
+        );
+        let journal_contents = fill_template(
+            MIGRATION_JOURNAL_TEMPLATE,
+            &[
+                ("{{MIGRATION_SUMMARY}}", summary),
+                ("{{WORKSPACE_NAME}}", dir_name.as_str()),
+                ("{{CREATED_AT}}", created_at.as_str()),
+            ],
+        );
+        fs::write(&plan_path, plan_contents)?;
+        fs::write(&journal_path, journal_contents)?;
+        Ok(MigrationWorkspace {
+            dir_path,
+            dir_name,
+            plan_path,
+            journal_path,
+        })
+    }
+
+    fn build_migration_prompt(
+        &self,
+        summary: &str,
+        dir_display: &str,
+        plan_display: &str,
+        journal_display: &str,
+    ) -> String {
+        let replacements = [
+            ("{{MIGRATION_SUMMARY}}", summary),
+            ("{{WORKSPACE_PATH}}", dir_display),
+            ("{{PLAN_PATH}}", plan_display),
+            ("{{JOURNAL_PATH}}", journal_display),
+        ];
+        fill_template(MIGRATION_PROMPT_TEMPLATE, &replacements)
+    }
+
+    fn next_available_migration_dir(&self, base_name: &str) -> (PathBuf, String) {
+        let mut candidate_name = base_name.to_string();
+        let mut candidate_path = self.config.cwd.join(&candidate_name);
+        let mut suffix = 2;
+        while candidate_path.exists() {
+            candidate_name = format!("{base_name}_{suffix:02}");
+            candidate_path = self.config.cwd.join(&candidate_name);
+            suffix += 1;
+        }
+        (candidate_path, candidate_name)
+    }
+
+    fn relative_display_path(&self, path: &Path) -> String {
+        diff_paths(path, &self.config.cwd)
+            .unwrap_or_else(|| path.to_path_buf())
+            .display()
+            .to_string()
+    }
+
     pub(crate) fn token_usage(&self) -> TokenUsage {
         self.token_info
             .as_ref()
@@ -2578,6 +2712,48 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+struct MigrationWorkspace {
+    dir_path: PathBuf,
+    dir_name: String,
+    plan_path: PathBuf,
+    journal_path: PathBuf,
+}
+
+fn fill_template(template: &str, replacements: &[(&str, &str)]) -> String {
+    let mut filled = template.to_string();
+    for (needle, value) in replacements {
+        filled = filled.replace(needle, value);
+    }
+    filled
+}
+
+fn sanitize_migration_slug(summary: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_dash = true;
+    for ch in summary.trim().to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            last_was_dash = false;
+        } else if !last_was_dash {
+            slug.push('-');
+            last_was_dash = true;
+        }
+    }
+    let mut trimmed = slug.trim_matches('-').to_string();
+    if trimmed.len() > 48 {
+        trimmed = trimmed
+            .chars()
+            .take(48)
+            .collect::<String>()
+            .trim_matches('-')
+            .to_string();
+    }
+    if trimmed.is_empty() {
+        return Local::now().format("plan-%Y%m%d-%H%M%S").to_string();
+    }
+    trimmed
 }
 
 #[cfg(test)]
