@@ -1928,6 +1928,7 @@ async fn run_turn(
                 return Err(CodexErr::UsageLimitReached(e));
             }
             Err(CodexErr::UsageNotIncluded) => return Err(CodexErr::UsageNotIncluded),
+            Err(e @ CodexErr::QuotaExceeded) => return Err(e),
             Err(e @ CodexErr::RefreshTokenFailed(_)) => return Err(e),
             Err(e) => {
                 // Use the configured provider-specific stream retry budget.
