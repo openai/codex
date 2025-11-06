@@ -411,6 +411,8 @@ fn test_rate_limit_warnings_monthly() {
 #[test]
 fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
     let (mut chat, _, _) = make_chatwidget_manual();
+    chat.auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     chat.config.model = NUDGE_MODEL_SLUG.to_string();
 
     chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
