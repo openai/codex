@@ -159,8 +159,6 @@ pub fn git_check_attr_eol(repo_root: &Path, rel_path: &Path) -> Option<Eol> {
         .arg(repo_root)
         .arg("check-attr")
         .arg("eol")
-        .arg("text")
-        .arg("binary")
         .arg("--")
         .arg(rel_key)
         .output()
@@ -169,39 +167,7 @@ pub fn git_check_attr_eol(repo_root: &Path, rel_path: &Path) -> Option<Eol> {
         return None;
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
-
-    let mut eol_val: Option<String> = None;
-    let mut text_val: Option<String> = None;
-    let mut binary_set = false;
-    for line in stdout.lines() {
-        // Format: "path: attr: value"
-        let mut parts = line.splitn(3, ": ");
-        let _ = parts.next();
-        if let (Some(attr), Some(value)) = (parts.next(), parts.next()) {
-            let attr = attr.trim();
-            let value = value.trim();
-            match attr {
-                "eol" => eol_val = Some(value.to_ascii_lowercase()),
-                "text" => text_val = Some(value.to_ascii_lowercase()),
-                "binary" => binary_set = value.eq_ignore_ascii_case("set"),
-                _ => {}
-            }
-        }
-    }
-
-    if binary_set {
-        return Some(Eol::Unknown);
-    }
-    if matches!(text_val.as_deref(), Some("unset")) {
-        return Some(Eol::Unknown);
-    }
-
-    match eol_val.as_deref() {
-        Some("lf") => Some(Eol::Lf),
-        Some("crlf") => Some(Eol::Crlf),
-        Some("native") => Some(os_native_eol()),
-        _ => None,
-    }
+    parse_git_check_attr_eol_stdout(&stdout)
 }
 
 /// Decide EOL based on repo policy and CLI/env.
@@ -327,6 +293,25 @@ fn rel_attr_key(repo_root: &Path, path: &Path) -> String {
     s.trim_start_matches('/').to_string()
 }
 
+/// Parse stdout from `git check-attr eol -- <path>` and return EOL if
+/// explicitly specified. Treat `auto`/`unspecified` as None.
+fn parse_git_check_attr_eol_stdout(stdout: &str) -> Option<Eol> {
+    for line in stdout.lines() {
+        // Expected: "<path>: eol: <value>"
+        if let Some((_, rhs)) = line.split_once(": eol: ") {
+            let v = rhs.trim().to_ascii_lowercase();
+            return match v.as_str() {
+                "lf" => Some(Eol::Lf),
+                "crlf" => Some(Eol::Crlf),
+                "native" => Some(os_native_eol()),
+                // 'auto' or 'unspecified' or others => no decision
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
 // Test instrumentation and unit tests for caching
 #[cfg(all(test, feature = "eol-cache"))]
 static RAW_CORE_EOL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -450,6 +435,20 @@ mod tests {
         // Pass absolute path intentionally; helper should normalize.
         let result = git_check_attr_eol(dir.path(), &file);
         assert_eq!(result, Some(Eol::Crlf));
+    }
+
+    #[test]
+    fn test_parse_git_check_attr_eol_stdout() {
+        assert!(matches!(
+            super::parse_git_check_attr_eol_stdout("foo.txt: eol: crlf\n"),
+            Some(Eol::Crlf)
+        ));
+        assert!(matches!(
+            super::parse_git_check_attr_eol_stdout("foo.txt: eol: lf\n"),
+            Some(Eol::Lf)
+        ));
+        assert!(super::parse_git_check_attr_eol_stdout("foo.txt: eol: unspecified\n").is_none());
+        assert!(super::parse_git_check_attr_eol_stdout("foo.txt: eol: auto\n").is_none());
     }
 }
 
