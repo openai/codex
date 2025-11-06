@@ -1,6 +1,8 @@
 use crate::color::perceptual_distance;
 use ratatui::style::Color;
+#[cfg(not(test))]
 use std::sync::LazyLock;
+#[cfg(not(test))]
 use std::sync::Mutex;
 #[cfg(windows)]
 use std::sync::OnceLock;
@@ -74,10 +76,11 @@ pub fn stdout_supports_truecolor() -> bool {
 fn enable_vt_stdout() -> std::io::Result<()> {
     use std::io;
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows_sys::Win32::System::Console::{
-        ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode, GetStdHandle, STD_OUTPUT_HANDLE,
-        SetConsoleMode,
-    };
+    use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+    use windows_sys::Win32::System::Console::GetConsoleMode;
+    use windows_sys::Win32::System::Console::GetStdHandle;
+    use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
+    use windows_sys::Win32::System::Console::SetConsoleMode;
 
     unsafe {
         let handle = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -131,11 +134,13 @@ pub fn default_bg() -> Option<(u8, u8, u8)> {
 /// `get_or_init_with` for the first successful query and `refresh_with` for a manual re-query.
 /// If a first query fails, we remember the failure to avoid repeated failed probes, unless
 /// a subsequent explicit refresh is performed.
+#[cfg(not(test))]
 struct Cache<T> {
     attempted: bool,
     value: Option<T>,
 }
 
+#[cfg(not(test))]
 impl<T> Default for Cache<T> {
     fn default() -> Self {
         Self {
@@ -145,6 +150,7 @@ impl<T> Default for Cache<T> {
     }
 }
 
+#[cfg(not(test))]
 impl<T: Copy> Cache<T> {
     /// Returns the cached value if available; otherwise runs `init` once and caches its result.
     fn get_or_init_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
@@ -163,6 +169,7 @@ impl<T: Copy> Cache<T> {
     }
 }
 
+#[cfg(not(test))]
 fn default_terminal_colors_cache() -> &'static Mutex<Cache<DefaultColors>> {
     // LazyLock creates the single cache instance; the Mutex guards concurrent refreshes/reads.
     static CACHE: LazyLock<Mutex<Cache<DefaultColors>>> =
