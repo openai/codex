@@ -20,6 +20,7 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
@@ -132,6 +133,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_utils_json_to_toml::json_to_toml;
@@ -1510,7 +1512,18 @@ impl CodexMessageProcessor {
         let items = page
             .items
             .into_iter()
-            .filter_map(|it| extract_conversation_summary(it.path, &it.head, &fallback_provider))
+            .filter_map(|it| {
+                let session_meta_line = it.head.first().and_then(|first| {
+                    serde_json::from_value::<SessionMetaLine>(first.clone()).ok()
+                })?;
+                extract_conversation_summary(
+                    it.path,
+                    &it.head,
+                    &session_meta_line.meta,
+                    session_meta_line.git.as_ref(),
+                    fallback_provider.as_str(),
+                )
+            })
             .collect::<Vec<_>>();
 
         // Encode next_cursor as a plain string
@@ -2671,16 +2684,25 @@ async fn read_summary_from_rollout(
         )));
     };
 
-    let session_meta = serde_json::from_value::<SessionMeta>(first.clone()).map_err(|_| {
-        IoError::other(format!(
-            "rollout at {} does not start with session metadata",
-            path.display()
-        ))
-    })?;
+    let session_meta_line =
+        serde_json::from_value::<SessionMetaLine>(first.clone()).map_err(|_| {
+            IoError::other(format!(
+                "rollout at {} does not start with session metadata",
+                path.display()
+            ))
+        })?;
+    let SessionMetaLine {
+        meta: session_meta,
+        git,
+    } = session_meta_line;
 
-    if let Some(summary) =
-        extract_conversation_summary(path.to_path_buf(), &head, fallback_provider)
-    {
+    if let Some(summary) = extract_conversation_summary(
+        path.to_path_buf(),
+        &head,
+        &session_meta,
+        git.as_ref(),
+        fallback_provider,
+    ) {
         return Ok(summary);
     }
 
@@ -2691,7 +2713,9 @@ async fn read_summary_from_rollout(
     };
     let model_provider = session_meta
         .model_provider
+        .clone()
         .unwrap_or_else(|| fallback_provider.to_string());
+    let git_info = git.as_ref().map(map_git_info);
 
     Ok(ConversationSummary {
         conversation_id: session_meta.id,
@@ -2699,19 +2723,20 @@ async fn read_summary_from_rollout(
         path: path.to_path_buf(),
         preview: String::new(),
         model_provider,
+        cwd: session_meta.cwd,
+        cli_version: session_meta.cli_version,
+        source: session_meta.source.clone(),
+        git_info,
     })
 }
 
 fn extract_conversation_summary(
     path: PathBuf,
     head: &[serde_json::Value],
+    session_meta: &SessionMeta,
+    git: Option<&codex_protocol::protocol::GitInfo>,
     fallback_provider: &str,
 ) -> Option<ConversationSummary> {
-    let session_meta = match head.first() {
-        Some(first_line) => serde_json::from_value::<SessionMeta>(first_line.clone()).ok()?,
-        None => return None,
-    };
-
     let preview = head
         .iter()
         .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
@@ -2733,7 +2758,9 @@ fn extract_conversation_summary(
     let conversation_id = session_meta.id;
     let model_provider = session_meta
         .model_provider
+        .clone()
         .unwrap_or_else(|| fallback_provider.to_string());
+    let git_info = git.map(map_git_info);
 
     Some(ConversationSummary {
         conversation_id,
@@ -2741,13 +2768,26 @@ fn extract_conversation_summary(
         path,
         preview: preview.to_string(),
         model_provider,
+        cwd: session_meta.cwd.clone(),
+        cli_version: session_meta.cli_version.clone(),
+        source: session_meta.source.clone(),
+        git_info,
     })
+}
+
+fn map_git_info(git_info: &codex_protocol::protocol::GitInfo) -> ConversationGitInfo {
+    ConversationGitInfo {
+        sha: git_info.commit_hash.clone(),
+        branch: git_info.branch.clone(),
+        origin_url: git_info.repository_url.clone(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use anyhow::Result;
+    use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::TempDir;
@@ -2786,8 +2826,11 @@ mod tests {
             }),
         ];
 
+        let session_meta = serde_json::from_value::<SessionMeta>(head[0].clone())?;
+
         let summary =
-            extract_conversation_summary(path.clone(), &head, "test-provider").expect("summary");
+            extract_conversation_summary(path.clone(), &head, &session_meta, None, "test-provider")
+                .expect("summary");
 
         let expected = ConversationSummary {
             conversation_id,
@@ -2795,6 +2838,10 @@ mod tests {
             path,
             preview: "Count to 5".to_string(),
             model_provider: "test-provider".to_string(),
+            cwd: PathBuf::from("/"),
+            cli_version: "0.0.0".to_string(),
+            source: SessionSource::VSCode,
+            git_info: None,
         };
 
         assert_eq!(summary, expected);
@@ -2839,6 +2886,10 @@ mod tests {
             path: path.clone(),
             preview: String::new(),
             model_provider: "fallback".to_string(),
+            cwd: PathBuf::new(),
+            cli_version: String::new(),
+            source: SessionSource::VSCode,
+            git_info: None,
         };
 
         assert_eq!(summary, expected);
