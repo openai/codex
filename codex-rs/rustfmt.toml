@@ -1,4 +1,12 @@
 edition = "2024"
-# The warnings caused by this setting can be ignored.
-# See https://github.com/openai/openai/pull/298039 for details.
-imports_granularity = "Item"
+
+# The following settings are unstable. Generally, to use these settings, you can either use a
+# nightly toolchain, or add each args to the cargo fmt command. If using stable, these will emit a
+# warning when running cargo fmt.
+
+# Grouping imports by module is a reasonable compromise between readability and conciseness that
+# saves about 2000 lines (33%) compared to grouping by item, while still keeping related imports
+# together in a way that works well with diffs and code navigation.
+group_imports = "StdExternalCrate"
+imports_granularity = "Module"
+reorder_imports = true

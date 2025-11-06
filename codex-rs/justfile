@@ -23,7 +23,8 @@ file-search *args:
 
 # format code
 fmt:
-    cargo fmt -- --config imports_granularity=Item
+    # Use nightly to enable unstable options in rustfmt.toml
+    cargo +nightly fmt
 
 fix *args:
     cargo clippy --fix --all-features --tests --allow-dirty "$@"

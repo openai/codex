@@ -57,11 +57,11 @@ jobs:
         working-directory: codex-rs
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.90
+      - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt
       - name: cargo fmt
-        run: cargo fmt -- --config imports_granularity=Item --check
+        run: cargo +nightly fmt --check # nightly for unstable options in rustfmt.toml
       - name: Verify codegen for mcp-types
         run: ./mcp-types/check_lib_rs.py
 

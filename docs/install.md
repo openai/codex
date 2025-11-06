@@ -24,6 +24,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
 rustup component add rustfmt
 rustup component add clippy
+rustup install nightly # For rustfmt with unstable options.
 
 # Build Codex.
 cargo build
@@ -32,7 +33,7 @@ cargo build
 cargo run --bin codex -- "explain this codebase to me"
 
 # After making changes, ensure the code is clean.
-cargo fmt -- --config imports_granularity=Item
+cargo +nightly fmt
 cargo clippy --tests
 
 # Run the tests.
