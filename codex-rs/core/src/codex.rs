@@ -1217,7 +1217,12 @@ impl Session {
 
     pub async fn interrupt_task(self: &Arc<Self>) {
         info!("interrupt received: abort current task, if any");
-        self.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        let has_active_turn = { self.active_turn.lock().await.is_some() };
+        if has_active_turn {
+            self.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        } else {
+            self.cancel_mcp_startup().await;
+        }
     }
 
     pub(crate) fn notifier(&self) -> &UserNotifier {
