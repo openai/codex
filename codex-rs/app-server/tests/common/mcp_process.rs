@@ -14,6 +14,7 @@ use anyhow::Context;
 use assert_cmd::prelude::*;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::ArchiveConversationParams;
+use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginChatGptParams;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
@@ -384,6 +385,15 @@ impl McpProcess {
             "type": "chatgpt"
         });
         self.send_request("account/login/start", Some(params)).await
+    }
+
+    /// Send an `account/login/cancel` JSON-RPC request.
+    pub async fn send_cancel_login_account_request(
+        &mut self,
+        params: CancelLoginAccountParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("account/login/cancel", params).await
     }
 
     /// Send a `fuzzyFileSearch` JSON-RPC request.

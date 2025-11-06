@@ -3,6 +3,8 @@ use anyhow::bail;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::AuthMode;
+use codex_app_server_protocol::CancelLoginAccountParams;
+use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::JSONRPCError;
@@ -16,6 +18,7 @@ use codex_login::login_with_api_key;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
 use std::path::Path;
+use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -229,16 +232,50 @@ async fn login_account_chatgpt_start() -> Result<()> {
     .await??;
 
     let login: LoginAccountResponse = to_response(resp)?;
-    let LoginAccountResponse::Chatgpt {
-        login_id: _,
-        auth_url,
-    } = login
-    else {
+    let LoginAccountResponse::Chatgpt { login_id, auth_url } = login else {
         bail!("unexpected login response: {login:?}");
     };
     assert!(
         auth_url.contains("redirect_uri=http%3A%2F%2Flocalhost"),
         "auth_url should contain a redirect_uri to localhost"
+    );
+
+    let cancel_id = mcp
+        .send_cancel_login_account_request(CancelLoginAccountParams {
+            login_id: login_id.clone(),
+        })
+        .await?;
+    let cancel_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(cancel_id)),
+    )
+    .await??;
+    let _ok: CancelLoginAccountResponse = to_response(cancel_resp)?;
+
+    let note = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("account/login/completed"),
+    )
+    .await??;
+    let parsed: ServerNotification = note.try_into()?;
+    let ServerNotification::AccountLoginCompleted(payload) = parsed else {
+        bail!("unexpected notification: {parsed:?}");
+    };
+    pretty_assertions::assert_eq!(payload.login_id, Some(login_id));
+    pretty_assertions::assert_eq!(payload.success, false);
+    assert!(
+        payload.error.is_some(),
+        "expected a non-empty error on cancel"
+    );
+
+    let maybe_updated = timeout(
+        Duration::from_millis(500),
+        mcp.read_stream_until_notification_message("account/updated"),
+    )
+    .await;
+    assert!(
+        maybe_updated.is_err(),
+        "account/updated should not be emitted when login is cancelled"
     );
     Ok(())
 }
