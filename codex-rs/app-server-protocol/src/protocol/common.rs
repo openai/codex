@@ -133,6 +133,18 @@ client_request_definitions! {
         params: v2::ThreadCompactParams,
         response: v2::ThreadCompactResponse,
     },
+    #[serde(rename = "turn/start")]
+    #[ts(rename = "turn/start")]
+    TurnStart {
+        params: v2::TurnStartParams,
+        response: v2::TurnStartResponse,
+    },
+    #[serde(rename = "turn/interrupt")]
+    #[ts(rename = "turn/interrupt")]
+    TurnInterrupt {
+        params: v2::TurnInterruptParams,
+        response: v2::TurnInterruptResponse,
+    },
 
     #[serde(rename = "model/list")]
     #[ts(rename = "model/list")]
