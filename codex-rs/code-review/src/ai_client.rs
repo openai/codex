@@ -25,6 +25,21 @@ impl AIClient {
         Ok(Self { config, client })
     }
 
+    /// Get the coding model name
+    pub fn coding_model(&self) -> &str {
+        &self.config.coding_model
+    }
+
+    /// Get the review model name
+    pub fn review_model(&self) -> &str {
+        &self.config.review_model
+    }
+
+    /// Get the quick check model name
+    pub fn quick_check_model(&self) -> &str {
+        &self.config.quick_check_model
+    }
+
     /// Analyze code using AI
     pub async fn analyze_code(
         &self,
@@ -90,7 +105,7 @@ impl AIClient {
     }
 
     /// Call Ollama API
-    async fn call_ollama(&self, model: &str, prompt: &str) -> Result<String> {
+    pub async fn call_ollama(&self, model: &str, prompt: &str) -> Result<String> {
         let request = OllamaRequest {
             model: model.to_string(),
             prompt: prompt.to_string(),

@@ -10,6 +10,9 @@
 //! - **Auto-Fix**: Automatically fix style issues and apply improvements
 //! - **Continuous Monitoring**: Watch files and review changes in real-time
 //! - **Session Management**: Track review sessions and statistics
+//! - **AST Analysis**: Deep code analysis using syn for Rust
+//! - **Git Integration**: Auto-commit improvements with detailed messages
+//! - **Test Generation**: AI-powered test creation
 //!
 //! # Example
 //!
@@ -30,14 +33,19 @@
 
 mod ai_client;
 mod analyzer;
+mod ast_analyzer;
 mod config;
+mod enhanced_analyzer;
 mod fixer;
+mod git_integration;
 pub mod linters;
 mod reviewer;
 mod session;
+mod test_generator;
 mod tools;
 mod watcher;
 
+// Core exports
 pub use ai_client::{AIClient, AIAnalysisResult, QuickCheckType};
 pub use analyzer::{AnalysisResult, CodeAnalyzer, Issue, IssueSeverity, IssueCategory, Suggestion};
 pub use config::{ReviewConfig, ReviewPolicy, ReviewTrigger, LocalAIConfig, AnalysisConfig};
@@ -47,6 +55,12 @@ pub use reviewer::{ContinuousReviewer, ReviewTask, ReviewType};
 pub use session::{ReviewSession, ReviewSessionState, SessionManager};
 pub use tools::{register_review_tools, ReviewTool};
 pub use watcher::{FileWatcher, WatchEvent};
+
+// Phase 3 exports
+pub use ast_analyzer::{AstAnalyzer, AstAnalysisResult, FunctionInfo};
+pub use enhanced_analyzer::{EnhancedAnalyzer, EnhancedAnalysisResult, QuickAnalysisResult};
+pub use git_integration::{GitIntegration, GitStatus, CommitInfo};
+pub use test_generator::{TestGenerator, GeneratedTests, Test, TestType, TestFileWriter};
 
 use anyhow::Result;
 

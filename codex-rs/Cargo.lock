@@ -1062,6 +1062,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "syn 2.0.104",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
