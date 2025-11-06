@@ -26,8 +26,10 @@ use std::path::PathBuf;
 use supports_color::Stream;
 
 mod mcp_cmd;
+mod migrate;
 
 use crate::mcp_cmd::McpCli;
+use crate::migrate::MigrateCli;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::features::is_known_feature_key;
@@ -72,6 +74,9 @@ enum Subcommand {
 
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
+
+    /// Manage Codex migration workstreams.
+    Migrate(MigrateCli),
 
     /// [experimental] Run Codex as an MCP server and manage MCP servers.
     Mcp(McpCli),
@@ -442,6 +447,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
             );
             run_logout(logout_cli.config_overrides).await;
+        }
+        Some(Subcommand::Migrate(migrate_cli)) => {
+            migrate_cli.run()?;
         }
         Some(Subcommand::Completion(completion_cli)) => {
             print_completion(completion_cli);

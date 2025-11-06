@@ -86,6 +86,8 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::markdown::append_markdown;
+use crate::migration::build_migration_prompt;
+use crate::migration::create_migration_workspace;
 #[cfg(target_os = "windows")]
 use crate::onboarding::WSL_INSTRUCTIONS;
 use crate::render::Insets;
@@ -120,6 +122,7 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use pathdiff::diff_paths;
 use strum::IntoEnumIterator;
 
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
@@ -1233,6 +1236,9 @@ impl ChatWidget {
                 }
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
                 self.submit_user_message(INIT_PROMPT.to_string().into());
+            }
+            SlashCommand::Migrate => {
+                self.open_migrate_prompt();
             }
             SlashCommand::Compact => {
                 self.clear_token_usage();
@@ -2420,6 +2426,63 @@ impl ChatWidget {
             }),
         );
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn start_migration(&mut self, summary: String) {
+        let summary = summary.trim();
+        if summary.is_empty() {
+            return;
+        }
+
+        match create_migration_workspace(&self.config.cwd, summary) {
+            Ok(workspace) => {
+                let dir_display = self.relative_display_path(&workspace.dir_path);
+                let plan_display = self.relative_display_path(&workspace.plan_path);
+                let journal_display = self.relative_display_path(&workspace.journal_path);
+                let prompt =
+                    build_migration_prompt(summary, &dir_display, &plan_display, &journal_display);
+                let hint = format!("Plan: {plan_display}\nJournal: {journal_display}",);
+                self.add_info_message(
+                    format!(
+                        "Created migration workspace `{}` at {dir_display}.",
+                        workspace.dir_name
+                    ),
+                    Some(hint),
+                );
+                self.submit_user_message(prompt.into());
+            }
+            Err(err) => {
+                tracing::error!("failed to prepare migration workspace: {err}");
+                self.add_error_message(format!("Failed to prepare migration workspace: {err}"));
+            }
+        }
+    }
+
+    fn open_migrate_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Describe the migration".to_string(),
+            "Example: Phase 2 – move billing to Postgres".to_string(),
+            Some(
+                "We'll create migration_<slug> with plan.md and journal.md once you press Enter."
+                    .to_string(),
+            ),
+            Box::new(move |prompt: String| {
+                let trimmed = prompt.trim().to_string();
+                if trimmed.is_empty() {
+                    return;
+                }
+                tx.send(AppEvent::StartMigration { summary: trimmed });
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn relative_display_path(&self, path: &Path) -> String {
+        diff_paths(path, &self.config.cwd)
+            .unwrap_or_else(|| path.to_path_buf())
+            .display()
+            .to_string()
     }
 
     pub(crate) fn token_usage(&self) -> TokenUsage {
