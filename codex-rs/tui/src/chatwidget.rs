@@ -563,7 +563,7 @@ impl ChatWidget {
                 }
                 let header = if total > 1 {
                     format!(
-                        "Booting MCP servers ({completed}/{total}): {}",
+                        "Starting MCP servers ({completed}/{total}): {}",
                         to_show.join(", ")
                     )
                 } else {
