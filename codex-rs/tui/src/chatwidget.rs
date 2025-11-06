@@ -133,6 +133,7 @@ struct RunningCommand {
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
 const NUDGE_MODEL_SLUG: &str = "gpt-5-codex";
+const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
 
 #[derive(Default)]
 struct RateLimitWarningState {
@@ -509,7 +510,18 @@ impl ChatWidget {
                     .and_then(|window| window.window_minutes),
             );
 
-            if !warnings.is_empty()
+            let high_usage = snapshot
+                .secondary
+                .as_ref()
+                .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
+                .unwrap_or(false)
+                || snapshot
+                    .primary
+                    .as_ref()
+                    .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
+                    .unwrap_or(false);
+
+            if high_usage
                 && self.config.model != NUDGE_MODEL_SLUG
                 && !matches!(
                     self.rate_limit_switch_prompt,
