@@ -289,7 +289,6 @@ fn make_chatwidget_manual() -> (
         running_commands: HashMap::new(),
         task_complete_pending: false,
         mcp_startup_status: None,
-        mcp_startup_task_running: false,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
@@ -2456,7 +2455,7 @@ fn warning_event_adds_warning_history_cell() {
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
         msg: EventMsg::Warning(WarningEvent {
-            message: TEST_WARNING_MESSAGE.to_string(),
+            message: "test warning message".to_string(),
         }),
     });
 
@@ -2464,7 +2463,7 @@ fn warning_event_adds_warning_history_cell() {
     assert_eq!(cells.len(), 1, "expected one warning history cell");
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains(TEST_WARNING_MESSAGE),
+        rendered.contains("test warning message"),
         "warning cell missing content: {rendered}"
     );
 }
