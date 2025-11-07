@@ -168,9 +168,19 @@ where
         }
     }
 
+    /// Gets the current buffer as a reference.
+    fn current_buffer(&self) -> &Buffer {
+        &self.buffers[self.current]
+    }
+
     /// Gets the current buffer as a mutable reference.
     fn current_buffer_mut(&mut self) -> &mut Buffer {
         &mut self.buffers[self.current]
+    }
+
+    /// Gets the previous buffer as a reference.
+    fn previous_buffer(&self) -> &Buffer {
+        &self.buffers[1 - self.current]
     }
 
     /// Gets the previous buffer as a mutable reference.
@@ -191,10 +201,9 @@ where
     /// Obtains a difference between the previous and the current buffer and passes it to the
     /// current backend for drawing.
     pub fn flush(&mut self) -> io::Result<()> {
-        let previous_buffer = &self.buffers[1 - self.current];
-        let current_buffer = &self.buffers[self.current];
-
-        let updates = diff_buffers(previous_buffer, current_buffer);
+        let previous_buffer = self.previous_buffer().clone();
+        let current_buffer = self.current_buffer().clone();
+        let updates = diff_buffers(&previous_buffer, &current_buffer);
         let last_put_command = updates.iter().rfind(|cmd| cmd.is_put());
         if let Some(&DrawCommand::Put { x, y, .. }) = last_put_command {
             self.last_known_cursor_pos = Position { x, y };
