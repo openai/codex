@@ -165,33 +165,42 @@ pub fn git_check_attr_eol(repo_root: &Path, rel_path: &Path) -> Option<Eol> {
     let mut cmd = std::process::Command::new("git");
     cmd.arg("-C")
         .arg(repo_root)
+        // Use /dev/null on all platforms to avoid Git for Windows NUL quirks
         .arg("-c")
-        .arg(format!(
-            "core.attributesfile={}",
-            if cfg!(windows) { "NUL" } else { "/dev/null" }
-        ))
+        .arg("core.attributesfile=/dev/null")
         .arg("check-attr")
+        .arg("-z")
         .arg("eol")
         .arg("--")
         .arg(&rel_key);
     // Ensure attribute resolution is repo-local only (no system/global leakage)
     cmd.env("GIT_ATTR_NOSYSTEM", "1")
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env(
-            "GIT_CONFIG_GLOBAL",
-            if cfg!(windows) { "NUL" } else { "/dev/null" },
-        );
+        .env("GIT_CONFIG_GLOBAL", "/dev/null");
     let out = cmd.output().ok()?;
     if !out.status.success() {
         return None;
     }
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Parse null-separated: "<path>\0eol\0<value>\0"
+    let z = String::from_utf8_lossy(&out.stdout);
     #[cfg(test)]
     {
-        let s = stdout.trim();
+        let s = z.trim_end_matches('\0');
         eprintln!("git check-attr eol stdout: {s:?}");
     }
-    parse_git_check_attr_eol_stdout(&stdout)
+    let mut parts = z.split('\0');
+    let _p = parts.next();
+    let _k = parts.next();
+    if let Some(v) = parts.next() {
+        let v = v.trim().to_ascii_lowercase();
+        match v.as_str() {
+            "lf" => Some(Eol::Lf),
+            "crlf" => Some(Eol::Crlf),
+            _ => None,
+        }
+    } else {
+        None
+    }
 }
 
 /// Decide EOL based on repo policy and CLI/env.
@@ -406,6 +415,7 @@ fn rel_attr_key(repo_root: &Path, path: &Path) -> String {
 
 /// Parse stdout from `git check-attr eol -- <path>` and return EOL if
 /// explicitly specified. Treat `auto`/`unspecified` as None.
+#[allow(dead_code)]
 fn parse_git_check_attr_eol_stdout(stdout: &str) -> Option<Eol> {
     for line in stdout.lines() {
         // Expected: "<path>: eol: <value>"
