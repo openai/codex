@@ -39,6 +39,7 @@ ctor = { workspace = true }
 owo-colors = { workspace = true }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
+toml = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",

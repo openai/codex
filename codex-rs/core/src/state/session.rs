@@ -3,7 +3,7 @@
 use codex_protocol::models::ResponseItem;
 
 use crate::codex::SessionConfiguration;
-use crate::conversation_history::ConversationHistory;
+use crate::context_manager::ContextManager;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
@@ -11,7 +11,7 @@ use crate::protocol::TokenUsageInfo;
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
-    pub(crate) history: ConversationHistory,
+    pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
 }
 
@@ -20,7 +20,7 @@ impl SessionState {
     pub(crate) fn new(session_configuration: SessionConfiguration) -> Self {
         Self {
             session_configuration,
-            history: ConversationHistory::new(),
+            history: ContextManager::new(),
             latest_rate_limits: None,
         }
     }
@@ -34,7 +34,7 @@ impl SessionState {
         self.history.record_items(items)
     }
 
-    pub(crate) fn clone_history(&self) -> ConversationHistory {
+    pub(crate) fn clone_history(&self) -> ContextManager {
         self.history.clone()
     }
 

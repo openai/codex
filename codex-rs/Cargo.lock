@@ -186,9 +186,11 @@ dependencies = [
  "chrono",
  "codex-app-server-protocol",
  "codex-core",
+ "codex-protocol",
  "serde",
  "serde_json",
  "tokio",
+ "uuid",
  "wiremock",
 ]
 
@@ -871,6 +873,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-protocol",
+ "mcp-types",
  "paste",
  "pretty_assertions",
  "schemars 0.8.22",
@@ -992,6 +995,7 @@ dependencies = [
  "supports-color",
  "tempfile",
  "tokio",
+ "toml",
 ]
 
 [[package]]
@@ -1448,6 +1452,7 @@ dependencies = [
  "codex-login",
  "codex-ollama",
  "codex-protocol",
+ "codex-windows-sandbox",
  "color-eyre",
  "crossterm",
  "diffy",
@@ -1469,6 +1474,7 @@ dependencies = [
  "regex-lite",
  "serde",
  "serde_json",
+ "serial_test",
  "shlex",
  "strum 0.27.2",
  "strum_macros 0.27.2",
@@ -5007,9 +5013,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "0.8.3"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fdad1258f7259fdc0f2dfc266939c82c3b5d1fd72bcde274d600cdc27e60243"
+checksum = "e5947688160b56fb6c827e3c20a72c90392a1d7e9dec74749197aa1780ac42ca"
 dependencies = [
  "base64",
  "bytes",
@@ -5041,9 +5047,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "0.8.3"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ede0589a208cc7ce81d1be68aa7e74b917fcd03c81528408bab0457e187dcd9b"
+checksum = "01263441d3f8635c628e33856c468b96ebbce1af2d3699ea712ca71432d4ee7a"
 dependencies = [
  "darling 0.21.3",
  "proc-macro2",

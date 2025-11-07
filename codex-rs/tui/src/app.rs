@@ -9,6 +9,7 @@ use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
+use crate::render::renderable::Renderable;
 use crate::resume_picker::ResumeSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
@@ -78,6 +79,9 @@ pub(crate) struct App {
     pub(crate) feedback: codex_feedback::CodexFeedback,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
+
+    // One-shot suppression of the next world-writable scan after user confirmation.
+    skip_world_writable_scan_once: bool,
 }
 
 impl App {
@@ -167,7 +171,29 @@ impl App {
             backtrack: BacktrackState::default(),
             feedback: feedback.clone(),
             pending_update_action: None,
+            skip_world_writable_scan_once: false,
         };
+
+        // On startup, if Auto mode (workspace-write) is active, warn about world-writable dirs on Windows.
+        #[cfg(target_os = "windows")]
+        {
+            let should_check = codex_core::get_platform_sandbox().is_some()
+                && matches!(
+                    app.config.sandbox_policy,
+                    codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                )
+                && !app
+                    .config
+                    .notices
+                    .hide_world_writable_warning
+                    .unwrap_or(false);
+            if should_check {
+                let cwd = app.config.cwd.clone();
+                let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
+                let tx = app.app_event_tx.clone();
+                Self::spawn_world_writable_scan(cwd, env_map, tx, false);
+            }
+        }
 
         #[cfg(not(debug_assertions))]
         if let Some(latest_version) = upgrade_version {
@@ -233,7 +259,7 @@ impl App {
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
                         |frame| {
-                            frame.render_widget_ref(&self.chat_widget, frame.area());
+                            self.chat_widget.render(frame.area(), frame.buffer);
                             if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
                                 frame.set_cursor_position((x, y));
                             }
@@ -359,6 +385,10 @@ impl App {
             AppEvent::OpenFullAccessConfirmation { preset } => {
                 self.chat_widget.open_full_access_confirmation(preset);
             }
+            AppEvent::OpenWorldWritableWarningConfirmation { preset } => {
+                self.chat_widget
+                    .open_world_writable_warning_confirmation(preset);
+            }
             AppEvent::OpenFeedbackNote {
                 category,
                 include_logs,
@@ -417,10 +447,44 @@ impl App {
                 self.chat_widget.set_approval_policy(policy);
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
+                #[cfg(target_os = "windows")]
+                let policy_is_workspace_write = matches!(
+                    policy,
+                    codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                );
+
                 self.chat_widget.set_sandbox_policy(policy);
+
+                // If sandbox policy becomes workspace-write, run the Windows world-writable scan.
+                #[cfg(target_os = "windows")]
+                {
+                    // One-shot suppression if the user just confirmed continue.
+                    if self.skip_world_writable_scan_once {
+                        self.skip_world_writable_scan_once = false;
+                        return Ok(true);
+                    }
+
+                    let should_check = codex_core::get_platform_sandbox().is_some()
+                        && policy_is_workspace_write
+                        && !self.chat_widget.world_writable_warning_hidden();
+                    if should_check {
+                        let cwd = self.config.cwd.clone();
+                        let env_map: std::collections::HashMap<String, String> =
+                            std::env::vars().collect();
+                        let tx = self.app_event_tx.clone();
+                        Self::spawn_world_writable_scan(cwd, env_map, tx, false);
+                    }
+                }
+            }
+            AppEvent::SkipNextWorldWritableScan => {
+                self.skip_world_writable_scan_once = true;
             }
             AppEvent::UpdateFullAccessWarningAcknowledged(ack) => {
                 self.chat_widget.set_full_access_warning_acknowledged(ack);
+            }
+            AppEvent::UpdateWorldWritableWarningAcknowledged(ack) => {
+                self.chat_widget
+                    .set_world_writable_warning_acknowledged(ack);
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
@@ -434,6 +498,21 @@ impl App {
                     );
                     self.chat_widget.add_error_message(format!(
                         "Failed to save full access confirmation preference: {err}"
+                    ));
+                }
+            }
+            AppEvent::PersistWorldWritableWarningAcknowledged => {
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_hide_world_writable_warning(true)
+                    .apply()
+                    .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist world-writable warning acknowledgement"
+                    );
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save Auto mode warning preference: {err}"
                     ));
                 }
             }
@@ -540,6 +619,31 @@ impl App {
             }
         };
     }
+
+    #[cfg(target_os = "windows")]
+    fn spawn_world_writable_scan(
+        cwd: PathBuf,
+        env_map: std::collections::HashMap<String, String>,
+        tx: AppEventSender,
+        apply_preset_on_continue: bool,
+    ) {
+        tokio::task::spawn_blocking(move || {
+            if codex_windows_sandbox::preflight_audit_everyone_writable(&cwd, &env_map).is_err() {
+                if apply_preset_on_continue {
+                    if let Some(preset) = codex_common::approval_presets::builtin_approval_presets()
+                        .into_iter()
+                        .find(|p| p.id == "auto")
+                    {
+                        tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
+                            preset: Some(preset),
+                        });
+                    }
+                } else {
+                    tx.send(AppEvent::OpenWorldWritableWarningConfirmation { preset: None });
+                }
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -591,6 +695,7 @@ mod tests {
             backtrack: BacktrackState::default(),
             feedback: codex_feedback::CodexFeedback::new(),
             pending_update_action: None,
+            skip_world_writable_scan_once: false,
         }
     }
 

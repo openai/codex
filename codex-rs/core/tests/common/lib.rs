@@ -244,7 +244,7 @@ pub mod fs_wait {
         if path.exists() {
             Ok(path)
         } else {
-            Err(anyhow!("timed out waiting for {:?}", path))
+            Err(anyhow!("timed out waiting for {path:?}"))
         }
     }
 
@@ -284,7 +284,7 @@ pub mod fs_wait {
         if let Some(found) = scan_for_match(&root, predicate) {
             Ok(found)
         } else {
-            Err(anyhow!("timed out waiting for matching file in {:?}", root))
+            Err(anyhow!("timed out waiting for matching file in {root:?}"))
         }
     }
 
