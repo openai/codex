@@ -33,6 +33,7 @@ use codex_app_server_protocol::FuzzyFileSearchResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
+use codex_app_server_protocol::GetClientInfoResponse;
 use codex_app_server_protocol::GetConversationSummaryParams;
 use codex_app_server_protocol::GetConversationSummaryResponse;
 use codex_app_server_protocol::GetUserAgentResponse;
@@ -158,6 +159,7 @@ use uuid::Uuid;
 type PendingInterruptQueue = Vec<(RequestId, ApiVersion)>;
 type PendingInterrupts = Arc<Mutex<HashMap<ConversationId, PendingInterruptQueue>>>;
 
+const CODEX_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 struct ActiveLogin {
@@ -339,6 +341,12 @@ impl CodexMessageProcessor {
                 params: _,
             } => {
                 self.get_user_agent(request_id).await;
+            }
+            ClientRequest::GetClientInfo {
+                request_id,
+                params: _,
+            } => {
+                self.get_client_info(request_id).await;
             }
             ClientRequest::UserInfo {
                 request_id,
@@ -855,6 +863,13 @@ impl CodexMessageProcessor {
     async fn get_user_agent(&self, request_id: RequestId) {
         let user_agent = get_codex_user_agent();
         let response = GetUserAgentResponse { user_agent };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn get_client_info(&self, request_id: RequestId) {
+        let response = GetClientInfoResponse {
+            client_version: CODEX_CLI_VERSION.to_string(),
+        };
         self.outgoing.send_response(request_id, response).await;
     }
 
