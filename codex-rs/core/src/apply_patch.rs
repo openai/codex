@@ -27,6 +27,7 @@ pub(crate) enum InternalApplyPatchInvocation {
     DelegateToExec(ApplyPatchExec),
 }
 
+#[derive(Debug)]
 pub(crate) struct ApplyPatchExec {
     pub(crate) action: ApplyPatchAction,
     pub(crate) user_explicitly_approved_this_action: bool,
@@ -35,7 +36,6 @@ pub(crate) struct ApplyPatchExec {
 pub(crate) async fn apply_patch(
     sess: &Session,
     turn_context: &TurnContext,
-    sub_id: &str,
     call_id: &str,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
@@ -61,7 +61,13 @@ pub(crate) async fn apply_patch(
             // that similar patches can be auto-approved in the future during
             // this session.
             let rx_approve = sess
-                .request_patch_approval(sub_id.to_owned(), call_id.to_owned(), &action, None, None)
+                .request_patch_approval(
+                    turn_context,
+                    call_id.to_owned(),
+                    convert_apply_patch_to_protocol(&action),
+                    None,
+                    None,
+                )
                 .await;
             match rx_approve.await.unwrap_or_default() {
                 ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
@@ -108,4 +114,29 @@ pub(crate) fn convert_apply_patch_to_protocol(
         result.insert(path.clone(), protocol_change);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    use tempfile::tempdir;
+
+    #[test]
+    fn convert_apply_patch_maps_add_variant() {
+        let tmp = tempdir().expect("tmp");
+        let p = tmp.path().join("a.txt");
+        // Create an action with a single Add change
+        let action = ApplyPatchAction::new_add_for_test(&p, "hello".to_string());
+
+        let got = convert_apply_patch_to_protocol(&action);
+
+        assert_eq!(
+            got.get(&p),
+            Some(&FileChange::Add {
+                content: "hello".to_string()
+            })
+        );
+    }
 }

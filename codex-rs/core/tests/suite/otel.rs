@@ -1,9 +1,9 @@
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::InputItem;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_custom_tool_call;
@@ -14,8 +14,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event_with_timeout;
-use std::time::Duration;
+use core_test_support::wait_for_event;
 use tracing_test::traced_test;
 
 use core_test_support::responses::ev_local_shell_call;
@@ -31,19 +30,14 @@ async fn responses_api_emits_api_request_event() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -77,19 +71,14 @@ async fn process_sse_emits_tracing_for_output_item() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -121,19 +110,14 @@ async fn process_sse_emits_failed_event_on_parse_error() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -166,19 +150,14 @@ async fn process_sse_records_failed_event_when_stream_closes_without_completed()
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -223,19 +202,14 @@ async fn process_sse_failed_event_records_response_error_message() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -278,19 +252,14 @@ async fn process_sse_failed_event_logs_parse_error() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -328,19 +297,14 @@ async fn process_sse_failed_event_logs_missing_error() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -378,19 +342,14 @@ async fn process_sse_failed_event_logs_response_completed_parse_error() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -433,19 +392,14 @@ async fn process_sse_emits_completed_telemetry() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -493,19 +447,14 @@ async fn handle_response_item_records_tool_result_for_custom_tool_call() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(|lines: &[&str]| {
         let line = lines
@@ -557,19 +506,14 @@ async fn handle_response_item_records_tool_result_for_function_call() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(|lines: &[&str]| {
         let line = lines
@@ -631,19 +575,14 @@ async fn handle_response_item_records_tool_result_for_local_shell_missing_ids() 
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(|lines: &[&str]| {
         let line = lines
@@ -689,19 +628,14 @@ async fn handle_response_item_records_tool_result_for_local_shell_call() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(|lines: &[&str]| {
         let line = lines
@@ -787,19 +721,14 @@ async fn handle_container_exec_autoapprove_from_config_records_tool_decision() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(tool_decision_assertion(
         "auto_config_call",
@@ -815,11 +744,7 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
     mount_sse(
         &server,
         sse(vec![
-            ev_local_shell_call(
-                "user_approved_call",
-                "completed",
-                vec!["/bin/echo", "approved"],
-            ),
+            ev_local_shell_call("user_approved_call", "completed", vec!["/bin/date"]),
             ev_completed("done"),
         ]),
     )
@@ -837,19 +762,14 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "approved".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::ExecApprovalRequest(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
 
     codex
         .submit(Op::ExecApproval {
@@ -859,12 +779,7 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(tool_decision_assertion(
         "user_approved_call",
@@ -881,11 +796,7 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
     mount_sse(
         &server,
         sse(vec![
-            ev_local_shell_call(
-                "user_approved_session_call",
-                "completed",
-                vec!["/bin/echo", "persist"],
-            ),
+            ev_local_shell_call("user_approved_session_call", "completed", vec!["/bin/date"]),
             ev_completed("done"),
         ]),
     )
@@ -903,19 +814,14 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "persist".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::ExecApprovalRequest(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
 
     codex
         .submit(Op::ExecApproval {
@@ -925,12 +831,7 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(tool_decision_assertion(
         "user_approved_session_call",
@@ -947,11 +848,7 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
     mount_sse(
         &server,
         sse(vec![
-            ev_local_shell_call(
-                "sandbox_retry_call",
-                "completed",
-                vec!["/bin/echo", "retry"],
-            ),
+            ev_local_shell_call("sandbox_retry_call", "completed", vec!["/bin/date"]),
             ev_completed("done"),
         ]),
     )
@@ -969,19 +866,14 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "retry".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::ExecApprovalRequest(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
 
     codex
         .submit(Op::ExecApproval {
@@ -991,12 +883,7 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(tool_decision_assertion(
         "sandbox_retry_call",
@@ -1013,7 +900,7 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
     mount_sse(
         &server,
         sse(vec![
-            ev_local_shell_call("user_denied_call", "completed", vec!["/bin/echo", "deny"]),
+            ev_local_shell_call("user_denied_call", "completed", vec!["/bin/date"]),
             ev_completed("done"),
         ]),
     )
@@ -1031,19 +918,14 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "deny".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::ExecApprovalRequest(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
 
     codex
         .submit(Op::ExecApproval {
@@ -1053,12 +935,7 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(tool_decision_assertion(
         "user_denied_call",
@@ -1075,11 +952,7 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
     mount_sse(
         &server,
         sse(vec![
-            ev_local_shell_call(
-                "sandbox_session_call",
-                "completed",
-                vec!["/bin/echo", "persist"],
-            ),
+            ev_local_shell_call("sandbox_session_call", "completed", vec!["/bin/date"]),
             ev_completed("done"),
         ]),
     )
@@ -1097,19 +970,14 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "persist".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::ExecApprovalRequest(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
 
     codex
         .submit(Op::ExecApproval {
@@ -1119,12 +987,7 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(tool_decision_assertion(
         "sandbox_session_call",
@@ -1141,7 +1004,7 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
     mount_sse(
         &server,
         sse(vec![
-            ev_local_shell_call("sandbox_deny_call", "completed", vec!["/bin/echo", "deny"]),
+            ev_local_shell_call("sandbox_deny_call", "completed", vec!["/bin/date"]),
             ev_completed("done"),
         ]),
     )
@@ -1159,19 +1022,14 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "deny".into(),
             }],
         })
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::ExecApprovalRequest(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
 
     codex
         .submit(Op::ExecApproval {
@@ -1181,12 +1039,7 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(tool_decision_assertion(
         "sandbox_deny_call",

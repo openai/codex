@@ -12,7 +12,7 @@ If you want to add a new feature or change the behavior of an existing one, plea
 
 - Create a _topic branch_ from `main` - e.g. `feat/interactive-prompt`.
 - Keep your changes focused. Multiple unrelated fixes should be opened as separate PRs.
-- Following the [development setup](#development-workflow) instructions above, ensure your change is free of lint warnings and test failures.
+- Ensure your change is free of lint warnings and test failures.
 
 ### Writing high-impact code changes
 
@@ -24,6 +24,7 @@ If you want to add a new feature or change the behavior of an existing one, plea
 ### Opening a pull request
 
 - Fill in the PR template (or include similar information) - **What? Why? How?**
+- Include a link to a bug report or enhancement request in the issue tracker
 - Run **all** checks locally (`cargo test && cargo clippy --tests && cargo fmt -- --config imports_granularity=Item`). CI failures that could have been caught locally slow down the process.
 - Make sure your branch is up-to-date with `main` and that you have resolved merge conflicts.
 - Mark the PR as **Ready for review** only when you believe it is in a merge-able state.
@@ -33,7 +34,7 @@ If you want to add a new feature or change the behavior of an existing one, plea
 1. One maintainer will be assigned as a primary reviewer.
 2. If your PR adds a new feature that was not previously discussed and approved, we may choose to close your PR (see [Contributing](#contributing)).
 3. We may ask for changes - please do not take this personally. We value the work, but we also value consistency and long-term maintainability.
-5. When there is consensus that the PR meets the bar, a maintainer will squash-and-merge.
+4. When there is consensus that the PR meets the bar, a maintainer will squash-and-merge.
 
 ### Community values
 
@@ -87,8 +88,8 @@ This will push the commit using the tag `rust-v${VERSION}`, which in turn kicks 
 
 If everything looks good in the generated GitHub Release, uncheck the **pre-release** box so it is the latest release.
 
-Create a PR to update [`Formula/c/codex.rb`](https://github.com/Homebrew/homebrew-core/blob/main/Formula/c/codex.rb) on Homebrew.
+Create a PR to update [`Cask/c/codex.rb`](https://github.com/Homebrew/homebrew-cask/blob/main/Formula/c/codex.rb) on Homebrew.
 
 ### Security & responsible AI
 
-Have you discovered a vulnerability or have concerns about model output? Please e-mail **security@openai.com** and we will respond promptly. 
+Have you discovered a vulnerability or have concerns about model output? Please e-mail **security@openai.com** and we will respond promptly.
