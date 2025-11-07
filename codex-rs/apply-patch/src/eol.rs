@@ -134,7 +134,10 @@ pub fn git_core_eol(repo_root: &Path) -> Option<Eol> {
     );
     let out = cmd.output().ok()?;
     #[cfg(test)]
-    eprintln!("git core.eol status: {:?}", out.status);
+    {
+        let status = out.status;
+        eprintln!("git core.eol status: {status:?}");
+    }
     if !out.status.success() {
         return None;
     }
@@ -184,7 +187,10 @@ pub fn git_check_attr_eol(repo_root: &Path, rel_path: &Path) -> Option<Eol> {
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
     #[cfg(test)]
-    eprintln!("git check-attr eol stdout: {:?}", stdout.trim());
+    {
+        let s = stdout.trim();
+        eprintln!("git check-attr eol stdout: {s:?}");
+    }
     parse_git_check_attr_eol_stdout(&stdout)
 }
 
@@ -326,7 +332,10 @@ fn git_core_autocrlf(repo_root: &Path) -> Option<Eol> {
     );
     let out = cmd.output().ok()?;
     #[cfg(test)]
-    eprintln!("git core.autocrlf status: {:?}", out.status);
+    {
+        let status = out.status;
+        eprintln!("git core.autocrlf status: {status:?}");
+    }
     if !out.status.success() {
         return None;
     }
@@ -334,7 +343,7 @@ fn git_core_autocrlf(repo_root: &Path) -> Option<Eol> {
         .trim()
         .to_ascii_lowercase();
     #[cfg(test)]
-    eprintln!("git core.autocrlf: {:?}", val);
+    eprintln!("git core.autocrlf: {val:?}");
     match val.as_str() {
         "true" => Some(Eol::Crlf),
         "input" => Some(Eol::Lf),
