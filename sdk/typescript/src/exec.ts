@@ -24,6 +24,8 @@ export type CodexExecArgs = {
   outputSchemaFile?: string;
   // --config model_reasoning_effort
   modelReasoningEffort?: ModelReasoningEffort;
+  // AbortSignal to cancel the execution
+  signal?: AbortSignal;
 };
 
 const INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
@@ -87,6 +89,7 @@ export class CodexExec {
 
     const child = spawn(this.executablePath, commandArgs, {
       env,
+      signal: args.signal,
     });
 
     let spawnError: unknown | null = null;
