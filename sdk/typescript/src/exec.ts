@@ -28,7 +28,7 @@ export type CodexExecArgs = {
   networkAccessEnabled?: boolean;
   // --config features.web_search_request
   webSearchEnabled?: boolean;
-  // --ask-for-approval
+  // --config approval_policy
   approvalPolicy?: ApprovalMode;
 };
 
@@ -77,7 +77,7 @@ export class CodexExec {
     }
 
     if (args.approvalPolicy) {
-      commandArgs.push("--ask-for-approval", args.approvalPolicy);
+      commandArgs.push("--config", `approval_policy="${args.approvalPolicy}"`);
     }
 
     if (args.images?.length) {

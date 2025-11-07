@@ -340,7 +340,7 @@ describe("Codex", () => {
 
       const commandArgs = spawnArgs[0];
       expect(commandArgs).toBeDefined();
-      expectPair(commandArgs, ["--ask-for-approval", "on-request"]);
+      expectPair(commandArgs, ["--config", 'approval_policy="on-request"']);
     } finally {
       restore();
       await close();
