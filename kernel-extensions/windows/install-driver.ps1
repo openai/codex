@@ -1,4 +1,4 @@
-﻿# Codex AI Driver - 自動インストールスクリプト
+# Codex AI Driver - 自動インストールスクリプト
 # Windows 10/11用
 
 <#

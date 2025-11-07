@@ -1,4 +1,4 @@
-﻿# Codex AI Driver - 診断情報収集スクリプト
+# Codex AI Driver - 診断情報収集スクリプト
 
 <#
 .SYNOPSIS
