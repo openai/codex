@@ -88,7 +88,10 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
 
     // 2) addConversationListener
     let add_listener_id = mcp
-        .send_add_conversation_listener_request(AddConversationListenerParams { conversation_id })
+        .send_add_conversation_listener_request(AddConversationListenerParams {
+            conversation_id,
+            experimental_raw_events: false,
+        })
         .await?;
     let _add_listener_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -143,7 +146,7 @@ fn create_config_toml(codex_home: &Path, server_uri: String) -> std::io::Result<
             r#"
 model = "mock-model"
 approval_policy = "never"
-sandbox_mode = "danger-full-access"
+sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
 

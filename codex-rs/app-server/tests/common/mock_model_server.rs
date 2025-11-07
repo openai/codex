@@ -29,6 +29,25 @@ pub async fn create_mock_chat_completions_server(responses: Vec<String>) -> Mock
     server
 }
 
+/// Same as `create_mock_chat_completions_server` but does not enforce an
+/// expectation on the number of calls.
+pub async fn create_mock_chat_completions_server_unchecked(responses: Vec<String>) -> MockServer {
+    let server = MockServer::start().await;
+
+    let seq_responder = SeqResponder {
+        num_calls: AtomicUsize::new(0),
+        responses,
+    };
+
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(seq_responder)
+        .mount(&server)
+        .await;
+
+    server
+}
+
 struct SeqResponder {
     num_calls: AtomicUsize,
     responses: Vec<String>,

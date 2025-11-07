@@ -67,10 +67,6 @@ pub struct Cli {
     #[arg(long = "json", alias = "experimental-json", default_value_t = false)]
     pub json: bool,
 
-    /// Whether to include the plan tool in the conversation.
-    #[arg(long = "include-plan-tool", default_value_t = false)]
-    pub include_plan_tool: bool,
-
     /// Specifies file where the last message from the agent should be written.
     #[arg(long = "output-last-message", short = 'o', value_name = "FILE")]
     pub last_message_file: Option<PathBuf>,
