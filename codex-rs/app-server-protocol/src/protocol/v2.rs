@@ -354,7 +354,7 @@ pub struct ThreadCompactResponse {}
 #[ts(export_to = "v2/")]
 pub struct Thread {
     pub id: String,
-    /// The first user message in the thread, if available.
+    /// Usually the first user message in the thread, if available.
     pub preview: String,
     pub model_provider: String,
     /// Unix timestamp (in seconds) when the thread was created.

@@ -4,6 +4,8 @@ use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use chrono::DateTime;
+use chrono::Utc;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
@@ -2853,33 +2855,30 @@ fn map_git_info(git_info: &GitInfo) -> ConversationGitInfo {
     }
 }
 
-fn parse_created_at(timestamp: Option<&str>) -> i64 {
-    timestamp
-        .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
-        .map(|dt| dt.timestamp())
-        .unwrap_or(0)
+fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
+    timestamp.and_then(|ts| {
+        chrono::DateTime::parse_from_rfc3339(ts)
+            .ok()
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+    })
 }
 
 fn summary_to_thread(summary: ConversationSummary) -> Thread {
     let ConversationSummary {
         conversation_id,
-        path: _,
         preview,
         timestamp,
         model_provider,
-        cwd: _,
-        cli_version: _,
-        source: _,
-        git_info: _,
+        ..
     } = summary;
 
-    let created_at = parse_created_at(timestamp.as_deref());
+    let created_at = parse_datetime(timestamp.as_deref());
 
     Thread {
         id: conversation_id.to_string(),
         preview,
         model_provider,
-        created_at,
+        created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
     }
 }
 
