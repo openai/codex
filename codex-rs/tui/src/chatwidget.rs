@@ -54,11 +54,15 @@ use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use rand::Rng;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Constraint;
+use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
+use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
@@ -88,12 +92,8 @@ use crate::history_cell::McpToolCallCell;
 use crate::markdown::append_markdown;
 #[cfg(target_os = "windows")]
 use crate::onboarding::WSL_INSTRUCTIONS;
-use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
-use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
-use crate::render::renderable::RenderableExt;
-use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
@@ -299,15 +299,6 @@ impl From<String> for UserMessage {
     fn from(text: String) -> Self {
         Self {
             text,
-            image_paths: Vec::new(),
-        }
-    }
-}
-
-impl From<&str> for UserMessage {
-    fn from(text: &str) -> Self {
-        Self {
-            text: text.to_string(),
             image_paths: Vec::new(),
         }
     }
@@ -830,10 +821,19 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
-        let running = self.running_commands.remove(&ev.call_id);
+        let ExecCommandEndEvent {
+            call_id,
+            is_user_shell_command,
+            aggregated_output,
+            formatted_output,
+            exit_code,
+            duration,
+            ..
+        } = ev;
+        let running = self.running_commands.remove(&call_id);
         let (command, parsed, is_user_shell_command) = match running {
             Some(rc) => (rc.command, rc.parsed_cmd, rc.is_user_shell_command),
-            None => (vec![ev.call_id.clone()], Vec::new(), false),
+            None => (vec![call_id.clone()], Vec::new(), is_user_shell_command),
         };
 
         let needs_new = self
@@ -844,7 +844,7 @@ impl ChatWidget {
         if needs_new {
             self.flush_active_cell();
             self.active_cell = Some(Box::new(new_active_exec_command(
-                ev.call_id.clone(),
+                call_id.clone(),
                 command,
                 parsed,
                 is_user_shell_command,
@@ -857,13 +857,13 @@ impl ChatWidget {
             .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
         {
             cell.complete_call(
-                &ev.call_id,
+                &call_id,
                 CommandOutput {
-                    exit_code: ev.exit_code,
-                    formatted_output: ev.formatted_output.clone(),
-                    aggregated_output: ev.aggregated_output.clone(),
+                    exit_code,
+                    formatted_output,
+                    aggregated_output,
                 },
-                ev.duration,
+                duration,
             );
             if cell.should_flush() {
                 self.flush_active_cell();
@@ -920,13 +920,19 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
-        // Ensure the status indicator is visible while the command runs.
+        let ExecCommandBeginEvent {
+            call_id,
+            command,
+            parsed_cmd,
+            is_user_shell_command,
+            ..
+        } = ev;
         self.running_commands.insert(
-            ev.call_id.clone(),
+            call_id.clone(),
             RunningCommand {
-                command: ev.command.clone(),
-                parsed_cmd: ev.parsed_cmd.clone(),
-                is_user_shell_command: ev.is_user_shell_command,
+                command: command.clone(),
+                parsed_cmd: parsed_cmd.clone(),
+                is_user_shell_command,
             },
         );
         if let Some(cell) = self
@@ -934,10 +940,10 @@ impl ChatWidget {
             .as_mut()
             .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
             && let Some(new_exec) = cell.with_added_call(
-                ev.call_id.clone(),
-                ev.command.clone(),
-                ev.parsed_cmd.clone(),
-                ev.is_user_shell_command,
+                call_id.clone(),
+                command.clone(),
+                parsed_cmd.clone(),
+                is_user_shell_command,
             )
         {
             *cell = new_exec;
@@ -945,10 +951,10 @@ impl ChatWidget {
             self.flush_active_cell();
 
             self.active_cell = Some(Box::new(new_active_exec_command(
-                ev.call_id.clone(),
-                ev.command.clone(),
-                ev.parsed_cmd,
-                ev.is_user_shell_command,
+                call_id,
+                command,
+                parsed_cmd,
+                is_user_shell_command,
             )));
         }
 
@@ -993,6 +999,27 @@ impl ChatWidget {
         if let Some(extra) = extra_cell {
             self.add_boxed_history(extra);
         }
+    }
+
+    fn layout_areas(&self, area: Rect) -> [Rect; 3] {
+        let bottom_min = self.bottom_pane.desired_height(area.width).min(area.height);
+        let remaining = area.height.saturating_sub(bottom_min);
+
+        let active_desired = self
+            .active_cell
+            .as_ref()
+            .map_or(0, |c| c.desired_height(area.width) + 1);
+        let active_height = active_desired.min(remaining);
+        // Note: no header area; remaining is not used beyond computing active height.
+
+        let header_height = 0u16;
+
+        Layout::vertical([
+            Constraint::Length(header_height),
+            Constraint::Length(active_height),
+            Constraint::Min(bottom_min),
+        ])
+        .areas(area)
     }
 
     pub(crate) fn new(
@@ -1125,6 +1152,14 @@ impl ChatWidget {
         }
     }
 
+    pub fn desired_height(&self, width: u16) -> u16 {
+        self.bottom_pane.desired_height(width)
+            + self
+                .active_cell
+                .as_ref()
+                .map_or(0, |c| c.desired_height(width) + 1)
+    }
+
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
@@ -1175,7 +1210,12 @@ impl ChatWidget {
                             text,
                             image_paths: self.bottom_pane.take_recent_submission_images(),
                         };
-                        self.queue_user_message(user_message);
+                        if self.bottom_pane.is_task_running() {
+                            self.queued_user_messages.push_back(user_message);
+                            self.refresh_queued_user_messages();
+                        } else {
+                            self.submit_user_message(user_message);
+                        }
                     }
                     InputResult::Command(cmd) => {
                         self.dispatch_command(cmd);
@@ -1232,7 +1272,7 @@ impl ChatWidget {
                     return;
                 }
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
-                self.submit_user_message(INIT_PROMPT.to_string().into());
+                self.submit_text_message(INIT_PROMPT.to_string());
             }
             SlashCommand::Compact => {
                 self.clear_token_usage();
@@ -1378,15 +1418,6 @@ impl ChatWidget {
             self.needs_final_message_separator = true;
         }
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
-    }
-
-    fn queue_user_message(&mut self, user_message: UserMessage) {
-        if self.bottom_pane.is_task_running() {
-            self.queued_user_messages.push_back(user_message);
-            self.refresh_queued_user_messages();
-        } else {
-            self.submit_user_message(user_message);
-        }
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
@@ -2591,6 +2622,16 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
+    /// Programmatically submit a user text message as if typed in the
+    /// composer. The text will be added to conversation history and sent to
+    /// the agent.
+    pub(crate) fn submit_text_message(&mut self, text: String) {
+        if text.is_empty() {
+            return;
+        }
+        self.submit_user_message(text.into());
+    }
+
     pub(crate) fn token_usage(&self) -> TokenUsage {
         self.token_info
             .as_ref()
@@ -2616,33 +2657,29 @@ impl ChatWidget {
         self.token_info = None;
     }
 
-    fn as_renderable(&self) -> RenderableItem<'_> {
-        let active_cell_renderable = match &self.active_cell {
-            Some(cell) => RenderableItem::Borrowed(cell).inset(Insets::tlbr(1, 0, 0, 0)),
-            None => RenderableItem::Owned(Box::new(())),
-        };
-        let mut flex = FlexRenderable::new();
-        flex.push(1, active_cell_renderable);
-        flex.push(
-            0,
-            RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(1, 0, 0, 0)),
-        );
-        RenderableItem::Owned(Box::new(flex))
+    pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        let [_, _, bottom_pane_area] = self.layout_areas(area);
+        self.bottom_pane.cursor_pos(bottom_pane_area)
     }
 }
 
-impl Renderable for ChatWidget {
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.as_renderable().render(area, buf);
+impl WidgetRef for &ChatWidget {
+    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        let [_, active_cell_area, bottom_pane_area] = self.layout_areas(area);
+        (&self.bottom_pane).render(bottom_pane_area, buf);
+        if !active_cell_area.is_empty()
+            && let Some(cell) = &self.active_cell
+        {
+            let mut area = active_cell_area;
+            area.y = area.y.saturating_add(1);
+            area.height = area.height.saturating_sub(1);
+            if let Some(exec) = cell.as_any().downcast_ref::<ExecCell>() {
+                exec.render_ref(area, buf);
+            } else if let Some(tool) = cell.as_any().downcast_ref::<McpToolCallCell>() {
+                tool.render_ref(area, buf);
+            }
+        }
         self.last_rendered_width.set(Some(area.width as usize));
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.as_renderable().desired_height(width)
-    }
-
-    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        self.as_renderable().cursor_pos(area)
     }
 }
 
