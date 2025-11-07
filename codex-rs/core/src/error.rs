@@ -109,6 +109,9 @@ pub enum CodexErr {
     #[error("{0}")]
     ConnectionFailed(ConnectionFailedError),
 
+    #[error("Quota exceeded. Check your plan and billing details.")]
+    QuotaExceeded,
+
     #[error(
         "To use Codex with your ChatGPT plan, upgrade to Plus: https://openai.com/chatgpt/pricing."
     )]
