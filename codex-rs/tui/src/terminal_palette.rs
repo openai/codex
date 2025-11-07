@@ -35,7 +35,7 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
 ///
 /// - On non-Windows, this is simply `supports_color`'s 16m capability.
 /// - On Windows, we upgrade to truecolor on Windows Terminal if Virtual Terminal
-///   Processing can be enabled successfully. This probing happens once and is cached.
+///   Processing can be enabled successfully via crossterm. This probing happens once and is cached.
 pub fn stdout_supports_truecolor() -> bool {
     #[cfg(windows)]
     {
@@ -49,7 +49,7 @@ pub fn stdout_supports_truecolor() -> bool {
             }
             // Upgrade to truecolor on Windows Terminal when VT processing is available.
             // We only attempt to enable VT once per process to avoid per-frame overhead.
-            std::env::var_os("WT_SESSION").is_some() && enable_vt_stdout().is_ok()
+            std::env::var_os("WT_SESSION").is_some() && crossterm::ansi_support::supports_ansi()
         })
     }
     #[cfg(not(windows))]
@@ -57,48 +57,6 @@ pub fn stdout_supports_truecolor() -> bool {
         supports_color::on_cached(supports_color::Stream::Stdout)
             .map(|level| level.has_16m)
             .unwrap_or(false)
-    }
-}
-
-/// Enables Virtual Terminal Processing (ANSI escape sequence handling) on Windows for stdout.
-///
-/// This ensures that ANSI SGR sequences (including 24-bit truecolor) are interpreted by the
-/// Windows console pipeline. We use this as a lightweight capability gate before upgrading to
-/// truecolor on Windows Terminal:
-///
-/// - If enabling VT processing succeeds, we can safely emit 24-bit color.
-/// - If it fails (e.g., legacy consoles or non-TTY), we do not upgrade and fall back to the
-///   base `supports_color` decision to avoid printing raw escape sequences.
-///
-/// Calling this repeatedly is idempotent (it simply sets the corresponding console mode flag),
-/// and we cache the result in `stdout_supports_truecolor` so we only attempt it once.
-#[cfg(windows)]
-fn enable_vt_stdout() -> std::io::Result<()> {
-    use std::io;
-    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-    use windows_sys::Win32::System::Console::GetConsoleMode;
-    use windows_sys::Win32::System::Console::GetStdHandle;
-    use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
-    use windows_sys::Win32::System::Console::SetConsoleMode;
-
-    unsafe {
-        let handle = GetStdHandle(STD_OUTPUT_HANDLE);
-        if handle == 0 || handle == INVALID_HANDLE_VALUE {
-            return Err(io::Error::last_os_error());
-        }
-
-        let mut mode: u32 = 0;
-        if GetConsoleMode(handle, &mut mode) == 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        let new_mode = mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-        if SetConsoleMode(handle, new_mode) == 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        Ok(())
     }
 }
 
