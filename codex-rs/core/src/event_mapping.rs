@@ -43,7 +43,7 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 });
             }
             ContentItem::OutputText { text } => {
-                if is_session_prefix(text) || is_user_shell_command_text(text) {
+                if is_session_prefix(text) {
                     return None;
                 }
                 warn!("Output text in user message: {}", text);
