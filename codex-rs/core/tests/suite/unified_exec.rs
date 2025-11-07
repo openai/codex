@@ -25,7 +25,6 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
-use core_test_support::wait_for_event_with_timeout;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
@@ -482,8 +481,6 @@ async fn unified_exec_emits_output_delta_for_write_stdin() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_skips_begin_event_for_empty_input() -> Result<()> {
-    use tokio::time::Duration;
-
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -559,7 +556,7 @@ async fn unified_exec_skips_begin_event_for_empty_input() -> Result<()> {
 
     let mut begin_events = Vec::new();
     loop {
-        let event_msg = wait_for_event_with_timeout(&codex, |_| true, Duration::from_secs(2)).await;
+        let event_msg = wait_for_event(&codex, |_| true).await;
         match event_msg {
             EventMsg::ExecCommandBegin(event) => begin_events.push(event),
             EventMsg::TaskComplete(_) => break,
