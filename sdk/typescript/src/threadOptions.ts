@@ -12,4 +12,5 @@ export type ThreadOptions = {
   modelReasoningEffort?: ModelReasoningEffort;
   networkAccess?: boolean;
   webSearch?: boolean;
+  approvalPolicy?: ApprovalMode;
 };

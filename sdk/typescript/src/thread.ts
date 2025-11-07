@@ -88,6 +88,7 @@ export class Thread {
       modelReasoningEffort: options?.modelReasoningEffort,
       networkAccess: options?.networkAccess,
       webSearch: options?.webSearch,
+      approvalPolicy: options?.approvalPolicy,
     });
     try {
       for await (const item of generator) {

@@ -3,7 +3,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
-import { SandboxMode, ModelReasoningEffort } from "./threadOptions";
+import { SandboxMode, ModelReasoningEffort, ApprovalMode } from "./threadOptions";
 
 export type CodexExecArgs = {
   input: string;
@@ -28,6 +28,8 @@ export type CodexExecArgs = {
   networkAccess?: boolean;
   // --config tools.web_search
   webSearch?: boolean;
+  // --ask-for-approval
+  approvalPolicy?: ApprovalMode;
 };
 
 const INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
@@ -72,6 +74,10 @@ export class CodexExec {
 
     if (args.webSearch !== undefined) {
       commandArgs.push("--config", `tools.web_search=${args.webSearch}`);
+    }
+
+    if (args.approvalPolicy) {
+      commandArgs.push("--ask-for-approval", args.approvalPolicy);
     }
 
     if (args.images?.length) {
