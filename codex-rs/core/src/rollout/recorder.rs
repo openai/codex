@@ -381,6 +381,7 @@ async fn rollout_writer(
             RolloutCmd::Flush { ack } => {
                 // Ensure underlying file is flushed and then ack.
                 if let Err(e) = writer.file.flush().await {
+                    warn!("failed to flush rollout file: {e}");
                     let _ = ack.send(());
                     return Err(e);
                 }
@@ -388,6 +389,8 @@ async fn rollout_writer(
             }
             RolloutCmd::Shutdown { ack } => {
                 let _ = ack.send(());
+                // need to break the loop to end the task
+                break;
             }
         }
     }
