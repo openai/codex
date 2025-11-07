@@ -389,8 +389,10 @@ async fn rollout_writer(
             }
             RolloutCmd::Shutdown { ack } => {
                 let _ = ack.send(());
-                // need to break the loop to end the task
-                break;
+                // Do not break or return here. After a Shutdown command there may still be
+                // queued AddItems messages that must be written. We only acknowledge and
+                // keep looping; the writer task exits naturally when all senders are dropped
+                // and rx.recv() yields None.
             }
         }
     }
