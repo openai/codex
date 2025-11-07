@@ -1,0 +1,175 @@
+/* TaskPanel.css - Kamui4D風タスクパネルスタイル */
+
+.task-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: rgba(10, 10, 26, 0.95);
+  border: 1px solid #00d4ff;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.task-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15px 20px;
+  border-bottom: 1px solid rgba(0, 212, 255, 0.3);
+  background: rgba(0, 212, 255, 0.05);
+}
+
+.task-panel-header h2 {
+  margin: 0;
+  font-size: 18px;
+  color: #00d4ff;
+  text-shadow: 0 0 10px rgba(0, 212, 255, 0.8);
+}
+
+.btn-add-task {
+  background: linear-gradient(135deg, #00d4ff, #b84fff);
+  border: none;
+  border-radius: 4px;
+  padding: 8px 16px;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.btn-add-task:hover {
+  transform: scale(1.05);
+}
+
+.task-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.task-item {
+  display: flex;
+  align-items: center;
+  padding: 12px;
+  margin-bottom: 8px;
+  background: rgba(20, 20, 40, 0.8);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.task-item:hover {
+  background: rgba(30, 30, 60, 0.9);
+  border-color: rgba(0, 212, 255, 0.5);
+}
+
+.task-item.selected {
+  border-color: #00d4ff;
+  box-shadow: 0 0 15px rgba(0, 212, 255, 0.5);
+}
+
+.task-status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 12px;
+  flex-shrink: 0;
+}
+
+.task-item.pending .task-status-indicator {
+  background: #888;
+}
+
+.task-item.running .task-status-indicator {
+  background: #39ff14;
+  box-shadow: 0 0 10px rgba(57, 255, 20, 0.8);
+  animation: pulse 1.5s infinite;
+}
+
+.task-item.completed .task-status-indicator {
+  background: #00d4ff;
+}
+
+.task-item.failed .task-status-indicator {
+  background: #ff3131;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(1.2);
+  }
+}
+
+.task-content {
+  flex: 1;
+}
+
+.task-content h3 {
+  margin: 0 0 4px 0;
+  font-size: 14px;
+  color: #ffffff;
+}
+
+.task-agent {
+  font-size: 11px;
+  color: #b84fff;
+  font-style: italic;
+}
+
+.task-progress {
+  margin-top: 8px;
+  position: relative;
+  height: 18px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #00d4ff, #39ff14);
+  border-radius: 9px;
+  transition: width 0.3s;
+}
+
+.progress-text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 11px;
+  font-weight: 600;
+  color: white;
+  text-shadow: 0 0 5px rgba(0, 0, 0, 0.8);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,6 +1,8 @@
 // VirtualDesktop Optimizer
 // Quest Link / Air Link / VirtualDesktop streaming optimization
 
+import { useState, useEffect } from 'react';
+
 export interface VDQualityPreset {
   name: string
   renderScale: number
@@ -53,10 +55,14 @@ export const VD_PRESETS: Record<string, VDQualityPreset> = {
 export class VirtualDesktopOptimizer {
   private currentPreset: VDQualityPreset
   private isVirtualDesktop: boolean = false
+  private dpiScale: number = 1.0
+  private vrHeadset: string | null = null
   
   constructor() {
-    this.currentPreset = VD_PRESETS.medium
+    this.currentPreset = VD_PRESETS['medium'] ?? VD_PRESETS['low']
     this.detectVirtualDesktop()
+    this.detectDPI()
+    this.detectVRHeadset()
   }
   
   // VirtualDesktop検出
@@ -183,6 +189,112 @@ export class VirtualDesktopOptimizer {
   isUsingVirtualDesktop(): boolean {
     return this.isVirtualDesktop
   }
+
+  // === Phase 3.2: DPI調整とVR Headset連携 ===
+
+  /**
+   * DPI検出と調整
+   */
+  detectDPI(): number {
+    this.dpiScale = window.devicePixelRatio || 1.0
+    
+    if (this.dpiScale > 1.5) {
+      console.log(`🖥️  High DPI detected: ${this.dpiScale}x`)
+      // 高DPI環境ではレンダリング品質を調整
+      if (this.dpiScale >= 2.0) {
+        this.applyPreset('ultra')
+      }
+    }
+    
+    return this.dpiScale
+  }
+
+  /**
+   * VR Headset検出（Quest Link / Air Link / Steam VR）
+   */
+  detectVRHeadset(): string | null {
+    // WebXR API経由でVRデバイス検出
+    if ('xr' in navigator) {
+      const xr = (navigator as any).xr;
+      if (xr && typeof xr.isSessionSupported === 'function') {
+        xr.isSessionSupported('immersive-vr').then((supported: boolean) => {
+        if (supported) {
+          // VRデバイス情報取得（可能であれば）
+          this.vrHeadset = 'WebXR Compatible Device'
+          console.log('🥽 VR Headset detected')
+          
+          // Quest特有の最適化
+          if (navigator.userAgent.includes('Quest')) {
+            this.vrHeadset = 'Meta Quest'
+            this.applyQuestOptimizations()
+          }
+        }
+        }).catch((err: Error) => {
+          console.warn('VR detection failed:', err)
+        })
+      }
+    }
+    
+    return this.vrHeadset
+  }
+
+  /**
+   * Quest専用最適化
+   */
+  private applyQuestOptimizations(): void {
+    console.log('🥽 Applying Quest-specific optimizations')
+    
+    // Quest 3は高解像度だがモバイルGPU
+    // 品質: High（Ultra不可）
+    this.applyPreset('high')
+    
+    // フォビエイテッドレンダリング準備
+    document.documentElement.setAttribute('data-foveated-rendering', 'true')
+  }
+
+  /**
+   * DPI倍率取得
+   */
+  getDPIScale(): number {
+    return this.dpiScale
+  }
+
+  /**
+   * 検出されたVR Headset取得
+   */
+  getVRHeadset(): string | null {
+    return this.vrHeadset
+  }
+
+  /**
+   * VR Headset接続確認（リアルタイム）
+   */
+  async checkVRHeadsetConnection(): Promise<boolean> {
+    if (!('xr' in navigator)) {
+      return false
+    }
+    
+    try {
+      const xr = (navigator as any).xr;
+      if (xr && typeof xr.isSessionSupported === 'function') {
+        const supported = await xr.isSessionSupported('immersive-vr')
+        return supported || false
+      }
+      return false
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * DPIスケール適用（Canvas解像度調整）
+   */
+  applyDPIScale(canvas: HTMLCanvasElement): void {
+    const rect = canvas.getBoundingClientRect()
+    canvas.width = rect.width * this.dpiScale
+    canvas.height = rect.height * this.dpiScale
+    console.log(`✅ Canvas resolution: ${canvas.width}x${canvas.height} (DPI: ${this.dpiScale}x)`)
+  }
 }
 
 // Global singleton
@@ -214,16 +326,4 @@ export const useVirtualDesktopOptimizer = () => {
     availablePresets: Object.keys(VD_PRESETS),
   }
 }
-
-// CYBERPUNK_COLORS定義（ARScene内で使用）
-const CYBERPUNK_COLORS = [
-  '#00d4ff',
-  '#b84fff',
-  '#ff006e',
-  '#39ff14',
-  '#ffff00',
-  '#ff3131',
-  '#00ffff',
-  '#ff00ff',
-]
 

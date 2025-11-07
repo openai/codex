@@ -1,0 +1,329 @@
+/* BabylonGitScene.css - Babylon.js Git可視化スタイル（Kamui4D超え） */
+
+.babylon-git-scene-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: radial-gradient(ellipse at center, #0a0a1a 0%, #020208 100%);
+}
+
+.babylon-git-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+  touch-action: none;
+}
+
+.babylon-git-canvas:active {
+  cursor: grabbing;
+}
+
+/* ローディングオーバーレイ */
+.loading-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(2, 2, 8, 0.95);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(10px);
+}
+
+.loading-spinner {
+  text-align: center;
+  color: #00d4ff;
+}
+
+.spinner {
+  width: 60px;
+  height: 60px;
+  margin: 0 auto 20px;
+  border: 4px solid rgba(0, 212, 255, 0.1);
+  border-top: 4px solid #00d4ff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  box-shadow: 0 0 20px rgba(0, 212, 255, 0.5);
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.loading-overlay p {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 5px 0;
+  text-shadow: 0 0 10px rgba(0, 212, 255, 0.8);
+}
+
+.loading-detail {
+  font-size: 14px !important;
+  color: #b84fff !important;
+  font-weight: 400 !important;
+}
+
+/* 統計パネル */
+.stats-panel {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: rgba(10, 10, 26, 0.9);
+  border: 1px solid #00d4ff;
+  border-radius: 8px;
+  padding: 15px;
+  min-width: 200px;
+  backdrop-filter: blur(10px);
+  box-shadow: 
+    0 0 20px rgba(0, 212, 255, 0.3),
+    inset 0 0 20px rgba(0, 212, 255, 0.1);
+  z-index: 100;
+}
+
+.stats-panel h3 {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  color: #00d4ff;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  text-shadow: 0 0 10px rgba(0, 212, 255, 0.8);
+  border-bottom: 1px solid rgba(0, 212, 255, 0.3);
+  padding-bottom: 8px;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  margin: 8px 0;
+  font-size: 14px;
+}
+
+.stat-label {
+  color: #b84fff;
+  font-weight: 500;
+}
+
+.stat-value {
+  color: #39ff14;
+  font-weight: 700;
+  font-family: 'Courier New', monospace;
+  text-shadow: 0 0 5px rgba(57, 255, 20, 0.6);
+}
+
+.stat-value.warning {
+  color: #ff3131;
+  text-shadow: 0 0 5px rgba(255, 49, 49, 0.6);
+}
+
+/* 選択コミットパネル */
+.selected-commit-panel {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  background: rgba(10, 10, 26, 0.95);
+  border: 1px solid #b84fff;
+  border-radius: 8px;
+  padding: 15px;
+  max-width: 400px;
+  backdrop-filter: blur(15px);
+  box-shadow: 
+    0 0 20px rgba(184, 79, 255, 0.4),
+    inset 0 0 20px rgba(184, 79, 255, 0.1);
+  z-index: 100;
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.selected-commit-panel h3 {
+  margin: 0 0 10px 0;
+  font-size: 14px;
+  color: #b84fff;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  text-shadow: 0 0 10px rgba(184, 79, 255, 0.8);
+}
+
+.commit-info p {
+  margin: 6px 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.commit-sha {
+  font-family: 'Courier New', monospace;
+  color: #00d4ff;
+  font-weight: 700;
+  font-size: 16px !important;
+  text-shadow: 0 0 8px rgba(0, 212, 255, 0.8);
+}
+
+.commit-message {
+  color: #ffffff;
+  font-weight: 500;
+}
+
+.commit-author {
+  color: #39ff14;
+  font-style: italic;
+}
+
+.commit-timestamp {
+  color: #888;
+  font-size: 11px !important;
+}
+
+/* コントロールヘルプ */
+.controls-help {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  background: rgba(10, 10, 26, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 10px 15px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(10px);
+  z-index: 90;
+}
+
+.controls-help p {
+  margin: 4px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.controls-help kbd {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: #00d4ff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  min-width: 30px;
+  text-align: center;
+}
+
+/* ミニマップ */
+.minimap-container {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  width: 200px;
+  height: 150px;
+  background: rgba(10, 10, 26, 0.9);
+  border: 1px solid rgba(0, 212, 255, 0.5);
+  border-radius: 6px;
+  overflow: hidden;
+  backdrop-filter: blur(10px);
+  z-index: 100;
+  box-shadow: 0 0 15px rgba(0, 212, 255, 0.3);
+}
+
+.minimap-canvas {
+  width: 100%;
+  height: 100%;
+}
+
+/* レスポンシブ（モバイル・タブレット） */
+@media (max-width: 768px) {
+  .stats-panel,
+  .selected-commit-panel,
+  .controls-help {
+    font-size: 11px;
+    padding: 10px;
+  }
+
+  .stats-panel {
+    top: 10px;
+    right: 10px;
+    min-width: 150px;
+  }
+
+  .selected-commit-panel {
+    bottom: 10px;
+    left: 10px;
+    max-width: calc(100% - 20px);
+  }
+
+  .controls-help {
+    display: none; /* モバイルでは非表示 */
+  }
+
+  .minimap-container {
+    width: 120px;
+    height: 90px;
+  }
+}
+
+/* Virtual Desktop / VR最適化 */
+@media (min-width: 2560px) {
+  .stats-panel,
+  .selected-commit-panel {
+    transform: scale(1.5);
+    transform-origin: top right;
+  }
+
+  .controls-help {
+    transform: scale(1.3);
+    transform-origin: bottom right;
+  }
+}
+
+/* ダークモード対応（システム設定） */
+@media (prefers-color-scheme: dark) {
+  /* すでにダークテーマなので変更不要 */
+}
+
+/* アニメーション無効化（ユーザー設定） */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

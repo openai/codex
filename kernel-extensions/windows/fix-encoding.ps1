@@ -1,4 +1,4 @@
-﻿# PowerShell Script Encoding Fixer
+# PowerShell Script Encoding Fixer
 # UTF-8 BOMなし → UTF-8 BOM付きに変換
 
 <#

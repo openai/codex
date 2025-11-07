@@ -1,0 +1,144 @@
+/* CLITerminal.css - ターミナルエミュレータスタイル */
+
+.cli-terminal {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #0a0a1a;
+  border: 1px solid #39ff14;
+  border-radius: 8px;
+  overflow: hidden;
+  font-family: 'Courier New', Consolas, monospace;
+}
+
+.terminal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 15px;
+  background: rgba(57, 255, 20, 0.1);
+  border-bottom: 1px solid rgba(57, 255, 20, 0.3);
+}
+
+.terminal-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #39ff14;
+  text-shadow: 0 0 10px rgba(57, 255, 20, 0.8);
+}
+
+.btn-clear {
+  background: transparent;
+  border: 1px solid rgba(57, 255, 20, 0.5);
+  border-radius: 4px;
+  padding: 4px 12px;
+  color: #39ff14;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-clear:hover {
+  background: rgba(57, 255, 20, 0.2);
+  border-color: #39ff14;
+}
+
+.terminal-output {
+  flex: 1;
+  overflow-y: auto;
+  padding: 15px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.terminal-entry {
+  margin-bottom: 12px;
+}
+
+.terminal-command {
+  display: flex;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.prompt {
+  color: #39ff14;
+  margin-right: 8px;
+  font-weight: 700;
+}
+
+.command-text {
+  color: #00d4ff;
+}
+
+.terminal-result {
+  color: #ffffff;
+  margin-left: 20px;
+  opacity: 0.9;
+}
+
+.terminal-input {
+  display: flex;
+  align-items: center;
+  padding: 12px 15px;
+  background: rgba(0, 0, 0, 0.3);
+  border-top: 1px solid rgba(57, 255, 20, 0.3);
+}
+
+.terminal-input input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #00d4ff;
+  font-size: 14px;
+  font-family: inherit;
+  margin-left: 8px;
+}
+
+.terminal-input input::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+/* スクロールバー */
+.terminal-output::-webkit-scrollbar {
+  width: 8px;
+}
+
+.terminal-output::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.terminal-output::-webkit-scrollbar-thumb {
+  background: rgba(57, 255, 20, 0.5);
+  border-radius: 4px;
+}
+
+.terminal-output::-webkit-scrollbar-thumb:hover {
+  background: #39ff14;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

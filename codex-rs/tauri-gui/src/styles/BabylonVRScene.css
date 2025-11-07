@@ -1,0 +1,117 @@
+/* BabylonVRScene.css - WebXR VRシーンスタイル */
+
+.babylon-vr-scene-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #0a0a1a;
+}
+
+.babylon-vr-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.vr-controls {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  background: rgba(10, 10, 26, 0.95);
+  border: 2px solid #b84fff;
+  border-radius: 12px;
+  padding: 30px 40px;
+  backdrop-filter: blur(15px);
+  box-shadow: 0 0 30px rgba(184, 79, 255, 0.5);
+}
+
+.vr-controls h3 {
+  margin: 0 0 20px 0;
+  color: #b84fff;
+  font-size: 24px;
+  text-shadow: 0 0 15px rgba(184, 79, 255, 0.8);
+}
+
+.btn-enter-vr {
+  background: linear-gradient(135deg, #b84fff, #ff006e);
+  border: none;
+  border-radius: 8px;
+  padding: 15px 40px;
+  color: white;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.3s;
+  box-shadow: 0 0 20px rgba(184, 79, 255, 0.6);
+}
+
+.btn-enter-vr:hover {
+  transform: scale(1.1);
+  box-shadow: 0 0 40px rgba(184, 79, 255, 0.9);
+}
+
+.feature-badge {
+  margin-top: 15px;
+  padding: 8px 16px;
+  background: rgba(57, 255, 20, 0.2);
+  border: 1px solid #39ff14;
+  border-radius: 20px;
+  color: #39ff14;
+  font-size: 14px;
+  display: inline-block;
+}
+
+.vr-not-supported {
+  color: #ff3131;
+  font-size: 16px;
+  margin-top: 20px;
+}
+
+.vr-active-overlay {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(184, 79, 255, 0.9);
+  border-radius: 8px;
+  padding: 15px 30px;
+  text-align: center;
+  color: white;
+}
+
+.vr-active-overlay p {
+  margin: 4px 0;
+  font-weight: 600;
+}
+
+.vr-hint {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
