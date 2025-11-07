@@ -309,7 +309,7 @@ describe("Codex", () => {
 
       const commandArgs = spawnArgs[0];
       expect(commandArgs).toBeDefined();
-      expectPair(commandArgs, ["--config", "tools.web_search=true"]);
+      expectPair(commandArgs, ["--config", "features.web_search_request=true"]);
     } finally {
       restore();
       await close();
