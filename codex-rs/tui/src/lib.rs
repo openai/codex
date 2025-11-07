@@ -54,6 +54,7 @@ pub mod live_wrap;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
+pub mod migration;
 pub mod onboarding;
 mod pager_overlay;
 pub mod public_widgets;

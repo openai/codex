@@ -17,6 +17,8 @@ Control Codex’s behavior during an interactive session with slash commands.
 | `/review`    | review my current changes and find issues                   |
 | `/new`       | start a new chat during a conversation                      |
 | `/init`      | create an AGENTS.md file with instructions for Codex        |
+| `/migrate`   | ask Codex to run `migrate-cli plan` and populate the migration workspace |
+| `/continue-migration` | ask Codex to run `migrate-cli execute` and work the next task |
 | `/compact`   | summarize conversation to prevent hitting the context limit |
 | `/undo`      | ask Codex to undo a turn                                    |
 | `/diff`      | show git diff (including untracked files)                   |
