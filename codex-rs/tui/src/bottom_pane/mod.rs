@@ -46,6 +46,7 @@ pub(crate) enum CancellationEvent {
 }
 
 pub(crate) use chat_composer::ChatComposer;
+pub(crate) use chat_composer::ComposerAttachment;
 pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
 
@@ -463,7 +464,25 @@ impl BottomPane {
         }
     }
 
-    pub(crate) fn take_recent_submission_images(&mut self) -> Vec<PathBuf> {
+    pub(crate) fn attach_image_from_path(&mut self, path: PathBuf) -> bool {
+        if self.view_stack.is_empty() {
+            match self.composer.attach_image_from_path(path) {
+                Ok(()) => {
+                    self.composer.insert_str(" ");
+                    self.request_redraw();
+                    true
+                }
+                Err(err) => {
+                    tracing::info!("failed to attach clipboard path: {err}");
+                    false
+                }
+            }
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn take_recent_submission_images(&mut self) -> Vec<ComposerAttachment> {
         self.composer.take_recent_submission_images()
     }
 

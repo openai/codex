@@ -69,12 +69,15 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
+use crate::bottom_pane::ComposerAttachment;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use crate::clipboard_paste::PasteImageError;
+use crate::clipboard_paste::clipboard_first_file_path;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -292,14 +295,14 @@ pub(crate) struct ChatWidget {
 
 struct UserMessage {
     text: String,
-    image_paths: Vec<PathBuf>,
+    attachments: Vec<ComposerAttachment>,
 }
 
 impl From<String> for UserMessage {
     fn from(text: String) -> Self {
         Self {
             text,
-            image_paths: Vec::new(),
+            attachments: Vec::new(),
         }
     }
 }
@@ -308,16 +311,19 @@ impl From<&str> for UserMessage {
     fn from(text: &str) -> Self {
         Self {
             text: text.to_string(),
-            image_paths: Vec::new(),
+            attachments: Vec::new(),
         }
     }
 }
 
-fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Option<UserMessage> {
-    if text.is_empty() && image_paths.is_empty() {
+fn create_initial_user_message(
+    text: String,
+    attachments: Vec<ComposerAttachment>,
+) -> Option<UserMessage> {
+    if text.is_empty() && attachments.is_empty() {
         None
     } else {
-        Some(UserMessage { text, image_paths })
+        Some(UserMessage { text, attachments })
     }
 }
 
@@ -1031,7 +1037,10 @@ impl ChatWidget {
             session_header: SessionHeader::new(config.model),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
-                initial_images,
+                initial_images
+                    .into_iter()
+                    .map(ComposerAttachment::Local)
+                    .collect(),
             ),
             token_info: None,
             rate_limit_snapshot: None,
@@ -1098,7 +1107,10 @@ impl ChatWidget {
             session_header: SessionHeader::new(config.model),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
-                initial_images,
+                initial_images
+                    .into_iter()
+                    .map(ComposerAttachment::Local)
+                    .collect(),
             ),
             token_info: None,
             rate_limit_snapshot: None,
@@ -1142,9 +1154,7 @@ impl ChatWidget {
                 kind: KeyEventKind::Press,
                 ..
             } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'v') => {
-                if let Ok((path, info)) = paste_image_to_temp_png() {
-                    self.attach_image(path, info.width, info.height, info.encoded_format.label());
-                }
+                self.handle_image_clipboard_paste();
                 return;
             }
             other if other.kind == KeyEventKind::Press => {
@@ -1173,7 +1183,7 @@ impl ChatWidget {
                         // If a task is running, queue the user input to be sent after the turn completes.
                         let user_message = UserMessage {
                             text,
-                            image_paths: self.bottom_pane.take_recent_submission_images(),
+                            attachments: self.bottom_pane.take_recent_submission_images(),
                         };
                         self.queue_user_message(user_message);
                     }
@@ -1199,6 +1209,22 @@ impl ChatWidget {
         self.bottom_pane
             .attach_image(path, width, height, format_label);
         self.request_redraw();
+    }
+
+    fn handle_image_clipboard_paste(&mut self) -> bool {
+        match paste_image_to_temp_png() {
+            Ok((path, info)) => {
+                self.attach_image(path, info.width, info.height, info.encoded_format.label());
+                true
+            }
+            Err(PasteImageError::NoImage(_)) => false,
+            Err(err) => {
+                let message = format!("Image paste failed: {err}");
+                self.add_to_history(history_cell::new_error_event(message));
+                self.request_redraw();
+                true
+            }
+        }
     }
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {
@@ -1339,6 +1365,14 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
+        if let Some(path) = clipboard_first_file_path()
+            && self.bottom_pane.attach_image_from_path(path)
+        {
+            return;
+        }
+        if text.is_empty() && self.handle_image_clipboard_paste() {
+            return;
+        }
         self.bottom_pane.handle_paste(text);
     }
 
@@ -1390,8 +1424,8 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
-        let UserMessage { text, image_paths } = user_message;
-        if text.is_empty() && image_paths.is_empty() {
+        let UserMessage { text, attachments } = user_message;
+        if text.is_empty() && attachments.is_empty() {
             return;
         }
 
@@ -1419,8 +1453,17 @@ impl ChatWidget {
             items.push(UserInput::Text { text: text.clone() });
         }
 
-        for path in image_paths {
-            items.push(UserInput::LocalImage { path });
+        for attachment in attachments {
+            match attachment {
+                ComposerAttachment::Local(path) => {
+                    items.push(UserInput::LocalImage { path });
+                }
+                ComposerAttachment::Remote(url) => {
+                    items.push(UserInput::Image {
+                        image_url: url.into(),
+                    });
+                }
+            }
         }
 
         self.codex_op_tx

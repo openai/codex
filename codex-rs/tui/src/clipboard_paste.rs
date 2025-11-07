@@ -26,6 +26,7 @@ impl std::error::Error for PasteImageError {}
 pub enum EncodedImageFormat {
     Png,
     Jpeg,
+    Webp,
     Other,
 }
 
@@ -34,6 +35,7 @@ impl EncodedImageFormat {
         match self {
             EncodedImageFormat::Png => "PNG",
             EncodedImageFormat::Jpeg => "JPEG",
+            EncodedImageFormat::Webp => "WEBP",
             EncodedImageFormat::Other => "IMG",
         }
     }
@@ -51,42 +53,86 @@ pub struct PastedImageInfo {
 pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
     let _span = tracing::debug_span!("paste_image_as_png").entered();
     tracing::debug!("attempting clipboard image read");
+
     let mut cb = arboard::Clipboard::new()
         .map_err(|e| PasteImageError::ClipboardUnavailable(e.to_string()))?;
-    // Sometimes images on the clipboard come as files (e.g. when copy/pasting from
-    // Finder), sometimes they come as image data (e.g. when pasting from Chrome).
-    // Accept both, and prefer files if both are present.
-    let files = cb
-        .get()
-        .file_list()
-        .map_err(|e| PasteImageError::ClipboardUnavailable(e.to_string()));
-    let dyn_img = if let Some(img) = files
-        .unwrap_or_default()
-        .into_iter()
-        .find_map(|f| image::open(f).ok())
-    {
-        tracing::debug!(
-            "clipboard image opened from file: {}x{}",
-            img.width(),
-            img.height()
-        );
-        img
-    } else {
-        let _span = tracing::debug_span!("get_image").entered();
-        let img = cb
-            .get_image()
-            .map_err(|e| PasteImageError::NoImage(e.to_string()))?;
-        let w = img.width as u32;
-        let h = img.height as u32;
-        tracing::debug!("clipboard image opened from image: {}x{}", w, h);
+    if let Some(image) = clipboard_image_from_file_list(&mut cb) {
+        return encode_dynamic_image(image);
+    }
+    let dyn_img = clipboard_image_from_pixels(&mut cb)?;
 
-        let Some(rgba_img) = image::RgbaImage::from_raw(w, h, img.bytes.into_owned()) else {
-            return Err(PasteImageError::EncodeFailed("invalid RGBA buffer".into()));
-        };
+    encode_dynamic_image(dyn_img)
+}
 
-        image::DynamicImage::ImageRgba8(rgba_img)
+#[cfg(not(target_os = "android"))]
+fn clipboard_image_from_file_list(cb: &mut arboard::Clipboard) -> Option<image::DynamicImage> {
+    let _span = tracing::debug_span!("clipboard_file_list").entered();
+
+    let files = match cb.get().file_list() {
+        Ok(files) => files,
+        Err(err) => {
+            tracing::debug!("clipboard file_list unavailable: {err}");
+            return None;
+        }
     };
 
+    for path in files {
+        let display_path = path.display().to_string();
+        match image::open(&path) {
+            Ok(img) => {
+                tracing::debug!(
+                    "clipboard image opened from file: {}x{} ({display_path})",
+                    img.width(),
+                    img.height()
+                );
+                return Some(img);
+            }
+            Err(err) => {
+                tracing::debug!("clipboard file entry unusable ({display_path}): {err}");
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn clipboard_first_file_path() -> Option<PathBuf> {
+    let mut cb = arboard::Clipboard::new().ok()?;
+    let files = cb.get().file_list().ok()?;
+    files.into_iter().next()
+}
+
+#[cfg(target_os = "android")]
+pub fn clipboard_first_file_path() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(not(target_os = "android"))]
+fn clipboard_image_from_pixels(
+    cb: &mut arboard::Clipboard,
+) -> Result<image::DynamicImage, PasteImageError> {
+    let _span = tracing::debug_span!("get_image").entered();
+    let img = cb
+        .get_image()
+        .map_err(|e| PasteImageError::NoImage(e.to_string()))?;
+    let w = img.width as u32;
+    let h = img.height as u32;
+    tracing::debug!("clipboard image opened from image: {}x{}", w, h);
+
+    let Some(rgba_img) = image::RgbaImage::from_raw(w, h, img.bytes.into_owned()) else {
+        return Err(PasteImageError::EncodeFailed("invalid RGBA buffer".into()));
+    };
+
+    Ok(image::DynamicImage::ImageRgba8(rgba_img))
+}
+
+#[cfg(not(target_os = "android"))]
+fn encode_dynamic_image(
+    dyn_img: image::DynamicImage,
+) -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
+    let width = dyn_img.width();
+    let height = dyn_img.height();
     let mut png: Vec<u8> = Vec::new();
     {
         let span =
@@ -101,8 +147,8 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
     Ok((
         png,
         PastedImageInfo {
-            width: dyn_img.width(),
-            height: dyn_img.height(),
+            width,
+            height,
             encoded_format: EncodedImageFormat::Png,
         },
     ))
@@ -203,6 +249,7 @@ pub fn pasted_image_format(path: &Path) -> EncodedImageFormat {
     {
         Some("png") => EncodedImageFormat::Png,
         Some("jpg") | Some("jpeg") => EncodedImageFormat::Jpeg,
+        Some("webp") => EncodedImageFormat::Webp,
         _ => EncodedImageFormat::Other,
     }
 }
@@ -226,6 +273,14 @@ mod pasted_paths_tests {
         assert_eq!(result, PathBuf::from(r"C:\Temp\example.png"));
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn normalize_file_url_with_percent_encoded_unicode() {
+        let input = "file:///tmp/%C2%A9image.png";
+        let result = normalize_pasted_path(input).expect("should parse unicode file URL");
+        assert_eq!(result, PathBuf::from("/tmp/\u{a9}image.png"));
+    }
+
     #[test]
     fn normalize_shell_escaped_single_path() {
         let input = "/home/user/My\\ File.png";
@@ -245,6 +300,13 @@ mod pasted_paths_tests {
         let input = "'/home/user/My File.png'";
         let result = normalize_pasted_path(input).expect("should trim single quotes via shlex");
         assert_eq!(result, PathBuf::from("/home/user/My File.png"));
+    }
+
+    #[test]
+    fn normalize_unicode_path() {
+        let input = "/tmp/\u{a9}photo.webp";
+        let result = normalize_pasted_path(input).expect("should handle unicode path");
+        assert_eq!(result, PathBuf::from("/tmp/\u{a9}photo.webp"));
     }
 
     #[test]
@@ -275,7 +337,7 @@ mod pasted_paths_tests {
         );
         assert_eq!(
             pasted_image_format(Path::new("/a/b/c.webp")),
-            EncodedImageFormat::Other
+            EncodedImageFormat::Webp
         );
     }
 
@@ -320,6 +382,10 @@ mod pasted_paths_tests {
         assert_eq!(
             pasted_image_format(Path::new(r"C:\\a\\b\\noext")),
             EncodedImageFormat::Other
+        );
+        assert_eq!(
+            pasted_image_format(Path::new(r"C:\\a\\b\\c.webp")),
+            EncodedImageFormat::Webp
         );
     }
 }

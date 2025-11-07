@@ -46,6 +46,7 @@ use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -830,6 +831,28 @@ fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
         images.is_empty(),
         "attachments are not preserved in history recall"
     );
+}
+
+#[test]
+fn remote_image_url_is_sent_as_image_input() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual();
+    chat.bottom_pane
+        .handle_paste("https://example.com/foo.png".to_string());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match op_rx.try_recv() {
+        Ok(Op::UserInput { items }) => {
+            assert!(
+                items.iter().any(|item| matches!(
+                    item,
+                    UserInput::Image { image_url } if image_url == "https://example.com/foo.png"
+                )),
+                "expected remote image attachment in user input"
+            );
+        }
+        other => panic!("expected Op::UserInput, got {other:?}"),
+    }
 }
 
 #[test]

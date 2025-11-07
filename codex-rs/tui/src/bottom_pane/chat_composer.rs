@@ -59,6 +59,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
+use url::Url;
 
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
@@ -72,10 +73,16 @@ pub enum InputResult {
     None,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ComposerAttachment {
+    Local(PathBuf),
+    Remote(Url),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct AttachedImage {
     placeholder: String,
-    path: PathBuf,
+    source: ComposerAttachment,
 }
 
 enum PromptSelectionMode {
@@ -222,8 +229,18 @@ impl ChatComposer {
             let placeholder = format!("[Pasted Content {char_count} chars]");
             self.textarea.insert_element(&placeholder);
             self.pending_pastes.push((placeholder, pasted));
-        } else if char_count > 1 && self.handle_paste_image_path(pasted.clone()) {
-            self.textarea.insert_str(" ");
+        } else if char_count > 1 {
+            let handled_local = self.handle_paste_image_path(pasted.clone());
+            let handled_remote = if handled_local {
+                false
+            } else {
+                self.handle_paste_remote_image(&pasted)
+            };
+            if handled_local || handled_remote {
+                self.textarea.insert_str(" ");
+            } else {
+                self.textarea.insert_str(&pasted);
+            }
         } else {
             self.textarea.insert_str(&pasted);
         }
@@ -245,11 +262,9 @@ impl ChatComposer {
             return false;
         };
 
-        match image::image_dimensions(&path_buf) {
-            Ok((w, h)) => {
+        match self.attach_image_from_path(path_buf) {
+            Ok(()) => {
                 tracing::info!("OK: {pasted}");
-                let format_label = pasted_image_format(&path_buf).label();
-                self.attach_image(path_buf, w, h, format_label);
                 true
             }
             Err(err) => {
@@ -257,6 +272,14 @@ impl ChatComposer {
                 false
             }
         }
+    }
+
+    fn handle_paste_remote_image(&mut self, pasted: &str) -> bool {
+        let Some(url) = parse_image_url(pasted) else {
+            return false;
+        };
+        self.attach_remote_image(url);
+        true
     }
 
     pub(crate) fn set_disable_paste_burst(&mut self, disabled: bool) {
@@ -311,13 +334,31 @@ impl ChatComposer {
         // Insert as an element to match large paste placeholder behavior:
         // styled distinctly and treated atomically for cursor/mutations.
         self.textarea.insert_element(&placeholder);
-        self.attached_images
-            .push(AttachedImage { placeholder, path });
+        self.attached_images.push(AttachedImage {
+            placeholder,
+            source: ComposerAttachment::Local(path),
+        });
     }
 
-    pub fn take_recent_submission_images(&mut self) -> Vec<PathBuf> {
+    fn attach_remote_image(&mut self, url: Url) {
+        let placeholder = format!("[{}]", remote_image_label(&url));
+        self.textarea.insert_element(&placeholder);
+        self.attached_images.push(AttachedImage {
+            placeholder,
+            source: ComposerAttachment::Remote(url),
+        });
+    }
+
+    pub fn attach_image_from_path(&mut self, path_buf: PathBuf) -> Result<(), image::ImageError> {
+        let (w, h) = image::image_dimensions(&path_buf)?;
+        let format_label = pasted_image_format(&path_buf).label();
+        self.attach_image(path_buf, w, h, format_label);
+        Ok(())
+    }
+
+    pub fn take_recent_submission_images(&mut self) -> Vec<ComposerAttachment> {
         let images = std::mem::take(&mut self.attached_images);
-        images.into_iter().map(|img| img.path).collect()
+        images.into_iter().map(|img| img.source).collect()
     }
 
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
@@ -1538,6 +1579,80 @@ impl ChatComposer {
     }
 }
 
+fn remote_image_label(url: &Url) -> String {
+    let filename = url
+        .path_segments()
+        .and_then(|segments| segments.filter(|s| !s.is_empty()).next_back());
+    let host = url.host_str().unwrap_or("remote image");
+    match filename {
+        Some(name) => name.to_string(),
+        None => host.to_string(),
+    }
+}
+
+fn parse_image_url(candidate: &str) -> Option<Url> {
+    let trimmed = candidate.trim();
+    if trimmed.is_empty() || trimmed.split_whitespace().count() != 1 {
+        return None;
+    }
+    let Ok(url) = Url::parse(trimmed) else {
+        return None;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    if !is_probable_image_url(&url) {
+        return None;
+    }
+    Some(url)
+}
+
+fn is_probable_image_url(url: &Url) -> bool {
+    if let Some(ext) = extension_from_url(url)
+        && is_supported_extension(&ext)
+    {
+        return true;
+    }
+    if let Some(ext) = extension_from_query(url)
+        && is_supported_extension(&ext)
+    {
+        return true;
+    }
+    false
+}
+
+fn extension_from_url(url: &Url) -> Option<String> {
+    let last_segment = url.path_segments()?.next_back()?;
+    let dot_index = last_segment.rfind('.')?;
+    let ext = &last_segment[dot_index + 1..];
+    if ext.is_empty() {
+        None
+    } else {
+        Some(ext.to_ascii_lowercase())
+    }
+}
+
+fn extension_from_query(url: &Url) -> Option<String> {
+    for (key, value) in url.query_pairs() {
+        if matches!(
+            key.as_ref().to_ascii_lowercase().as_str(),
+            "format" | "fm" | "ext"
+        ) {
+            let ext = value.to_ascii_lowercase();
+            if !ext.is_empty() {
+                return Some(ext);
+            }
+        }
+    }
+    None
+}
+
+const SUPPORTED_REMOTE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp"];
+
+fn is_supported_extension(ext: &str) -> bool {
+    SUPPORTED_REMOTE_EXTENSIONS.contains(&ext)
+}
+
 impl Renderable for ChatComposer {
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let [_, textarea_rect, _] = self.layout_areas(area);
@@ -1693,6 +1808,7 @@ mod tests {
     use crate::bottom_pane::ChatComposer;
     use crate::bottom_pane::InputResult;
     use crate::bottom_pane::chat_composer::AttachedImage;
+    use crate::bottom_pane::chat_composer::ComposerAttachment;
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
     use crate::bottom_pane::prompt_args::extract_positional_args_for_prompt_line;
     use crate::bottom_pane::textarea::TextArea;
@@ -2155,6 +2271,31 @@ mod tests {
             InputResult::Submitted(text) => assert_eq!(text, "hello"),
             _ => panic!("expected Submitted"),
         }
+    }
+
+    #[test]
+    fn handle_paste_image_url_attaches_remote_image() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        assert!(composer.handle_paste("https://images.ctfassets.net/example/path.png".to_string()));
+        assert_eq!(composer.attached_images.len(), 1);
+        match &composer.attached_images[0].source {
+            ComposerAttachment::Remote(url) => {
+                assert_eq!(
+                    url.as_str(),
+                    "https://images.ctfassets.net/example/path.png"
+                );
+            }
+            other => panic!("expected remote attachment, got {other:?}"),
+        }
+        assert!(composer.textarea.text().starts_with("[path.png] "));
     }
 
     #[test]
@@ -2743,7 +2884,7 @@ mod tests {
             _ => panic!("expected Submitted"),
         }
         let imgs = composer.take_recent_submission_images();
-        assert_eq!(vec![path], imgs);
+        assert_eq!(vec![ComposerAttachment::Local(path)], imgs);
     }
 
     #[test]
@@ -2766,8 +2907,7 @@ mod tests {
             _ => panic!("expected Submitted"),
         }
         let imgs = composer.take_recent_submission_images();
-        assert_eq!(imgs.len(), 1);
-        assert_eq!(imgs[0], path);
+        assert_eq!(imgs, vec![ComposerAttachment::Local(path)]);
         assert!(composer.attached_images.is_empty());
     }
 
@@ -2886,8 +3026,8 @@ mod tests {
         );
         assert_eq!(
             vec![AttachedImage {
-                path: path2,
-                placeholder: "[image_dup2.png 10x5]".to_string()
+                placeholder: "[image_dup2.png 10x5]".to_string(),
+                source: ComposerAttachment::Local(path2)
             }],
             composer.attached_images,
             "one image mapping remains"
@@ -2922,7 +3062,18 @@ mod tests {
         );
 
         let imgs = composer.take_recent_submission_images();
-        assert_eq!(imgs, vec![tmp_path]);
+        assert_eq!(imgs, vec![ComposerAttachment::Local(tmp_path)]);
+    }
+
+    #[test]
+    fn parse_image_url_accepts_supported_extension() {
+        let url = parse_image_url("https://example.com/path/to/image.webp").expect("should parse");
+        assert_eq!(url.as_str(), "https://example.com/path/to/image.webp");
+    }
+
+    #[test]
+    fn parse_image_url_rejects_unsupported_extension() {
+        assert!(parse_image_url("https://example.com/path/to/image.gif").is_none());
     }
 
     #[test]
