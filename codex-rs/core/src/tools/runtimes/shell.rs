@@ -4,9 +4,7 @@ Runtime: shell
 Executes shell requests under the orchestrator: asks for approval when needed,
 builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
-use crate::command_safety::is_dangerous_command::command_might_be_dangerous;
 use crate::command_safety::is_dangerous_command::requires_initial_appoval;
-use crate::command_safety::is_safe_command::is_known_safe_command;
 use crate::exec::ExecToolCallOutput;
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::execute_env;

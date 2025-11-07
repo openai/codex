@@ -141,7 +141,14 @@ impl ActionKind {
             }
             ActionKind::RunUnifiedExecCommand { command } => {
                 let event = exec_command_event(call_id, command, Some(1000))?;
-                Ok((event, Some(vec![command.to_string()])))
+                Ok((
+                    event,
+                    Some(vec![
+                        "/bin/bash".to_string(),
+                        "-lc".to_string(),
+                        command.to_string(),
+                    ]),
+                ))
             }
             ActionKind::ApplyPatchFunction { target, content } => {
                 let (path, patch_path) = target.resolve_for_patch(test);
@@ -225,6 +232,9 @@ enum Expectation {
     },
     CommandSuccess {
         stdout_contains: &'static str,
+    },
+    CommandFailure {
+        output_contains: &'static str,
     },
 }
 
@@ -354,6 +364,19 @@ impl Expectation {
                 assert!(
                     result.stdout.contains(stdout_contains),
                     "trusted command stdout missing {stdout_contains:?}: {}",
+                    result.stdout
+                );
+            }
+            Expectation::CommandFailure { output_contains } => {
+                assert_ne!(
+                    result.exit_code,
+                    Some(0),
+                    "expected non-zero exit for command failure: {}",
+                    result.stdout
+                );
+                assert!(
+                    result.stdout.contains(output_contains),
+                    "command failure stderr missing {output_contains:?}: {}",
                     result.stdout
                 );
             }
@@ -1085,7 +1108,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             approval_policy: OnRequest,
             sandbox_policy: SandboxPolicy::ReadOnly,
             action: ActionKind::RunUnifiedExecCommand {
-                command: "bash -c 'echo hello unified exec'",
+                command: "echo \"hello unified exec\"",
             },
             with_escalated_permissions: false,
             features: vec![Feature::UnifiedExec],
@@ -1093,6 +1116,24 @@ fn scenarios() -> Vec<ScenarioSpec> {
             outcome: Outcome::Auto,
             expectation: Expectation::CommandSuccess {
                 stdout_contains: "hello unified exec",
+            },
+        },
+        ScenarioSpec {
+            name: "unified exec on request requires approval unless trusted",
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            action: ActionKind::RunUnifiedExecCommand {
+                command: "git reset --hard",
+            },
+            with_escalated_permissions: false,
+            features: vec![Feature::UnifiedExec],
+            model_override: None,
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::Denied,
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected by user",
             },
         },
     ]
