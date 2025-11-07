@@ -218,28 +218,6 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     test.submit_turn("follow-up after shell command").await?;
 
     let request = mock.single_request();
-    let items = request.input();
-
-    fn find_user_text(items: &[serde_json::Value], marker: &str) -> Option<String> {
-        items.iter().find_map(|item| {
-            if item.get("type").and_then(serde_json::Value::as_str) != Some("message") {
-                return None;
-            }
-            if item.get("role").and_then(serde_json::Value::as_str) != Some("user") {
-                return None;
-            }
-            let content = item.get("content")?.as_array()?;
-            content.iter().find_map(|span| {
-                if span.get("type").and_then(serde_json::Value::as_str) == Some("input_text") {
-                    let text = span.get("text").and_then(serde_json::Value::as_str)?;
-                    if text.contains(marker) {
-                        return Some(text.to_string());
-                    }
-                }
-                None
-            })
-        })
-    }
 
     fn scrub_duration(input: &str) -> String {
         input
@@ -255,7 +233,10 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
             .join("\n")
     }
 
-    let command_message = find_user_text(&items, "<user_shell_command>")
+    let command_message = request
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.contains("<user_shell_command>"))
         .expect("command message recorded in request");
     let sanitized = scrub_duration(&command_message);
     let expected = format!(

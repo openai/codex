@@ -61,6 +61,22 @@ impl ResponsesRequest {
         self.0.body_json().unwrap()
     }
 
+    /// Returns all `input_text` spans from `message` inputs for the provided role.
+    pub fn message_input_texts(&self, role: &str) -> Vec<String> {
+        self.input()
+            .iter()
+            .filter(|item| {
+                item.get("type").and_then(Value::as_str) == Some("message")
+                    && item.get("role").and_then(Value::as_str) == Some(role)
+            })
+            .filter_map(|item| item.get("content").and_then(Value::as_array))
+            .flat_map(|content| content.iter())
+            .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
+            .filter_map(|span| span.get("text").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect()
+    }
+
     pub fn input(&self) -> Vec<Value> {
         self.0.body_json::<Value>().unwrap()["input"]
             .as_array()
