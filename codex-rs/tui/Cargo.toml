@@ -90,10 +90,6 @@ url = { workspace = true }
 codex-windows-sandbox = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = [
-    "Win32_Foundation",
-    "Win32_System_Console",
-] }
 terminal-colorsaurus = "1"
 
 [target.'cfg(unix)'.dependencies]
