@@ -31,18 +31,20 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
 
     let update_action = get_update_action();
     info.and_then(|info| {
-        let latest_version = latest_version_for_action(&info, update_action);
-        if is_newer(latest_version, CODEX_CLI_VERSION).unwrap_or(false) {
-            Some(latest_version.to_string())
-        } else {
-            None
-        }
+        latest_version_for_action(&info, update_action).and_then(|latest_version| {
+            if is_newer(latest_version, CODEX_CLI_VERSION).unwrap_or(false) {
+                Some(latest_version.to_string())
+            } else {
+                None
+            }
+        })
     })
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct VersionInfo {
     latest_version: String,
+    #[serde(default)]
     latest_brew_version: String,
     // ISO-8601 timestamp (RFC3339)
     last_checked_at: DateTime<Utc>,
@@ -87,10 +89,7 @@ async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
         .error_for_status()?
         .text()
         .await?;
-    let latest_version = latest_tag_name
-        .strip_prefix("rust-v")
-        .ok_or_else(|| anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))?
-        .to_string();
+    let latest_version = extract_version_from_latest_tag(&latest_tag_name)?;
     let latest_brew_version = extract_version_from_cask(&cask_contents)?;
 
     // Preserve any previously dismissed version if present.
@@ -110,6 +109,13 @@ async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn is_newer(latest: &str, current: &str) -> Option<bool> {
+    match (parse_version(latest), parse_version(current)) {
+        (Some(l), Some(c)) => Some(l > c),
+        _ => None,
+    }
+}
+
 fn extract_version_from_cask(cask_contents: &str) -> anyhow::Result<String> {
     cask_contents
         .lines()
@@ -122,19 +128,20 @@ fn extract_version_from_cask(cask_contents: &str) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow::anyhow!("Failed to find version in Homebrew cask file"))
 }
 
-fn is_newer(latest: &str, current: &str) -> Option<bool> {
-    match (parse_version(latest), parse_version(current)) {
-        (Some(l), Some(c)) => Some(l > c),
-        _ => None,
-    }
+fn extract_version_from_latest_tag(latest_tag_name: &str) -> anyhow::Result<String> {
+    latest_tag_name
+        .strip_prefix("rust-v")
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))
 }
 
-fn latest_version_for_action<'a>(info: &'a VersionInfo, action: Option<UpdateAction>) -> &'a str {
+fn latest_version_for_action(info: &VersionInfo, action: Option<UpdateAction>) -> Option<&str> {
     match action {
         Some(UpdateAction::BrewUpgrade) if !info.latest_brew_version.is_empty() => {
-            &info.latest_brew_version
+            Some(&info.latest_brew_version)
         }
-        _ => &info.latest_version,
+        Some(UpdateAction::BrewUpgrade) => None,
+        _ => Some(&info.latest_version),
     }
 }
 
@@ -241,6 +248,19 @@ mod tests {
     }
 
     #[test]
+    fn extracts_version_from_latest_tag() {
+        assert_eq!(
+            extract_version_from_latest_tag("rust-v1.5.0").expect("failed to parse version"),
+            "1.5.0"
+        );
+    }
+
+    #[test]
+    fn latest_tag_without_prefix_is_invalid() {
+        assert!(extract_version_from_latest_tag("v1.5.0").is_err());
+    }
+
+    #[test]
     fn prerelease_version_is_not_considered_newer() {
         assert_eq!(is_newer("0.11.0-beta.1", "0.11.0"), None);
         assert_eq!(is_newer("1.0.0-rc.1", "1.0.0"), None);
@@ -270,11 +290,25 @@ mod tests {
         };
         assert_eq!(
             latest_version_for_action(&info, Some(UpdateAction::BrewUpgrade)),
-            "1.0.5"
+            Some("1.0.5")
         );
         assert_eq!(
             latest_version_for_action(&info, Some(UpdateAction::NpmGlobalLatest)),
-            "1.1.0"
+            Some("1.1.0")
+        );
+    }
+
+    #[test]
+    fn brew_update_without_brew_version_returns_none() {
+        let info = VersionInfo {
+            latest_version: "1.1.0".to_string(),
+            latest_brew_version: "".to_string(),
+            last_checked_at: Utc::now(),
+            dismissed_version: None,
+        };
+        assert_eq!(
+            latest_version_for_action(&info, Some(UpdateAction::BrewUpgrade)),
+            None
         );
     }
 
