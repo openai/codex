@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use codex_core::config::{set_project_trusted, set_project_untrusted};
+use codex_core::config::set_project_trusted;
+use codex_core::config::set_project_untrusted;
 use codex_core::git_info::resolve_root_git_project_for_trust;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
