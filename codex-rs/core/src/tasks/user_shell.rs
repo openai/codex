@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use codex_async_utils::CancelErr;
+use codex_async_utils::OrCancelExt;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -119,16 +121,12 @@ impl SessionTask for UserShellCommandTask {
         });
 
         let sandbox_policy = SandboxPolicy::DangerFullAccess;
-        let exec_future = execute_exec_env(exec_env, &sandbox_policy, stdout_stream);
-        tokio::pin!(exec_future);
-
-        let exec_result = tokio::select! {
-            res = &mut exec_future => Some(res),
-            _ = cancellation_token.cancelled() => None,
-        };
+        let exec_result = execute_exec_env(exec_env, &sandbox_policy, stdout_stream)
+            .or_cancel(&cancellation_token)
+            .await;
 
         match exec_result {
-            None => {
+            Err(CancelErr::Cancelled) => {
                 let aborted_message = "command aborted by user".to_string();
                 let output_items = [user_shell_command_record_item(
                     &raw_command,
@@ -152,7 +150,7 @@ impl SessionTask for UserShellCommandTask {
                     )
                     .await;
             }
-            Some(Ok(output)) => {
+            Ok(Ok(output)) => {
                 session
                     .send_event(
                         turn_context.as_ref(),
@@ -177,7 +175,7 @@ impl SessionTask for UserShellCommandTask {
                     .record_conversation_items(turn_context.as_ref(), &output_items)
                     .await;
             }
-            Some(Err(err)) => {
+            Ok(Err(err)) => {
                 error!("user shell command failed: {err:?}");
                 let message = format!("execution error: {err:?}");
                 let exec_output = ExecToolCallOutput {
