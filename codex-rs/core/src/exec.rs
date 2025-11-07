@@ -577,7 +577,6 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
             let chunk = tmp[..n].to_vec();
             let msg = EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
                 call_id: stream.call_id.clone(),
-                is_user_shell_command: false,
                 stream: if is_stderr {
                     ExecOutputStream::Stderr
                 } else {

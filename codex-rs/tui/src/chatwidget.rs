@@ -824,7 +824,7 @@ impl ChatWidget {
         let running = self.running_commands.remove(&ev.call_id);
         let (command, parsed, is_user_shell_command) = match running {
             Some(rc) => (rc.command, rc.parsed_cmd, rc.is_user_shell_command),
-            None => (vec![ev.call_id.clone()], Vec::new(), ev.is_user_shell_command),
+            None => (vec![ev.call_id.clone()], Vec::new(), false),
         };
 
         let needs_new = self

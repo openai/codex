@@ -640,7 +640,6 @@ fn end_exec(chat: &mut ChatWidget, call_id: &str, stdout: &str, stderr: &str, ex
         id: call_id.to_string(),
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: call_id.to_string(),
-            is_user_shell_command: false,
             stdout: stdout.to_string(),
             stderr: stderr.to_string(),
             aggregated_output: aggregated.clone(),
@@ -2775,7 +2774,6 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         id: "c1".into(),
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "c1".into(),
-            is_user_shell_command: false,
             stdout: String::new(),
             stderr: String::new(),
             aggregated_output: String::new(),

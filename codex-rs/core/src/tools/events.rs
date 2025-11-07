@@ -140,7 +140,6 @@ impl ToolEmitter {
                     output.exit_code,
                     output.duration,
                     format_exec_output_str(&output),
-                    false,
                 )
                 .await;
             }
@@ -153,7 +152,6 @@ impl ToolEmitter {
                     output.exit_code,
                     output.duration,
                     format_exec_output_str(&output),
-                    false,
                 )
                 .await;
             }
@@ -166,7 +164,6 @@ impl ToolEmitter {
                     -1,
                     Duration::ZERO,
                     message.clone(),
-                    false,
                 )
                 .await;
             }
@@ -232,7 +229,6 @@ impl ToolEmitter {
                     output.exit_code,
                     output.duration,
                     format_exec_output_str(&output),
-                    false,
                 )
                 .await;
             }
@@ -248,7 +244,6 @@ impl ToolEmitter {
                     output.exit_code,
                     output.duration,
                     format_exec_output_str(&output),
-                    false,
                 )
                 .await;
             }
@@ -264,7 +259,6 @@ impl ToolEmitter {
                     -1,
                     Duration::ZERO,
                     message.clone(),
-                    false,
                 )
                 .await;
             }
@@ -323,7 +317,6 @@ impl ToolEmitter {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn emit_exec_end(
     ctx: ToolEventCtx<'_>,
     stdout: String,
@@ -332,14 +325,12 @@ async fn emit_exec_end(
     exit_code: i32,
     duration: Duration,
     formatted_output: String,
-    is_user_shell_command: bool,
 ) {
     ctx.session
         .send_event(
             ctx.turn,
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: ctx.call_id.to_string(),
-                is_user_shell_command,
                 stdout,
                 stderr,
                 aggregated_output,

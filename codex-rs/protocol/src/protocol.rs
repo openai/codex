@@ -1222,10 +1222,6 @@ pub struct ExecCommandBeginEvent {
 pub struct ExecCommandEndEvent {
     /// Identifier for the ExecCommandBegin that finished.
     pub call_id: String,
-    /// True when this exec was initiated directly by the user (e.g. bang command),
-    /// not by the agent/model. Defaults to false for backwards compatibility.
-    #[serde(default)]
-    pub is_user_shell_command: bool,
     /// Captured stdout
     pub stdout: String,
     /// Captured stderr
@@ -1262,10 +1258,6 @@ pub enum ExecOutputStream {
 pub struct ExecCommandOutputDeltaEvent {
     /// Identifier for the ExecCommandBegin that produced this chunk.
     pub call_id: String,
-    /// True when this exec was initiated directly by the user (e.g. bang command),
-    /// not by the agent/model. Defaults to false for backwards compatibility.
-    #[serde(default)]
-    pub is_user_shell_command: bool,
     /// Which stream produced this chunk.
     pub stream: ExecOutputStream,
     /// Raw bytes from the stream (may not be valid UTF-8).
@@ -1552,13 +1544,12 @@ mod tests {
     fn vec_u8_as_base64_serialization_and_deserialization() -> Result<()> {
         let event = ExecCommandOutputDeltaEvent {
             call_id: "call21".to_string(),
-            is_user_shell_command: false,
             stream: ExecOutputStream::Stdout,
             chunk: vec![1, 2, 3, 4, 5],
         };
         let serialized = serde_json::to_string(&event)?;
         assert_eq!(
-            r#"{"call_id":"call21","is_user_shell_command":false,"stream":"stdout","chunk":"AQIDBAU="}"#,
+            r#"{"call_id":"call21","stream":"stdout","chunk":"AQIDBAU="}"#,
             serialized,
         );
 
