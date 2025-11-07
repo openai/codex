@@ -22,6 +22,7 @@ use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
 use crossterm::event::Event;
+#[cfg(unix)]
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyboardEnhancementFlags;
@@ -40,6 +41,7 @@ use ratatui::text::Line;
 
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
+#[cfg(unix)]
 use crate::key_hint;
 use tokio::select;
 use tokio_stream::Stream;
