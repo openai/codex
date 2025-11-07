@@ -2,8 +2,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -26,6 +24,7 @@ use crate::sandboxing::ExecEnv;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_for_model;
 use crate::tools::format_exec_output_str;
+use crate::user_shell_command::user_shell_command_record_item;
 
 use super::SessionTask;
 use super::SessionTaskContext;
@@ -85,21 +84,8 @@ impl SessionTask for UserShellCommandTask {
             }
         };
 
-        fn build_user_message(text: String) -> ResponseItem {
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText { text }],
-            }
-        }
-
         let call_id = Uuid::new_v4().to_string();
         let raw_command = self.command.clone();
-        let command_text = format!("<user_shell_command>\n{raw_command}\n</user_shell_command>");
-        let command_items = [build_user_message(command_text)];
-        session
-            .record_conversation_items(turn_context.as_ref(), &command_items)
-            .await;
 
         let parsed_cmd = parse_command(&shell_invocation);
         session
@@ -144,10 +130,10 @@ impl SessionTask for UserShellCommandTask {
         match exec_result {
             None => {
                 let aborted_message = "command aborted by user".to_string();
-                let aborted_text = format!(
-                    "<user_shell_command_output>\n{aborted_message}\n</user_shell_command_output>"
-                );
-                let output_items = [build_user_message(aborted_text)];
+                let output_items = [user_shell_command_record_item(
+                    &raw_command,
+                    &aborted_message,
+                )];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
                     .await;
@@ -183,10 +169,10 @@ impl SessionTask for UserShellCommandTask {
                     .await;
 
                 let output_payload = format_exec_output_for_model(&output);
-                let output_text = format!(
-                    "<user_shell_command_output>\n{output_payload}\n</user_shell_command_output>"
-                );
-                let output_items = [build_user_message(output_text)];
+                let output_items = [user_shell_command_record_item(
+                    &raw_command,
+                    &output_payload,
+                )];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
                     .await;
@@ -217,10 +203,10 @@ impl SessionTask for UserShellCommandTask {
                     )
                     .await;
                 let output_payload = format_exec_output_for_model(&exec_output);
-                let output_text = format!(
-                    "<user_shell_command_output>\n{output_payload}\n</user_shell_command_output>"
-                );
-                let output_items = [build_user_message(output_text)];
+                let output_items = [user_shell_command_record_item(
+                    &raw_command,
+                    &output_payload,
+                )];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
                     .await;
