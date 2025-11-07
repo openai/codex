@@ -10,7 +10,6 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::codex::TurnContext;
-use crate::exec::DeltaEventBuilder;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
@@ -138,7 +137,6 @@ impl SessionTask for UserShellCommandTask {
             exec_env,
             &sandbox_policy,
             stdout_stream,
-            Some(DeltaEventBuilder::user_command()),
         );
         tokio::pin!(exec_future);
 
@@ -162,7 +160,6 @@ impl SessionTask for UserShellCommandTask {
                         turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id,
-                            is_user_shell_command: true,
                             stdout: String::new(),
                             stderr: aborted_message.clone(),
                             aggregated_output: aborted_message.clone(),
@@ -179,7 +176,6 @@ impl SessionTask for UserShellCommandTask {
                         turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id: call_id.clone(),
-                            is_user_shell_command: true,
                             stdout: output.stdout.text.clone(),
                             stderr: output.stderr.text.clone(),
                             aggregated_output: output.aggregated_output.text.clone(),
@@ -215,7 +211,6 @@ impl SessionTask for UserShellCommandTask {
                         turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id,
-                            is_user_shell_command: true,
                             stdout: exec_output.stdout.text.clone(),
                             stderr: exec_output.stderr.text.clone(),
                             aggregated_output: exec_output.aggregated_output.text.clone(),
