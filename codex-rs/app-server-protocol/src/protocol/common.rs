@@ -760,8 +760,7 @@ mod tests {
         let request = ClientRequest::GetAccount {
             request_id: RequestId::Integer(5),
             params: v2::GetAccountParams {
-                include_token: None,
-                refresh_token: None,
+                refresh_token: false,
             },
         };
         assert_eq!(
@@ -769,8 +768,7 @@ mod tests {
                 "method": "account/read",
                 "id": 5,
                 "params": {
-                    "includeToken": null,
-                    "refreshToken": null
+                    "refreshToken": false
                 }
             }),
             serde_json::to_value(&request)?,
@@ -780,13 +778,10 @@ mod tests {
 
     #[test]
     fn account_serializes_fields_in_camel_case() -> Result<()> {
-        let api_key = v2::Account::ApiKey {
-            api_key: Some("secret".to_string()),
-        };
+        let api_key = v2::Account::ApiKey {};
         assert_eq!(
             json!({
                 "type": "apiKey",
-                "apiKey": "secret",
             }),
             serde_json::to_value(&api_key)?,
         );
@@ -794,14 +789,12 @@ mod tests {
         let chatgpt = v2::Account::Chatgpt {
             email: "user@example.com".to_string(),
             plan_type: PlanType::Plus,
-            auth_token: None,
         };
         assert_eq!(
             json!({
                 "type": "chatgpt",
                 "email": "user@example.com",
                 "planType": "plus",
-                "authToken": null,
             }),
             serde_json::to_value(&chatgpt)?,
         );

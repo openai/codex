@@ -123,15 +123,11 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
 pub enum Account {
     #[serde(rename = "apiKey", rename_all = "camelCase")]
     #[ts(rename = "apiKey", rename_all = "camelCase")]
-    ApiKey { api_key: Option<String> },
+    ApiKey {},
 
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
-    Chatgpt {
-        email: String,
-        plan_type: PlanType,
-        auth_token: Option<String>,
-    },
+    Chatgpt { email: String, plan_type: PlanType },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -198,8 +194,8 @@ pub struct GetAccountRateLimitsResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct GetAccountParams {
-    pub include_token: Option<bool>,
-    pub refresh_token: Option<bool>,
+    #[serde(default)]
+    pub refresh_token: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

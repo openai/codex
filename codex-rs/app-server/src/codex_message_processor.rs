@@ -105,7 +105,6 @@ use codex_core::NewConversation;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
 use codex_core::auth::CLIENT_ID;
-use codex_core::auth::CodexAuth;
 use codex_core::auth::login_with_api_key;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -849,24 +848,8 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn maybe_read_token(&self, auth: &CodexAuth, include_token: bool) -> Option<String> {
-        if include_token {
-            match auth.get_token().await {
-                Ok(tok) if !tok.is_empty() => Some(tok),
-                Ok(_) => None,
-                Err(err) => {
-                    tracing::warn!("failed to read auth token for account: {err}");
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    }
-
     async fn get_account(&self, request_id: RequestId, params: GetAccountParams) {
-        let include_token = params.include_token.unwrap_or(false);
-        let do_refresh = params.refresh_token.unwrap_or(false);
+        let do_refresh = params.refresh_token;
 
         if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
             tracing::warn!("failed to refresh token while getting account: {err}");
@@ -886,21 +869,13 @@ impl CodexMessageProcessor {
 
         let account = match self.auth_manager.auth() {
             Some(auth) => Some(match auth.mode {
-                AuthMode::ApiKey => {
-                    let api_key = self.maybe_read_token(&auth, include_token).await;
-                    Account::ApiKey { api_key }
-                }
+                AuthMode::ApiKey => Account::ApiKey {},
                 AuthMode::ChatGPT => {
                     let email = auth.get_account_email();
                     let plan_type = auth.account_plan_type();
-                    let auth_token = self.maybe_read_token(&auth, include_token).await;
 
                     match (email, plan_type) {
-                        (Some(email), Some(plan_type)) => Account::Chatgpt {
-                            email,
-                            plan_type,
-                            auth_token,
-                        },
+                        (Some(email), Some(plan_type)) => Account::Chatgpt { email, plan_type },
                         _ => {
                             let error = JSONRPCErrorError {
                                 code: INVALID_REQUEST_ERROR_CODE,
