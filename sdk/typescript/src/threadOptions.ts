@@ -10,4 +10,7 @@ export type ThreadOptions = {
   workingDirectory?: string;
   skipGitRepoCheck?: boolean;
   modelReasoningEffort?: ModelReasoningEffort;
+  networkAccessEnabled?: boolean;
+  webSearchEnabled?: boolean;
+  approvalPolicy?: ApprovalMode;
 };

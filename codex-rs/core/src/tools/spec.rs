@@ -15,7 +15,7 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConfigShellToolType {
     Default,
     Local,
@@ -42,17 +42,14 @@ impl ToolsConfig {
             model_family,
             features,
         } = params;
-        let use_unified_exec_tool = features.enabled(Feature::UnifiedExec);
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
 
-        let shell_type = if use_unified_exec_tool {
+        let shell_type = if features.enabled(Feature::UnifiedExec) {
             ConfigShellToolType::UnifiedExec
-        } else if model_family.uses_local_shell_tool {
-            ConfigShellToolType::Local
         } else {
-            ConfigShellToolType::Default
+            model_family.shell_type.clone()
         };
 
         let apply_patch_tool_type = match model_family.apply_patch_tool_type {
@@ -1203,6 +1200,23 @@ mod tests {
             &Features::with_defaults(),
             &[
                 "local_shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_porcupine_defaults() {
+        assert_model_tools(
+            "porcupine",
+            &Features::with_defaults(),
+            &[
+                "exec_command",
+                "write_stdin",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
