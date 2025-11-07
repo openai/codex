@@ -797,13 +797,17 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn refresh_token_if_requested(&self, do_refresh: bool) {
+        if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
+            tracing::warn!("failed to refresh token whilte getting account: {err}");
+        }
+    }
+
     async fn get_auth_status(&self, request_id: RequestId, params: GetAuthStatusParams) {
         let include_token = params.include_token.unwrap_or(false);
         let do_refresh = params.refresh_token.unwrap_or(false);
 
-        if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
-            tracing::warn!("failed to refresh token while getting auth status: {err}");
-        }
+        self.refresh_token_if_requested(do_refresh).await;
 
         // Determine whether auth is required based on the active model provider.
         // If a custom provider is configured with `requires_openai_auth == false`,
@@ -851,9 +855,7 @@ impl CodexMessageProcessor {
     async fn get_account(&self, request_id: RequestId, params: GetAccountParams) {
         let do_refresh = params.refresh_token;
 
-        if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
-            tracing::warn!("failed to refresh token while getting account: {err}");
-        }
+        self.refresh_token_if_requested(do_refresh).await;
 
         // Whether auth is required for the active model provider.
         let requires_openai_auth = self.config.model_provider.requires_openai_auth;
