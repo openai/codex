@@ -5,8 +5,10 @@ use crate::protocol::common::AuthMode;
 use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
+use codex_protocol::user_input::UserInput as CoreUserInput;
 use mcp_types::ContentBlock as McpContentBlock;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -121,14 +123,11 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
 pub enum Account {
     #[serde(rename = "apiKey", rename_all = "camelCase")]
     #[ts(rename = "apiKey", rename_all = "camelCase")]
-    ApiKey { api_key: String },
+    ApiKey {},
 
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
-    Chatgpt {
-        email: Option<String>,
-        plan_type: PlanType,
-    },
+    Chatgpt { email: String, plan_type: PlanType },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -194,8 +193,17 @@ pub struct GetAccountRateLimitsResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct GetAccountParams {
+    #[serde(default)]
+    pub refresh_token: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct GetAccountResponse {
-    pub account: Account,
+    pub account: Option<Account>,
+    pub requires_openai_auth: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
@@ -346,6 +354,11 @@ pub struct ThreadCompactResponse {}
 #[ts(export_to = "v2/")]
 pub struct Thread {
     pub id: String,
+    /// Usually the first user message in the thread, if available.
+    pub preview: String,
+    pub model_provider: String,
+    /// Unix timestamp (in seconds) when the thread was created.
+    pub created_at: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -368,6 +381,13 @@ pub struct Turn {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct TurnError {
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub enum TurnStatus {
     Completed,
     Interrupted,
@@ -375,15 +395,51 @@ pub enum TurnStatus {
     InProgress,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+// Turn APIs
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct TurnError {
-    pub message: String,
+pub struct TurnStartParams {
+    pub thread_id: String,
+    pub input: Vec<UserInput>,
+    /// Override the working directory for this turn and subsequent turns.
+    pub cwd: Option<PathBuf>,
+    /// Override the approval policy for this turn and subsequent turns.
+    pub approval_policy: Option<AskForApproval>,
+    /// Override the sandbox policy for this turn and subsequent turns.
+    pub sandbox_policy: Option<SandboxPolicy>,
+    /// Override the model for this turn and subsequent turns.
+    pub model: Option<String>,
+    /// Override the reasoning effort for this turn and subsequent turns.
+    pub effort: Option<ReasoningEffort>,
+    /// Override the reasoning summary for this turn and subsequent turns.
+    pub summary: Option<ReasoningSummary>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnStartResponse {
+    pub turn: Turn,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnInterruptParams {
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnInterruptResponse {}
+
+// User input types
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum UserInput {
     Text { text: String },
@@ -391,8 +447,19 @@ pub enum UserInput {
     LocalImage { path: PathBuf },
 }
 
+impl UserInput {
+    pub fn into_core(self) -> CoreUserInput {
+        match self {
+            UserInput::Text { text } => CoreUserInput::Text { text },
+            UserInput::Image { url } => CoreUserInput::Image { image_url: url },
+            UserInput::LocalImage { path } => CoreUserInput::LocalImage { path },
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum ThreadItem {
     UserMessage {
@@ -516,7 +583,7 @@ pub struct TodoItem {
 }
 
 // === Server Notifications ===
-
+// Thread/Turn lifecycle notifications and item progress events
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -545,6 +612,7 @@ pub struct Usage {
 #[ts(export_to = "v2/")]
 pub struct TurnCompletedNotification {
     pub turn: Turn,
+    // TODO: should usage be stored on the Turn object, and we return that instead?
     pub usage: Usage,
 }
 
@@ -562,6 +630,7 @@ pub struct ItemCompletedNotification {
     pub item: ThreadItem,
 }
 
+// Item-specific progress notifications
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

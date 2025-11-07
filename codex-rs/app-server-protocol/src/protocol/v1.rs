@@ -11,6 +11,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnAbortReason;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -113,6 +114,18 @@ pub struct ConversationSummary {
     pub preview: String,
     pub timestamp: Option<String>,
     pub model_provider: String,
+    pub cwd: PathBuf,
+    pub cli_version: String,
+    pub source: SessionSource,
+    pub git_info: Option<ConversationGitInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct ConversationGitInfo {
+    pub sha: Option<String>,
+    pub branch: Option<String>,
+    pub origin_url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
