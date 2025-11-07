@@ -24,6 +24,10 @@ export type CodexExecArgs = {
   outputSchemaFile?: string;
   // --config model_reasoning_effort
   modelReasoningEffort?: ModelReasoningEffort;
+  // --config sandbox_workspace_write.network_access
+  networkAccess?: boolean;
+  // --config tools.web_search
+  webSearch?: boolean;
 };
 
 const INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
@@ -60,6 +64,14 @@ export class CodexExec {
 
     if (args.modelReasoningEffort) {
       commandArgs.push("--config", `model_reasoning_effort="${args.modelReasoningEffort}"`);
+    }
+
+    if (args.networkAccess !== undefined) {
+      commandArgs.push("--config", `sandbox_workspace_write.network_access=${args.networkAccess}`);
+    }
+
+    if (args.webSearch !== undefined) {
+      commandArgs.push("--config", `tools.web_search=${args.webSearch}`);
     }
 
     if (args.images?.length) {
