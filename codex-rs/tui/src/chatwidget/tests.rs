@@ -5,6 +5,8 @@ use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
 use codex_common::approval_presets::builtin_approval_presets;
+use codex_common::model_presets::ModelPreset;
+use codex_common::model_presets::ReasoningEffortPreset;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
@@ -409,6 +411,8 @@ fn test_rate_limit_warnings_monthly() {
 #[test]
 fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
     let (mut chat, _, _) = make_chatwidget_manual();
+    chat.auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     chat.config.model = NUDGE_MODEL_SLUG.to_string();
 
     chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
@@ -421,8 +425,10 @@ fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
 
 #[test]
 fn rate_limit_switch_prompt_shows_once_per_session() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual();
     chat.config.model = "gpt-5".to_string();
+    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
 
     chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
     assert!(
@@ -444,8 +450,10 @@ fn rate_limit_switch_prompt_shows_once_per_session() {
 
 #[test]
 fn rate_limit_switch_prompt_defers_until_task_complete() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual();
     chat.config.model = "gpt-5".to_string();
+    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
 
     chat.bottom_pane.set_task_running(true);
     chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
@@ -465,6 +473,8 @@ fn rate_limit_switch_prompt_defers_until_task_complete() {
 #[test]
 fn rate_limit_switch_prompt_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+    chat.auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     chat.config.model = "gpt-5".to_string();
 
     chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
@@ -1489,6 +1499,44 @@ fn model_reasoning_selection_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_reasoning_selection_popup", popup);
+}
+
+#[test]
+fn single_reasoning_option_skips_selection() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    static SINGLE_EFFORT: [ReasoningEffortPreset; 1] = [ReasoningEffortPreset {
+        effort: ReasoningEffortConfig::High,
+        description: "Maximizes reasoning depth for complex or ambiguous problems",
+    }];
+    let preset = ModelPreset {
+        id: "model-with-single-reasoning",
+        model: "model-with-single-reasoning",
+        display_name: "model-with-single-reasoning",
+        description: "",
+        default_reasoning_effort: ReasoningEffortConfig::High,
+        supported_reasoning_efforts: &SINGLE_EFFORT,
+        is_default: false,
+    };
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !popup.contains("Select Reasoning Level"),
+        "expected reasoning selection popup to be skipped"
+    );
+
+    let mut events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        events.push(ev);
+    }
+
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, AppEvent::UpdateReasoningEffort(Some(effort)) if *effort == ReasoningEffortConfig::High)),
+        "expected reasoning effort to be applied automatically; events: {events:?}"
+    );
 }
 
 #[test]

@@ -132,7 +132,7 @@ struct RunningCommand {
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
-const NUDGE_MODEL_SLUG: &str = "gpt-5-codex";
+const NUDGE_MODEL_SLUG: &str = "gpt-5-codex-mini";
 const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
 
 #[derive(Default)]
@@ -1773,9 +1773,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Approaching rate limits".to_string()),
-            subtitle: Some(format!(
-                "You've used over 90% of your limit. Switch to {display_name} for lower credit usage?"
-            )),
+            subtitle: Some(format!("Switch to {display_name} for lower credit usage?")),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
@@ -1798,6 +1796,7 @@ impl ChatWidget {
             };
             let is_current = preset.model == current_model;
             let preset_for_action = preset;
+            let single_supported_effort = preset_for_action.supported_reasoning_efforts.len() == 1;
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 tx.send(AppEvent::OpenReasoningPopup {
                     model: preset_for_action,
@@ -1808,7 +1807,7 @@ impl ChatWidget {
                 description,
                 is_current,
                 actions,
-                dismiss_on_select: false,
+                dismiss_on_select: single_supported_effort,
                 ..Default::default()
             });
         }
@@ -1845,6 +1844,15 @@ impl ChatWidget {
                 stored: Some(default_effort),
                 display: default_effort,
             });
+        }
+
+        if choices.len() == 1 {
+            if let Some(effort) = choices.first().and_then(|c| c.stored) {
+                self.apply_model_and_effort(preset.model.to_string(), Some(effort));
+            } else {
+                self.apply_model_and_effort(preset.model.to_string(), None);
+            }
+            return;
         }
 
         let default_choice: Option<ReasoningEffortConfig> = choices
@@ -1885,7 +1893,7 @@ impl ChatWidget {
 
             let warning = "⚠ High reasoning effort can quickly consume Plus plan rate limits.";
             let show_warning =
-                preset.model == "gpt-5-codex" && effort == ReasoningEffortConfig::High;
+                preset.model.starts_with("gpt-5-codex") && effort == ReasoningEffortConfig::High;
             let selected_description = show_warning.then(|| {
                 description
                     .as_ref()
@@ -1942,6 +1950,32 @@ impl ChatWidget {
         });
     }
 
+    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                model: Some(model.clone()),
+                effort: Some(effort),
+                summary: None,
+            }));
+        self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
+        self.app_event_tx
+            .send(AppEvent::UpdateReasoningEffort(effort));
+        self.app_event_tx.send(AppEvent::PersistModelSelection {
+            model: model.clone(),
+            effort,
+        });
+        tracing::info!(
+            "Selected model: {}, Selected effort: {}",
+            model,
+            effort
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "default".to_string())
+        );
+    }
+
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
     pub(crate) fn open_approvals_popup(&mut self) {
         let current_approval = self.config.approval_policy;
@@ -1996,13 +2030,34 @@ impl ChatWidget {
                         preset: preset_clone.clone(),
                     });
                 })]
-            } else if cfg!(target_os = "windows")
-                && preset.id == "auto"
-                && codex_core::get_platform_sandbox().is_none()
-            {
-                vec![Box::new(|tx| {
-                    tx.send(AppEvent::ShowWindowsAutoModeInstructions);
-                })]
+            } else if preset.id == "auto" {
+                #[cfg(target_os = "windows")]
+                {
+                    if codex_core::get_platform_sandbox().is_none() {
+                        vec![Box::new(|tx| {
+                            tx.send(AppEvent::ShowWindowsAutoModeInstructions);
+                        })]
+                    } else if !self
+                        .config
+                        .notices
+                        .hide_world_writable_warning
+                        .unwrap_or(false)
+                        && self.windows_world_writable_flagged()
+                    {
+                        let preset_clone = preset.clone();
+                        vec![Box::new(move |tx| {
+                            tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
+                                preset: Some(preset_clone.clone()),
+                            });
+                        })]
+                    } else {
+                        Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                }
             } else {
                 Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
             };
@@ -2042,6 +2097,19 @@ impl ChatWidget {
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
         })]
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_world_writable_flagged(&self) -> bool {
+        use std::collections::HashMap;
+        let mut env_map: HashMap<String, String> = HashMap::new();
+        for (k, v) in std::env::vars() {
+            env_map.insert(k, v);
+        }
+        match codex_windows_sandbox::preflight_audit_everyone_writable(&self.config.cwd, &env_map) {
+            Ok(()) => false,
+            Err(_) => true,
+        }
     }
 
     pub(crate) fn open_full_access_confirmation(&mut self, preset: ApprovalPreset) {
@@ -2109,6 +2177,95 @@ impl ChatWidget {
     }
 
     #[cfg(target_os = "windows")]
+    pub(crate) fn open_world_writable_warning_confirmation(
+        &mut self,
+        preset: Option<ApprovalPreset>,
+    ) {
+        let (approval, sandbox) = match &preset {
+            Some(p) => (Some(p.approval), Some(p.sandbox.clone())),
+            None => (None, None),
+        };
+        let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
+        let title_line = Line::from("Auto mode has unprotected directories").bold();
+        let info_line = Line::from(vec![
+            "Some important directories on this system are world-writable. ".into(),
+            "The Windows sandbox cannot protect writes to these locations in Auto mode."
+                .fg(Color::Red),
+        ]);
+        header_children.push(Box::new(title_line));
+        header_children.push(Box::new(
+            Paragraph::new(vec![info_line]).wrap(Wrap { trim: false }),
+        ));
+        let header = ColumnRenderable::with(header_children);
+
+        // Build actions ensuring acknowledgement happens before applying the new sandbox policy,
+        // so downstream policy-change hooks don't re-trigger the warning.
+        let mut accept_actions: Vec<SelectionAction> = Vec::new();
+        // Suppress the immediate re-scan once after user confirms continue.
+        accept_actions.push(Box::new(|tx| {
+            tx.send(AppEvent::SkipNextWorldWritableScan);
+        }));
+        if let (Some(approval), Some(sandbox)) = (approval, sandbox.clone()) {
+            accept_actions.extend(Self::approval_preset_actions(approval, sandbox));
+        }
+
+        let mut accept_and_remember_actions: Vec<SelectionAction> = Vec::new();
+        accept_and_remember_actions.push(Box::new(|tx| {
+            tx.send(AppEvent::UpdateWorldWritableWarningAcknowledged(true));
+            tx.send(AppEvent::PersistWorldWritableWarningAcknowledged);
+        }));
+        if let (Some(approval), Some(sandbox)) = (approval, sandbox) {
+            accept_and_remember_actions.extend(Self::approval_preset_actions(approval, sandbox));
+        }
+
+        let deny_actions: Vec<SelectionAction> = if preset.is_some() {
+            vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenApprovalsPopup);
+            })]
+        } else {
+            Vec::new()
+        };
+
+        let items = vec![
+            SelectionItem {
+                name: "Continue".to_string(),
+                description: Some("Apply Auto mode for this session".to_string()),
+                actions: accept_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Continue and don't warn again".to_string(),
+                description: Some("Enable Auto mode and remember this choice".to_string()),
+                actions: accept_and_remember_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Cancel".to_string(),
+                description: Some("Go back without enabling Auto mode".to_string()),
+                actions: deny_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            header: Box::new(header),
+            ..Default::default()
+        });
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn open_world_writable_warning_confirmation(
+        &mut self,
+        _preset: Option<ApprovalPreset>,
+    ) {
+    }
+
+    #[cfg(target_os = "windows")]
     pub(crate) fn open_windows_auto_mode_instructions(&mut self) {
         use ratatui_macros::line;
 
@@ -2157,6 +2314,18 @@ impl ChatWidget {
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
         self.config.notices.hide_full_access_warning = Some(acknowledged);
+    }
+
+    pub(crate) fn set_world_writable_warning_acknowledged(&mut self, acknowledged: bool) {
+        self.config.notices.hide_world_writable_warning = Some(acknowledged);
+    }
+
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn world_writable_warning_hidden(&self) -> bool {
+        self.config
+            .notices
+            .hide_world_writable_warning
+            .unwrap_or(false)
     }
 
     /// Set the reasoning effort in the widget's config copy.

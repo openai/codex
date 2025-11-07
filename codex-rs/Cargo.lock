@@ -1452,6 +1452,7 @@ dependencies = [
  "codex-login",
  "codex-ollama",
  "codex-protocol",
+ "codex-windows-sandbox",
  "color-eyre",
  "crossterm",
  "diffy",
