@@ -97,20 +97,10 @@ impl NaturalLanguageParser {
             ],
         );
 
-        // /plan patterns (formerly /blueprint)
+        // /plan patterns
         patterns.insert(
             "plan",
-            vec![
-                "計画",
-                "プラン",
-                "設計",
-                "企画",
-                "ブループリント",
-                "plan",
-                "blueprint",
-                "design",
-                "scheme",
-            ],
+            vec!["計画", "プラン", "設計", "企画", "plan", "design", "scheme"],
         );
 
         // /new patterns

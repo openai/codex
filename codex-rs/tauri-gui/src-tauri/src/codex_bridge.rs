@@ -4,7 +4,7 @@ use std::process::Command;
 use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Blueprint {
+pub struct Plan {
     pub id: String,
     pub description: String,
     pub status: String,
@@ -80,18 +80,14 @@ impl CodexBridge {
         ))
     }
 
-    /// Create a new blueprint
-    pub async fn create_blueprint(
-        &self,
-        description: String,
-        mode: Option<String>,
-    ) -> Result<Blueprint> {
-        info!("Creating blueprint: {}", description);
+    /// Create a new plan
+    pub async fn create_plan(&self, description: String, mode: Option<String>) -> Result<Plan> {
+        info!("Creating plan: {}", description);
 
         let mode = mode.unwrap_or_else(|| "orchestrated".to_string());
 
         let output = Command::new(&self.codex_bin_path)
-            .arg("blueprint")
+            .arg("plan")
             .arg("create")
             .arg(&description)
             .arg("--mode")
@@ -100,27 +96,27 @@ impl CodexBridge {
 
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("Failed to create blueprint: {}", error));
+            return Err(anyhow::anyhow!("Failed to create plan: {}", error));
         }
 
         // Parse output (simplified - assumes JSON output)
         let _stdout = String::from_utf8_lossy(&output.stdout);
-        let blueprint = Blueprint {
-            id: "bp-placeholder".to_string(), // Extract from output
+        let plan = Plan {
+            id: "plan-placeholder".to_string(), // Extract from output
             description,
             status: "Pending".to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
         };
 
-        Ok(blueprint)
+        Ok(plan)
     }
 
-    /// Execute a blueprint
-    pub async fn execute_blueprint(&self, id: String) -> Result<ExecutionResult> {
-        info!("Executing blueprint: {}", id);
+    /// Execute a plan
+    pub async fn execute_plan(&self, id: String) -> Result<ExecutionResult> {
+        info!("Executing plan: {}", id);
 
         let output = Command::new(&self.codex_bin_path)
-            .arg("blueprint")
+            .arg("plan")
             .arg("execute")
             .arg(&id)
             .output()?;
@@ -139,17 +135,17 @@ impl CodexBridge {
         })
     }
 
-    /// List all blueprints
-    pub async fn list_blueprints(&self) -> Result<Vec<Blueprint>> {
-        info!("Listing blueprints");
+    /// List all plans
+    pub async fn list_plans(&self) -> Result<Vec<Plan>> {
+        info!("Listing plans");
 
         let output = Command::new(&self.codex_bin_path)
-            .arg("blueprint")
+            .arg("plan")
             .arg("list")
             .output()?;
 
         if !output.status.success() {
-            return Err(anyhow::anyhow!("Failed to list blueprints"));
+            return Err(anyhow::anyhow!("Failed to list plans"));
         }
 
         // Parse output (simplified)
@@ -213,30 +209,24 @@ impl CodexBridge {
 
 // Tauri commands that use CodexBridge
 #[tauri::command]
-pub async fn codex_create_blueprint(
-    description: String,
-    mode: Option<String>,
-) -> Result<Blueprint, String> {
+pub async fn codex_create_plan(description: String, mode: Option<String>) -> Result<Plan, String> {
     let bridge = CodexBridge::new().map_err(|e| e.to_string())?;
     bridge
-        .create_blueprint(description, mode)
+        .create_plan(description, mode)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn codex_execute_blueprint(id: String) -> Result<ExecutionResult, String> {
+pub async fn codex_execute_plan(id: String) -> Result<ExecutionResult, String> {
     let bridge = CodexBridge::new().map_err(|e| e.to_string())?;
-    bridge
-        .execute_blueprint(id)
-        .await
-        .map_err(|e| e.to_string())
+    bridge.execute_plan(id).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn codex_list_blueprints() -> Result<Vec<Blueprint>, String> {
+pub async fn codex_list_plans() -> Result<Vec<Plan>, String> {
     let bridge = CodexBridge::new().map_err(|e| e.to_string())?;
-    bridge.list_blueprints().await.map_err(|e| e.to_string())
+    bridge.list_plans().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

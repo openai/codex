@@ -69,7 +69,7 @@ impl GeminiSearchProvider {
 
         // Gemini CLI コマンド実行
         let output = tokio::process::Command::new("gemini")
-            .args(&["search", "--model", &self.model, query])
+            .args(["search", "--model", &self.model, query])
             .output()
             .await?;
 
@@ -145,7 +145,7 @@ impl GeminiSearchProvider {
             if let mcp_types::ContentBlock::TextContent(text_content) = item {
                 let text = &text_content.text;
                 // Try to parse as JSON array first
-                if let Ok(json_results) = serde_json::from_str::<Vec<serde_json::Value>>(&text) {
+                if let Ok(json_results) = serde_json::from_str::<Vec<serde_json::Value>>(text) {
                     for json_result in json_results {
                         if let Ok(gemini_result) =
                             serde_json::from_value::<GeminiSearchResult>(json_result)
@@ -155,7 +155,7 @@ impl GeminiSearchProvider {
                     }
                 } else {
                     // Fallback: parse as text response
-                    results.extend(self.parse_text_response(&text)?);
+                    results.extend(self.parse_text_response(text)?);
                 }
             }
         }

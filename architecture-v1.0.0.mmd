@@ -1,10 +1,16 @@
 graph TB
+    subgraph VR["🥽 VR/AR Layer v2.0.0"]
+        Quest2["Quest 2<br/>90Hz WebXR<br/>Controller"]
+        Quest3["Quest 3<br/>120Hz Hand Track<br/>Passthrough"]
+        VisionPro["Vision Pro<br/>visionOS<br/>RealityKit"]
+    end
+    
     subgraph Client["🖥️ Client Layer"]
-        CLI["CLI<br/>codex-cli<br/>Cross-platform binaries"]
-        TUI["TUI<br/>ratatui-based<br/>Rich terminal UI"]
-        VSCode["VSCode Extension<br/>v1.0.0<br/>Blueprint UI<br/>Multi-language support"]
-        Cursor["Cursor IDE<br/>MCP Integration<br/>Composer support"]
-        WebGUI["Web GUI<br/>React + Vite<br/>Dashboard"]
+        CLI["CLI<br/>codex plan<br/>v2.0.0"]
+        TUI["TUI 4D Viz<br/>xyz+time<br/>CUDA 100x"]
+        TauriGUI["Tauri GUI<br/>Three.js VR<br/>60fps"]
+        VSCode["VSCode Ext<br/>Plan Mode<br/>8 languages"]
+        Cursor["Cursor IDE<br/>MCP Proto<br/>Composer"]
     end
 
     subgraph Orchestration["🎯 Orchestration Layer (v1.0.0)"]
@@ -14,12 +20,18 @@ graph TB
         LockManager["Lock Manager<br/>.codex/lock.json<br/>Repository-level concurrency"]
     end
 
-    subgraph Core["⚙️ Core Runtime (Rust)"]
-        CoreEngine["Core Engine<br/>codex-core<br/>Session management<br/>Tool execution"]
-        Blueprint["Blueprint Mode<br/>v1.0.0 Complete<br/>3 execution strategies<br/>Budget & Policy enforcement"]
-        TokenBudget["Token Budget<br/>Thread-safe tracking<br/>Per-agent limits"]
-        AuditLog["Audit Logger<br/>Structured logs<br/>Security events"]
-        ProjectDoc["Project Doc<br/>AGENTS.md parser<br/>Language detection<br/>Multi-language support"]
+    subgraph Core["⚙️ Core Runtime v2.0.0"]
+        CoreEngine["Core Engine<br/>codex-core<br/>Event-driven<br/>1M context"]
+        PlanMode["Plan Mode<br/>v2.0.0<br/>Single/Orch/Comp<br/>Worktree isolation"]
+        TokenBudget["Token Budget<br/>Per-agent limits<br/>Cost tracking"]
+        AuditLog["Audit Logger<br/>Security events<br/>HMAC-SHA256"]
+        Git4D["Git 4D Viz<br/>xyz+time<br/>Heatmap<br/>Cluster"]
+    end
+    
+    subgraph Kernel["💻 Kernel Integration v2.0.0"]
+        LinuxMod["Linux Modules<br/>ai_scheduler<br/>ai_mem<br/>ai_gpu"]
+        WinDriver["Windows Driver<br/>WDM/KMDF<br/>ETW Trace"]
+        CUDARuntime["CUDA Runtime<br/>CUDA 12<br/>RTX 3080"]
     end
 
     subgraph Agents["🤖 Sub-Agent System"]

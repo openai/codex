@@ -1,6 +1,6 @@
 //! Webhook types and payloads
 
-use crate::blueprint::BlueprintState;
+use crate::plan::PlanState;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -18,11 +18,11 @@ pub enum WebhookService {
     Http,
 }
 
-/// Webhook payload for blueprint events
+/// Webhook payload for plan events
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookPayload {
-    /// Blueprint ID
-    pub blueprint_id: String,
+    /// Plan ID
+    pub plan_id: String,
 
     /// Blueprint title
     pub title: String,
@@ -74,13 +74,13 @@ pub struct CompetitionScore {
 impl WebhookPayload {
     /// Create a new webhook payload
     pub fn new(
-        blueprint_id: String,
+        plan_id: String,
         title: String,
-        state: BlueprintState,
+        state: PlanState,
         summary: String,
     ) -> Self {
         Self {
-            blueprint_id,
+            plan_id,
             title,
             state: state.name().to_string(),
             summary,
@@ -142,21 +142,21 @@ fn default_timeout_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blueprint::state::BlueprintState;
+    use crate::plan::state::PlanState;
 
     #[test]
     fn test_webhook_payload_creation() {
         let payload = WebhookPayload::new(
             "bp-123".to_string(),
             "Test Blueprint".to_string(),
-            BlueprintState::Approved {
+            PlanState::Approved {
                 approved_by: "user".to_string(),
                 approved_at: Utc::now(),
             },
             "Blueprint approved".to_string(),
         );
 
-        assert_eq!(payload.blueprint_id, "bp-123");
+        assert_eq!(payload.plan_id, "bp-123");
         assert_eq!(payload.state, "approved");
     }
 
@@ -174,7 +174,7 @@ mod tests {
         let payload = WebhookPayload::new(
             "bp-123".to_string(),
             "Test".to_string(),
-            BlueprintState::Drafting,
+            PlanState::Drafting,
             "Summary".to_string(),
         )
         .with_score(score.clone());

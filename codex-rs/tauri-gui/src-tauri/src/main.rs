@@ -60,21 +60,19 @@ async fn get_gpu_stats() -> Result<serde_json::Value, String> {
     #[cfg(feature = "cuda")]
     {
         match codex_cuda_runtime::CudaRuntime::new(0) {
-            Ok(cuda) => {
-                match cuda.get_device_info() {
-                    Ok(info) => Ok(serde_json::json!({
-                        "available": true,
-                        "device_name": info.name,
-                        "compute_capability": format!("{}.{}", info.compute_capability_major, info.compute_capability_minor),
-                        "total_memory": info.total_memory,
-                    })),
-                    Err(e) => Err(format!("Failed to get device info: {e}"))
-                }
-            }
-            Err(e) => Err(format!("CUDA not available: {e}"))
+            Ok(cuda) => match cuda.get_device_info() {
+                Ok(info) => Ok(serde_json::json!({
+                    "available": true,
+                    "device_name": info.name,
+                    "compute_capability": format!("{}.{}", info.compute_capability_major, info.compute_capability_minor),
+                    "total_memory": info.total_memory,
+                })),
+                Err(e) => Err(format!("Failed to get device info: {e}")),
+            },
+            Err(e) => Err(format!("CUDA not available: {e}")),
         }
     }
-    
+
     #[cfg(not(feature = "cuda"))]
     {
         Ok(serde_json::json!({
@@ -187,9 +185,9 @@ async fn main() {
             stop_file_watcher,
             get_recent_changes,
             enable_autostart,
-            codex_bridge::codex_create_blueprint,
-            codex_bridge::codex_execute_blueprint,
-            codex_bridge::codex_list_blueprints,
+            codex_bridge::codex_create_plan,
+            codex_bridge::codex_execute_plan,
+            codex_bridge::codex_list_plans,
             codex_bridge::codex_research,
             codex_bridge::codex_list_mcp_tools,
             codex_bridge::codex_invoke_mcp_tool,

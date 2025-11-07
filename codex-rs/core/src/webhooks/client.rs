@@ -68,7 +68,7 @@ impl WebhookClient {
             .post(&config.url)
             .header("Content-Type", "application/json")
             .header("X-Codex-Signature", format!("sha256={}", signature))
-            .header("X-Codex-Event", format!("blueprint.{}", payload.state))
+            .header("X-Codex-Event", format!("plan.{}", payload.state))
             .timeout(Duration::from_secs(config.timeout_secs))
             .body(body)
             .send()
@@ -98,11 +98,11 @@ impl WebhookClient {
     /// Format payload for GitHub
     fn format_github_payload(&self, payload: &WebhookPayload) -> Result<String> {
         let github_payload = serde_json::json!({
-            "context": "codex/blueprint",
+            "context": "codex/plan",
             "state": self.map_state_to_github(&payload.state),
             "description": &payload.summary,
-            "target_url": format!("https://github.com/zapabob/codex/blueprints/{}", payload.blueprint_id),
-            "blueprint_id": &payload.blueprint_id,
+            "target_url": format!("https://github.com/zapabob/codex/plans/{}", payload.plan_id),
+            "plan_id": &payload.plan_id,
             "title": &payload.title,
             "timestamp": payload.timestamp.to_rfc3339(),
         });
@@ -162,7 +162,7 @@ impl Default for WebhookClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blueprint::state::BlueprintState;
+    use crate::plan::state::PlanState;
 
     #[test]
     fn test_compute_hmac() {
@@ -184,7 +184,7 @@ mod tests {
         let payload = WebhookPayload::new(
             "bp-123".to_string(),
             "Test".to_string(),
-            BlueprintState::Approved {
+            PlanState::Approved {
                 approved_by: "user".to_string(),
                 approved_at: chrono::Utc::now(),
             },
@@ -192,7 +192,7 @@ mod tests {
         );
 
         let result = client.format_github_payload(&payload).unwrap();
-        assert!(result.contains("codex/blueprint"));
+        assert!(result.contains("codex/plan"));
         assert!(result.contains("success"));
     }
 
@@ -202,7 +202,7 @@ mod tests {
         let payload = WebhookPayload::new(
             "bp-123".to_string(),
             "Test Blueprint".to_string(),
-            BlueprintState::Approved {
+            PlanState::Approved {
                 approved_by: "user".to_string(),
                 approved_at: chrono::Utc::now(),
             },

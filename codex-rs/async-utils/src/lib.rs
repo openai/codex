@@ -75,10 +75,7 @@ mod tests {
 
         let result = value.or_cancel(&token).await;
 
-        assert_eq!(Ok(42), result);
-    }
-
-    #[tokio::test]
+        assert_eq!(result, Ok(42));
     async fn returns_err_when_token_cancelled_first() {
         let token = CancellationToken::new();
         let token_clone = token.clone();
@@ -99,7 +96,7 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().dangling_artifacts.is_none());
     }
-
+}
     #[tokio::test]
     async fn returns_err_when_token_already_cancelled() {
         let token = CancellationToken::new();
@@ -111,7 +108,7 @@ mod tests {
         }
         .or_cancel(&token)
         .await;
-
+    ｝
         assert!(result.is_err());
         assert!(result.unwrap_err().dangling_artifacts.is_none());
     }

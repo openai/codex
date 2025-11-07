@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { writeText, readText } from "@tauri-apps/api/clipboard";
 import Dashboard from "./pages/Dashboard";
 import Settings from "./pages/Settings";
-import Blueprints from "./pages/Blueprints";
+import Plans from "./pages/Plans";
 import GitVR from "./pages/GitVR";
 import Orchestration from "./pages/Orchestration";
 import { CyberpunkBackground } from "./components/CyberpunkBackground";
@@ -96,7 +96,7 @@ function App() {
             <Link to="/orchestration" className="nav-link">
               🎭 Orchestration
             </Link>
-            <Link to="/blueprints" className="nav-link">
+            <Link to="/Plans" className="nav-link">
               📋 Plans
             </Link>
             <Link to="/settings" className="nav-link">
@@ -114,7 +114,7 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/git-viz" element={<GitVR />} />
             <Route path="/orchestration" element={<Orchestration />} />
-            <Route path="/blueprints" element={<Blueprints />} />
+            <Route path="/Plans" element={<Plans />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </main>

@@ -1,4 +1,4 @@
-// Anthropic Claude Integration
+﻿// Anthropic Claude Integration
 import Anthropic from '@anthropic-ai/sdk'
 import type { AIMessage } from './types'
 

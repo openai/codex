@@ -1,4 +1,4 @@
-/**
+﻿/**
  * VR Navigation System
  * Teleportation, Smooth Locomotion, Comfort options
  */

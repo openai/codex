@@ -1,4 +1,4 @@
-// Supabase Database Types (Auto-generated)
+﻿// Supabase Database Types (Auto-generated)
 // This is a placeholder - generate with: npx supabase gen types typescript
 
 export type Json =

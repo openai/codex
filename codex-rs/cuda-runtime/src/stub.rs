@@ -9,11 +9,11 @@ impl CudaRuntime {
     pub fn new(_device_id: usize) -> Result<Self> {
         anyhow::bail!("CUDA support not compiled (use --features cuda)")
     }
-    
+
     pub fn is_available() -> bool {
         false
     }
-    
+
     pub fn device_count() -> usize {
         0
     }
@@ -27,4 +27,3 @@ pub struct CudaDeviceInfo {
     pub total_memory: usize,
     pub multiprocessor_count: i32,
 }
-

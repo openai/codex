@@ -1,4 +1,4 @@
-/**
+﻿/**
  * OAuth Callback Handler
  * 
  * Handles OAuth and Magic Link callbacks from Supabase

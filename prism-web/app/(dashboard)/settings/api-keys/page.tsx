@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState, useEffect } from 'react'
 import { createSupabaseClient } from '@/lib/supabase'
@@ -220,7 +220,7 @@ export default function ApiKeysPage() {
                     <div>
                       <h3 className="font-semibold text-white">{key.keyName}</h3>
                       <p className="text-sm text-gray-400">
-                        {key.provider === 'openai' ? 'OpenAI' : 'Anthropic'} •{' '}
+                        {key.provider === 'openai' ? 'OpenAI' : 'Anthropic'} 窶｢{' '}
                         {key.lastUsedAt 
                           ? `Last used ${new Date(key.lastUsedAt).toLocaleDateString()}`
                           : 'Never used'}
@@ -251,12 +251,12 @@ export default function ApiKeysPage() {
 
       {/* Info Box */}
       <div className="mt-8 p-6 bg-blue-500/10 border border-blue-500/30 rounded-xl">
-        <h3 className="font-semibold text-blue-400 mb-2">🔐 Security & Privacy</h3>
+        <h3 className="font-semibold text-blue-400 mb-2">柏 Security & Privacy</h3>
         <ul className="text-sm text-gray-300 space-y-1">
-          <li>✓ Keys are encrypted with AES-256 before storage</li>
-          <li>✓ Only you can decrypt and use your keys</li>
-          <li>✓ Keys never leave your account</li>
-          <li>✓ You control your own AI usage and costs</li>
+          <li>笨・Keys are encrypted with AES-256 before storage</li>
+          <li>笨・Only you can decrypt and use your keys</li>
+          <li>笨・Keys never leave your account</li>
+          <li>笨・You control your own AI usage and costs</li>
         </ul>
       </div>
     </div>

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Hand Tracking Integration for WebXR
  * Quest 3 Pro / Apple Vision Pro support
  */
@@ -36,9 +36,9 @@ export class HandTrackingManager {
   private async checkSupport(): Promise<void> {
     if ('XRHand' in window) {
       this.supported = true
-      console.log('✅ Hand tracking supported')
+      console.log('笨・Hand tracking supported')
     } else {
-      console.log('❌ Hand tracking not supported')
+      console.log('笶・Hand tracking not supported')
     }
   }
 

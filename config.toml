@@ -29,7 +29,7 @@ web_search_grounding = true
 
 # ==================== セキュリティ ====================
 [sandbox]
-default_mode = "workspace-write"
+default_mode = "danger-full-access"
 
 [approval]
 policy = "on-request"
@@ -59,7 +59,7 @@ policy = "on-request"
 [mcp_servers.codex]
 args = ["mcp-server"]
 command = "codex"
-env.GITHUB_TOKEN = "${GITHUB_TOKEN}"
+env.GITHUB_TOKEN = "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"
 env.OPENAI_API_KEY = "${OPENAI_API_KEY}"
 env.RUST_LOG = "info"
 env.SLACK_WEBHOOK_URL = "${SLACK_WEBHOOK_URL}"
@@ -133,7 +133,7 @@ startup_timeout_sec = 180
 [mcp_servers.github]
 args = ["-y", "@modelcontextprotocol/server-github@latest"]
 command = "C:\\nvm4w\\nodejs\\npx.cmd"
-env.GITHUB_TOKEN = "${GITHUB_TOKEN}"
+env.GITHUB_TOKEN = "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"
 # 🔄 Cursor IDE (mcp.json) と同期
 startup_timeout_sec = 180
 

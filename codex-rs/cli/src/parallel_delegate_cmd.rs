@@ -103,7 +103,7 @@ pub async fn run_parallel_delegate_command(
         otel_manager,
         config.model_provider.clone(),
         conversation_id,
-        config.model_reasoning_effort,
+        config.model_reasoning_effort.unwrap_or_default(),
         config.model_reasoning_summary,
         config.model_verbosity.unwrap_or_default(),
     );

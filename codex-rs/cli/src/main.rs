@@ -25,16 +25,16 @@ use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use supports_color::Stream;
 
-mod blueprint_commands;
 mod git_commands;
 mod lock_cmd;
 mod mcp_cmd;
+mod plan_commands;
 mod webhook_cmd;
 
-use crate::blueprint_commands::BlueprintCli;
 use crate::git_commands::GitAnalyzeCli;
 use crate::lock_cmd::LockCli;
 use crate::mcp_cmd::McpCli;
+use crate::plan_commands::PlanCli;
 use crate::webhook_cmd::WebhookCli;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -79,6 +79,18 @@ struct MultitoolCli {
     /// CUDA device ID (default: 0)
     #[clap(long, global = true)]
     pub cuda_device: Option<i32>,
+
+    /// Use Ollama for local inference
+    #[clap(long, global = true)]
+    pub use_ollama: bool,
+
+    /// Ollama model name
+    #[clap(long, global = true, default_value = "gpt-oss:20b")]
+    pub ollama_model: String,
+
+    /// Ollama server URL
+    #[clap(long, global = true)]
+    pub ollama_url: Option<String>,
 
     #[clap(flatten)]
     interactive: TuiCli,
@@ -168,8 +180,8 @@ enum Subcommand {
     /// [EXPERIMENTAL] Manage repository locks
     Lock(LockCli),
 
-    /// [EXPERIMENTAL] Blueprint Mode commands
-    Blueprint(BlueprintCli),
+    /// [EXPERIMENTAL] Plan Mode commands
+    Plan(PlanCli),
 
     /// [EXPERIMENTAL] Git repository analysis for 3D/4D visualization
     #[clap(name = "git-analyze")]
@@ -702,6 +714,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         kernel_accelerated,
         mut interactive,
         subcommand,
+        ..
     } = MultitoolCli::parse();
 
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
@@ -712,25 +725,33 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     #[cfg(target_os = "windows")]
     {
         if use_windows_ai {
-            root_config_overrides.raw_overrides.push("windows_ai.enabled=true".to_string());
-            
+            root_config_overrides
+                .raw_overrides
+                .push("windows_ai.enabled=true".to_string());
+
             if kernel_accelerated {
-                root_config_overrides.raw_overrides.push("windows_ai.kernel_accelerated=true".to_string());
+                root_config_overrides
+                    .raw_overrides
+                    .push("windows_ai.kernel_accelerated=true".to_string());
             }
-            
+
             // Log Windows AI usage
             #[cfg(feature = "windows-ai")]
             {
                 if codex_windows_ai::is_windows_ai_available() {
                     eprintln!("🚀 Windows AI enabled (kernel_accelerated: {kernel_accelerated})");
                 } else {
-                    eprintln!("⚠️  Windows AI requested but not available (requires Windows 11 25H2+)");
+                    eprintln!(
+                        "⚠️  Windows AI requested but not available (requires Windows 11 25H2+)"
+                    );
                 }
             }
-            
+
             #[cfg(not(feature = "windows-ai"))]
             {
-                eprintln!("⚠️  Windows AI requested but not compiled (compile with --features windows-ai)");
+                eprintln!(
+                    "⚠️  Windows AI requested but not compiled (compile with --features windows-ai)"
+                );
             }
         }
     }
@@ -948,8 +969,8 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 lock_cmd::run_lock_remove(remove_cmd)?;
             }
         },
-        Some(Subcommand::Blueprint(blueprint_cli)) => {
-            blueprint_commands::run_blueprint_command(blueprint_cli).await?;
+        Some(Subcommand::Plan(plan_cli)) => {
+            plan_commands::run_plan_command(plan_cli).await?;
         }
         Some(Subcommand::GitAnalyze(git_cli)) => {
             git_commands::run_git_analyze_command(git_cli).await?;
