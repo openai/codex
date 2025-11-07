@@ -583,7 +583,7 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
                     ExecOutputStream::Stdout
                 },
                 chunk,
-        });
+            });
             let event = Event {
                 id: stream.sub_id.clone(),
                 msg,

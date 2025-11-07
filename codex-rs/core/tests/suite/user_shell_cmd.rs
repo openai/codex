@@ -193,7 +193,8 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     let delta_event = wait_for_event_match(&test.codex, |ev| match ev {
         EventMsg::ExecCommandOutputDelta(event) => Some(event.clone()),
         _ => None,
-    }).await;
+    })
+    .await;
     assert_eq!(delta_event.stream, ExecOutputStream::Stdout);
     let chunk_text =
         String::from_utf8(delta_event.chunk.clone()).expect("user command chunk is valid utf-8");
@@ -202,7 +203,8 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     let end_event = wait_for_event_match(&test.codex, |ev| match ev {
         EventMsg::ExecCommandEnd(event) => Some(event.clone()),
         _ => None,
-    }).await;
+    })
+    .await;
     assert_eq!(end_event.exit_code, 0);
     assert_eq!(end_event.stdout.trim(), "not-set");
 
