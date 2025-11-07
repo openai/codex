@@ -14,6 +14,20 @@ Currently, you can dump a TypeScript version of the schema using `codex generate
 codex generate-ts --out DIR
 ```
 
+## Initialization
+
+Clients must send a single `initialize` request before invoking any other method, then acknowledge with an `initialized` notification. The server returns the user agent string it will present to upstream services; subsequent requests issued before initialization receive a `"Not initialized"` error, and repeated `initialize` calls receive an `"Already initialized"` error.
+
+Example:
+
+```json
+{ "method": "initialize", "id": 0, "params": {
+    "clientInfo": { "name": "codex-vscode", "title": "Codex VS Code Extension", "version": "0.1.0" }
+} }
+{ "id": 0, "result": { "userAgent": "codex-app-server/0.1.0 codex-vscode/0.1.0" } }
+{ "method": "initialized" }
+```
+
 ## Core primitives
 
 We have 3 top level primitives:
@@ -165,8 +179,8 @@ Request:
 
 Response examples:
 ```json
-{ "id": 1, "result": { "account": null, "requiresOpenaiAuth": false } } // no auth needed
-{ "id": 1, "result": { "account": null, "requiresOpenaiAuth": true } }  // auth needed
+{ "id": 1, "result": { "account": null, "requiresOpenaiAuth": false } } // No OpenAI auth needed (e.g., OSS/local models)
+{ "id": 1, "result": { "account": null, "requiresOpenaiAuth": true } }  // OpenAI auth required (typical for OpenAI-hosted models)
 { "id": 1, "result": { "account": { "type": "apiKey" }, "requiresOpenaiAuth": true } }
 { "id": 1, "result": { "account": { "type": "chatgpt", "email": "user@example.com", "planType": "pro" }, "requiresOpenaiAuth": true } }
 ```
