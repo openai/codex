@@ -67,7 +67,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_record_item_with_freeform_sections() {
+    fn formats_basic_record() {
         let exec_output = ExecToolCallOutput {
             exit_code: 0,
             stdout: StreamOutput::new("hi".to_string()),
@@ -90,37 +90,19 @@ mod tests {
     }
 
     #[test]
-    fn formats_stderr_only_output() {
+    fn uses_aggregated_output_over_streams() {
         let exec_output = ExecToolCallOutput {
             exit_code: 42,
-            stdout: StreamOutput::new(String::new()),
-            stderr: StreamOutput::new("boom".to_string()),
-            aggregated_output: StreamOutput::new("boom".to_string()),
+            stdout: StreamOutput::new("stdout-only".to_string()),
+            stderr: StreamOutput::new("stderr-only".to_string()),
+            aggregated_output: StreamOutput::new("combined output wins".to_string()),
             duration: Duration::from_millis(120),
             timed_out: false,
         };
         let record = format_user_shell_command_record("false", &exec_output);
         assert_eq!(
             record,
-            "<user_shell_command>\n<command>\nfalse\n</command>\n<result>\nExit code: 42\nDuration: 0.1200 seconds\nOutput:\nboom\n</result>\n</user_shell_command>"
-        );
-    }
-
-    #[test]
-    fn formats_combined_output_in_order() {
-        let combined = "out line\nerr line";
-        let exec_output = ExecToolCallOutput {
-            exit_code: 1,
-            stdout: StreamOutput::new("out line\n".to_string()),
-            stderr: StreamOutput::new("err line".to_string()),
-            aggregated_output: StreamOutput::new(combined.to_string()),
-            duration: Duration::from_millis(250),
-            timed_out: false,
-        };
-        let record = format_user_shell_command_record("cmd", &exec_output);
-        assert_eq!(
-            record,
-            "<user_shell_command>\n<command>\ncmd\n</command>\n<result>\nExit code: 1\nDuration: 0.2500 seconds\nOutput:\nout line\nerr line\n</result>\n</user_shell_command>"
+            "<user_shell_command>\n<command>\nfalse\n</command>\n<result>\nExit code: 42\nDuration: 0.1200 seconds\nOutput:\ncombined output wins\n</result>\n</user_shell_command>"
         );
     }
 }
