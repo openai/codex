@@ -201,10 +201,8 @@ where
     /// Obtains a difference between the previous and the current buffer and passes it to the
     /// current backend for drawing.
     pub fn flush(&mut self) -> io::Result<()> {
-        let previous_buffer = self.previous_buffer().clone();
-        let current_buffer = self.current_buffer().clone();
-        let updates = diff_buffers(&previous_buffer, &current_buffer);
-        let last_put_command = updates.iter().rfind(|cmd| cmd.is_put());
+        let updates = diff_buffers(self.previous_buffer(), self.current_buffer());
+        let last_put_command = updates.iter().rfind(|command| command.is_put());
         if let Some(&DrawCommand::Put { x, y, .. }) = last_put_command {
             self.last_known_cursor_pos = Position { x, y };
         }
@@ -399,12 +397,12 @@ use ratatui::buffer::Cell;
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, IsVariant)]
-enum DrawCommand<'a> {
-    Put { x: u16, y: u16, cell: &'a Cell },
+enum DrawCommand {
+    Put { x: u16, y: u16, cell: Cell },
     ClearToEnd { x: u16, y: u16, bg: Color },
 }
 
-fn diff_buffers<'a>(a: &'a Buffer, b: &'a Buffer) -> Vec<DrawCommand<'a>> {
+fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
     let previous_buffer = &a.content;
     let next_buffer = &b.content;
 
@@ -453,7 +451,7 @@ fn diff_buffers<'a>(a: &'a Buffer, b: &'a Buffer) -> Vec<DrawCommand<'a>> {
                 updates.push(DrawCommand::Put {
                     x,
                     y,
-                    cell: &next_buffer[i],
+                    cell: next_buffer[i].clone(),
                 });
             }
         }
@@ -466,9 +464,9 @@ fn diff_buffers<'a>(a: &'a Buffer, b: &'a Buffer) -> Vec<DrawCommand<'a>> {
     updates
 }
 
-fn draw<'a, I>(writer: &mut impl Write, commands: I) -> io::Result<()>
+fn draw<I>(writer: &mut impl Write, commands: I) -> io::Result<()>
 where
-    I: Iterator<Item = DrawCommand<'a>>,
+    I: Iterator<Item = DrawCommand>,
 {
     let mut fg = Color::Reset;
     let mut bg = Color::Reset;
