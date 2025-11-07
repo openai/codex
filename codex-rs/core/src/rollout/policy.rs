@@ -45,9 +45,6 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::ExitedReviewMode(_)
         | EventMsg::UndoCompleted(_)
         | EventMsg::TurnAborted(_) => true,
-        EventMsg::ExecCommandBegin(ev) => ev.is_user_shell_command,
-        EventMsg::ExecCommandOutputDelta(ev) => ev.is_user_shell_command,
-        EventMsg::ExecCommandEnd(ev) => ev.is_user_shell_command,
         EventMsg::Error(_)
         | EventMsg::Warning(_)
         | EventMsg::TaskStarted(_)
@@ -62,6 +59,9 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::McpToolCallEnd(_)
         | EventMsg::WebSearchBegin(_)
         | EventMsg::WebSearchEnd(_)
+        | EventMsg::ExecCommandBegin(_)
+        | EventMsg::ExecCommandOutputDelta(_)
+        | EventMsg::ExecCommandEnd(_)
         | EventMsg::ExecApprovalRequest(_)
         | EventMsg::ApplyPatchApprovalRequest(_)
         | EventMsg::BackgroundEvent(_)
