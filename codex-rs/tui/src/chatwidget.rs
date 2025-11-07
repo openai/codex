@@ -830,19 +830,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
-        let ExecCommandEndEvent {
-            call_id,
-            is_user_shell_command,
-            aggregated_output,
-            formatted_output,
-            exit_code,
-            duration,
-            ..
-        } = ev;
-        let running = self.running_commands.remove(&call_id);
+        let running = self.running_commands.remove(&ev.call_id);
         let (command, parsed, is_user_shell_command) = match running {
             Some(rc) => (rc.command, rc.parsed_cmd, rc.is_user_shell_command),
-            None => (vec![call_id.clone()], Vec::new(), is_user_shell_command),
+            None => (vec![ev.call_id.clone()], Vec::new(), false),
         };
 
         let needs_new = self
@@ -853,7 +844,7 @@ impl ChatWidget {
         if needs_new {
             self.flush_active_cell();
             self.active_cell = Some(Box::new(new_active_exec_command(
-                call_id.clone(),
+                ev.call_id.clone(),
                 command,
                 parsed,
                 is_user_shell_command,
@@ -866,13 +857,13 @@ impl ChatWidget {
             .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
         {
             cell.complete_call(
-                &call_id,
+                &ev.call_id,
                 CommandOutput {
-                    exit_code,
-                    formatted_output,
-                    aggregated_output,
+                    exit_code: ev.exit_code,
+                    formatted_output: ev.formatted_output.clone(),
+                    aggregated_output: ev.aggregated_output.clone(),
                 },
-                duration,
+                ev.duration,
             );
             if cell.should_flush() {
                 self.flush_active_cell();
@@ -929,19 +920,13 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
-        let ExecCommandBeginEvent {
-            call_id,
-            command,
-            parsed_cmd,
-            is_user_shell_command,
-            ..
-        } = ev;
+        // Ensure the status indicator is visible while the command runs.
         self.running_commands.insert(
-            call_id.clone(),
+            ev.call_id.clone(),
             RunningCommand {
-                command: command.clone(),
-                parsed_cmd: parsed_cmd.clone(),
-                is_user_shell_command,
+                command: ev.command.clone(),
+                parsed_cmd: ev.parsed_cmd.clone(),
+                is_user_shell_command: ev.is_user_shell_command,
             },
         );
         if let Some(cell) = self
@@ -949,10 +934,10 @@ impl ChatWidget {
             .as_mut()
             .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
             && let Some(new_exec) = cell.with_added_call(
-                call_id.clone(),
-                command.clone(),
-                parsed_cmd.clone(),
-                is_user_shell_command,
+                ev.call_id.clone(),
+                ev.command.clone(),
+                ev.parsed_cmd.clone(),
+                ev.is_user_shell_command,
             )
         {
             *cell = new_exec;
@@ -960,10 +945,10 @@ impl ChatWidget {
             self.flush_active_cell();
 
             self.active_cell = Some(Box::new(new_active_exec_command(
-                call_id,
-                command,
-                parsed_cmd,
-                is_user_shell_command,
+                ev.call_id.clone(),
+                ev.command.clone(),
+                ev.parsed_cmd,
+                ev.is_user_shell_command,
             )));
         }
 
