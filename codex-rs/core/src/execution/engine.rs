@@ -3,7 +3,7 @@
 //! Provides a unified interface for executing blueprints with different strategies.
 
 use crate::agents::AgentRuntime;
-use crate::plan::{PlanBlock, ExecutionMode};
+use crate::plan::{ExecutionMode, PlanBlock};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -75,10 +75,7 @@ impl ExecutionEngine {
             );
         }
 
-        debug!(
-            "Executing plan {} with mode: {}",
-            plan.id, self.mode
-        );
+        debug!("Executing plan {} with mode: {}", plan.id, self.mode);
 
         let start = std::time::Instant::now();
 

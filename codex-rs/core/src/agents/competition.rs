@@ -3,7 +3,7 @@
 //! Creates multiple git worktrees, executes identical tasks in parallel,
 //! scores results, and auto-merges the winner.
 
-use crate::blueprint::{PlanBlock, EvalCriteria};
+use crate::blueprint::{EvalCriteria, PlanBlock};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

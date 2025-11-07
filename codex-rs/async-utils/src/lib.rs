@@ -108,7 +108,7 @@ mod tests {
         }
         .or_cancel(&token)
         .await;
-    ｝
+
         assert!(result.is_err());
         assert!(result.unwrap_err().dangling_artifacts.is_none());
     }
