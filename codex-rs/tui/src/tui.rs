@@ -22,6 +22,7 @@ use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
 use crossterm::event::Event;
+use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::PopKeyboardEnhancementFlags;
@@ -39,11 +40,15 @@ use ratatui::text::Line;
 
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
+use crate::key_hint;
 use tokio::select;
 use tokio_stream::Stream;
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
+
+#[cfg(unix)]
+const SUSPEND_KEY: key_hint::KeyBinding = key_hint::ctrl(KeyCode::Char('z'));
 
 pub fn set_modes() -> Result<()> {
     execute!(stdout(), EnableBracketedPaste)?;
@@ -269,6 +274,7 @@ impl Tui {
 
     pub fn event_stream(&self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
         use tokio_stream::StreamExt;
+
         let mut crossterm_events = crossterm::event::EventStream::new();
         let mut draw_rx = self.draw_tx.subscribe();
 
@@ -280,6 +286,7 @@ impl Tui {
         #[cfg(unix)]
         let suspend_cursor_y = self.suspend_cursor_y.clone();
 
+        #[cfg(unix)]
         let suspend = move || {
             if alt_screen_active.load(Ordering::Relaxed) {
                 // Disable alternate scroll when suspending from alt-screen
@@ -289,12 +296,8 @@ impl Tui {
             } else {
                 resume_pending.store(ResumeAction::RealignInline as u8, Ordering::Relaxed);
             }
-            #[cfg(unix)]
-            {
-                let y = suspend_cursor_y.load(Ordering::Relaxed);
-                let _ = execute!(stdout(), MoveTo(0, y));
-            }
-            let _ = execute!(stdout(), crossterm::cursor::Show);
+            let y = suspend_cursor_y.load(Ordering::Relaxed);
+            let _ = execute!(stdout(), MoveTo(0, y), crossterm::cursor::Show);
             let _ = Tui::suspend();
         };
 
@@ -306,16 +309,7 @@ impl Tui {
                         match event {
                             crossterm::event::Event::Key(key_event) => {
                                 #[cfg(unix)]
-                                if matches!(
-                                    key_event,
-                                    crossterm::event::KeyEvent {
-                                        code: crossterm::event::KeyCode::Char('z'),
-                                        modifiers: crossterm::event::KeyModifiers::CONTROL,
-                                        kind: crossterm::event::KeyEventKind::Press,
-                                        ..
-                                    }
-                                )
-                                {
+                                if SUSPEND_KEY.is_press(key_event) {
                                     suspend();
                                     // We continue here after resume.
                                     yield TuiEvent::Draw;
