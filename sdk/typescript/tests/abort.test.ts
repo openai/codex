@@ -171,7 +171,7 @@ describe("AbortSignal support", () => {
   });
 
   it("actually kills a long-running process when aborted", async () => {
-    // Create a custom server that streams events slowly, simulating a long-running operation
+    // Create a server that continuously returns tool call requests, forcing codex into an infinite execution loop
     const http = await import("node:http");
     let serverClosed = false;
 
@@ -184,16 +184,26 @@ describe("AbortSignal support", () => {
         res.write('event: response.created\n');
         res.write('data: {"type":"response.created","response":{"id":"resp_test"}}\n\n');
 
-        // Stream events slowly in an infinite loop
+        let toolCallCount = 0;
+        // Continuously stream tool call events in a loop, simulating an agent that keeps executing tools
         const interval = setInterval(() => {
           if (serverClosed) {
             clearInterval(interval);
             return;
           }
-          // Keep sending events to keep the process alive
-          res.write('event: response.progress\n');
-          res.write('data: {"type":"response.progress"}\n\n');
-        }, 100); // Send an event every 100ms
+          toolCallCount++;
+          // Stream a tool call in progress
+          res.write('event: response.output_item.done\n');
+          res.write(`data: {"type":"response.output_item.done","item":{"id":"tool_${toolCallCount}","type":"mcp_tool_call","server":"test_server","tool":"infinite_loop","arguments":{},"status":"in_progress"}}\n\n`);
+
+          // Then immediately complete it
+          setTimeout(() => {
+            if (!serverClosed) {
+              res.write('event: response.output_item.done\n');
+              res.write(`data: {"type":"response.output_item.done","item":{"id":"tool_${toolCallCount}","type":"mcp_tool_call","server":"test_server","tool":"infinite_loop","arguments":{},"result":{"content":[{"type":"text","text":"keep going"}],"structured_content":null},"status":"completed"}}\n\n`);
+            }
+          }, 50);
+        }, 100); // New tool call every 100ms
 
         // Clean up on client disconnect
         req.on("close", () => {
@@ -227,17 +237,17 @@ describe("AbortSignal support", () => {
       const controller = new AbortController();
       const startTime = Date.now();
 
-      // Start the long-running operation
-      const runPromise = thread.runStreamed("Long running task", { signal: controller.signal });
+      // Start the long-running operation with infinite tool calls
+      const runPromise = thread.runStreamed("Start infinite tool loop", { signal: controller.signal });
 
-      // Abort after 200ms (should be mid-execution)
+      // Abort after 200ms (should be mid-execution with several tool calls processed)
       setTimeout(() => controller.abort("Test timeout"), 200);
 
       // The operation should fail due to abort
       await expect(async () => {
         const { events } = await runPromise;
         for await (const event of events) {
-          // Should be interrupted
+          // Should be interrupted mid-stream
         }
       }).rejects.toThrow();
 
@@ -245,7 +255,7 @@ describe("AbortSignal support", () => {
 
       // Verify we aborted quickly (not after natural completion)
       // Should complete within ~300ms (200ms wait + abort overhead)
-      // If abort didn't work, it would hang indefinitely
+      // If abort didn't work, it would hang indefinitely as tool calls keep coming
       expect(elapsed).toBeLessThan(500);
     } finally {
       serverClosed = true;
