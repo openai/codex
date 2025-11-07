@@ -128,10 +128,9 @@ pub fn git_core_eol(repo_root: &Path) -> Option<Eol> {
         .arg("--local")
         .arg("--get")
         .arg("core.eol");
-    cmd.env("GIT_CONFIG_NOSYSTEM", "1").env(
-        "GIT_CONFIG_GLOBAL",
-        if cfg!(windows) { "NUL" } else { "/dev/null" },
-    );
+    cmd.current_dir(repo_root);
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null");
     let out = cmd.output().ok()?;
     #[cfg(test)]
     {
@@ -174,9 +173,12 @@ pub fn git_check_attr_eol(repo_root: &Path, rel_path: &Path) -> Option<Eol> {
         .arg("--")
         .arg(&rel_key);
     // Ensure attribute resolution is repo-local only (no system/global leakage)
+    cmd.current_dir(repo_root);
     cmd.env("GIT_ATTR_NOSYSTEM", "1")
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null");
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("LANG", "C")
+        .env("LC_ALL", "C");
     let out = cmd.output().ok()?;
     if !out.status.success() {
         return None;
@@ -335,10 +337,9 @@ fn git_core_autocrlf(repo_root: &Path) -> Option<Eol> {
         .arg("--local")
         .arg("--get")
         .arg("core.autocrlf");
-    cmd.env("GIT_CONFIG_NOSYSTEM", "1").env(
-        "GIT_CONFIG_GLOBAL",
-        if cfg!(windows) { "NUL" } else { "/dev/null" },
-    );
+    cmd.current_dir(repo_root);
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null");
     let out = cmd.output().ok()?;
     #[cfg(test)]
     {
