@@ -25,9 +25,9 @@ export type CodexExecArgs = {
   // --config model_reasoning_effort
   modelReasoningEffort?: ModelReasoningEffort;
   // --config sandbox_workspace_write.network_access
-  networkAccess?: boolean;
+  networkAccessEnabled?: boolean;
   // --config tools.web_search
-  webSearch?: boolean;
+  webSearchEnabled?: boolean;
   // --ask-for-approval
   approvalPolicy?: ApprovalMode;
 };
@@ -68,12 +68,12 @@ export class CodexExec {
       commandArgs.push("--config", `model_reasoning_effort="${args.modelReasoningEffort}"`);
     }
 
-    if (args.networkAccess !== undefined) {
-      commandArgs.push("--config", `sandbox_workspace_write.network_access=${args.networkAccess}`);
+    if (args.networkAccessEnabled !== undefined) {
+      commandArgs.push("--config", `sandbox_workspace_write.network_access=${args.networkAccessEnabled}`);
     }
 
-    if (args.webSearch !== undefined) {
-      commandArgs.push("--config", `tools.web_search=${args.webSearch}`);
+    if (args.webSearchEnabled !== undefined) {
+      commandArgs.push("--config", `tools.web_search=${args.webSearchEnabled}`);
     }
 
     if (args.approvalPolicy) {

@@ -86,8 +86,8 @@ export class Thread {
       skipGitRepoCheck: options?.skipGitRepoCheck,
       outputSchemaFile: schemaPath,
       modelReasoningEffort: options?.modelReasoningEffort,
-      networkAccess: options?.networkAccess,
-      webSearch: options?.webSearch,
+      networkAccessEnabled: options?.networkAccessEnabled,
+      webSearchEnabled: options?.webSearchEnabled,
       approvalPolicy: options?.approvalPolicy,
     });
     try {
