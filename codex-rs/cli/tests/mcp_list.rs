@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use anyhow::Result;
+use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::load_global_mcp_servers;
-use codex_core::config::write_global_mcp_servers;
-use codex_core::config_types::McpServerTransportConfig;
+use codex_core::config::types::McpServerTransportConfig;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
@@ -59,7 +59,9 @@ async fn list_and_get_render_expected_output() -> Result<()> {
         }
         other => panic!("unexpected transport: {other:?}"),
     }
-    write_global_mcp_servers(codex_home.path(), &servers)?;
+    ConfigEditsBuilder::new(codex_home.path())
+        .replace_mcp_servers(&servers)
+        .apply_blocking()?;
 
     let mut list_cmd = codex_command(codex_home.path())?;
     let list_output = list_cmd.args(["mcp", "list"]).output()?;
@@ -68,9 +70,9 @@ async fn list_and_get_render_expected_output() -> Result<()> {
     assert!(stdout.contains("Name"));
     assert!(stdout.contains("docs"));
     assert!(stdout.contains("docs-server"));
-    assert!(stdout.contains("TOKEN=secret"));
-    assert!(stdout.contains("APP_TOKEN=$APP_TOKEN"));
-    assert!(stdout.contains("WORKSPACE_ID=$WORKSPACE_ID"));
+    assert!(stdout.contains("TOKEN=*****"));
+    assert!(stdout.contains("APP_TOKEN=*****"));
+    assert!(stdout.contains("WORKSPACE_ID=*****"));
     assert!(stdout.contains("Status"));
     assert!(stdout.contains("Auth"));
     assert!(stdout.contains("enabled"));
@@ -119,9 +121,9 @@ async fn list_and_get_render_expected_output() -> Result<()> {
     assert!(stdout.contains("transport: stdio"));
     assert!(stdout.contains("command: docs-server"));
     assert!(stdout.contains("args: --port 4000"));
-    assert!(stdout.contains("env: TOKEN=secret"));
-    assert!(stdout.contains("APP_TOKEN=$APP_TOKEN"));
-    assert!(stdout.contains("WORKSPACE_ID=$WORKSPACE_ID"));
+    assert!(stdout.contains("env: TOKEN=*****"));
+    assert!(stdout.contains("APP_TOKEN=*****"));
+    assert!(stdout.contains("WORKSPACE_ID=*****"));
     assert!(stdout.contains("enabled: true"));
     assert!(stdout.contains("remove: codex mcp remove docs"));
 
@@ -149,7 +151,9 @@ async fn get_disabled_server_shows_single_line() -> Result<()> {
         .get_mut("docs")
         .expect("docs server should exist after add");
     docs.enabled = false;
-    write_global_mcp_servers(codex_home.path(), &servers)?;
+    ConfigEditsBuilder::new(codex_home.path())
+        .replace_mcp_servers(&servers)
+        .apply_blocking()?;
 
     let mut get_cmd = codex_command(codex_home.path())?;
     let get_output = get_cmd.args(["mcp", "get", "docs"]).output()?;

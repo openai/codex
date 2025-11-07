@@ -1,0 +1,15 @@
+[package]
+edition.workspace = true
+name = "codex-utils-tokenizer"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tiktoken-rs = "0.7"
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
