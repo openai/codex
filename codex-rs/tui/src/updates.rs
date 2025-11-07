@@ -29,9 +29,11 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
         });
     }
 
+    let update_action = get_update_action();
     info.and_then(|info| {
-        if is_newer(&info.latest_version, CODEX_CLI_VERSION).unwrap_or(false) {
-            Some(info.latest_version)
+        let latest_version = latest_version_for_action(&info, update_action);
+        if is_newer(latest_version, CODEX_CLI_VERSION).unwrap_or(false) {
+            Some(latest_version.to_string())
         } else {
             None
         }
@@ -41,6 +43,7 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct VersionInfo {
     latest_version: String,
+    latest_brew_version: String,
     // ISO-8601 timestamp (RFC3339)
     last_checked_at: DateTime<Utc>,
     #[serde(default)]
@@ -50,6 +53,12 @@ struct VersionInfo {
 const VERSION_FILENAME: &str = "version.json";
 const HOMEBREW_CASK_URL: &str =
     "https://raw.githubusercontent.com/Homebrew/homebrew-cask/HEAD/Casks/c/codex.rb";
+const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
+
+#[derive(Deserialize, Debug, Clone)]
+struct ReleaseInfo {
+    tag_name: String,
+}
 
 fn version_filepath(config: &Config) -> PathBuf {
     config.codex_home.join(VERSION_FILENAME)
@@ -61,6 +70,15 @@ fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
 }
 
 async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
+    let ReleaseInfo {
+        tag_name: latest_tag_name,
+    } = create_client()
+        .get(LATEST_RELEASE_URL)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<ReleaseInfo>()
+        .await?;
     let cask_contents = create_client()
         .get(HOMEBREW_CASK_URL)
         .send()
@@ -68,12 +86,17 @@ async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
         .error_for_status()?
         .text()
         .await?;
-    let latest_version = extract_version_from_cask(&cask_contents)?;
+    let latest_version = latest_tag_name
+        .strip_prefix("rust-v")
+        .ok_or_else(|| anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))?
+        .to_string();
+    let latest_brew_version = extract_version_from_cask(&cask_contents)?;
 
     // Preserve any previously dismissed version if present.
     let prev_info = read_version_info(version_file).ok();
     let info = VersionInfo {
         latest_version,
+        latest_brew_version,
         last_checked_at: Utc::now(),
         dismissed_version: prev_info.and_then(|p| p.dismissed_version),
     };
@@ -102,6 +125,15 @@ fn is_newer(latest: &str, current: &str) -> Option<bool> {
     match (parse_version(latest), parse_version(current)) {
         (Some(l), Some(c)) => Some(l > c),
         _ => None,
+    }
+}
+
+fn latest_version_for_action<'a>(info: &'a VersionInfo, action: Option<UpdateAction>) -> &'a str {
+    match action {
+        Some(UpdateAction::BrewUpgrade) if !info.latest_brew_version.is_empty() => {
+            &info.latest_brew_version
+        }
+        _ => &info.latest_version,
     }
 }
 
@@ -179,7 +211,7 @@ impl UpdateAction {
         match self {
             UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex@latest"]),
             UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex@latest"]),
-            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
+            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "codex"]),
         }
     }
 
@@ -226,6 +258,24 @@ mod tests {
     fn whitespace_is_ignored() {
         assert_eq!(parse_version(" 1.2.3 \n"), Some((1, 2, 3)));
         assert_eq!(is_newer(" 1.2.3 ", "1.2.2"), Some(true));
+    }
+
+    #[test]
+    fn latest_version_prefers_brew_when_available() {
+        let info = VersionInfo {
+            latest_version: "1.1.0".to_string(),
+            latest_brew_version: "1.0.5".to_string(),
+            last_checked_at: Utc::now(),
+            dismissed_version: None,
+        };
+        assert_eq!(
+            latest_version_for_action(&info, Some(UpdateAction::BrewUpgrade)),
+            "1.0.5"
+        );
+        assert_eq!(
+            latest_version_for_action(&info, Some(UpdateAction::NpmGlobalLatest)),
+            "1.1.0"
+        );
     }
 
     #[test]
