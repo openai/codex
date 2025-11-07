@@ -133,11 +133,7 @@ impl SessionTask for UserShellCommandTask {
         });
 
         let sandbox_policy = SandboxPolicy::DangerFullAccess;
-        let exec_future = execute_exec_env(
-            exec_env,
-            &sandbox_policy,
-            stdout_stream,
-        );
+        let exec_future = execute_exec_env(exec_env, &sandbox_policy, stdout_stream);
         tokio::pin!(exec_future);
 
         let exec_result = tokio::select! {

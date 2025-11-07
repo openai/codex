@@ -161,13 +161,7 @@ pub(crate) async fn execute_exec_env(
     };
 
     let start = Instant::now();
-    let raw_output_result = exec(
-        params,
-        sandbox,
-        sandbox_policy,
-        stdout_stream,
-    )
-    .await;
+    let raw_output_result = exec(params, sandbox, sandbox_policy, stdout_stream).await;
     let duration = start.elapsed();
     finalize_exec_result(raw_output_result, sandbox, duration)
 }
@@ -589,7 +583,7 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
                     ExecOutputStream::Stdout
                 },
                 chunk,
-        });
+            });
             let event = Event {
                 id: stream.sub_id.clone(),
                 msg,
