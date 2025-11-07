@@ -309,3 +309,70 @@ fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<()> {
     assert!(content.contains(&marker2));
     Ok(())
 }
+
+#[test]
+fn exec_fork_creates_new_session() -> anyhow::Result<()> {
+    let test = test_codex_exec();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_responses_fixture.sse");
+
+    // Seed conversation.
+    let marker = format!("fork-source-{}", Uuid::new_v4());
+    let prompt = format!("echo {marker}");
+
+    test.cmd()
+        .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        .env("OPENAI_BASE_URL", "http://unused.local")
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&prompt)
+        .assert()
+        .success();
+
+    let sessions_dir = test.home_path().join("sessions");
+    let source_path = find_session_file_containing_marker(&sessions_dir, &marker)
+        .expect("no session file found after source run");
+    let source_id = extract_conversation_id(&source_path);
+    assert!(
+        !source_id.is_empty(),
+        "missing conversation id in source session"
+    );
+
+    // Fork with a new prompt.
+    let marker2 = format!("fork-branch-{}", Uuid::new_v4());
+    let prompt2 = format!("echo {marker2}");
+
+    test.cmd()
+        .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        .env("OPENAI_BASE_URL", "http://unused.local")
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg("fork")
+        .arg(&source_id)
+        .arg(&prompt2)
+        .assert()
+        .success();
+
+    let forked_path = find_session_file_containing_marker(&sessions_dir, &marker2)
+        .expect("no forked session file containing new marker");
+    assert_ne!(
+        forked_path, source_path,
+        "fork should produce a new session file"
+    );
+
+    let source_content = std::fs::read_to_string(&source_path)?;
+    assert!(
+        !source_content.contains(&marker2),
+        "source session must remain unchanged"
+    );
+
+    let forked_content = std::fs::read_to_string(&forked_path)?;
+    assert!(
+        forked_content.contains(&marker) && forked_content.contains(&marker2),
+        "forked session should contain both original and new prompts"
+    );
+
+    Ok(())
+}

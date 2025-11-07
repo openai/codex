@@ -1,6 +1,8 @@
 pub mod account;
 mod conversation_id;
 pub use conversation_id::ConversationId;
+/// Numeric identifier for agents/subagents (agent 0 is always the root UI thread).
+pub type AgentId = u64;
 pub mod approvals;
 pub mod config_types;
 pub mod custom_prompts;

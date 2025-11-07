@@ -1126,6 +1126,7 @@ dependencies = [
  "http",
  "image",
  "indexmap 2.12.0",
+ "insta",
  "keyring",
  "landlock",
  "libc",
@@ -3335,6 +3336,7 @@ checksum = "46fdb647ebde000f43b5b53f773c30cf9b0cb4300453208713fa38b2c70935a0"
 dependencies = [
  "console",
  "once_cell",
+ "serde",
  "similar",
 ]
 

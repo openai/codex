@@ -708,7 +708,7 @@ impl SessionHeaderHistoryCell {
             ReasoningEffortConfig::Low => "low",
             ReasoningEffortConfig::Medium => "medium",
             ReasoningEffortConfig::High => "high",
-            ReasoningEffortConfig::XHigh => "xhigh",
+            ReasoningEffortConfig::XHigh => "x-high",
             ReasoningEffortConfig::None => "none",
         })
     }
@@ -1860,10 +1860,12 @@ mod tests {
     fn coalesces_sequential_reads_within_one_call() {
         // Build one exec cell with a Search followed by two Reads
         let call_id = "c1".to_string();
+        let command = vec!["bash".into(), "-lc".into(), "echo".into()];
         let mut cell = ExecCell::new(
             ExecCall {
                 call_id: call_id.clone(),
-                command: vec!["bash".into(), "-lc".into(), "echo".into()],
+                subagent: None,
+                command,
                 parsed: vec![
                     ParsedCommand::Search {
                         query: Some("shimmer_spans".into()),
@@ -1883,6 +1885,7 @@ mod tests {
                 ],
                 output: None,
                 source: ExecCommandSource::Agent,
+                is_user_shell_command: false,
                 start_time: Some(Instant::now()),
                 duration: None,
                 interaction_input: None,
@@ -1908,8 +1911,10 @@ mod tests {
                     path: None,
                     cmd: "rg shimmer_spans".into(),
                 }],
+                subagent: None,
                 output: None,
                 source: ExecCommandSource::Agent,
+                is_user_shell_command: false,
                 start_time: Some(Instant::now()),
                 duration: None,
                 interaction_input: None,
@@ -1930,6 +1935,7 @@ mod tests {
                 }],
                 ExecCommandSource::Agent,
                 None,
+                false,
             )
             .unwrap();
         cell.complete_call("c2", CommandOutput::default(), Duration::from_millis(1));
@@ -1945,6 +1951,7 @@ mod tests {
                 }],
                 ExecCommandSource::Agent,
                 None,
+                false,
             )
             .unwrap();
         cell.complete_call("c3", CommandOutput::default(), Duration::from_millis(1));
@@ -1977,8 +1984,10 @@ mod tests {
                         path: "shimmer.rs".into(),
                     },
                 ],
+                subagent: None,
                 output: None,
                 source: ExecCommandSource::Agent,
+                is_user_shell_command: false,
                 start_time: Some(Instant::now()),
                 duration: None,
                 interaction_input: None,
@@ -2001,8 +2010,10 @@ mod tests {
                 call_id: call_id.clone(),
                 command: vec!["bash".into(), "-lc".into(), cmd],
                 parsed: Vec::new(),
+                subagent: None,
                 output: None,
                 source: ExecCommandSource::Agent,
+                is_user_shell_command: false,
                 start_time: Some(Instant::now()),
                 duration: None,
                 interaction_input: None,
@@ -2027,8 +2038,10 @@ mod tests {
                 call_id: call_id.clone(),
                 command: vec!["echo".into(), "ok".into()],
                 parsed: Vec::new(),
+                subagent: None,
                 output: None,
                 source: ExecCommandSource::Agent,
+                is_user_shell_command: false,
                 start_time: Some(Instant::now()),
                 duration: None,
                 interaction_input: None,
@@ -2051,8 +2064,10 @@ mod tests {
                 call_id: call_id.clone(),
                 command: vec!["bash".into(), "-lc".into(), long],
                 parsed: Vec::new(),
+                subagent: None,
                 output: None,
                 source: ExecCommandSource::Agent,
+                is_user_shell_command: false,
                 start_time: Some(Instant::now()),
                 duration: None,
                 interaction_input: None,
@@ -2074,8 +2089,10 @@ mod tests {
                 call_id: call_id.clone(),
                 command: vec!["bash".into(), "-lc".into(), cmd],
                 parsed: Vec::new(),
+                subagent: None,
                 output: None,
                 source: ExecCommandSource::Agent,
+                is_user_shell_command: false,
                 start_time: Some(Instant::now()),
                 duration: None,
                 interaction_input: None,
@@ -2098,8 +2115,10 @@ mod tests {
                 call_id: call_id.clone(),
                 command: vec!["bash".into(), "-lc".into(), cmd],
                 parsed: Vec::new(),
+                subagent: None,
                 output: None,
                 source: ExecCommandSource::Agent,
+                is_user_shell_command: false,
                 start_time: Some(Instant::now()),
                 duration: None,
                 interaction_input: None,
@@ -2122,8 +2141,10 @@ mod tests {
                 call_id: call_id.clone(),
                 command: vec!["bash".into(), "-lc".into(), "seq 1 10 1>&2 && false".into()],
                 parsed: Vec::new(),
+                subagent: None,
                 output: None,
                 source: ExecCommandSource::Agent,
+                is_user_shell_command: false,
                 start_time: Some(Instant::now()),
                 duration: None,
                 interaction_input: None,
@@ -2172,8 +2193,10 @@ mod tests {
                 call_id: call_id.clone(),
                 command: vec!["bash".into(), "-lc".into(), long_cmd.to_string()],
                 parsed: Vec::new(),
+                subagent: None,
                 output: None,
                 source: ExecCommandSource::Agent,
+                is_user_shell_command: false,
                 start_time: Some(Instant::now()),
                 duration: None,
                 interaction_input: None,

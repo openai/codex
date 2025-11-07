@@ -1,6 +1,7 @@
 use codex_common::elapsed::format_duration;
 use codex_common::elapsed::format_elapsed;
 use codex_core::config::Config;
+use codex_core::protocol::AgentInboxEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::BackgroundEventEvent;
@@ -18,11 +19,14 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::StreamErrorEvent;
+use codex_core::protocol::SubagentLifecycleEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_protocol::AgentId;
+use codex_protocol::ConversationId;
 use codex_protocol::num_format::format_with_separators;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
@@ -43,6 +47,7 @@ use codex_protocol::plan_tool::UpdatePlanArgs;
 const MAX_OUTPUT_LINES_FOR_EXEC_TOOL_CALL: usize = 20;
 pub(crate) struct EventProcessorWithHumanOutput {
     call_id_to_patch: HashMap<String, PatchApplyBegin>,
+    subagents: HashMap<ConversationId, SubagentCliInfo>,
 
     // To ensure that --color=never is respected, ANSI escapes _must_ be added
     // using .style() with one of these fields. If you need a new style, add a
@@ -65,6 +70,11 @@ pub(crate) struct EventProcessorWithHumanOutput {
     final_message: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+struct SubagentCliInfo {
+    label: Option<String>,
+}
+
 impl EventProcessorWithHumanOutput {
     pub(crate) fn create_with_ansi(
         with_ansi: bool,
@@ -76,6 +86,7 @@ impl EventProcessorWithHumanOutput {
         if with_ansi {
             Self {
                 call_id_to_patch,
+                subagents: HashMap::new(),
                 bold: Style::new().bold(),
                 italic: Style::new().italic(),
                 dimmed: Style::new().dimmed(),
@@ -93,6 +104,7 @@ impl EventProcessorWithHumanOutput {
         } else {
             Self {
                 call_id_to_patch,
+                subagents: HashMap::new(),
                 bold: Style::new(),
                 italic: Style::new(),
                 dimmed: Style::new(),
@@ -546,6 +558,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ts_msg!(self, "task aborted: review ended");
                 }
             },
+            EventMsg::SubagentLifecycle(ev) => self.log_subagent_lifecycle(ev),
+            EventMsg::AgentInbox(ev) => self.log_agent_inbox(ev),
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
             EventMsg::WebSearchBegin(_)
             | EventMsg::ExecApprovalRequest(_)
@@ -593,6 +607,106 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 println!("{message}");
             }
         }
+    }
+}
+impl EventProcessorWithHumanOutput {
+    fn log_subagent_lifecycle(&mut self, event: SubagentLifecycleEvent) {
+        match event {
+            SubagentLifecycleEvent::Created(created) => {
+                let name = self.render_subagent_name(
+                    &created.subagent.session_id,
+                    created.subagent.agent_id,
+                    created.subagent.label.as_deref(),
+                );
+                self.subagents.insert(
+                    created.subagent.session_id,
+                    SubagentCliInfo {
+                        label: created.subagent.label.clone(),
+                    },
+                );
+                ts_msg!(
+                    self,
+                    "[#{}] {} created via {:?}",
+                    created.subagent.agent_id,
+                    name.style(self.cyan),
+                    created.subagent.origin
+                );
+            }
+            SubagentLifecycleEvent::Status(status) => {
+                let name = self.render_subagent_name(&status.session_id, status.agent_id, None);
+                ts_msg!(
+                    self,
+                    "[#{}] {} status → {:?}",
+                    status.agent_id,
+                    name.style(self.cyan),
+                    status.status
+                );
+            }
+            SubagentLifecycleEvent::ReasoningHeader(reasoning) => {
+                let name =
+                    self.render_subagent_name(&reasoning.session_id, reasoning.agent_id, None);
+                ts_msg!(
+                    self,
+                    "[#{}] {} header: {}",
+                    reasoning.agent_id,
+                    name.style(self.cyan),
+                    reasoning.reasoning_header.style(self.italic)
+                );
+            }
+            SubagentLifecycleEvent::Deleted(removed) => {
+                let name = self.render_subagent_name(&removed.session_id, removed.agent_id, None);
+                self.subagents.remove(&removed.session_id);
+                ts_msg!(
+                    self,
+                    "[#{}] {} removed",
+                    removed.agent_id,
+                    name.style(self.cyan)
+                );
+            }
+        }
+    }
+
+    fn log_agent_inbox(&mut self, event: AgentInboxEvent) {
+        let name = self.render_subagent_name(&event.session_id, event.agent_id, None);
+        ts_msg!(
+            self,
+            "[#{}] {} inbox: {} msg{}, {} interrupt{}",
+            event.agent_id,
+            name.style(self.cyan),
+            event.pending_messages,
+            if event.pending_messages == 1 { "" } else { "s" },
+            event.pending_interrupts,
+            if event.pending_interrupts == 1 {
+                ""
+            } else {
+                "s"
+            }
+        );
+    }
+
+    fn render_subagent_name(
+        &self,
+        session_id: &ConversationId,
+        agent_id: AgentId,
+        explicit: Option<&str>,
+    ) -> String {
+        if let Some(name) = explicit
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(std::string::ToString::to_string)
+            .or_else(|| {
+                self.subagents
+                    .get(session_id)
+                    .and_then(|info| info.label.as_deref())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(std::string::ToString::to_string)
+            })
+        {
+            return name;
+        }
+        let short = session_id.to_string().chars().take(8).collect::<String>();
+        format!("subagent #{agent_id} ({short})")
     }
 }
 

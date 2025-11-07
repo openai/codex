@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::AgentId;
 use crate::ConversationId;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -469,6 +470,12 @@ pub enum EventMsg {
 
     /// Raw chain-of-thought from agent.
     AgentReasoningRawContent(AgentReasoningRawContentEvent),
+
+    /// Lifecycle update for a subagent (spawned/forked/resumed child session).
+    SubagentLifecycle(SubagentLifecycleEvent),
+
+    /// Notification that a subagent's inbox depth changed (e.g., parent sent an interrupt).
+    AgentInbox(AgentInboxEvent),
 
     /// Agent reasoning content delta event from agent.
     AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent),
@@ -969,6 +976,92 @@ pub struct AgentReasoningRawContentEvent {
     pub text: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq, Eq, Copy)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SubagentLifecycleOrigin {
+    Spawn,
+    Fork,
+    SendMessage,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq, Eq, Copy)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SubagentLifecycleStatus {
+    Queued,
+    Running,
+    Ready,
+    Idle,
+    Failed,
+    Canceled,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(export)]
+pub struct SubagentSummary {
+    pub agent_id: AgentId,
+    pub parent_agent_id: Option<AgentId>,
+    pub session_id: ConversationId,
+    pub parent_session_id: Option<ConversationId>,
+    pub origin: SubagentLifecycleOrigin,
+    pub status: SubagentLifecycleStatus,
+    pub label: Option<String>,
+    pub summary: Option<String>,
+    pub reasoning_header: Option<String>,
+    pub started_at_ms: i64,
+    pub pending_messages: usize,
+    pub pending_interrupts: usize,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(tag = "event", rename_all = "snake_case")]
+#[ts(export)]
+pub enum SubagentLifecycleEvent {
+    Created(SubagentCreatedEvent),
+    Status(SubagentStatusEvent),
+    ReasoningHeader(SubagentReasoningHeaderEvent),
+    Deleted(SubagentRemovedEvent),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(export)]
+pub struct SubagentCreatedEvent {
+    pub subagent: SubagentSummary,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(export)]
+pub struct SubagentStatusEvent {
+    pub agent_id: AgentId,
+    pub session_id: ConversationId,
+    pub status: SubagentLifecycleStatus,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(export)]
+pub struct SubagentReasoningHeaderEvent {
+    pub agent_id: AgentId,
+    pub session_id: ConversationId,
+    pub reasoning_header: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(export)]
+pub struct SubagentRemovedEvent {
+    pub agent_id: AgentId,
+    pub session_id: ConversationId,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[ts(export)]
+pub struct AgentInboxEvent {
+    pub agent_id: AgentId,
+    pub session_id: ConversationId,
+    pub pending_messages: usize,
+    pub pending_interrupts: usize,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct AgentReasoningRawContentDeltaEvent {
     pub delta: String,
@@ -1294,6 +1387,9 @@ pub struct ExecCommandBeginEvent {
     /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
     pub source: ExecCommandSource,
+    /// Whether the command was explicitly requested as a local user shell command.
+    #[serde(default)]
+    pub is_user_shell_command: bool,
     /// Raw input sent to a unified exec session (if this is an interaction event).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

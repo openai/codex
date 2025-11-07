@@ -121,6 +121,7 @@ image = { workspace = true, features = ["jpeg", "png"] }
 maplit = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
+insta = { version = "1.39", features = ["yaml"] }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = { workspace = true }

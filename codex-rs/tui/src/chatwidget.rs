@@ -11,6 +11,7 @@ use codex_core::config::types::Notifications;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
+use codex_core::protocol::AgentInboxEvent;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -40,6 +41,9 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
+use codex_core::protocol::SubagentLifecycleEvent;
+use codex_core::protocol::SubagentLifecycleStatus;
+use codex_core::protocol::SubagentSummary;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
@@ -52,6 +56,7 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_protocol::AgentId;
 use codex_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::user_input::UserInput;
@@ -81,6 +86,8 @@ use crate::bottom_pane::InputResult;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::SubagentDisplayEntry;
+use crate::bottom_pane::SubagentDisplayEntryKind;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
@@ -88,6 +95,7 @@ use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::new_active_exec_command;
+use crate::exec_cell::parse_subagent_call;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
@@ -105,6 +113,8 @@ use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+use codex_protocol::models::ResponseItem;
+use serde_json::Value;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -137,6 +147,7 @@ struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
     source: ExecCommandSource,
+    is_user_shell_command: bool,
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
@@ -286,6 +297,7 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    subagent_states: HashMap<ConversationId, SubagentUiState>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     // Simple review mode flag; used to adjust layout and banners.
@@ -325,12 +337,58 @@ impl From<&str> for UserMessage {
     }
 }
 
+#[derive(Clone)]
+struct SubagentUiState {
+    agent_id: AgentId,
+    session_id: ConversationId,
+    status: SubagentLifecycleStatus,
+    label: Option<String>,
+    summary: Option<String>,
+    reasoning_header: Option<String>,
+    started_at_ms: i64,
+    pending_messages: usize,
+    pending_interrupts: usize,
+}
+
+impl From<SubagentSummary> for SubagentUiState {
+    fn from(summary: SubagentSummary) -> Self {
+        Self {
+            agent_id: summary.agent_id,
+            session_id: summary.session_id,
+            status: summary.status,
+            label: summary.label,
+            summary: summary.summary,
+            reasoning_header: summary.reasoning_header,
+            started_at_ms: summary.started_at_ms,
+            pending_messages: summary.pending_messages,
+            pending_interrupts: summary.pending_interrupts,
+        }
+    }
+}
+
+impl SubagentUiState {
+    fn is_active(&self) -> bool {
+        matches!(
+            self.status,
+            SubagentLifecycleStatus::Queued
+                | SubagentLifecycleStatus::Running
+                | SubagentLifecycleStatus::Ready
+        )
+    }
+}
+
 fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Option<UserMessage> {
     if text.is_empty() && image_paths.is_empty() {
         None
     } else {
         Some(UserMessage { text, image_paths })
     }
+}
+
+fn default_subagent_label(session_id: ConversationId) -> String {
+    let full = session_id.to_string();
+    let short = full.chars().take(8).collect::<String>();
+    format!("Subagent {short}")
 }
 
 impl ChatWidget {
@@ -347,12 +405,225 @@ impl ChatWidget {
         self.bottom_pane.update_status_header(header);
     }
 
+    fn on_subagent_lifecycle(&mut self, event: SubagentLifecycleEvent, from_replay: bool) {
+        let Some(parent_id) = self.conversation_id else {
+            return;
+        };
+
+        if from_replay {
+            return;
+        }
+
+        let mut changed = false;
+        match event {
+            SubagentLifecycleEvent::Created(created) => {
+                if created.subagent.parent_session_id != Some(parent_id) {
+                    return;
+                }
+                let state: SubagentUiState = created.subagent.into();
+                self.subagent_states.insert(state.session_id, state);
+                changed = true;
+            }
+            SubagentLifecycleEvent::Status(status) => {
+                if let Some(entry) = self.subagent_states.get_mut(&status.session_id)
+                    && entry.agent_id == status.agent_id
+                    && entry.status != status.status
+                {
+                    entry.status = status.status;
+                    changed = true;
+                }
+            }
+            SubagentLifecycleEvent::ReasoningHeader(reasoning) => {
+                if let Some(entry) = self.subagent_states.get_mut(&reasoning.session_id)
+                    && entry.agent_id == reasoning.agent_id
+                {
+                    entry.reasoning_header = Some(reasoning.reasoning_header);
+                    changed = true;
+                }
+            }
+            SubagentLifecycleEvent::Deleted(removed) => {
+                let should_remove = self
+                    .subagent_states
+                    .get(&removed.session_id)
+                    .map(|entry| entry.agent_id == removed.agent_id)
+                    .unwrap_or(false);
+                if should_remove && self.subagent_states.remove(&removed.session_id).is_some() {
+                    changed = true;
+                }
+            }
+        }
+
+        if changed {
+            self.refresh_subagent_visuals();
+        }
+    }
+
+    fn on_agent_inbox(&mut self, event: AgentInboxEvent) {
+        if let Some(entry) = self.subagent_states.get_mut(&event.session_id)
+            && entry.agent_id == event.agent_id
+            && (entry.pending_messages != event.pending_messages
+                || entry.pending_interrupts != event.pending_interrupts)
+        {
+            entry.pending_messages = event.pending_messages;
+            entry.pending_interrupts = event.pending_interrupts;
+            self.refresh_subagent_visuals();
+        }
+    }
+
+    fn refresh_subagent_visuals(&mut self) {
+        let (entries, active_count) = self.build_subagent_display_entries();
+        self.bottom_pane.update_subagent_summaries(entries);
+        self.bottom_pane.set_subagent_counts(active_count);
+    }
+
+    fn build_subagent_display_entries(&self) -> (Vec<SubagentDisplayEntry>, usize) {
+        if self.subagent_states.is_empty() {
+            return (Vec::new(), 0);
+        }
+
+        let mut states: Vec<SubagentUiState> = self.subagent_states.values().cloned().collect();
+        states.sort_by(|a, b| {
+            a.started_at_ms
+                .cmp(&b.started_at_ms)
+                .then_with(|| a.session_id.to_string().cmp(&b.session_id.to_string()))
+        });
+
+        let active_count = states.iter().filter(|s| s.is_active()).count();
+        let mut entries: Vec<SubagentDisplayEntry> = Vec::with_capacity(states.len() + 1);
+        let total = states.len();
+
+        let mut detail_parts: Vec<String> = Vec::new();
+        let queued = states
+            .iter()
+            .filter(|s| s.status == SubagentLifecycleStatus::Queued)
+            .count();
+        if queued > 0 {
+            detail_parts.push(format!("{queued} queued"));
+        }
+        let running = states
+            .iter()
+            .filter(|s| s.status == SubagentLifecycleStatus::Running)
+            .count();
+        if running > 0 {
+            detail_parts.push(format!("{running} running"));
+        }
+        let ready = states
+            .iter()
+            .filter(|s| s.status == SubagentLifecycleStatus::Ready)
+            .count();
+        if ready > 0 {
+            detail_parts.push(format!("{ready} ready"));
+        }
+        let idle = states
+            .iter()
+            .filter(|s| s.status == SubagentLifecycleStatus::Idle)
+            .count();
+        if idle > 0 {
+            detail_parts.push(format!("{idle} idle"));
+        }
+        let failed = states
+            .iter()
+            .filter(|s| s.status == SubagentLifecycleStatus::Failed)
+            .count();
+        if failed > 0 {
+            detail_parts.push(format!("{failed} failed"));
+        }
+        let canceled = states
+            .iter()
+            .filter(|s| s.status == SubagentLifecycleStatus::Canceled)
+            .count();
+        if canceled > 0 {
+            detail_parts.push(format!("{canceled} canceled"));
+        }
+        let pending_interrupts_total: usize = states.iter().map(|s| s.pending_interrupts).sum();
+        if pending_interrupts_total > 0 {
+            detail_parts.push(format!(
+                "{pending_interrupts_total} interrupt{}",
+                if pending_interrupts_total == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ));
+        }
+        let pending_messages_total: usize = states.iter().map(|s| s.pending_messages).sum();
+        if pending_messages_total > 0 {
+            detail_parts.push(format!(
+                "{pending_messages_total} pending msg{}",
+                if pending_messages_total == 1 { "" } else { "s" }
+            ));
+        }
+
+        entries.push(SubagentDisplayEntry {
+            kind: SubagentDisplayEntryKind::Summary,
+            label: format!("{total} subagent{}", if total == 1 { "" } else { "s" }),
+            detail: if detail_parts.is_empty() {
+                None
+            } else {
+                Some(detail_parts.join(" • "))
+            },
+            status: None,
+        });
+
+        for state in states {
+            let mut label = state.label.clone();
+            if label.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+                label = Some(default_subagent_label(state.session_id));
+            }
+            let mut detail_segments: Vec<String> = Vec::new();
+            if state.pending_interrupts > 0 {
+                detail_segments.push(format!(
+                    "{} interrupt{}",
+                    state.pending_interrupts,
+                    if state.pending_interrupts == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
+                ));
+            }
+            if state.pending_messages > 0 {
+                detail_segments.push(format!(
+                    "{} pending msg{}",
+                    state.pending_messages,
+                    if state.pending_messages == 1 { "" } else { "s" }
+                ));
+            }
+            if let Some(text) = state
+                .reasoning_header
+                .clone()
+                .or_else(|| state.summary.clone())
+            {
+                detail_segments.push(truncate_text(&text, 160));
+            }
+            let detail = if detail_segments.is_empty() {
+                None
+            } else {
+                Some(detail_segments.join(" • "))
+            };
+
+            let label_text = label.unwrap_or_else(|| default_subagent_label(state.session_id));
+            let decorated_label = format!("[#{}] {}", state.agent_id, label_text);
+
+            entries.push(SubagentDisplayEntry {
+                kind: SubagentDisplayEntryKind::Item,
+                label: decorated_label,
+                detail,
+                status: Some(state.status),
+            });
+        }
+
+        (entries, active_count)
+    }
+
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.conversation_id = Some(event.session_id);
         self.current_rollout_path = Some(event.rollout_path.clone());
+        self.subagent_states.clear();
+        self.refresh_subagent_visuals();
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
@@ -864,6 +1135,31 @@ impl ChatWidget {
         self.set_status_header(message);
     }
 
+    fn on_raw_response_item(&mut self, ev: codex_core::protocol::RawResponseItemEvent) {
+        if let ResponseItem::FunctionCallOutput { output, .. } = ev.item {
+            if let Ok(value) = serde_json::from_str::<Value>(&output.content) {
+                if value
+                    .get("injected")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    if let Some(msg) = value
+                        .get("messages")
+                        .and_then(Value::as_array)
+                        .and_then(|arr| arr.first())
+                        .and_then(|m| m.get("prompt"))
+                        .and_then(Value::as_str)
+                    {
+                        let cell =
+                            history_cell::new_info_event(format!("subagent await: {msg}"), None);
+                        self.add_to_history(cell);
+                        self.request_redraw();
+                    }
+                }
+            }
+        }
+    }
+
     /// Periodic tick to commit at most one queued line to history with a small delay,
     /// animating the output.
     pub(crate) fn on_commit_tick(&mut self) {
@@ -938,14 +1234,21 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
-        let (command, parsed, source) = match running {
-            Some(rc) => (rc.command, rc.parsed_cmd, rc.source),
+        let (command, parsed, source, is_user_shell_command) = match running {
+            Some(rc) => (
+                rc.command,
+                rc.parsed_cmd,
+                rc.source,
+                rc.is_user_shell_command,
+            ),
             None => (
                 vec![ev.call_id.clone()],
                 Vec::new(),
                 ExecCommandSource::Agent,
+                false,
             ),
         };
+        let subagent = parse_subagent_call(&command);
         let is_unified_exec_interaction =
             matches!(source, ExecCommandSource::UnifiedExecInteraction);
 
@@ -960,9 +1263,11 @@ impl ChatWidget {
                 ev.call_id.clone(),
                 command,
                 parsed,
+                subagent,
                 source,
                 None,
                 self.config.animations,
+                is_user_shell_command,
             )));
         }
 
@@ -1041,12 +1346,15 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
         // Ensure the status indicator is visible while the command runs.
+        let is_user_shell_command =
+            ev.is_user_shell_command || matches!(ev.source, ExecCommandSource::UserShell);
         self.running_commands.insert(
             ev.call_id.clone(),
             RunningCommand {
                 command: ev.command.clone(),
                 parsed_cmd: ev.parsed_cmd.clone(),
                 source: ev.source,
+                is_user_shell_command,
             },
         );
         let interaction_input = ev.interaction_input.clone();
@@ -1060,19 +1368,24 @@ impl ChatWidget {
                 ev.parsed_cmd.clone(),
                 ev.source,
                 interaction_input.clone(),
+                is_user_shell_command,
             )
         {
             *cell = new_exec;
         } else {
             self.flush_active_cell();
 
+            let subagent = parse_subagent_call(&ev.command);
+
             self.active_cell = Some(Box::new(new_active_exec_command(
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd,
+                subagent,
                 ev.source,
                 interaction_input,
                 self.config.animations,
+                is_user_shell_command,
             )));
         }
 
@@ -1179,6 +1492,7 @@ impl ChatWidget {
             retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
+            subagent_states: HashMap::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -1254,6 +1568,7 @@ impl ChatWidget {
             retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
+            subagent_states: HashMap::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: true,
             pending_notification: None,
@@ -1719,8 +2034,18 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::RawResponseItem(_)
-            | EventMsg::ItemStarted(_)
+            EventMsg::SubagentLifecycle(ev) => self.on_subagent_lifecycle(ev, from_replay),
+            EventMsg::AgentInbox(ev) => {
+                if !from_replay {
+                    self.on_agent_inbox(ev);
+                }
+            }
+            EventMsg::RawResponseItem(ev) => {
+                if !from_replay {
+                    self.on_raw_response_item(ev);
+                }
+            }
+            EventMsg::ItemStarted(_)
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)

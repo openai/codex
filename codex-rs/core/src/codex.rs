@@ -46,6 +46,7 @@ use mcp_types::ReadResourceRequestParams;
 use mcp_types::ReadResourceResult;
 use serde_json;
 use serde_json::Value;
+use tokio::fs;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
@@ -103,6 +104,8 @@ use crate::shell;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
+use crate::subagents::SubagentManager;
+use crate::subagents::SubagentRegistry;
 use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
@@ -134,12 +137,19 @@ use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
 
+// Built-in prompts for orchestrating and running subagents. These can be
+// overridden via files in `$CODEX_HOME` (see `load_root_agent_prompt` and
+// `load_subagent_prompt`).
+const ROOT_AGENT_PROMPT_FALLBACK: &str = include_str!("../root_agent_prompt.md");
+const SUBAGENT_PROMPT_FALLBACK: &str = include_str!("../subagent_prompt.md");
+
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
 pub struct Codex {
     pub(crate) next_id: AtomicU64,
     pub(crate) tx_sub: Sender<Submission>,
     pub(crate) rx_event: Receiver<Event>,
+    pub(crate) conversation_id: ConversationId,
 }
 
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
@@ -153,6 +163,31 @@ pub struct CodexSpawnOk {
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 64;
 
+async fn load_agent_prompt_fallback(fallback: &str, override_filename: &str) -> Option<String> {
+    if let Ok(home) = crate::config::find_codex_home() {
+        let path = home.join(override_filename);
+        if let Ok(contents) = fs::read_to_string(&path).await {
+            let trimmed = contents.trim();
+            if !trimmed.is_empty() {
+                return Some(contents);
+            }
+        }
+    }
+    if fallback.trim().is_empty() {
+        None
+    } else {
+        Some(fallback.to_string())
+    }
+}
+
+async fn load_root_agent_prompt() -> Option<String> {
+    load_agent_prompt_fallback(ROOT_AGENT_PROMPT_FALLBACK, "AGENTS.root.md").await
+}
+
+async fn load_subagent_prompt() -> Option<String> {
+    load_agent_prompt_fallback(SUBAGENT_PROMPT_FALLBACK, "AGENTS.subagent.md").await
+}
+
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub async fn spawn(
@@ -160,6 +195,7 @@ impl Codex {
         auth_manager: Arc<AuthManager>,
         conversation_history: InitialHistory,
         session_source: SessionSource,
+        desired_conversation_id: Option<ConversationId>,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -170,6 +206,27 @@ impl Codex {
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to load execpolicy: {err}")))?;
 
+        // When subagent tooling is enabled, attach additional developer
+        // instructions that clarify the root vs subagent responsibilities.
+        // Exactly one of these prompts applies to a session:
+        // - Root sessions get `root_agent_prompt`.
+        // - Subagent sessions (spawned or forked) get `subagent_prompt`.
+        let role_prompt = if config.features.enabled(Feature::SubagentTools) {
+            if let SessionSource::SubAgent(_) = session_source {
+                load_subagent_prompt().await
+            } else {
+                load_root_agent_prompt().await
+            }
+        } else {
+            None
+        };
+
+        let developer_instructions = match (role_prompt, config.developer_instructions.clone()) {
+            (None, existing) => existing,
+            (Some(prompt), None) => Some(prompt),
+            (Some(prompt), Some(existing)) => Some(format!("{prompt}\n\n{existing}")),
+        };
+
         let config = Arc::new(config);
 
         let session_configuration = SessionConfiguration {
@@ -177,7 +234,7 @@ impl Codex {
             model: config.model.clone(),
             model_reasoning_effort: config.model_reasoning_effort,
             model_reasoning_summary: config.model_reasoning_summary,
-            developer_instructions: config.developer_instructions.clone(),
+            developer_instructions,
             user_instructions,
             base_instructions: config.base_instructions.clone(),
             compact_prompt: config.compact_prompt.clone(),
@@ -199,6 +256,7 @@ impl Codex {
             tx_event.clone(),
             conversation_history,
             session_source_clone,
+            desired_conversation_id,
         )
         .await
         .map_err(|e| {
@@ -213,12 +271,17 @@ impl Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
             rx_event,
+            conversation_id,
         };
 
         Ok(CodexSpawnOk {
             codex,
             conversation_id,
         })
+    }
+
+    pub fn conversation_id(&self) -> ConversationId {
+        self.conversation_id
     }
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
@@ -387,6 +450,22 @@ pub(crate) struct SessionSettingsUpdate {
 }
 
 impl Session {
+    pub(crate) fn conversation_id(&self) -> ConversationId {
+        self.conversation_id
+    }
+
+    pub(crate) async fn history_len(&self) -> usize {
+        let mut history = {
+            let state = self.state.lock().await;
+            state.clone_history()
+        };
+        history.get_history().len()
+    }
+
+    pub(crate) async fn has_active_turn(&self) -> bool {
+        self.active_turn.lock().await.is_some()
+    }
+
     fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
         otel_event_manager: &OtelEventManager,
@@ -455,6 +534,7 @@ impl Session {
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
         session_source: SessionSource,
+        desired_conversation_id: Option<ConversationId>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -469,7 +549,7 @@ impl Session {
 
         let (conversation_id, rollout_params) = match &initial_history {
             InitialHistory::New | InitialHistory::Forked(_) => {
-                let conversation_id = ConversationId::default();
+                let conversation_id = desired_conversation_id.unwrap_or_default();
                 (
                     conversation_id,
                     RolloutRecorderParams::new(
@@ -553,6 +633,15 @@ impl Session {
         // Create the mutable state for the Session.
         let state = SessionState::new(session_configuration.clone());
 
+        let subagent_registry = SubagentRegistry::new();
+        let subagent_manager = SubagentManager::new(
+            Arc::new(subagent_registry.clone()),
+            config.max_active_subagents,
+            config.root_agent_uses_user_messages,
+            config.subagent_root_inbox_autosubmit,
+            config.subagent_inbox_inject_before_tools,
+        );
+
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: CancellationToken::new(),
@@ -564,6 +653,8 @@ impl Session {
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager,
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            subagents: subagent_registry,
+            subagent_manager,
         };
 
         let sess = Arc::new(Session {
@@ -574,6 +665,9 @@ impl Session {
             services,
             next_internal_sub_id: AtomicU64::new(0),
         });
+
+        // Register this session so it can be discovered for fork-time subagent reparenting.
+        crate::session_index::register(conversation_id, &sess);
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
@@ -652,10 +746,13 @@ impl Session {
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
                 self.flush_rollout().await;
             }
-            InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
+            InitialHistory::Resumed(_) => {
                 let rollout_items = conversation_history.get_rollout_items();
-                let persist = matches!(conversation_history, InitialHistory::Forked(_));
-
+                // Rehydrate subagent registry from persisted lifecycle events so UI/list tools work after resume.
+                self.services
+                    .subagent_manager
+                    .import_from_rollout(&rollout_items, self.conversation_id)
+                    .await;
                 // If resuming, warn when the last recorded model differs from the current one.
                 if let InitialHistory::Resumed(_) = conversation_history
                     && let Some(prev) = rollout_items.iter().rev().find_map(|it| {
@@ -692,11 +789,34 @@ impl Session {
                         .await;
                 }
 
-                // If persisting, persist all rollout items as-is (recorder filters)
-                if persist && !rollout_items.is_empty() {
+                self.flush_rollout().await;
+            }
+            InitialHistory::Forked(_) => {
+                let rollout_items = conversation_history.get_rollout_items();
+
+                // Start from the parent rollout and then, for subagent
+                // sessions only, append a developer message carrying the
+                // subagent-specific prompt so the child can see it at the
+                // fork boundary.
+                let mut reconstructed_history =
+                    self.reconstruct_history_from_rollout(&turn_context, &rollout_items);
+
+                if let Some(dev) = turn_context.developer_instructions.as_deref()
+                    && !dev.trim().is_empty()
+                {
+                    let dev_item: ResponseItem = DeveloperInstructions::new(dev.to_string()).into();
+                    reconstructed_history.push(dev_item);
+                }
+
+                if !reconstructed_history.is_empty() {
+                    self.record_into_history(&reconstructed_history, &turn_context)
+                        .await;
+                }
+
+                if !rollout_items.is_empty() {
                     self.persist_rollout_items(&rollout_items).await;
                 }
-                // Flush after seeding history and any persisted rollout copy.
+
                 self.flush_rollout().await;
             }
         }
@@ -1339,6 +1459,12 @@ impl Session {
     async fn cancel_mcp_startup(&self) {
         self.services.mcp_startup_cancellation_token.cancel();
     }
+
+    pub(crate) fn root_inbox_autosubmit_enabled(&self) -> bool {
+        self.services
+            .subagent_manager
+            .root_inbox_autosubmit_enabled()
+    }
 }
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
@@ -1829,23 +1955,43 @@ async fn spawn_review_thread(
 /// - If the model sends only an assistant message, we record it in the
 ///   conversation history and consider the task complete.
 ///
+fn merge_turn_items_for_recording(
+    outputs_to_record: &[ResponseItem],
+    new_inputs_to_record: &[ResponseItem],
+    inbox_items: &[ResponseItem],
+    inject_before_tools: bool,
+) -> Vec<ResponseItem> {
+    let mut items = Vec::with_capacity(
+        outputs_to_record.len() + new_inputs_to_record.len() + inbox_items.len(),
+    );
+    items.extend(outputs_to_record.iter().cloned());
+    if inject_before_tools {
+        items.extend(inbox_items.iter().cloned());
+        items.extend(new_inputs_to_record.iter().cloned());
+    } else {
+        items.extend(new_inputs_to_record.iter().cloned());
+        items.extend(inbox_items.iter().cloned());
+    }
+    items
+}
+
 pub(crate) async fn run_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
+    record_user_input: bool,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
-    if input.is_empty() {
-        return None;
-    }
     let event = EventMsg::TaskStarted(TaskStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
     sess.send_event(&turn_context, event).await;
 
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    sess.record_input_and_rollout_usermsg(turn_context.as_ref(), &initial_input_for_turn)
-        .await;
+    if record_user_input && !input.is_empty() {
+        let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
+        sess.record_input_and_rollout_usermsg(turn_context.as_ref(), &initial_input_for_turn)
+            .await;
+    }
 
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
         .await;
@@ -1904,8 +2050,36 @@ pub(crate) async fn run_task(
                 let token_limit_reached = total_usage_tokens
                     .map(|tokens| tokens >= limit)
                     .unwrap_or(false);
-                let (responses, items_to_record_in_conversation_history) =
-                    process_items(processed_items, &sess, &turn_context).await;
+                let (responses, outputs_to_record, new_inputs_to_record) =
+                    process_items(processed_items).await;
+
+                // Drain the root agent inbox and synthesize subagent_await
+                // items at this safe stopping point. Only the root session has
+                // a root inbox; for subagent sessions this will be a no-op.
+                let inbox_items = sess
+                    .services
+                    .subagent_manager
+                    .drain_root_inbox_to_items(&sess.conversation_id())
+                    .await;
+                let had_inbox = !inbox_items.is_empty();
+
+                // Assemble the final list of items to record for this turn,
+                // respecting the configured injection order for inbox-derived
+                // synthetic subagent_await calls.
+                let items_to_record_in_conversation_history = merge_turn_items_for_recording(
+                    &outputs_to_record,
+                    &new_inputs_to_record,
+                    &inbox_items,
+                    sess.services.subagent_manager.inbox_inject_before_tools(),
+                );
+
+                if !items_to_record_in_conversation_history.is_empty() {
+                    sess.record_conversation_items(
+                        &turn_context,
+                        &items_to_record_in_conversation_history,
+                    )
+                    .await;
+                }
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached {
@@ -1919,6 +2093,15 @@ pub(crate) async fn run_task(
                 }
 
                 if responses.is_empty() {
+                    // Hard case: no tool calls to execute. If draining the
+                    // inbox produced new synthetic subagent_await items and
+                    // autosubmit is enabled, allow the model to react in a
+                    // follow-up turn by continuing the loop instead of
+                    // treating this as a terminal completion.
+                    if sess.root_inbox_autosubmit_enabled() && had_inbox {
+                        continue;
+                    }
+
                     last_agent_message = get_last_assistant_message_from_turn(
                         &items_to_record_in_conversation_history,
                     );
@@ -1937,7 +2120,18 @@ pub(crate) async fn run_task(
             Err(CodexErr::TurnAborted {
                 dangling_artifacts: processed_items,
             }) => {
-                let _ = process_items(processed_items, &sess, &turn_context).await;
+                let (_, outputs_to_record, new_inputs_to_record) =
+                    process_items(processed_items).await;
+                let mut items_to_record_in_conversation_history = Vec::new();
+                items_to_record_in_conversation_history.extend(outputs_to_record);
+                items_to_record_in_conversation_history.extend(new_inputs_to_record);
+                if !items_to_record_in_conversation_history.is_empty() {
+                    sess.record_conversation_items(
+                        &turn_context,
+                        &items_to_record_in_conversation_history,
+                    )
+                    .await;
+                }
                 // Aborted turn is reported via a different event.
                 break;
             }
@@ -2410,6 +2604,11 @@ mod tests {
     use std::time::Duration;
     use tokio::time::sleep;
 
+    use crate::subagents::AwaitInboxResult;
+    use crate::subagents::InboxMessage;
+    use crate::subagents::SubagentCompletion;
+    use crate::subagents::SubagentManager;
+    use crate::subagents::SubagentRegistry;
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
@@ -2459,6 +2658,66 @@ mod tests {
             session.state.lock().await.clone_history().get_history()
         });
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn forked_subagent_injects_subagent_developer_instructions() {
+        use codex_protocol::models::ContentItem;
+        use codex_protocol::models::ResponseItem as ProtocolResponseItem;
+        use codex_protocol::protocol::SubAgentSource;
+
+        // Start from a basic session and then mark it as a subagent session
+        // with explicit developer instructions that stand in for the
+        // subagent prompt.
+        let (session, _tc) = make_session_and_context();
+        tokio_test::block_on(async {
+            let mut state = session.state.lock().await;
+            state.session_configuration.session_source =
+                SessionSource::SubAgent(SubAgentSource::Other("child".to_string()));
+            state.session_configuration.developer_instructions =
+                Some("SUBAGENT_PROMPT".to_string());
+        });
+
+        // Build a minimal forked rollout containing a single user message
+        // from the parent.
+        let parent_msg = ProtocolResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "parent-msg".to_string(),
+            }],
+        };
+        let rollout_items = vec![RolloutItem::ResponseItem(parent_msg)];
+
+        // Seed the forked history; for subagent sessions this should append a
+        // developer message carrying the subagent prompt after the parent
+        // transcript.
+        tokio_test::block_on(session.record_initial_history(InitialHistory::Forked(rollout_items)));
+
+        let history = tokio_test::block_on(async {
+            session.state.lock().await.clone_history().get_history()
+        });
+
+        // Parent message should still be present.
+        assert!(history.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { role, content, .. }
+                if role == "user" && content.iter().any(|c| matches!(
+                    c,
+                    ContentItem::InputText { text } if text == "parent-msg"
+                ))
+        )));
+
+        // Subagent developer instructions should be appended as a `developer`
+        // role message containing the configured prompt text.
+        assert!(history.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { role, content, .. }
+                if role == "developer" && content.iter().any(|c| matches!(
+                    c,
+                    ContentItem::InputText { text } if text == "SUBAGENT_PROMPT"
+                ))
+        )));
     }
 
     #[test]
@@ -2621,6 +2880,15 @@ mod tests {
 
         let state = SessionState::new(session_configuration.clone());
 
+        let subagent_registry = SubagentRegistry::new();
+        let subagent_manager = SubagentManager::new(
+            Arc::new(subagent_registry.clone()),
+            config.max_active_subagents,
+            config.root_agent_uses_user_messages,
+            config.subagent_root_inbox_autosubmit,
+            config.subagent_inbox_inject_before_tools,
+        );
+
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: CancellationToken::new(),
@@ -2632,6 +2900,8 @@ mod tests {
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            subagents: subagent_registry,
+            subagent_manager,
         };
 
         let turn_context = Session::make_turn_context(
@@ -2699,6 +2969,15 @@ mod tests {
 
         let state = SessionState::new(session_configuration.clone());
 
+        let subagent_registry = SubagentRegistry::new();
+        let subagent_manager = SubagentManager::new(
+            Arc::new(subagent_registry.clone()),
+            config.max_active_subagents,
+            config.root_agent_uses_user_messages,
+            config.subagent_root_inbox_autosubmit,
+            config.subagent_inbox_inject_before_tools,
+        );
+
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: CancellationToken::new(),
@@ -2710,6 +2989,8 @@ mod tests {
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            subagents: subagent_registry,
+            subagent_manager,
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
@@ -2731,6 +3012,195 @@ mod tests {
         });
 
         (session, turn_context, rx_event)
+    }
+
+    #[tokio::test]
+    async fn subagent_inbox_tool_only_mode_injects_await_into_parent_and_child() {
+        // Build parent and child sessions and register them so the
+        // SubagentManager can look them up via session_index.
+        let (parent_session_raw, _tc_parent) = make_session_and_context();
+        let parent_session = Arc::new(parent_session_raw);
+        let (child_session_raw, _tc_child) = make_session_and_context();
+        let child_session = Arc::new(child_session_raw);
+
+        crate::session_index::register(parent_session.conversation_id(), &parent_session);
+        crate::session_index::register(child_session.conversation_id(), &child_session);
+
+        // Independent registry/manager used only for this test so we can
+        // construct metadata and an AwaitInboxResult by hand.
+        let registry = Arc::new(SubagentRegistry::new());
+        let manager = SubagentManager::new(Arc::clone(&registry), 4, false, false, false);
+
+        let agent_id = 1;
+        let initial_message_count = 0;
+        let metadata = registry
+            .register_spawn(
+                child_session.conversation_id(),
+                Some(parent_session.conversation_id()),
+                Some(agent_id),
+                agent_id,
+                initial_message_count,
+                Some("child".to_string()),
+                None,
+            )
+            .await;
+
+        let messages = vec![InboxMessage {
+            sender_agent_id: 0,
+            recipient_agent_id: agent_id,
+            interrupt: false,
+            prompt: Some("hello child".to_string()),
+            timestamp_ms: 1_000,
+        }];
+
+        let await_result = AwaitInboxResult {
+            metadata,
+            completion: Some(SubagentCompletion::Completed {
+                last_message: Some("done".to_string()),
+            }),
+            messages,
+        };
+
+        manager
+            .deliver_inbox_to_threads_at_yield(&await_result)
+            .await;
+
+        // Child history should contain a synthetic subagent_await call in
+        // tool-only mode.
+        let child_history = child_session.clone_history().await.get_history();
+        assert!(child_history.iter().any(|item| matches!(
+            item,
+            ResponseItem::FunctionCall { name, .. } if name == "subagent_await"
+        )));
+
+        // And the user-visible payload should include the original prompt.
+        assert!(child_history.iter().any(|item| match item {
+            ResponseItem::FunctionCallOutput { output, .. } => {
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&output.content) else {
+                    return false;
+                };
+                value["messages"]
+                    .as_array()
+                    .is_some_and(|msgs| msgs.iter().any(|m| m["prompt"] == "hello child"))
+            }
+            _ => false,
+        }));
+    }
+
+    #[tokio::test]
+    async fn subagent_inbox_root_messages_become_user_turns_when_toggle_enabled() {
+        use codex_protocol::models::ContentItem;
+
+        let (parent_session_raw, _tc_parent) = make_session_and_context();
+        let parent_session = Arc::new(parent_session_raw);
+        let (child_session_raw, _tc_child) = make_session_and_context();
+        let child_session = Arc::new(child_session_raw);
+
+        crate::session_index::register(parent_session.conversation_id(), &parent_session);
+        crate::session_index::register(child_session.conversation_id(), &child_session);
+
+        let registry = Arc::new(SubagentRegistry::new());
+        let manager = SubagentManager::new(Arc::clone(&registry), 4, true, false, false);
+
+        let agent_id = 1;
+        let initial_message_count = 0;
+        let metadata = registry
+            .register_spawn(
+                child_session.conversation_id(),
+                Some(parent_session.conversation_id()),
+                Some(agent_id),
+                agent_id,
+                initial_message_count,
+                Some("child".to_string()),
+                None,
+            )
+            .await;
+
+        let messages = vec![InboxMessage {
+            sender_agent_id: 0,
+            recipient_agent_id: agent_id,
+            interrupt: false,
+            prompt: Some("hello child".to_string()),
+            timestamp_ms: 1_000,
+        }];
+
+        let await_result = AwaitInboxResult {
+            metadata,
+            completion: Some(SubagentCompletion::Completed {
+                last_message: Some("done".to_string()),
+            }),
+            messages,
+        };
+
+        manager
+            .deliver_inbox_to_threads_at_yield(&await_result)
+            .await;
+
+        // In toggle-on mode, the child should still see a synthetic
+        // subagent_await reflecting completion, even when the only inbox
+        // messages came from the root.
+        let child_history = child_session.clone_history().await.get_history();
+        assert!(child_history.iter().any(|item| matches!(
+            item,
+            ResponseItem::FunctionCall { name, .. } if name == "subagent_await"
+        )));
+
+        // Instead, the root-origin prompt should appear as a user message.
+        assert!(child_history.iter().any(|item| match item {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                content.iter().any(|c| match c {
+                    ContentItem::InputText { text } => text == "hello child",
+                    _ => false,
+                })
+            }
+            _ => false,
+        }));
+    }
+
+    #[tokio::test]
+    async fn subagent_completion_without_messages_surfaces_await_to_parent_and_child() {
+        let (parent_session_raw, _tc_parent) = make_session_and_context();
+        let parent_session = Arc::new(parent_session_raw);
+        let (child_session_raw, _tc_child) = make_session_and_context();
+        let child_session = Arc::new(child_session_raw);
+
+        crate::session_index::register(parent_session.conversation_id(), &parent_session);
+        crate::session_index::register(child_session.conversation_id(), &child_session);
+
+        let registry = Arc::new(SubagentRegistry::new());
+        let manager = SubagentManager::new(Arc::clone(&registry), 4, false, false, false);
+
+        let agent_id = 1;
+        let initial_message_count = 0;
+        let metadata = registry
+            .register_spawn(
+                child_session.conversation_id(),
+                Some(parent_session.conversation_id()),
+                Some(agent_id),
+                agent_id,
+                initial_message_count,
+                Some("child".to_string()),
+                None,
+            )
+            .await;
+
+        let await_result = AwaitInboxResult {
+            metadata,
+            completion: Some(SubagentCompletion::Completed {
+                last_message: Some("done".to_string()),
+            }),
+            messages: Vec::new(),
+        };
+
+        manager
+            .deliver_inbox_to_threads_at_yield(&await_result)
+            .await;
+
+        let child_history = child_session.clone_history().await.get_history();
+        assert!(child_history.iter().any(|item| matches!(
+            item,
+            ResponseItem::FunctionCall { name, .. } if name == "subagent_await"
+        )));
     }
 
     #[derive(Clone, Copy)]
@@ -3208,5 +3678,91 @@ mod tests {
         );
 
         pretty_assertions::assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn merge_turn_items_orders_inbox_after_tools_by_default() {
+        let outputs = vec![ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "tool-output".to_string(),
+            }],
+        }];
+        let new_inputs = vec![ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload {
+                content: "tool-response".to_string(),
+                ..Default::default()
+            },
+        }];
+        let inbox = vec![ResponseItem::FunctionCall {
+            id: None,
+            name: "subagent_await".to_string(),
+            arguments: "{}".to_string(),
+            call_id: "await-1".to_string(),
+        }];
+
+        let merged = merge_turn_items_for_recording(&outputs, &new_inputs, &inbox, false);
+
+        assert_eq!(merged.len(), 3);
+        // outputs_to_record first
+        assert!(matches!(
+            &merged[0],
+            ResponseItem::Message { role, .. } if role == "assistant"
+        ));
+        // new_inputs_to_record next
+        assert!(matches!(
+            &merged[1],
+            ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "call-1"
+        ));
+        // inbox-derived synthetic await last
+        assert!(matches!(
+            &merged[2],
+            ResponseItem::FunctionCall { name, .. } if name == "subagent_await"
+        ));
+    }
+
+    #[test]
+    fn merge_turn_items_orders_inbox_before_tools_when_configured() {
+        let outputs = vec![ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "tool-output".to_string(),
+            }],
+        }];
+        let new_inputs = vec![ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload {
+                content: "tool-response".to_string(),
+                ..Default::default()
+            },
+        }];
+        let inbox = vec![ResponseItem::FunctionCall {
+            id: None,
+            name: "subagent_await".to_string(),
+            arguments: "{}".to_string(),
+            call_id: "await-1".to_string(),
+        }];
+
+        let merged = merge_turn_items_for_recording(&outputs, &new_inputs, &inbox, true);
+
+        assert_eq!(merged.len(), 3);
+        // outputs_to_record first
+        assert!(matches!(
+            &merged[0],
+            ResponseItem::Message { role, .. } if role == "assistant"
+        ));
+        // inbox-derived synthetic await next
+        assert!(matches!(
+            &merged[1],
+            ResponseItem::FunctionCall { name, .. } if name == "subagent_await"
+        ));
+        // new_inputs_to_record last
+        assert!(matches!(
+            &merged[2],
+            ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "call-1"
+        ));
     }
 }

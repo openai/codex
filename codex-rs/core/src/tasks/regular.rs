@@ -28,6 +28,6 @@ impl SessionTask for RegularTask {
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         let sess = session.clone_session();
-        run_task(sess, ctx, input, cancellation_token).await
+        run_task(sess, ctx, input, true, cancellation_token).await
     }
 }

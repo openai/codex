@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicU64;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_async_utils::OrCancelExt;
+use codex_protocol::ConversationId;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -30,13 +31,16 @@ use codex_protocol::protocol::InitialHistory;
 /// The returned `events_rx` yields non-approval events emitted by the sub-agent.
 /// Approval requests are handled via `parent_session` and are not surfaced.
 /// The returned `ops_tx` allows the caller to submit additional `Op`s to the sub-agent.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_codex_conversation_interactive(
     config: Config,
     auth_manager: Arc<AuthManager>,
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
+    desired_conversation_id: Option<ConversationId>,
     initial_history: Option<InitialHistory>,
+    source: SubAgentSource,
 ) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -45,7 +49,8 @@ pub(crate) async fn run_codex_conversation_interactive(
         config,
         auth_manager,
         initial_history.unwrap_or(InitialHistory::New),
-        SessionSource::SubAgent(SubAgentSource::Review),
+        SessionSource::SubAgent(source),
+        desired_conversation_id,
     )
     .await?;
     let codex = Arc::new(codex);
@@ -81,6 +86,7 @@ pub(crate) async fn run_codex_conversation_interactive(
         next_id: AtomicU64::new(0),
         tx_sub: tx_ops,
         rx_event: rx_sub,
+        conversation_id: codex.conversation_id(),
     })
 }
 
@@ -105,13 +111,16 @@ pub(crate) async fn run_codex_conversation_one_shot(
         parent_session,
         parent_ctx,
         child_cancel.clone(),
+        None,
         initial_history,
+        SubAgentSource::Review,
     )
     .await?;
 
     // Send the initial input to kick off the one-shot turn.
     io.submit(Op::UserInput { items: input }).await?;
 
+    let conversation_id = io.conversation_id();
     // Bridge events so we can observe completion and shut down automatically.
     let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let ops_tx = io.tx_sub.clone();
@@ -146,6 +155,7 @@ pub(crate) async fn run_codex_conversation_one_shot(
         next_id: AtomicU64::new(0),
         rx_event: rx_bridge,
         tx_sub: tx_closed,
+        conversation_id,
     })
 }
 

@@ -3,6 +3,9 @@ use std::time::Instant;
 use super::model::CommandOutput;
 use super::model::ExecCall;
 use super::model::ExecCell;
+use super::model::SubagentCell;
+use super::model::parse_subagent_call;
+use super::model::subagent_from_formatted_output;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::HistoryCell;
 use crate::render::highlight::highlight_bash_to_lines;
@@ -27,6 +30,32 @@ pub(crate) const TOOL_CALL_MAX_LINES: usize = 5;
 const USER_SHELL_TOOL_CALL_MAX_LINES: usize = 50;
 const MAX_INTERACTION_PREVIEW_CHARS: usize = 80;
 
+fn header_parts(cell: &SubagentCell) -> Option<(String, Option<String>)> {
+    match cell {
+        SubagentCell::Fork { label, .. } => Some(("Forked subagent".into(), Some(label.clone()))),
+        SubagentCell::Spawn { label, .. } => Some(("Spawned subagent".into(), Some(label.clone()))),
+        SubagentCell::SendMessage { label, .. } => {
+            Some(("Sent message to subagent".into(), Some(label.clone())))
+        }
+        SubagentCell::Await { label, .. } => Some(("Awaited subagent".into(), label.clone())),
+        SubagentCell::Prune { .. } => Some(("Pruned subagents".into(), None)),
+        SubagentCell::Logs { label, .. } => Some((
+            "Fetched subagent logs".into(),
+            label.as_ref().map(|l| format!("from {l}")),
+        )),
+        SubagentCell::List { .. } => Some(("Listed subagents".into(), None)),
+        SubagentCell::Watchdog { action, .. } => {
+            Some(("Watchdog".into(), action.as_ref().map(|a| a.to_string())))
+        }
+        SubagentCell::Cancel { label } => Some(("Canceled subagent".into(), label.clone())),
+        SubagentCell::Raw { .. } => None,
+    }
+}
+
+fn subagent_header_parts(command: &[String]) -> Option<(String, Option<String>)> {
+    parse_subagent_call(command).as_ref().and_then(header_parts)
+}
+
 pub(crate) struct OutputLinesParams {
     pub(crate) line_limit: usize,
     pub(crate) only_err: bool,
@@ -38,17 +67,22 @@ pub(crate) fn new_active_exec_command(
     call_id: String,
     command: Vec<String>,
     parsed: Vec<ParsedCommand>,
+    subagent: Option<SubagentCell>,
     source: ExecCommandSource,
     interaction_input: Option<String>,
     animations_enabled: bool,
+    is_user_shell_command: bool,
 ) -> ExecCell {
+    let subagent = subagent.or_else(|| parse_subagent_call(&command));
     ExecCell::new(
         ExecCall {
             call_id,
             command,
             parsed,
+            subagent,
             output: None,
             source,
+            is_user_shell_command,
             start_time: Some(Instant::now()),
             duration: None,
             interaction_input,
@@ -192,6 +226,8 @@ impl HistoryCell for ExecCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         if self.is_exploring_cell() {
             self.exploring_display_lines(width)
+        } else if self.is_subagent_cell() {
+            self.subagent_display_lines(width)
         } else {
             self.command_display_lines(width)
         }
@@ -343,6 +379,143 @@ impl ExecCell {
 
         out.extend(prefix_lines(out_indented, "  └ ".dim(), "    ".into()));
         out
+    }
+
+    fn subagent_display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let [call] = &self.calls.as_slice() else {
+            panic!("Expected exactly one call in a subagent display cell");
+        };
+        let bullet = if let Some(output) = &call.output {
+            if output.exit_code == 0 {
+                "•".green().bold()
+            } else {
+                "•".red().bold()
+            }
+        } else {
+            spinner(call.start_time, self.animations_enabled())
+        };
+
+        let render = call
+            .output
+            .as_ref()
+            .and_then(|o| subagent_from_formatted_output(&o.formatted_output))
+            .or_else(|| call.subagent.clone())
+            .or_else(|| {
+                subagent_header_parts(&call.command).map(|(verb, rest)| SubagentCell::Raw {
+                    text: format!(
+                        "{}{}",
+                        verb,
+                        rest.map(|r| format!(" {r}")).unwrap_or_default()
+                    ),
+                })
+            });
+
+        let Some((verb, rest)) = render.as_ref().and_then(header_parts) else {
+            return vec![Line::from(vec![bullet, " ".into(), "Subagent".bold()])];
+        };
+
+        let mut header: Vec<Span<'static>> = vec![bullet, " ".into(), verb.bold()];
+        if let Some(rest) = rest
+            && !rest.is_empty()
+        {
+            header.push(" ".into());
+            header.push(rest.into());
+        }
+
+        let mut lines = vec![Line::from(header)];
+
+        if let Some(render) = render {
+            let mut body_lines: Vec<Line<'static>> = Vec::new();
+            match render {
+                SubagentCell::Spawn { model, summary, .. }
+                | SubagentCell::Fork { model, summary, .. } => {
+                    if let Some(m) = model {
+                        body_lines.push(Line::from(vec![format!("model={m}").into()]));
+                    }
+                    if let Some(s) = summary {
+                        body_lines.push(Line::from(vec![format!("\"{s}\"").into()]));
+                    }
+                }
+                SubagentCell::SendMessage { summary, .. } => {
+                    if let Some(s) = summary {
+                        body_lines.push(Line::from(vec![format!("\"{s}\"").into()]));
+                    }
+                }
+                SubagentCell::List { count } => {
+                    if let Some(count) = count {
+                        body_lines
+                            .push(Line::from(vec![format!("listed {count} subagents").into()]));
+                    }
+                }
+                SubagentCell::Await {
+                    timed_out,
+                    message,
+                    lifecycle_status,
+                    ..
+                } => {
+                    if timed_out.unwrap_or(false) {
+                        body_lines.push(Line::from("Timed out"));
+                    } else if let Some(msg) = message {
+                        body_lines.push(Line::from(msg));
+                    } else if let Some(status) = lifecycle_status {
+                        body_lines.push(Line::from(vec![format!("status={status}").into()]));
+                    }
+                }
+                SubagentCell::Cancel { .. } => {}
+                SubagentCell::Prune { counts } => {
+                    if let Some(counts) = counts {
+                        body_lines.push(Line::from(vec![
+                            format!("pruned subagents {counts}").into(),
+                        ]));
+                    }
+                }
+                SubagentCell::Logs { rendered, .. } => {
+                    if let Some(rendered) = rendered {
+                        for l in rendered.lines() {
+                            body_lines.push(Line::from(l.to_string()));
+                        }
+                    }
+                }
+                SubagentCell::Watchdog {
+                    action,
+                    interval_s,
+                    message,
+                } => {
+                    if let Some(a) = action {
+                        body_lines.push(Line::from(vec![format!("action={a}").into()]));
+                    }
+                    if let Some(i) = interval_s {
+                        body_lines.push(Line::from(vec![format!("interval={i}s").into()]));
+                    }
+                    if let Some(msg) = message {
+                        body_lines.push(Line::from(vec![format!("\"{msg}\"").into()]));
+                    }
+                }
+                SubagentCell::Raw { text } => {
+                    body_lines.push(Line::from(text));
+                }
+            }
+
+            if !body_lines.is_empty() {
+                lines.extend(prefix_lines(body_lines, "  └ ".dim(), "    ".into()));
+            }
+        } else if let Some(output) = call.output.as_ref() {
+            let OutputLines {
+                lines: out_lines, ..
+            } = output_lines(
+                Some(output),
+                OutputLinesParams {
+                    line_limit: USER_SHELL_TOOL_CALL_MAX_LINES,
+                    only_err: false,
+                    include_angle_pipe: false,
+                    include_prefix: false,
+                },
+            );
+            let prefixed = prefix_lines(out_lines, "  └ ".dim(), "    ".into());
+            lines.extend(prefixed);
+        }
+
+        lines
     }
 
     fn command_display_lines(&self, width: u16) -> Vec<Line<'static>> {

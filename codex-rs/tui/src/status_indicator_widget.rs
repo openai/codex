@@ -28,6 +28,7 @@ pub(crate) struct StatusIndicatorWidget {
     elapsed_running: Duration,
     last_resume_at: Instant,
     is_paused: bool,
+    subagent_count: usize,
     app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
     animations_enabled: bool,
@@ -62,6 +63,7 @@ impl StatusIndicatorWidget {
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
             is_paused: false,
+            subagent_count: 0,
 
             app_event_tx,
             frame_requester,
@@ -85,6 +87,14 @@ impl StatusIndicatorWidget {
 
     pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
         self.show_interrupt_hint = visible;
+    }
+
+    pub(crate) fn set_subagent_count(&mut self, count: usize) {
+        if self.subagent_count == count {
+            return;
+        }
+        self.subagent_count = count;
+        self.frame_requester.schedule_frame();
     }
 
     #[cfg(test)]
@@ -160,17 +170,31 @@ impl Renderable for StatusIndicatorWidget {
             spans.push(self.header.clone().into());
         }
         spans.push(" ".into());
+        let mut status_parts = vec![pretty_elapsed];
+        if self.subagent_count > 0 {
+            status_parts.push(format_subagent_count(self.subagent_count));
+        }
+        let base_status = status_parts.join(" • ");
         if self.show_interrupt_hint {
-            spans.extend(vec![
-                format!("({pretty_elapsed} • ").dim(),
-                key_hint::plain(KeyCode::Esc).into(),
-                " to interrupt)".dim(),
-            ]);
+            let mut prefix = format!("({base_status}");
+            prefix.push_str(" • ");
+            spans.push(prefix.dim());
+            spans.push(key_hint::plain(KeyCode::Esc).into());
+            spans.push(" to interrupt)".dim());
         } else {
-            spans.push(format!("({pretty_elapsed})").dim());
+            let status_text = format!("({base_status})");
+            spans.push(status_text.dim());
         }
 
         Line::from(spans).render_ref(area, buf);
+    }
+}
+
+fn format_subagent_count(count: usize) -> String {
+    if count == 1 {
+        "1 subagent".to_string()
+    } else {
+        format!("{count} subagents")
     }
 }
 
@@ -181,6 +205,8 @@ mod tests {
     use crate::app_event_sender::AppEventSender;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
     use std::time::Duration;
     use std::time::Instant;
     use tokio::sync::mpsc::unbounded_channel;
@@ -227,6 +253,37 @@ mod tests {
             .draw(|f| w.render(f.area(), f.buffer_mut()))
             .expect("draw");
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn renders_with_subagent_count() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
+        w.set_subagent_count(3);
+
+        let area = Rect::new(0, 0, 80, 1);
+        let mut buf = Buffer::empty(area);
+        w.render(area, &mut buf);
+        let mut row = String::new();
+        for x in 0..area.width {
+            row.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
+        }
+        assert!(
+            row.contains("3 subagents"),
+            "count should show even when interrupt hint is visible: {row}"
+        );
+
+        w.set_interrupt_hint_visible(false);
+        w.render(area, &mut buf);
+        row.clear();
+        for x in 0..area.width {
+            row.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
+        }
+        assert!(
+            row.contains("3 subagents"),
+            "expected count when no interrupt hint: {row}"
+        );
     }
 
     #[test]

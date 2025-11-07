@@ -18,14 +18,19 @@ use tracing::warn;
 
 use crate::AuthManager;
 use crate::codex::Session;
+use crate::codex::SessionSettingsUpdate;
 use crate::codex::TurnContext;
+use crate::parse_turn_item;
 use crate::protocol::EventMsg;
+use crate::protocol::ItemCompletedEvent;
+use crate::protocol::ItemStartedEvent;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 
 pub(crate) use compact::CompactTask;
@@ -150,6 +155,61 @@ impl Session {
         self.register_new_active_task(running_task).await;
     }
 
+    /// Start a new model turn driven by inbox-derived items (e.g.,
+    /// synthetic `subagent_await` call/output pairs) without fabricating
+    /// additional user text. The model will see the updated history and
+    /// continue from there.
+    pub async fn autosubmit_inbox_task(self: &Arc<Self>, items: Vec<ResponseItem>) {
+        if items.is_empty() {
+            return;
+        }
+
+        let turn_context = self.new_turn(SessionSettingsUpdate::default()).await;
+
+        // Emit started/completed events for synthetic tool calls so UIs render them.
+        for item in &items {
+            if let Some(turn_item) = parse_turn_item(item) {
+                match item {
+                    ResponseItem::FunctionCall { .. } => {
+                        self.send_event(
+                            turn_context.as_ref(),
+                            EventMsg::ItemStarted(ItemStartedEvent {
+                                thread_id: self.conversation_id(),
+                                turn_id: turn_context.sub_id.clone(),
+                                item: turn_item.clone(),
+                            }),
+                        )
+                        .await;
+                    }
+                    ResponseItem::FunctionCallOutput { .. } => {
+                        self.send_event(
+                            turn_context.as_ref(),
+                            EventMsg::ItemCompleted(ItemCompletedEvent {
+                                thread_id: self.conversation_id(),
+                                turn_id: turn_context.sub_id.clone(),
+                                item: turn_item.clone(),
+                            }),
+                        )
+                        .await;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        self.record_conversation_items(&turn_context, &items).await;
+
+        // Kick off a RegularTask with no additional user input; `run_task`
+        // will treat this as an assistant-only turn based on existing
+        // history plus the inbox-derived items.
+        self.spawn_task(
+            Arc::clone(&turn_context),
+            Vec::new(),
+            crate::tasks::RegularTask,
+        )
+        .await;
+    }
+
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
         for task in self.take_all_running_tasks().await {
             self.handle_task_abort(task, reason.clone()).await;
@@ -168,6 +228,7 @@ impl Session {
             *active = None;
         }
         drop(active);
+
         let event = EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message });
         self.send_event(turn_context.as_ref(), event).await;
     }

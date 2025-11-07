@@ -91,6 +91,9 @@ pub struct Cli {
 pub enum Command {
     /// Resume a previous session by id or pick the most recent with --last.
     Resume(ResumeArgs),
+
+    /// Fork an existing session into a new branch and immediately run a prompt.
+    Fork(ForkArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -105,6 +108,17 @@ pub struct ResumeArgs {
     pub last: bool,
 
     /// Prompt to send after resuming the session. If `-` is used, read from stdin.
+    #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
+    pub prompt: Option<String>,
+}
+
+#[derive(Parser, Debug)]
+pub struct ForkArgs {
+    /// Session id (UUID) to fork into a new branch.
+    #[arg(value_name = "SESSION_ID")]
+    pub session_id: String,
+
+    /// Prompt to send after forking. If `-` is used, read from stdin.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
     pub prompt: Option<String>,
 }

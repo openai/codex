@@ -12,11 +12,14 @@ use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use codex_core::config::OPENAI_DEFAULT_MODEL;
+use codex_core::protocol::AgentInboxEvent;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -36,6 +39,14 @@ use codex_core::protocol::ReviewLineRange;
 use codex_core::protocol::ReviewOutputEvent;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
+use codex_core::protocol::SubagentCreatedEvent;
+use codex_core::protocol::SubagentLifecycleEvent;
+use codex_core::protocol::SubagentLifecycleOrigin;
+use codex_core::protocol::SubagentLifecycleStatus;
+use codex_core::protocol::SubagentReasoningHeaderEvent;
+use codex_core::protocol::SubagentRemovedEvent;
+use codex_core::protocol::SubagentStatusEvent;
+use codex_core::protocol::SubagentSummary;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
 use codex_core::protocol::TokenCountEvent;
@@ -56,6 +67,9 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
+use std::fs::File;
+use std::io::BufRead;
+use std::io::BufReader;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use tempfile::tempdir;
@@ -75,6 +89,39 @@ fn test_config() -> Config {
         std::env::temp_dir(),
     )
     .expect("config")
+}
+
+// Backward-compat shim for older session logs that predate the
+// `formatted_output` field on ExecCommandEnd events.
+fn upgrade_event_payload_for_tests(mut payload: serde_json::Value) -> serde_json::Value {
+    if let Some(obj) = payload.as_object_mut()
+        && let Some(msg) = obj.get_mut("msg")
+        && let Some(m) = msg.as_object_mut()
+    {
+        let ty = m.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if ty == "exec_command_end" {
+            let stdout = m.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+            let stderr = m.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+            let aggregated = if stderr.is_empty() {
+                stdout.to_string()
+            } else {
+                format!("{stdout}{stderr}")
+            };
+            if !m.contains_key("formatted_output") {
+                m.insert(
+                    "formatted_output".to_string(),
+                    serde_json::Value::String(aggregated.clone()),
+                );
+            }
+            if !m.contains_key("aggregated_output") {
+                m.insert(
+                    "aggregated_output".to_string(),
+                    serde_json::Value::String(aggregated),
+                );
+            }
+        }
+    }
+    payload
 }
 
 fn snapshot(percent: f64) -> RateLimitSnapshot {
@@ -369,6 +416,7 @@ fn make_chatwidget_manual() -> (
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
+        subagent_states: HashMap::new(),
         suppress_session_configured_redraw: false,
         pending_notification: None,
         is_review_mode: false,
@@ -724,6 +772,7 @@ fn begin_exec_with_source(
         cwd,
         parsed_cmd,
         source,
+        is_user_shell_command: false,
         interaction_input,
     };
     chat.handle_codex_event(Event {
@@ -757,6 +806,7 @@ fn end_exec(
         parsed_cmd,
         source,
         interaction_input,
+        ..
     } = begin_event;
     chat.handle_codex_event(Event {
         id: call_id.clone(),
@@ -785,6 +835,30 @@ fn active_blob(chat: &ChatWidget) -> String {
         .expect("active cell present")
         .display_lines(80);
     lines_to_single_string(&lines)
+}
+
+fn open_fixture(name: &str) -> File {
+    // 1) Prefer fixtures within this crate
+    {
+        let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        p.push("tests");
+        p.push("fixtures");
+        p.push(name);
+        if let Ok(f) = File::open(&p) {
+            return f;
+        }
+    }
+    // 2) Fallback to parent (workspace root)
+    {
+        let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        p.push("..");
+        p.push(name);
+        if let Ok(f) = File::open(&p) {
+            return f;
+        }
+    }
+    // 3) Last resort: CWD
+    File::open(name).expect("open fixture file")
 }
 
 #[test]
@@ -967,6 +1041,175 @@ fn exec_history_cell_shows_working_then_completed() {
 }
 
 #[test]
+fn subagent_lifecycle_updates_bottom_pane() {
+    let (mut chat, mut _rx, _ops) = make_chatwidget_manual();
+    let parent_id = ConversationId::new();
+    chat.conversation_id = Some(parent_id);
+    chat.on_task_started();
+
+    let child_id = ConversationId::new();
+    let summary = SubagentSummary {
+        agent_id: 1,
+        parent_agent_id: Some(0),
+        session_id: child_id,
+        parent_session_id: Some(parent_id),
+        origin: SubagentLifecycleOrigin::Fork,
+        status: SubagentLifecycleStatus::Running,
+        label: Some("Docs sweep".to_string()),
+        summary: Some("Rewrite md files".to_string()),
+        reasoning_header: None,
+        started_at_ms: 42,
+        pending_messages: 0,
+        pending_interrupts: 0,
+    };
+
+    chat.dispatch_event_msg(
+        Some("created".into()),
+        EventMsg::SubagentLifecycle(SubagentLifecycleEvent::Created(SubagentCreatedEvent {
+            subagent: summary,
+        })),
+        false,
+    );
+
+    assert_eq!(chat.bottom_pane.subagent_count(), 1);
+    assert_eq!(chat.bottom_pane.subagent_entries().len(), 2);
+
+    chat.dispatch_event_msg(
+        Some("header".into()),
+        EventMsg::SubagentLifecycle(SubagentLifecycleEvent::ReasoningHeader(
+            SubagentReasoningHeaderEvent {
+                agent_id: 1,
+                session_id: child_id,
+                reasoning_header: "Scanning tests".to_string(),
+            },
+        )),
+        false,
+    );
+    let entries = chat.bottom_pane.subagent_entries();
+    assert_eq!(entries[1].detail.as_deref(), Some("Scanning tests"));
+
+    chat.dispatch_event_msg(
+        Some("status".into()),
+        EventMsg::SubagentLifecycle(SubagentLifecycleEvent::Status(SubagentStatusEvent {
+            agent_id: 1,
+            session_id: child_id,
+            status: SubagentLifecycleStatus::Idle,
+        })),
+        false,
+    );
+    assert_eq!(chat.bottom_pane.subagent_count(), 0);
+
+    chat.dispatch_event_msg(
+        Some("deleted".into()),
+        EventMsg::SubagentLifecycle(SubagentLifecycleEvent::Deleted(SubagentRemovedEvent {
+            agent_id: 1,
+            session_id: child_id,
+        })),
+        false,
+    );
+    assert!(chat.bottom_pane.subagent_entries().is_empty());
+}
+
+#[test]
+fn replayed_subagent_events_are_ignored() {
+    let (mut chat, mut _rx, _ops) = make_chatwidget_manual();
+    let parent_id = ConversationId::new();
+    chat.conversation_id = Some(parent_id);
+
+    let child_id = ConversationId::new();
+    let summary = SubagentSummary {
+        agent_id: 1,
+        parent_agent_id: Some(0),
+        session_id: child_id,
+        parent_session_id: Some(parent_id),
+        origin: SubagentLifecycleOrigin::Spawn,
+        status: SubagentLifecycleStatus::Running,
+        label: None,
+        summary: None,
+        reasoning_header: None,
+        started_at_ms: 100,
+        pending_messages: 0,
+        pending_interrupts: 0,
+    };
+
+    chat.dispatch_event_msg(
+        None,
+        EventMsg::SubagentLifecycle(SubagentLifecycleEvent::Created(SubagentCreatedEvent {
+            subagent: summary,
+        })),
+        true,
+    );
+
+    assert!(chat.bottom_pane.subagent_entries().is_empty());
+    assert_eq!(chat.bottom_pane.subagent_count(), 0);
+}
+
+#[test]
+fn agent_inbox_updates_pending_counts() {
+    let (mut chat, mut _rx, _ops) = make_chatwidget_manual();
+    let parent_id = ConversationId::new();
+    chat.conversation_id = Some(parent_id);
+
+    let child_id = ConversationId::new();
+    let summary = SubagentSummary {
+        agent_id: 1,
+        parent_agent_id: Some(0),
+        session_id: child_id,
+        parent_session_id: Some(parent_id),
+        origin: SubagentLifecycleOrigin::Spawn,
+        status: SubagentLifecycleStatus::Running,
+        label: Some("Docs sweep".to_string()),
+        summary: None,
+        reasoning_header: None,
+        started_at_ms: 100,
+        pending_messages: 0,
+        pending_interrupts: 0,
+    };
+
+    chat.dispatch_event_msg(
+        None,
+        EventMsg::SubagentLifecycle(SubagentLifecycleEvent::Created(SubagentCreatedEvent {
+            subagent: summary,
+        })),
+        false,
+    );
+
+    chat.dispatch_event_msg(
+        None,
+        EventMsg::AgentInbox(AgentInboxEvent {
+            agent_id: 1,
+            session_id: child_id,
+            pending_messages: 2,
+            pending_interrupts: 1,
+        }),
+        false,
+    );
+
+    let entries = chat.bottom_pane.subagent_entries();
+    assert_eq!(entries.len(), 2);
+    let summary_entry = &entries[0];
+    let detail = summary_entry.detail.as_deref().expect("summary detail");
+    assert!(
+        detail.contains("1 interrupt"),
+        "summary should include interrupt count: {detail}"
+    );
+    assert!(
+        detail.contains("2 pending msgs"),
+        "summary should include pending message count: {detail}"
+    );
+    let agent_entry = &entries[1];
+    let detail = agent_entry.detail.as_deref().expect("agent detail");
+    assert!(
+        detail.contains("1 interrupt"),
+        "agent detail should include interrupt count: {detail}"
+    );
+    assert!(
+        detail.contains("2 pending msgs"),
+        "agent detail should include pending msg count: {detail}"
+    );
+}
+
+#[test]
 fn exec_history_cell_shows_working_then_failed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
@@ -1013,6 +1256,59 @@ fn exec_history_shows_unified_exec_startup_commands() {
     assert!(
         blob.contains("• Ran echo unified exec startup"),
         "expected startup command to render: {blob:?}"
+    );
+}
+
+#[test]
+fn subagent_tool_calls_render_as_ran_entries() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let call_id = "sub-call-1";
+    let command = vec!["subagent_spawn".to_string(), "label=docs".to_string()];
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    chat.handle_codex_event(Event {
+        id: call_id.to_string(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: call_id.to_string(),
+            turn_id: "turn-1".to_string(),
+            command: command.clone(),
+            cwd: cwd.clone(),
+            parsed_cmd: Vec::new(),
+            source: ExecCommandSource::Agent,
+            is_user_shell_command: false,
+            interaction_input: None,
+        }),
+    });
+
+    chat.handle_codex_event(Event {
+        id: call_id.to_string(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: call_id.to_string(),
+            turn_id: "turn-1".to_string(),
+            command,
+            cwd,
+            parsed_cmd: Vec::new(),
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            aggregated_output: "spawned agent #2".to_string(),
+            exit_code: 0,
+            duration: std::time::Duration::from_millis(8),
+            formatted_output: "spawned agent #2".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected a single exec history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Ran subagent_spawn"),
+        "expected command header in history cell: {rendered}"
+    );
+    assert!(
+        rendered.contains("spawned agent #2"),
+        "expected tool output to be rendered: {rendered}"
     );
 }
 
@@ -1831,6 +2127,168 @@ fn disabled_slash_command_while_task_running_snapshot() {
     );
     let blob = lines_to_single_string(cells.last().unwrap());
     assert_snapshot!(blob);
+}
+#[tokio::test]
+async fn binary_size_transcript_snapshot() {
+    // the snapshot in this test depends on gpt-5-codex. Skip for now. We will consider
+    // creating snapshots for other models in the future.
+    if OPENAI_DEFAULT_MODEL != "gpt-5-codex" {
+        return;
+    }
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    // Set up a VT100 test terminal to capture ANSI visual output
+    let width: u16 = 80;
+    let height: u16 = 2000;
+    let viewport = Rect::new(0, height - 1, width, 1);
+    let backend = VT100Backend::new(width, height);
+    let mut terminal = crate::custom_terminal::Terminal::with_options(backend)
+        .expect("failed to construct terminal");
+    terminal.set_viewport_area(viewport);
+
+    // Replay the recorded session into the widget and collect transcript
+    let file = open_fixture("binary-size-log.jsonl");
+    let reader = BufReader::new(file);
+    let mut transcript = String::new();
+    let mut has_emitted_history = false;
+
+    for line in reader.lines() {
+        let line = line.expect("read line");
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Ok(v): Result<serde_json::Value, _> = serde_json::from_str(&line) else {
+            continue;
+        };
+        let Some(dir) = v.get("dir").and_then(|d| d.as_str()) else {
+            continue;
+        };
+        if dir != "to_tui" {
+            continue;
+        }
+        let Some(kind) = v.get("kind").and_then(|k| k.as_str()) else {
+            continue;
+        };
+
+        match kind {
+            "codex_event" => {
+                if let Some(payload) = v.get("payload") {
+                    let ev: Event =
+                        serde_json::from_value(upgrade_event_payload_for_tests(payload.clone()))
+                            .expect("parse");
+                    let ev = match ev {
+                        Event {
+                            msg: EventMsg::ExecCommandBegin(e),
+                            ..
+                        } => {
+                            // Re-parse the command
+                            let parsed_cmd = codex_core::parse_command::parse_command(&e.command);
+                            Event {
+                                id: ev.id,
+                                msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                                    call_id: e.call_id.clone(),
+                                    turn_id: e.turn_id.clone(),
+                                    command: e.command,
+                                    cwd: e.cwd,
+                                    parsed_cmd,
+                                    source: ExecCommandSource::Agent,
+                                    is_user_shell_command: e.is_user_shell_command,
+                                    interaction_input: e.interaction_input.clone(),
+                                }),
+                            }
+                        }
+                        _ => ev,
+                    };
+                    chat.handle_codex_event(ev);
+                    while let Ok(app_ev) = rx.try_recv() {
+                        if let AppEvent::InsertHistoryCell(cell) = app_ev {
+                            let mut lines = cell.display_lines(width);
+                            if has_emitted_history
+                                && !cell.is_stream_continuation()
+                                && !lines.is_empty()
+                            {
+                                lines.insert(0, "".into());
+                            }
+                            has_emitted_history = true;
+                            transcript.push_str(&lines_to_single_string(&lines));
+                            crate::insert_history::insert_history_lines(&mut terminal, lines)
+                                .expect("Failed to insert history lines in test");
+                        }
+                    }
+                }
+            }
+            "app_event" => {
+                if let Some(variant) = v.get("variant").and_then(|s| s.as_str())
+                    && variant == "CommitTick"
+                {
+                    chat.on_commit_tick();
+                    while let Ok(app_ev) = rx.try_recv() {
+                        if let AppEvent::InsertHistoryCell(cell) = app_ev {
+                            let mut lines = cell.display_lines(width);
+                            if has_emitted_history
+                                && !cell.is_stream_continuation()
+                                && !lines.is_empty()
+                            {
+                                lines.insert(0, "".into());
+                            }
+                            has_emitted_history = true;
+                            transcript.push_str(&lines_to_single_string(&lines));
+                            crate::insert_history::insert_history_lines(&mut terminal, lines)
+                                .expect("Failed to insert history lines in test");
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Build the final VT100 visual by parsing the ANSI stream. Trim trailing spaces per line
+    // and drop trailing empty lines so the shape matches the ideal fixture exactly.
+    let screen = terminal.backend().vt100().screen();
+    let mut lines: Vec<String> = Vec::with_capacity(height as usize);
+    for row in 0..height {
+        let mut s = String::with_capacity(width as usize);
+        for col in 0..width {
+            if let Some(cell) = screen.cell(row, col) {
+                if let Some(ch) = cell.contents().chars().next() {
+                    s.push(ch);
+                } else {
+                    s.push(' ');
+                }
+            } else {
+                s.push(' ');
+            }
+        }
+        // Trim trailing spaces to match plain text fixture
+        lines.push(s.trim_end().to_string());
+    }
+    while lines.last().is_some_and(std::string::String::is_empty) {
+        lines.pop();
+    }
+    // Consider content only after the last session banner marker. Skip the transient
+    // 'thinking' header if present, and start from the first non-empty content line
+    // that follows. This keeps the snapshot stable across sessions.
+    const MARKER_PREFIX: &str = "To get started, describe a task or try one of these commands:";
+    let last_marker_line_idx = lines
+        .iter()
+        .rposition(|l| l.trim_start().starts_with(MARKER_PREFIX))
+        .expect("marker not found in visible output");
+    // Prefer the first assistant content line (blockquote '>' prefix) after the marker;
+    // fallback to the first non-empty, non-'thinking' line.
+    let start_idx = (last_marker_line_idx + 1..lines.len())
+        .find(|&idx| lines[idx].trim_start().starts_with('•'))
+        .unwrap_or_else(|| {
+            (last_marker_line_idx + 1..lines.len())
+                .find(|&idx| {
+                    let t = lines[idx].trim_start();
+                    !t.is_empty() && t != "thinking"
+                })
+                .expect("no content line found after marker")
+        });
+
+    // Snapshot the normalized visible transcript following the banner.
+    assert_snapshot!("binary_size_ideal_response", lines[start_idx..].join("\n"));
 }
 
 //
@@ -2859,6 +3317,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
             cwd: cwd.clone(),
             parsed_cmd: parsed_cmd.clone(),
             source: ExecCommandSource::Agent,
+            is_user_shell_command: false,
             interaction_input: None,
         }),
     });

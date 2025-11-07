@@ -1,0 +1,21 @@
+mod manager;
+mod registry;
+
+pub use manager::AwaitInboxResult;
+pub use manager::AwaitResult;
+pub use manager::ForkRequest;
+pub use manager::InboxMessage;
+pub use manager::LogEntry;
+pub use manager::PruneErrorEntry;
+pub use manager::PruneReport;
+pub use manager::PruneRequest;
+pub use manager::SendMessageRequest;
+pub use manager::SpawnRequest;
+pub use manager::SubagentCompletion;
+pub use manager::SubagentManager;
+pub use manager::SubagentManagerError;
+pub use manager::WatchdogAction;
+pub use registry::SubagentMetadata;
+pub use registry::SubagentOrigin;
+pub use registry::SubagentRegistry;
+pub use registry::SubagentStatus;

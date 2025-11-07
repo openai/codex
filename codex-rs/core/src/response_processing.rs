@@ -1,5 +1,3 @@
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -10,9 +8,7 @@ use tracing::warn;
 /// - `ResponseInputItem`s to send back to the model on the next turn.
 pub(crate) async fn process_items(
     processed_items: Vec<crate::codex::ProcessedResponseItem>,
-    sess: &Session,
-    turn_context: &TurnContext,
-) -> (Vec<ResponseInputItem>, Vec<ResponseItem>) {
+) -> (Vec<ResponseInputItem>, Vec<ResponseItem>, Vec<ResponseItem>) {
     let mut outputs_to_record = Vec::<ResponseItem>::new();
     let mut new_inputs_to_record = Vec::<ResponseItem>::new();
     let mut responses = Vec::<ResponseInputItem>::new();
@@ -60,11 +56,5 @@ pub(crate) async fn process_items(
         outputs_to_record.push(item);
     }
 
-    let all_items_to_record = [outputs_to_record, new_inputs_to_record].concat();
-    // Only attempt to take the lock if there is something to record.
-    if !all_items_to_record.is_empty() {
-        sess.record_conversation_items(turn_context, &all_items_to_record)
-            .await;
-    }
-    (responses, all_items_to_record)
+    (responses, outputs_to_record, new_inputs_to_record)
 }

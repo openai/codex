@@ -35,6 +35,7 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
+    pub include_subagent_tools: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -52,10 +53,12 @@ impl ToolsConfig {
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
+        let include_subagent_tools = features.enabled(Feature::SubagentTools);
+        let experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
-        } else if features.enabled(Feature::UnifiedExec) {
+        } else if experimental_unified_exec_tool {
             ConfigShellToolType::UnifiedExec
         } else {
             model_family.shell_type.clone()
@@ -78,6 +81,7 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_request: include_web_search_request,
             include_view_image_tool,
+            include_subagent_tools,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }
@@ -280,7 +284,7 @@ fn create_shell_tool() -> ToolSpec {
         },
     );
     properties.insert(
-        "timeout_ms".to_string(),
+        "timeout_s".to_string(),
         JsonSchema::Number {
             description: Some("The timeout for the command in milliseconds".to_string()),
         },
@@ -289,13 +293,21 @@ fn create_shell_tool() -> ToolSpec {
     properties.insert(
         "with_escalated_permissions".to_string(),
         JsonSchema::Boolean {
-            description: Some("Whether to request escalated permissions. Set to true if command needs to be run without sandbox restrictions".to_string()),
+            description: Some(
+                "Whether to request escalated permissions. Set to true if \
+                command needs to be run without sandbox restrictions"
+                    .to_string(),
+            ),
         },
     );
     properties.insert(
         "justification".to_string(),
         JsonSchema::String {
-            description: Some("Only set if with_escalated_permissions is true. 1-sentence explanation of why we want to run this command.".to_string()),
+            description: Some(
+                "Only set if with_escalated_permissions is true. 1-sentence \
+                explanation of why we want to run this command."
+                    .to_string(),
+            ),
         },
     );
 
@@ -345,7 +357,7 @@ fn create_shell_command_tool() -> ToolSpec {
         },
     );
     properties.insert(
-        "timeout_ms".to_string(),
+        "timeout_s".to_string(),
         JsonSchema::Number {
             description: Some("The timeout for the command in milliseconds".to_string()),
         },
@@ -450,7 +462,7 @@ fn create_test_sync_tool() -> ToolSpec {
         },
     );
     barrier_properties.insert(
-        "timeout_ms".to_string(),
+        "timeout_s".to_string(),
         JsonSchema::Number {
             description: Some("Maximum time in milliseconds to wait at the barrier".to_string()),
         },
@@ -613,13 +625,409 @@ fn create_read_file_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "read_file".to_string(),
-        description:
-            "Reads a local file with 1-indexed line numbers, supporting slice and indentation-aware block modes."
-                .to_string(),
+        description: "Reads a local file with 1-indexed line numbers, \
+            supporting slice and indentation-aware block modes."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["file_path".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_subagent_spawn_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "prompt".to_string(),
+        JsonSchema::String {
+            description: Some("Initial prompt for a brand-new, context-free subagent.".to_string()),
+        },
+    );
+    properties.insert(
+        "model".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional model override for this subagent (e.g., `gpt-5-codex`, `gpt-5`). \
+                Must be a valid, supported model id."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "label".to_string(),
+        JsonSchema::String {
+            description: Some("Optional short name for this subagent.".to_string()),
+        },
+    );
+    properties.insert(
+        "sandbox_mode".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional sandbox mode override (downgrade-only: request \
+                `read_only` or `workspace_write`; you can never escalate to a \
+                less-restricted sandbox)."
+                    .to_string(),
+            ),
+        },
+    );
+    ToolSpec::Function(ResponsesApiTool {
+        name: "subagent_spawn".to_string(),
+        description: "Spawn a brand-new, context-free subagent for impartial reviews or \
+            isolated tasks. Provide a detailed prompt, optionally label the child, \
+            optionally set the model, and optionally request sandbox downgrades to `read_only` or \
+            `workspace_write`. Each spawn consumes one of the 8 active-child \
+            slots until you prune/cancel it, so reserve this for \
+            work that benefits from a fresh context. Prefer `gpt-5` for \
+            planning and research and `gpt-5-codex` for code reading and writing."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["prompt".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_subagent_fork_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "prompt".to_string(),
+        JsonSchema::String {
+            description: Some("Optional prompt to hand to the forked child.".to_string()),
+        },
+    );
+    properties.insert(
+        "model".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional model override for this forked subagent (e.g., `gpt-5-codex`, `gpt-5`). \
+                Must be a valid, supported model id."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "label".to_string(),
+        JsonSchema::String {
+            description: Some("Optional short name for this fork.".to_string()),
+        },
+    );
+    properties.insert(
+        "sandbox_mode".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional sandbox mode override (downgrade-only: request \
+                `read_only` or `workspace_write`; danger mode is never granted)."
+                    .to_string(),
+            ),
+        },
+    );
+    ToolSpec::Function(ResponsesApiTool {
+        name: "subagent_fork".to_string(),
+        description: "Fork the current session (think POSIX `fork`): both parent and \
+            child observe the same tool call/return. The parent payload includes \
+            the new `child_session_id` with `role: parent`, while the child sees \
+            `role: child`. Use forks when the subagent needs your full \
+            conversation history (spawn stays blank-slate). Each fork also counts \
+            toward the 8-child cap until you prune or cancel it. `gpt-5` excels at \
+            planning/reviews, while `gpt-5-codex` handles code edits. You may only \
+            request sandbox downgrades to `read_only` or `workspace_write`."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec![]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_subagent_send_message_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "prompt".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional follow-up question or task; omit to simply wake the \
+                agent to continue running from its prior state."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "label".to_string(),
+        JsonSchema::String {
+            description: Some("Optional new label.".to_string()),
+        },
+    );
+    properties.insert(
+        "agent_id".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Numeric agent_id (from `subagent_list`) confirming which agent you intend to target."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "interrupt".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Set true to mark this message as an interrupt so the child halts its current task before processing the prompt.".to_string(),
+            ),
+        },
+    );
+    ToolSpec::Function(ResponsesApiTool {
+        name: "subagent_send_message".to_string(),
+        description: "Send a short status update, summary, or follow-up task to another agent you can see in `subagent_list`. \
+            The target `agent_id` must be echoed exactly so Codex can reject stale lookups. Provide a new prompt to ask for \
+            more work or to share what you have done so far; omit the prompt if you only need to rename the agent or wake it \
+            without new work. Set `interrupt=true` to preempt the agent before delivering the payload; interrupts are only \
+            honored for non-root agents. Agents retain their existing sandbox; you may only request downgrades to `read_only` \
+            or `workspace_write` when spawning or forking. Each child stores only the latest 200 log events, so pair this with \
+            `subagent_logs` for progress checks. Use `subagent_send_message` whenever you want another agent (including the \
+            root) to see your progress or recommendations, without blocking on `subagent_await`."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_subagent_list_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "subagent_list".to_string(),
+        description: "List the agents you can currently observe plus their metadata. Each entry \
+            includes the numeric `agent_id`, optional `parent_agent_id`, `session_id`, `label` (display name), \
+            `summary`, `origin` (spawn | fork | send_message), `status`, `reasoning_header`, \
+            `started_at_ms` (creation time), `initial_message_count`, the parent session id, and the \
+            current inbox counters (`pending_messages`, `pending_interrupts`). Status is one of `queued` (launching), `running` \
+            (actively working), `ready` (waiting for a new prompt or for you to \
+            read its completion), `idle` (you already awaited the result), \
+            `failed`, or `canceled`. `idle`/`failed`/`canceled` agents are \
+            pruneable; `queued`/`running`/`ready` count against the 8-active-child \
+            limit, so consult this list before every send/await/logs call to keep headroom."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: Some(vec![]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_subagent_await_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "timeout_s".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Optional timeout in seconds (max 1,800 s / 30 minutes). Omit or set to 0 to use the 30-minute default; prefer at least 300 s so you are not busy-waiting."
+                    .to_string(),
+            ),
+        },
+    );
+    ToolSpec::Function(ResponsesApiTool {
+        name: "subagent_await".to_string(),
+        description: "Drain the inbox for another agent and observe any terminal completion. `subagent_await` is \
+            the sole delivery mechanism for cross-agent messages: each call returns a `messages` array (with sender \
+            and recipient ids) plus an optional `completion` object when the child has reached a terminal state. \
+            Successful calls move the agent’s status to `idle`, `failed`, or `canceled` when a completion is present, \
+            but the agent remains listed until you explicitly run `subagent_prune`. Even though the root thread may \
+            inject synthetic `subagent_await` results at turn boundaries, you should continue polling this tool with \
+            short timeouts (e.g., 30s → 60s → 120s) so you can react to sibling messages and send interrupts without \
+            waiting for completions. Provide `timeout_s` (capped at 30 minutes / 1,800 s) to bound how long you \
+            wait (omit/0 uses the 30-minute default; minimum recommended 300 s)—timeouts leave the agent in its current status and return `timed_out=true` with an empty `messages` array."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_subagent_watchdog_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "agent_id".to_string(),
+        JsonSchema::Number {
+            description: Some("Target agent id (0 targets the root agent).".to_string()),
+        },
+    );
+    properties.insert(
+        "interval_s".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Optional ping interval in seconds (minimum 30, default 300).".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "message".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional message template for each ping; defaults to a status/progress prompt."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "cancel".to_string(),
+        JsonSchema::Boolean {
+            description: Some("If true, cancel the existing watchdog for this agent instead of starting/replacing it.".to_string()),
+        },
+    );
+    ToolSpec::Function(ResponsesApiTool {
+        name: "subagent_watchdog".to_string(),
+        description: "Start, replace, or cancel a background watchdog (timer, like JS `setInterval`) that sends periodic inbox pings to an agent (including agent 0/root). Watchdogs are not subagents and do not consume subagent slots; they run inside the current session and enqueue messages on a configurable interval.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["agent_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_subagent_prune_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "agent_ids".to_string(),
+        JsonSchema::Array {
+            items: Box::new(JsonSchema::Number {
+                description: Some("Agent id".to_string()),
+            }),
+            description: Some(
+                "Specific agents to prune; omit to prune all \
+                completed agents you can see."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "all".to_string(),
+        JsonSchema::Boolean {
+            description: Some("If true, prune all completed agents you can see.".to_string()),
+        },
+    );
+    properties.insert(
+        "completed_only".to_string(),
+        JsonSchema::Boolean {
+            description: Some("Must be true or omitted.".to_string()),
+        },
+    );
+    ToolSpec::Function(ResponsesApiTool {
+        name: "subagent_prune".to_string(),
+        description: "Prune completed subagents (specific agent ids or \
+            everyone you can observe). Only agents whose `status` is `idle`, \
+            `failed`, or `canceled` are eligible—use `subagent_await` or \
+            `subagent_cancel` first to move `queued`/`running`/`ready` \
+            agents into a terminal state. `subagent_await` and \
+            `subagent_cancel` do not remove entries by themselves, \
+            so pruning is the only way to free the concurrency slot. \
+            Run prune regularly so finished work disappears from the UI \
+            and you stay under the 8-child cap."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec![]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_subagent_logs_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "agent_id".to_string(),
+        JsonSchema::Number {
+            description: Some("Numeric child agent id to inspect.".to_string()),
+        },
+    );
+    properties.insert(
+        "limit".to_string(),
+        JsonSchema::Number {
+            description: Some("Max events to return (default 5).".to_string()),
+        },
+    );
+    properties.insert(
+        "max_bytes".to_string(),
+        JsonSchema::Number {
+            description: Some("Optional byte cap for returned events.".to_string()),
+        },
+    );
+    properties.insert(
+        "since_ms".to_string(),
+        JsonSchema::Number {
+            description: Some("If set, only return events with timestamp >= since_ms.".to_string()),
+        },
+    );
+    properties.insert(
+        "before_ms".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "If set, only return events with timestamp < before_ms (default is 'now' when omitted).".
+                    to_string(),
+            ),
+        },
+    );
+    ToolSpec::Function(ResponsesApiTool {
+        name: "subagent_logs".to_string(),
+        description: "Peek recent events from another agent without blocking. Each \
+            agent keeps only the latest ~200 events, so use `limit` (default 5), \
+            `max_bytes`, `since_ms` (for forward paging) and `before_ms` (for backward \
+            paging) to page through the log buffer. This call never consumes the \
+            final completion—use it while the agent is `queued` or `running` to \
+            diagnose progress before deciding between `await`, `send_message`, \
+            or `cancel`."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["agent_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_subagent_cancel_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "agent_id".to_string(),
+        JsonSchema::Number {
+            description: Some("Numeric agent id to cancel.".to_string()),
+        },
+    );
+    properties.insert(
+        "reason".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional note that explains why the child was canceled (surfaced to humans)."
+                    .to_string(),
+            ),
+        },
+    );
+    ToolSpec::Function(ResponsesApiTool {
+        name: "subagent_cancel".to_string(),
+        description: "Stop a queued/running/ready agent \
+            immediately. Use cancel when you need to abort in-flight work; \
+            follow it with `subagent_prune` once the status is `canceled` so \
+            the slot becomes available."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["agent_id".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -658,9 +1066,9 @@ fn create_list_dir_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "list_dir".to_string(),
-        description:
-            "Lists entries in a local directory with 1-indexed entry numbers and simple type labels."
-                .to_string(),
+        description: "Lists entries in a local directory with 1-indexed entry \
+            numbers and simple type labels."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -676,7 +1084,8 @@ fn create_list_mcp_resources_tool() -> ToolSpec {
         "server".to_string(),
         JsonSchema::String {
             description: Some(
-                "Optional MCP server name. When omitted, lists resources from every configured server."
+                "Optional MCP server name. When omitted, lists resources from \
+                every configured server."
                     .to_string(),
             ),
         },
@@ -685,7 +1094,8 @@ fn create_list_mcp_resources_tool() -> ToolSpec {
         "cursor".to_string(),
         JsonSchema::String {
             description: Some(
-                "Opaque cursor returned by a previous list_mcp_resources call for the same server."
+                "Opaque cursor returned by a previous list_mcp_resources call \
+                for the same server."
                     .to_string(),
             ),
         },
@@ -693,7 +1103,11 @@ fn create_list_mcp_resources_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "list_mcp_resources".to_string(),
-        description: "Lists resources provided by MCP servers. Resources allow servers to share data that provides context to language models, such as files, database schemas, or application-specific information. Prefer resources over web search when possible.".to_string(),
+        description: "Lists resources provided by MCP servers. Resources allow \
+            servers to share data that provides context to language models, such \
+            as files, database schemas, or application-specific information. \
+            Prefer resources over web search when possible."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -709,7 +1123,8 @@ fn create_list_mcp_resource_templates_tool() -> ToolSpec {
         "server".to_string(),
         JsonSchema::String {
             description: Some(
-                "Optional MCP server name. When omitted, lists resource templates from all configured servers."
+                "Optional MCP server name. When omitted, lists resource \
+                templates from all configured servers."
                     .to_string(),
             ),
         },
@@ -718,7 +1133,8 @@ fn create_list_mcp_resource_templates_tool() -> ToolSpec {
         "cursor".to_string(),
         JsonSchema::String {
             description: Some(
-                "Opaque cursor returned by a previous list_mcp_resource_templates call for the same server."
+                "Opaque cursor returned by a previous \
+                list_mcp_resource_templates call for the same server."
                     .to_string(),
             ),
         },
@@ -726,7 +1142,12 @@ fn create_list_mcp_resource_templates_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "list_mcp_resource_templates".to_string(),
-        description: "Lists resource templates provided by MCP servers. Parameterized resource templates allow servers to share data that takes parameters and provides context to language models, such as files, database schemas, or application-specific information. Prefer resource templates over web search when possible.".to_string(),
+        description: "Lists resource templates provided by MCP servers. \
+            Parameterized resource templates allow servers to share data that \
+            takes parameters and provides context to language models, such as \
+            files, database schemas, or application-specific information. Prefer \
+            resource templates over web search when possible."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -742,7 +1163,8 @@ fn create_read_mcp_resource_tool() -> ToolSpec {
         "server".to_string(),
         JsonSchema::String {
             description: Some(
-                "MCP server name exactly as configured. Must match the 'server' field returned by list_mcp_resources."
+                "MCP server name exactly as configured. Must match the \
+                'server' field returned by list_mcp_resources."
                     .to_string(),
             ),
         },
@@ -982,6 +1404,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
+    use crate::tools::handlers::SubagentToolHandler;
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
@@ -1036,6 +1459,29 @@ pub(crate) fn build_specs(
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
+
+    if config.include_subagent_tools {
+        // Built-in subagent orchestrator tools (one per action).
+        let subagent_handler = Arc::new(SubagentToolHandler);
+        builder.push_spec(create_subagent_spawn_tool());
+        builder.register_handler("subagent_spawn", subagent_handler.clone());
+        builder.push_spec(create_subagent_fork_tool());
+        builder.register_handler("subagent_fork", subagent_handler.clone());
+        builder.push_spec(create_subagent_send_message_tool());
+        builder.register_handler("subagent_send_message", subagent_handler.clone());
+        builder.push_spec(create_subagent_list_tool());
+        builder.register_handler("subagent_list", subagent_handler.clone());
+        builder.push_spec(create_subagent_await_tool());
+        builder.register_handler("subagent_await", subagent_handler.clone());
+        builder.push_spec(create_subagent_watchdog_tool());
+        builder.register_handler("subagent_watchdog", subagent_handler.clone());
+        builder.push_spec(create_subagent_prune_tool());
+        builder.register_handler("subagent_prune", subagent_handler.clone());
+        builder.push_spec(create_subagent_logs_tool());
+        builder.register_handler("subagent_logs", subagent_handler.clone());
+        builder.push_spec(create_subagent_cancel_tool());
+        builder.register_handler("subagent_cancel", subagent_handler);
+    }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {
@@ -1460,6 +1906,52 @@ mod tests {
                 "update_plan",
                 "web_search",
                 "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_subagent_tools_gated_by_feature() {
+        let model_family = find_family_for_model("gpt-5-codex")
+            .expect("gpt-5-codex should be a valid model family");
+        let mut base_features = Features::with_defaults();
+        base_features.enable(Feature::UnifiedExec);
+        base_features.enable(Feature::WebSearchRequest);
+        base_features.enable(Feature::ViewImageTool);
+
+        let config_without = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            features: &base_features,
+        });
+        let (tools_without, _) = build_specs(&config_without, None).build();
+        let missing = tools_without
+            .iter()
+            .map(|t| tool_name(&t.spec))
+            .filter(|name| name.starts_with("subagent_"))
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "subagent tools should be disabled by default: {missing:?}"
+        );
+
+        let mut enabled_features = base_features.clone();
+        enabled_features.enable(Feature::SubagentTools);
+        let config_with = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            features: &enabled_features,
+        });
+        let (tools_with, _) = build_specs(&config_with, None).build();
+        assert_contains_tool_names(
+            &tools_with,
+            &[
+                "subagent_spawn",
+                "subagent_fork",
+                "subagent_send_message",
+                "subagent_list",
+                "subagent_await",
+                "subagent_prune",
+                "subagent_logs",
+                "subagent_cancel",
             ],
         );
     }

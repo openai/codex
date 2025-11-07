@@ -86,6 +86,7 @@ impl SessionTask for UserShellCommandTask {
                     cwd: cwd.clone(),
                     parsed_cmd: parsed_cmd.clone(),
                     source: ExecCommandSource::UserShell,
+                    is_user_shell_command: true,
                     interaction_input: None,
                 }),
             )

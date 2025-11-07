@@ -268,7 +268,8 @@ ignored = [
 ]
 
 [profile.release]
-lto = "fat"
+opt-level = "z"        # or "s" (z is smaller)
+lto = "thin"           # "fat" can be smaller sometimes; test both
 # Because we bundle some of these executables with the TypeScript CLI, we
 # remove everything to make the binary as small as possible.
 strip = "symbols"

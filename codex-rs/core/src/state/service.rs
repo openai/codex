@@ -3,6 +3,8 @@ use std::sync::Arc;
 use crate::AuthManager;
 use crate::RolloutRecorder;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::subagents::SubagentManager;
+use crate::subagents::SubagentRegistry;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_notification::UserNotifier;
@@ -22,4 +24,6 @@ pub(crate) struct SessionServices {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) otel_event_manager: OtelEventManager,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
+    pub(crate) subagents: SubagentRegistry,
+    pub(crate) subagent_manager: SubagentManager,
 }

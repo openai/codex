@@ -35,6 +35,7 @@ Optional and experimental capabilities are toggled via the `[features]` table in
 [features]
 streamable_shell = true          # enable the streamable exec tool
 web_search_request = true        # allow the model to request web searches
+# subagent_tools = true          # expose spawn/fork/list/await/logs/prune subagent tools
 # view_image_tool defaults to true; omit to keep defaults
 ```
 
@@ -48,6 +49,7 @@ Supported features:
 | `apply_patch_freeform`                    |  false  | Beta         | Include the freeform `apply_patch` tool              |
 | `view_image_tool`                         |  true   | Stable       | Include the `view_image` tool                        |
 | `web_search_request`                      |  false  | Stable       | Allow the model to issue web searches                |
+| `subagent_tools`                          |  false  | Experimental | Enable built-in subagent orchestration tools         |
 | `experimental_sandbox_command_assessment` |  false  | Experimental | Enable model-based sandbox risk assessment           |
 | `ghost_commit`                            |  false  | Experimental | Create a ghost commit each turn                      |
 | `enable_experimental_windows_sandbox`     |  false  | Experimental | Use the Windows restricted-token sandbox             |
@@ -348,6 +350,58 @@ sandbox_mode = "danger-full-access"
 This is reasonable to use if Codex is running in an environment that provides its own sandboxing (such as a Docker container) such that further sandboxing is unnecessary.
 
 Though using this option may also be necessary if you try to use Codex in environments where its native sandboxing mechanisms are unsupported, such as older Linux kernels or on Windows.
+
+### max_active_subagents
+
+Controls how many subagents (spawned or forked conversations) may run concurrently within a single Codex session. Each child keeps one slot until it is pruned or fully shut down, so this setting bounds concurrency as well as memory use.
+
+```toml
+# allow at most eight active subagents (default)
+max_active_subagents = 8
+```
+
+When the limit is reached, additional `spawn`/`fork` tool calls immediately return an error telling the model to prune or await existing children before launching new work. Values below 1 are rejected, and values above 64 are clamped to 64 to prevent runaway resource use.
+
+### root_agent_uses_user_messages
+
+Controls how the root agent’s messages to a subagent are represented in the subagent’s own history. When `true` (default), root-to-subagent messages are injected as `user` turns in the child. When `false`, every cross-agent message arrives only via `subagent_await` tool results, so the child must explicitly read the tool output to see root instructions.
+
+### subagent_root_inbox_autosubmit
+
+Controls whether the root agent automatically drains its inbox (and any child
+messages destined for agent `0`) at safe stopping points between model turns,
+and whether it may auto-start a follow-up turn based on those messages. When
+`true`:
+
+- At the end of each model turn for the root, Codex drains the root inbox and
+  injects synthetic `subagent_await` call/output pairs—complete with
+  `completion_status`—directly into the root transcript in timestamp order.
+- If a model turn finished without any tool calls and the inbox drain produced
+  entries, Codex immediately launches another Responses turn so the root can
+  react without waiting for fresh user input.
+- When the root session is otherwise idle, the drain still records a lightweight
+  autosubmitted turn containing the pending `subagent_await` items. This keeps
+  the conversation history current even before the next user-initiated turn.
+
+When `false`, the root must call `subagent_await` explicitly to see inbox
+messages during a turn, and no autosubmitted turns are emitted while idle.
+
+### subagent_inbox_inject_before_tools
+
+Controls where synthetic `subagent_await` tool calls and outputs derived from
+inbox delivery are injected relative to real tool outputs inside a turn.
+
+- When `false` (default), Codex records the model’s tool call and tool
+  output(s) for a turn first, and only then appends synthetic `subagent_await`
+  calls/outputs derived from inbox messages (Option A). This is closer to
+  training-time patterns where the model generally sees its own tool call and
+  result before extra context.
+- When `true`, Codex records synthetic `subagent_await` calls/outputs first
+  and then appends tool outputs (Option B), which is closer to strict
+  chronological ordering when inbox messages arrive while tools are running.
+
+This flag only affects how Codex orders conversation items in history; it
+never splices synthetic items into the middle of an in-flight streaming turn.
 
 ### tools.\*
 
