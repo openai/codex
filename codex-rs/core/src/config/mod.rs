@@ -3286,11 +3286,7 @@ trust_level = "untrusted"
         let cfg = toml::from_str::<ConfigToml>(config_with_untrusted)
             .expect("TOML deserialization should succeed");
 
-        let resolution = cfg.derive_sandbox_policy(
-            None,
-            None,
-            &PathBuf::from("/tmp/test"),
-        );
+        let resolution = cfg.derive_sandbox_policy(None, None, &PathBuf::from("/tmp/test"));
 
         // Verify that untrusted projects get WorkspaceWrite, not ReadOnly
         assert!(
