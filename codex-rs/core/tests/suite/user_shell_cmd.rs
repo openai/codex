@@ -181,10 +181,10 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     })
     .await;
     assert!(begin_event.is_user_shell_command);
-    let expected_tokens = shlex::split(&command).unwrap_or_else(|| vec![command.clone()]);
     assert_eq!(
-        begin_event.command, expected_tokens,
-        "user command begin event did not include expected command tokens.\nexpected={expected_tokens:?}\nactual={:?}",
+        begin_event.command.last(),
+        Some(&command),
+        "user command begin event should include the original command as the last arg; got: {:?}",
         begin_event.command
     );
 
@@ -241,49 +241,27 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
         })
     }
 
+    fn scrub_duration(input: &str) -> String {
+        input
+            .lines()
+            .map(|line| {
+                if line.starts_with("Duration: ") {
+                    "Duration: <redacted> seconds"
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     let command_message = find_user_text(&items, "<user_shell_command>")
         .expect("command message recorded in request");
-    let escaped_command = regex_lite::escape(&command);
-    let command_regex = regex_lite::Regex::new(&format!(
-        r"(?s)^<user_shell_command>\n?{escaped_command}\n?</user_shell_command>$"
-    ))
-    .expect("compile command regex");
-    assert!(
-        command_regex.is_match(&command_message),
-        "command message should match expected payload: {command_message}"
+    let sanitized = scrub_duration(&command_message);
+    let expected = format!(
+        "<user_shell_command>\n<command>\n{command}\n</command>\n<result>\nExit code: 0\nDuration: <redacted> seconds\nOutput:\nnot-set\n</result>\n</user_shell_command>"
     );
-
-    let output_message = find_user_text(&items, "<user_shell_command_output>")
-        .expect("output message recorded in request");
-    let output_regex = regex_lite::Regex::new(
-        r"(?s)^<user_shell_command_output>\n?(.*?)\n?</user_shell_command_output>$",
-    )
-    .expect("compile output regex");
-    let caps = output_regex
-        .captures(&output_message)
-        .expect("shell command output payload present");
-    let payload = caps
-        .get(1)
-        .expect("output payload capture present")
-        .as_str();
-    let parsed: serde_json::Value =
-        serde_json::from_str(payload).expect("parse shell command output payload");
-    assert_eq!(
-        parsed
-            .get("metadata")
-            .and_then(|meta| meta.get("exit_code"))
-            .and_then(serde_json::Value::as_i64),
-        Some(0),
-        "expected exit_code metadata to be present and zero",
-    );
-    let output_text = parsed
-        .get("output")
-        .and_then(serde_json::Value::as_str)
-        .expect("model-facing output string present");
-    assert!(
-        output_text.contains("not-set"),
-        "model-facing output should include stdout content: {output_text:?}"
-    );
+    assert_eq!(sanitized, expected);
 
     Ok(())
 }
