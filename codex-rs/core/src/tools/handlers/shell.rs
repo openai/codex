@@ -78,6 +78,7 @@ impl ToolHandler for ShellHandler {
                     turn,
                     tracker,
                     call_id,
+                    false,
                 )
                 .await
             }
@@ -90,6 +91,7 @@ impl ToolHandler for ShellHandler {
                     turn,
                     tracker,
                     call_id,
+                    true,
                 )
                 .await
             }
@@ -108,6 +110,7 @@ impl ShellHandler {
         turn: Arc<TurnContext>,
         tracker: crate::tools::context::SharedTurnDiffTracker,
         call_id: String,
+        is_user_shell_command: bool,
     ) -> Result<ToolOutput, FunctionCallError> {
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params.with_escalated_permissions.unwrap_or(false)
@@ -201,7 +204,11 @@ impl ShellHandler {
         }
 
         // Regular shell execution path.
-        let emitter = ToolEmitter::shell(exec_params.command.clone(), exec_params.cwd.clone());
+        let emitter = ToolEmitter::shell(
+            exec_params.command.clone(),
+            exec_params.cwd.clone(),
+            is_user_shell_command,
+        );
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         emitter.begin(event_ctx).await;
 

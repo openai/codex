@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use codex_core::config::set_windows_wsl_setup_acknowledged;
+use codex_core::config::edit::ConfigEditsBuilder;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -66,7 +66,10 @@ impl WindowsSetupWidget {
 
     fn handle_continue(&mut self) {
         self.highlighted = WindowsSetupSelection::Continue;
-        match set_windows_wsl_setup_acknowledged(&self.codex_home, true) {
+        match ConfigEditsBuilder::new(&self.codex_home)
+            .set_windows_wsl_setup_acknowledged(true)
+            .apply_blocking()
+        {
             Ok(()) => {
                 self.selection = Some(WindowsSetupSelection::Continue);
                 self.exit_requested = false;

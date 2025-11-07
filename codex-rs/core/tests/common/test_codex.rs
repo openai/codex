@@ -97,11 +97,9 @@ impl TestCodexBuilder {
         let mut config = load_default_config_for_test(home);
         config.cwd = cwd.path().to_path_buf();
         config.model_provider = model_provider;
-        config.codex_linux_sandbox_exe = Some(PathBuf::from(
-            assert_cmd::Command::cargo_bin("codex")?
-                .get_program()
-                .to_os_string(),
-        ));
+        if let Ok(cmd) = assert_cmd::Command::cargo_bin("codex") {
+            config.codex_linux_sandbox_exe = Some(PathBuf::from(cmd.get_program().to_os_string()));
+        }
 
         let mut mutators = vec![];
         swap(&mut self.config_mutators, &mut mutators);
@@ -242,6 +240,30 @@ impl TestCodexHarness {
             .expect("output string")
             .to_string()
     }
+
+    pub async fn custom_tool_call_output(&self, call_id: &str) -> String {
+        let bodies = self.request_bodies().await;
+        custom_tool_call_output(&bodies, call_id)
+            .get("output")
+            .and_then(Value::as_str)
+            .expect("output string")
+            .to_string()
+    }
+}
+
+fn custom_tool_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
+    for body in bodies {
+        if let Some(items) = body.get("input").and_then(Value::as_array) {
+            for item in items {
+                if item.get("type").and_then(Value::as_str) == Some("custom_tool_call_output")
+                    && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+                {
+                    return item;
+                }
+            }
+        }
+    }
+    panic!("custom_tool_call_output {call_id} not found");
 }
 
 fn function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
