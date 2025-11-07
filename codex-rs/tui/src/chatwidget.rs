@@ -911,6 +911,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
+        // Ensure the status indicator is visible while the command runs.
         self.running_commands.insert(
             ev.call_id.clone(),
             RunningCommand {
