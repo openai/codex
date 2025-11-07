@@ -1212,7 +1212,7 @@ mod tests {
     #[test]
     fn test_porcupine_defaults() {
         assert_model_tools(
-            "porcupine-large",
+            "porcupine",
             &Features::with_defaults(),
             &[
                 "exec_command",
