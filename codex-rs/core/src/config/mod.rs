@@ -3288,12 +3288,20 @@ trust_level = "untrusted"
 
         let resolution = cfg.derive_sandbox_policy(None, None, &PathBuf::from("/tmp/test"));
 
-        // Verify that untrusted projects get WorkspaceWrite, not ReadOnly
-        assert!(
-            matches!(resolution.policy, SandboxPolicy::WorkspaceWrite { .. }),
-            "Expected WorkspaceWrite for untrusted project, got {:?}",
-            resolution.policy
-        );
+        // Verify that untrusted projects get WorkspaceWrite (or ReadOnly on Windows due to downgrade)
+        if cfg!(target_os = "windows") {
+            assert!(
+                matches!(resolution.policy, SandboxPolicy::ReadOnly),
+                "Expected ReadOnly on Windows, got {:?}",
+                resolution.policy
+            );
+        } else {
+            assert!(
+                matches!(resolution.policy, SandboxPolicy::WorkspaceWrite { .. }),
+                "Expected WorkspaceWrite for untrusted project, got {:?}",
+                resolution.policy
+            );
+        }
 
         Ok(())
     }
@@ -3326,11 +3334,18 @@ trust_level = "untrusted"
             "Expected UnlessTrusted approval policy for untrusted project"
         );
 
-        // Verify that untrusted projects still get WorkspaceWrite sandbox
-        assert!(
-            matches!(config.sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }),
-            "Expected WorkspaceWrite sandbox for untrusted project"
-        );
+        // Verify that untrusted projects still get WorkspaceWrite sandbox (or ReadOnly on Windows)
+        if cfg!(target_os = "windows") {
+            assert!(
+                matches!(config.sandbox_policy, SandboxPolicy::ReadOnly),
+                "Expected ReadOnly on Windows"
+            );
+        } else {
+            assert!(
+                matches!(config.sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }),
+                "Expected WorkspaceWrite sandbox for untrusted project"
+            );
+        }
 
         Ok(())
     }
