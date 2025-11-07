@@ -3517,8 +3517,7 @@ mod tests {
         );
         assert!(
             text.contains('\n'),
-            "expected newline to be inserted instead of submit; got: {:?}",
-            text
+            "expected newline to be inserted instead of submit; got: {text:?}"
         );
     }
 }

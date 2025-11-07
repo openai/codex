@@ -97,7 +97,7 @@ fn ensure_denybin(tools: &[&str], denybin_dir: Option<&Path>) -> Result<PathBuf>
     fs::create_dir_all(&base)?;
     for tool in tools {
         for ext in [".bat", ".cmd"] {
-            let path = base.join(format!("{}{}", tool, ext));
+            let path = base.join(format!("{tool}{ext}"));
             if !path.exists() {
                 let mut f = File::create(&path)?;
                 f.write_all(b"@echo off\\r\\nexit /b 1\\r\\n")?;
@@ -153,7 +153,7 @@ pub fn apply_no_network_to_env(env_map: &mut HashMap<String, String>) -> Result<
     // Clean up any stale stubs from previous runs so real curl/wget can run.
     for tool in ["curl", "wget"] {
         for ext in [".bat", ".cmd"] {
-            let p = base.join(format!("{}{}", tool, ext));
+            let p = base.join(format!("{tool}{ext}"));
             if p.exists() {
                 let _ = std::fs::remove_file(&p);
             }

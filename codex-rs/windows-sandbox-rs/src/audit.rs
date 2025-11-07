@@ -233,8 +233,7 @@ pub fn audit_everyone_writable(
         }
         crate::logging::log_note(
             &format!(
-                "AUDIT: world-writable scan FAILED; checked={checked}; duration_ms={elapsed_ms}; flagged:{}",
-                list
+                "AUDIT: world-writable scan FAILED; checked={checked}; duration_ms={elapsed_ms}; flagged:{list}",
             ),
             Some(cwd),
         );
@@ -243,8 +242,7 @@ pub fn audit_everyone_writable(
             list_err.push_str(&format!("\n - {}", p.display()));
         }
         return Err(anyhow!(
-            "Refusing to run: found directories writable by Everyone: {}",
-            list_err
+            "Refusing to run: found directories writable by Everyone: {list_err}"
         ));
     }
     // Log success once if nothing flagged

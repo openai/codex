@@ -32,7 +32,7 @@ pub fn format_last_error(err: i32) -> String {
             std::ptr::null_mut(),
         );
         if len == 0 || buf_ptr.is_null() {
-            return format!("Win32 error {}", err);
+            return format!("Win32 error {err}");
         }
         let slice = std::slice::from_raw_parts(buf_ptr, len as usize);
         let mut s = String::from_utf16_lossy(slice);
