@@ -32,7 +32,6 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_with_timeout;
 use futures::StreamExt;
 use serde_json::json;
 use std::io::Write;
@@ -56,6 +55,18 @@ fn sse_completed(id: &str) -> String {
 #[expect(clippy::unwrap_used)]
 fn assert_message_role(request_body: &serde_json::Value, role: &str) {
     assert_eq!(request_body["role"].as_str().unwrap(), role);
+}
+
+#[expect(clippy::expect_used)]
+fn assert_message_equals(request_body: &serde_json::Value, text: &str) {
+    let content = request_body["content"][0]["text"]
+        .as_str()
+        .expect("invalid message content");
+
+    assert_eq!(
+        content, text,
+        "expected message content '{content}' to equal '{text}'"
+    );
 }
 
 #[expect(clippy::expect_used)]
@@ -601,11 +612,79 @@ async fn includes_user_instructions_message_in_request() {
             .contains("be nice")
     );
     assert_message_role(&request_body["input"][0], "user");
-    assert_message_starts_with(&request_body["input"][0], "<user_instructions>");
-    assert_message_ends_with(&request_body["input"][0], "</user_instructions>");
+    assert_message_starts_with(&request_body["input"][0], "# AGENTS.md instructions for ");
+    assert_message_ends_with(&request_body["input"][0], "</INSTRUCTIONS>");
+    let ui_text = request_body["input"][0]["content"][0]["text"]
+        .as_str()
+        .expect("invalid message content");
+    assert!(ui_text.contains("<INSTRUCTIONS>"));
+    assert!(ui_text.contains("be nice"));
     assert_message_role(&request_body["input"][1], "user");
     assert_message_starts_with(&request_body["input"][1], "<environment_context>");
     assert_message_ends_with(&request_body["input"][1], "</environment_context>");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_developer_instructions_message_in_request() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock =
+        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
+            .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider = model_provider;
+    config.user_instructions = Some("be nice".to_string());
+    config.developer_instructions = Some("be useful".to_string());
+
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create new conversation")
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert!(
+        !request_body["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("be nice")
+    );
+    assert_message_role(&request_body["input"][0], "developer");
+    assert_message_equals(&request_body["input"][0], "be useful");
+    assert_message_role(&request_body["input"][1], "user");
+    assert_message_starts_with(&request_body["input"][1], "# AGENTS.md instructions for ");
+    assert_message_ends_with(&request_body["input"][1], "</INSTRUCTIONS>");
+    let ui_text = request_body["input"][1]["content"][0]["text"]
+        .as_str()
+        .expect("invalid message content");
+    assert!(ui_text.contains("<INSTRUCTIONS>"));
+    assert!(ui_text.contains("be nice"));
+    assert_message_role(&request_body["input"][2], "user");
+    assert_message_starts_with(&request_body["input"][2], "<environment_context>");
+    assert_message_ends_with(&request_body["input"][2], "</environment_context>");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -675,6 +754,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         effort,
         summary,
         conversation_id,
+        codex_protocol::protocol::SessionSource::Exec,
     );
 
     let mut prompt = Prompt::default();
@@ -1036,26 +1116,20 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         })
         .await?;
 
-    use std::time::Duration;
-
-    let token_event = wait_for_event_with_timeout(
-        &codex,
-        |event| {
-            matches!(
-                event,
-                EventMsg::TokenCount(payload)
-                    if payload.info.as_ref().is_some_and(|info| {
-                        info.model_context_window == Some(info.total_token_usage.total_tokens)
-                            && info.total_token_usage.total_tokens > 0
-                    })
-            )
-        },
-        Duration::from_secs(5),
-    )
+    let token_event = wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::TokenCount(payload)
+                if payload.info.as_ref().is_some_and(|info| {
+                    info.model_context_window == Some(info.total_token_usage.total_tokens)
+                        && info.total_token_usage.total_tokens > 0
+                })
+        )
+    })
     .await;
 
     let EventMsg::TokenCount(token_payload) = token_event else {
-        unreachable!("wait_for_event_with_timeout returned unexpected event");
+        unreachable!("wait_for_event returned unexpected event");
     };
 
     let info = token_payload
@@ -1261,6 +1335,10 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Build a small SSE stream with deltas and a final assistant message.
     // We emit the same body for all 3 turns; ids vary but are unused by assertions.
     let sse_raw = r##"[
+        {"type":"response.output_item.added", "item":{
+            "type":"message", "role":"assistant",
+            "content":[{"type":"output_text","text":""}]
+        }},
         {"type":"response.output_text.delta", "delta":"Hey "},
         {"type":"response.output_text.delta", "delta":"there"},
         {"type":"response.output_text.delta", "delta":"!\n"},

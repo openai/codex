@@ -17,22 +17,13 @@ use codex_protocol::ConversationId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SandboxCommandAssessment;
+use codex_protocol::protocol::SessionSource;
 use futures::StreamExt;
 use serde_json::json;
 use tokio::time::timeout;
 use tracing::warn;
 
 const SANDBOX_ASSESSMENT_TIMEOUT: Duration = Duration::from_secs(5);
-
-const SANDBOX_RISK_CATEGORY_VALUES: &[&str] = &[
-    "data_deletion",
-    "data_exfiltration",
-    "privilege_escalation",
-    "system_modification",
-    "network_access",
-    "resource_exhaustion",
-    "compliance",
-];
 
 #[derive(Template)]
 #[template(path = "sandboxing/assessment_prompt.md", escape = "none")]
@@ -53,6 +44,7 @@ pub(crate) async fn assess_command(
     auth_manager: Arc<AuthManager>,
     parent_otel: &OtelEventManager,
     conversation_id: ConversationId,
+    session_source: SessionSource,
     call_id: &str,
     command: &[String],
     sandbox_policy: &SandboxPolicy,
@@ -141,6 +133,7 @@ pub(crate) async fn assess_command(
         config.model_reasoning_effort,
         config.model_reasoning_summary,
         conversation_id,
+        session_source,
     );
 
     let start = Instant::now();
@@ -173,27 +166,26 @@ pub(crate) async fn assess_command(
                     call_id,
                     "success",
                     Some(assessment.risk_level),
-                    &assessment.risk_categories,
                     duration,
                 );
                 return Some(assessment);
             }
             Err(err) => {
                 warn!("failed to parse sandbox assessment JSON: {err}");
-                parent_otel.sandbox_assessment(call_id, "parse_error", None, &[], duration);
+                parent_otel.sandbox_assessment(call_id, "parse_error", None, duration);
             }
         },
         Ok(Ok(None)) => {
             warn!("sandbox assessment response did not include any message");
-            parent_otel.sandbox_assessment(call_id, "no_output", None, &[], duration);
+            parent_otel.sandbox_assessment(call_id, "no_output", None, duration);
         }
         Ok(Err(err)) => {
             warn!("sandbox assessment failed: {err}");
-            parent_otel.sandbox_assessment(call_id, "model_error", None, &[], duration);
+            parent_otel.sandbox_assessment(call_id, "model_error", None, duration);
         }
         Err(_) => {
             warn!("sandbox assessment timed out");
-            parent_otel.sandbox_assessment(call_id, "timeout", None, &[], duration);
+            parent_otel.sandbox_assessment(call_id, "timeout", None, duration);
         }
     }
 
@@ -226,7 +218,7 @@ fn sandbox_roots_for_prompt(policy: &SandboxPolicy, cwd: &Path) -> Vec<PathBuf> 
 fn sandbox_assessment_schema() -> serde_json::Value {
     json!({
         "type": "object",
-        "required": ["description", "risk_level", "risk_categories"],
+        "required": ["description", "risk_level"],
         "properties": {
             "description": {
                 "type": "string",
@@ -237,13 +229,6 @@ fn sandbox_assessment_schema() -> serde_json::Value {
                 "type": "string",
                 "enum": ["low", "medium", "high"]
             },
-            "risk_categories": {
-                "type": "array",
-                "items": {
-                    "type": "string",
-                    "enum": SANDBOX_RISK_CATEGORY_VALUES
-                }
-            }
         },
         "additionalProperties": false
     })

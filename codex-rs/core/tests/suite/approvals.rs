@@ -23,14 +23,12 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -268,11 +266,22 @@ impl Expectation {
                     "expected non-zero exit for {path:?}"
                 );
                 for needle in *message_contains {
-                    assert!(
-                        result.stdout.contains(needle),
-                        "stdout missing {needle:?}: {}",
-                        result.stdout
-                    );
+                    if needle.contains('|') {
+                        let options: Vec<&str> = needle.split('|').collect();
+                        let matches_any =
+                            options.iter().any(|option| result.stdout.contains(option));
+                        assert!(
+                            matches_any,
+                            "stdout missing one of {options:?}: {}",
+                            result.stdout
+                        );
+                    } else {
+                        assert!(
+                            result.stdout.contains(needle),
+                            "stdout missing {needle:?}: {}",
+                            result.stdout
+                        );
+                    }
                 }
                 assert!(
                     !path.exists(),
@@ -412,16 +421,12 @@ async fn expect_exec_approval(
     test: &TestCodex,
     expected_command: &[String],
 ) -> ExecApprovalRequestEvent {
-    let event = wait_for_event_with_timeout(
-        &test.codex,
-        |event| {
-            matches!(
-                event,
-                EventMsg::ExecApprovalRequest(_) | EventMsg::TaskComplete(_)
-            )
-        },
-        Duration::from_secs(5),
-    )
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TaskComplete(_)
+        )
+    })
     .await;
 
     match event {
@@ -438,16 +443,12 @@ async fn expect_patch_approval(
     test: &TestCodex,
     expected_call_id: &str,
 ) -> ApplyPatchApprovalRequestEvent {
-    let event = wait_for_event_with_timeout(
-        &test.codex,
-        |event| {
-            matches!(
-                event,
-                EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TaskComplete(_)
-            )
-        },
-        Duration::from_secs(5),
-    )
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TaskComplete(_)
+        )
+    })
     .await;
 
     match event {
@@ -461,16 +462,12 @@ async fn expect_patch_approval(
 }
 
 async fn wait_for_completion_without_approval(test: &TestCodex) {
-    let event = wait_for_event_with_timeout(
-        &test.codex,
-        |event| {
-            matches!(
-                event,
-                EventMsg::ExecApprovalRequest(_) | EventMsg::TaskComplete(_)
-            )
-        },
-        Duration::from_secs(5),
-    )
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TaskComplete(_)
+        )
+    })
     .await;
 
     match event {
@@ -901,7 +898,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 message_contains: if cfg!(target_os = "linux") {
                     &["Permission denied"]
                 } else {
-                    &["failed in sandbox"]
+                    &["Permission denied|Operation not permitted|Read-only file system"]
                 },
             },
         },
@@ -1045,7 +1042,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 message_contains: if cfg!(target_os = "linux") {
                     &["Permission denied"]
                 } else {
-                    &["failed in sandbox"]
+                    &["Permission denied|Operation not permitted|Read-only file system"]
                 },
             },
         },

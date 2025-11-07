@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { codexExecSpy } from "./codexExecSpy";
-import { describe, expect, it, xit } from "@jest/globals";
+import { describe, expect, it } from "@jest/globals";
 
 import { Codex } from "../src/codex";
 
@@ -223,6 +223,37 @@ describe("Codex", () => {
     }
   });
 
+  it("passes modelReasoningEffort to exec", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Reasoning effort applied", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread({
+        modelReasoningEffort: "high",
+      });
+      await thread.run("apply reasoning effort");
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      expectPair(commandArgs, ["--config", 'model_reasoning_effort="high"']);
+    } finally {
+      restore();
+      await close();
+    }
+  });
+
   it("writes output schema to a temporary file and forwards it", async () => {
     const { url, close, requests } = await startResponsesTestProxy({
       statusCode: 200,
@@ -308,8 +339,7 @@ describe("Codex", () => {
       await close();
     }
   });
-  // TODO(pakrym): unskip the test
-  xit("forwards images to exec", async () => {
+  it("forwards images to exec", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,
       responseBodies: [
