@@ -181,14 +181,12 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     })
     .await;
     assert!(begin_event.is_user_shell_command);
-    if begin_event.command.last() != Some(&command) {
-        let expected_tokens = shlex::split(&command).unwrap_or_else(|| vec![command.clone()]);
-        assert_eq!(
-            begin_event.command, expected_tokens,
-            "user command begin event did not include expected command tokens.\nexpected={expected_tokens:?}\nactual={:?}",
-            begin_event.command
-        );
-    }
+    let expected_tokens = shlex::split(&command).unwrap_or_else(|| vec![command.clone()]);
+    assert_eq!(
+        begin_event.command, expected_tokens,
+        "user command begin event did not include expected command tokens.\nexpected={expected_tokens:?}\nactual={:?}",
+        begin_event.command
+    );
 
     let delta_event = wait_for_event_match(&test.codex, |ev| match ev {
         EventMsg::ExecCommandOutputDelta(event) => Some(event.clone()),
@@ -245,17 +243,29 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
 
     let command_message = find_user_text(&items, "<user_shell_command>")
         .expect("command message recorded in request");
+    let escaped_command = regex_lite::escape(&command);
+    let command_regex = regex_lite::Regex::new(&format!(
+        r"(?s)^<user_shell_command>\n?{escaped_command}\n?</user_shell_command>$"
+    ))
+    .expect("compile command regex");
     assert!(
-        command_message.contains(&command),
-        "command message should include shell invocation: {command_message}"
+        command_regex.is_match(&command_message),
+        "command message should match expected payload: {command_message}"
     );
 
     let output_message = find_user_text(&items, "<user_shell_command_output>")
         .expect("output message recorded in request");
-    let payload = output_message
-        .strip_prefix("<user_shell_command_output>\n")
-        .and_then(|text| text.strip_suffix("\n</user_shell_command_output>"))
+    let output_regex = regex_lite::Regex::new(
+        r"(?s)^<user_shell_command_output>\n?(.*?)\n?</user_shell_command_output>$",
+    )
+    .expect("compile output regex");
+    let caps = output_regex
+        .captures(&output_message)
         .expect("shell command output payload present");
+    let payload = caps
+        .get(1)
+        .expect("output payload capture present")
+        .as_str();
     let parsed: serde_json::Value =
         serde_json::from_str(payload).expect("parse shell command output payload");
     assert_eq!(
