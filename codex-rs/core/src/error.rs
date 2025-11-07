@@ -238,7 +238,8 @@ pub struct UnexpectedResponseError {
     pub request_id: Option<String>,
 }
 
-const CLOUDFLARE_BLOCKED_MESSAGE: &str = "Access blocked by Cloudflare. This usually happens when connecting from a restricted region";
+const CLOUDFLARE_BLOCKED_MESSAGE: &str =
+    "Access blocked by Cloudflare. This usually happens when connecting from a restricted region";
 
 impl UnexpectedResponseError {
     fn friendly_message(&self) -> Option<String> {
