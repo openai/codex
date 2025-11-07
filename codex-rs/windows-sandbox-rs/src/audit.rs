@@ -164,6 +164,7 @@ unsafe fn path_has_world_write_allow(path: &Path) -> Result<bool> {
 pub fn audit_everyone_writable(
     cwd: &Path,
     env: &std::collections::HashMap<String, String>,
+    logs_base_dir: Option<&Path>,
 ) -> Result<()> {
     let start = Instant::now();
     let mut flagged: Vec<PathBuf> = Vec::new();
@@ -236,7 +237,7 @@ pub fn audit_everyone_writable(
                 "AUDIT: world-writable scan FAILED; checked={checked}; duration_ms={elapsed_ms}; flagged:{}",
                 list
             ),
-            Some(cwd),
+            logs_base_dir,
         );
         let mut list_err = String::new();
         for p in flagged {
@@ -252,7 +253,7 @@ pub fn audit_everyone_writable(
         &format!(
             "AUDIT: world-writable scan OK; checked={checked}; duration_ms={elapsed_ms}"
         ),
-        Some(cwd),
+        logs_base_dir,
     );
     Ok(())
 }
