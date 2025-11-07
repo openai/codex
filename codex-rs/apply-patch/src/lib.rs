@@ -590,13 +590,16 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
                 {
                     crate::eol::notify_gitattributes_touched(&root);
                 }
-                let (repo_root, _rel) = repo_root_and_rel_for_path(path);
-                // New files: prefer .gitattributes via absolute path (normalized internally);
-                // if unspecified, default to LF.
-                let mut target = repo_root
-                    .as_deref()
-                    .and_then(|root| eol::git_check_attr_eol_cached(root, path))
-                    .unwrap_or(eol::Eol::Lf);
+                let (repo_root, rel) = repo_root_and_rel_for_path(path);
+                // New files: use deterministic policy: .gitattributes > core.eol > core.autocrlf > env > LF
+                let mut target = match repo_root.as_deref() {
+                    Some(root) => {
+                        let env = crate::eol::OsEnv;
+                        let rel_ref = rel.as_deref().unwrap_or(path);
+                        eol::choose_eol_for_new_file(root, rel_ref, &env)
+                    }
+                    None => eol::Eol::Lf,
+                };
                 // Allow explicit Detect override via CLI/env only.
                 use crate::eol::AssumeEol;
                 use crate::eol::Eol;
@@ -769,8 +772,14 @@ fn repo_root_and_rel_for_path(path: &Path) -> (Option<PathBuf>, Option<PathBuf>)
         && out.status.success()
     {
         let root = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim().to_string());
+        // Compute a repo-relative path. If `path` is relative, resolve it under the repo root.
+        let abs_path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            root.join(path)
+        };
         // Be resilient on Windows where case / separators may differ
-        if let Some(rel) = rel_path_case_insensitive(&root, path) {
+        if let Some(rel) = rel_path_case_insensitive(&root, &abs_path) {
             return (Some(root), Some(rel));
         }
         return (Some(root), None);
@@ -1691,14 +1700,17 @@ PATCH"#,
             .unwrap();
         fs::write(dir.path().join(".gitattributes"), "*.txt text eol=crlf\n").unwrap();
 
-        let path = dir.path().join("foo.txt");
-        let patch = wrap_patch(&format!("*** Add File: {}\n+line1\n+line2", path.display()));
+        let rel = Path::new("foo.txt");
+        let path = dir.path().join(rel);
+        let patch = wrap_patch(&format!("*** Add File: {}\n+line1\n+line2", rel.display()));
         use assert_cmd::prelude::*;
         use std::process::Command as PCommand;
         let fake_global = dir.path().join("_gitconfig_global");
         fs::write(&fake_global, "").unwrap();
         let mut cmd = PCommand::cargo_bin("apply_patch").unwrap();
         cmd.current_dir(dir.path())
+            // Ensure no leaked override from other tests affects EOL selection.
+            .env_remove("APPLY_PATCH_ASSUME_EOL")
             .env("GIT_CONFIG_GLOBAL", &fake_global)
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .arg(&patch)
@@ -1720,14 +1732,17 @@ PATCH"#,
             .unwrap();
         fs::write(dir.path().join(".gitattributes"), "*.txt text eol=lf\n").unwrap();
 
-        let path = dir.path().join("bar.txt");
-        let patch = wrap_patch(&format!("*** Add File: {}\n+line1\n+line2", path.display()));
+        let rel = Path::new("bar.txt");
+        let path = dir.path().join(rel);
+        let patch = wrap_patch(&format!("*** Add File: {}\n+line1\n+line2", rel.display()));
         use assert_cmd::prelude::*;
         use std::process::Command as PCommand;
         let fake_global = dir.path().join("_gitconfig_global");
         fs::write(&fake_global, "").unwrap();
         let mut cmd = PCommand::cargo_bin("apply_patch").unwrap();
         cmd.current_dir(dir.path())
+            // Ensure no leaked override from other tests affects EOL selection.
+            .env_remove("APPLY_PATCH_ASSUME_EOL")
             .env("GIT_CONFIG_GLOBAL", &fake_global)
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .arg(&patch)
@@ -1750,6 +1765,8 @@ PATCH"#,
         PCommand::cargo_bin("apply_patch")
             .unwrap()
             .current_dir(dir.path())
+            // Ensure no leaked override from other tests affects EOL selection.
+            .env_remove("APPLY_PATCH_ASSUME_EOL")
             .arg(&patch)
             .assert()
             .success();
@@ -1762,7 +1779,7 @@ PATCH"#,
     // user/system core.eol). We validate core.eol directly and .gitattributes above.
 
     #[test]
-    fn test_new_file_ignores_core_eol_defaults_to_lf() {
+    fn test_new_file_uses_core_eol_when_no_attrs() {
         let dir = tempdir().unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
         std::process::Command::new("git")
@@ -1791,9 +1808,8 @@ PATCH"#,
             .assert()
             .success();
         let contents = fs::read(&path).unwrap();
-        // Should default to LF despite core.eol=crlf
-        assert!(!contents.windows(2).any(|w| w == b"\r\n"));
-        assert!(contents.contains(&b'\n'));
+        // With new deterministic policy, respect core.eol=crlf when no .gitattributes
+        assert!(contents.windows(2).any(|w| w == b"\r\n"));
     }
 
     #[test]

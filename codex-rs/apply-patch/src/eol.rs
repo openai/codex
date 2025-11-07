@@ -118,18 +118,23 @@ pub fn normalize_to_eol_preserve_eof(mut s: String, target: Eol) -> String {
     s
 }
 
-#[cfg(test)]
 pub fn git_core_eol(repo_root: &Path) -> Option<Eol> {
     #[cfg(all(test, feature = "eol-cache"))]
     RAW_CORE_EOL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let out = std::process::Command::new("git")
-        .arg("-C")
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("-C")
         .arg(repo_root)
         .arg("config")
+        .arg("--local")
         .arg("--get")
-        .arg("core.eol")
-        .output()
-        .ok()?;
+        .arg("core.eol");
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1").env(
+        "GIT_CONFIG_GLOBAL",
+        if cfg!(windows) { "NUL" } else { "/dev/null" },
+    );
+    let out = cmd.output().ok()?;
+    #[cfg(test)]
+    eprintln!("git core.eol status: {:?}", out.status);
     if !out.status.success() {
         return None;
     }
@@ -154,19 +159,32 @@ pub fn git_check_attr_eol(repo_root: &Path, rel_path: &Path) -> Option<Eol> {
     // This avoids git check-attr mismatches on macOS/Linux when absolute paths
     // or OS-native separators are used.
     let rel_key = rel_attr_key(repo_root, rel_path);
-    let out = std::process::Command::new("git")
-        .arg("-C")
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("-C")
         .arg(repo_root)
+        .arg("-c")
+        .arg(format!(
+            "core.attributesfile={}",
+            if cfg!(windows) { "NUL" } else { "/dev/null" }
+        ))
         .arg("check-attr")
         .arg("eol")
         .arg("--")
-        .arg(rel_key)
-        .output()
-        .ok()?;
+        .arg(&rel_key);
+    // Ensure attribute resolution is repo-local only (no system/global leakage)
+    cmd.env("GIT_ATTR_NOSYSTEM", "1")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env(
+            "GIT_CONFIG_GLOBAL",
+            if cfg!(windows) { "NUL" } else { "/dev/null" },
+        );
+    let out = cmd.output().ok()?;
     if !out.status.success() {
         return None;
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
+    #[cfg(test)]
+    eprintln!("git check-attr eol stdout: {:?}", stdout.trim());
     parse_git_check_attr_eol_stdout(&stdout)
 }
 
@@ -273,22 +291,106 @@ pub fn decide_eol(repo_root: Option<&Path>, rel_path: Option<&Path>, is_new_file
         // Existing: let caller decide from original bytes
         return Eol::Unknown;
     }
-
-    // New file without explicit CLI override: consult .gitattributes only,
-    // otherwise default to LF. Ignore git core.* to avoid host variability.
-    if let (Some(root), Some(rel)) = (repo_root, rel_path)
-        && let Some(e) = git_check_attr_eol_cached(root, rel)
-    {
-        return e;
+    // New file without explicit CLI override: use the same chain as choose_eol_for_new_file.
+    if let Some(root) = repo_root {
+        let rel = rel_path.unwrap_or_else(|| Path::new("."));
+        return choose_eol_for_new_file(root, rel, &OsEnv);
     }
     Eol::Lf
+}
+
+/// Lightweight environment accessor used to control overrides in tests.
+pub trait Env {
+    fn get(&self, key: &str) -> Option<String>;
+}
+
+/// Default OS environment implementation.
+pub struct OsEnv;
+impl Env for OsEnv {
+    fn get(&self, key: &str) -> Option<String> {
+        std::env::var(key).ok()
+    }
+}
+
+fn git_core_autocrlf(repo_root: &Path) -> Option<Eol> {
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("-C")
+        .arg(repo_root)
+        .arg("config")
+        .arg("--local")
+        .arg("--get")
+        .arg("core.autocrlf");
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1").env(
+        "GIT_CONFIG_GLOBAL",
+        if cfg!(windows) { "NUL" } else { "/dev/null" },
+    );
+    let out = cmd.output().ok()?;
+    #[cfg(test)]
+    eprintln!("git core.autocrlf status: {:?}", out.status);
+    if !out.status.success() {
+        return None;
+    }
+    let val = String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .to_ascii_lowercase();
+    #[cfg(test)]
+    eprintln!("git core.autocrlf: {:?}", val);
+    match val.as_str() {
+        "true" => Some(Eol::Crlf),
+        "input" => Some(Eol::Lf),
+        _ => None,
+    }
+}
+
+/// Choose the EOL for a new file using deterministic precedence:
+/// explicit override (lf/crlf) > .gitattributes > core.eol > core.autocrlf > default LF.
+/// If the override is `git` or `detect`, fall back to repo policy (or LF if none).
+pub fn choose_eol_for_new_file(repo_root: &Path, rel_path: &Path, env: &dyn Env) -> Eol {
+    let from_git = git_check_attr_eol_cached(repo_root, rel_path)
+        .or_else(|| git_core_eol(repo_root))
+        .or_else(|| git_core_autocrlf(repo_root));
+
+    if let Some(v) = env.get("APPLY_PATCH_ASSUME_EOL")
+        && let Some(sel) = parse_assume_eol(&v)
+    {
+        return match sel {
+            AssumeEol::Lf => Eol::Lf,
+            AssumeEol::Crlf => Eol::Crlf,
+            // For Git or Detect, fall back to repo policy if available, else LF.
+            _ => from_git.unwrap_or(Eol::Lf),
+        };
+    }
+    from_git.unwrap_or(Eol::Lf)
 }
 
 /// Compute a repo-relative attribute lookup key using forward slashes.
 /// Falls back to the provided path's display string if a relative path
 /// cannot be determined (should be rare).
 fn rel_attr_key(repo_root: &Path, path: &Path) -> String {
-    let rel: std::path::PathBuf = diff_paths(path, repo_root).unwrap_or_else(|| path.to_path_buf());
+    // On macOS and Windows, repo_root and path may not share the same
+    // canonical representation (e.g., /var vs /private/var, case
+    // differences, or symlinks). Canonicalize both sides before
+    // computing the relative key that we pass to `git check-attr` so
+    // .gitattributes matching is reliable for new files that do not
+    // yet exist on disk.
+    let canon_root = std::fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
+
+    // If the file doesn't exist yet (typical for Add File), try to
+    // canonicalize its parent directory and then join the file name so
+    // we still get a path under the canonicalized repo root.
+    let canon_path = match std::fs::canonicalize(path) {
+        Ok(p) => p,
+        Err(_) => {
+            let parent = path.parent().unwrap_or_else(|| Path::new("."));
+            match std::fs::canonicalize(parent) {
+                Ok(cp) => cp.join(path.file_name().unwrap_or_default()),
+                Err(_) => path.to_path_buf(),
+            }
+        }
+    };
+
+    let rel: std::path::PathBuf =
+        diff_paths(&canon_path, &canon_root).unwrap_or_else(|| path.to_path_buf());
     let s = rel.to_string_lossy().replace('\\', "/");
     s.trim_start_matches('/').to_string()
 }
@@ -459,6 +561,117 @@ mod tests {
         std::fs::write(&nested, "line1\n").unwrap();
         let result = git_check_attr_eol(dir.path(), &nested);
         assert_eq!(result, Some(Eol::Crlf));
+    }
+
+    #[test]
+    fn test_choose_eol_gitattributes_new_file_nonexistent() {
+        let _g = TEST_MUTEX.lock().unwrap();
+        let dir = tempdir().unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        std::fs::write(dir.path().join(".gitattributes"), "*.txt text eol=crlf\n").unwrap();
+        struct NoEnv;
+        impl Env for NoEnv {
+            fn get(&self, _k: &str) -> Option<String> {
+                None
+            }
+        }
+        let e = choose_eol_for_new_file(dir.path(), Path::new("foo.txt"), &NoEnv);
+        assert_eq!(e, Eol::Crlf);
+    }
+
+    #[test]
+    fn test_choose_eol_core_eol_crlf_no_attrs() {
+        let _g = TEST_MUTEX.lock().unwrap();
+        let dir = tempdir().unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .args([
+                "-C",
+                dir.path().to_str().unwrap(),
+                "config",
+                "core.eol",
+                "crlf",
+            ])
+            .status()
+            .unwrap();
+        struct NoEnv;
+        impl Env for NoEnv {
+            fn get(&self, _k: &str) -> Option<String> {
+                None
+            }
+        }
+        let e = choose_eol_for_new_file(dir.path(), Path::new("foo.txt"), &NoEnv);
+        assert_eq!(e, Eol::Crlf);
+    }
+
+    #[test]
+    fn test_choose_eol_core_autocrlf_true_no_attrs() {
+        let _g = TEST_MUTEX.lock().unwrap();
+        let dir = tempdir().unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .args([
+                "-C",
+                dir.path().to_str().unwrap(),
+                "config",
+                "core.autocrlf",
+                "true",
+            ])
+            .status()
+            .unwrap();
+        struct NoEnv;
+        impl Env for NoEnv {
+            fn get(&self, _k: &str) -> Option<String> {
+                None
+            }
+        }
+        let e = choose_eol_for_new_file(dir.path(), Path::new("foo.txt"), &NoEnv);
+        assert_eq!(e, Eol::Crlf);
+    }
+
+    #[test]
+    fn test_choose_eol_env_override_beats_config() {
+        let _g = TEST_MUTEX.lock().unwrap();
+        let dir = tempdir().unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .args([
+                "-C",
+                dir.path().to_str().unwrap(),
+                "config",
+                "core.eol",
+                "crlf",
+            ])
+            .status()
+            .unwrap();
+        struct EnvLF;
+        impl Env for EnvLF {
+            fn get(&self, k: &str) -> Option<String> {
+                (k == "APPLY_PATCH_ASSUME_EOL").then(|| "lf".to_string())
+            }
+        }
+        let e = choose_eol_for_new_file(dir.path(), Path::new("foo.txt"), &EnvLF);
+        assert_eq!(e, Eol::Lf);
     }
 
     #[test]
