@@ -14,6 +14,7 @@ workspace = true
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-protocol = { workspace = true }
+mcp-types = { workspace = true }
 paste = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

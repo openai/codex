@@ -5,6 +5,8 @@ use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
 use codex_common::approval_presets::builtin_approval_presets;
+use codex_common::model_presets::ModelPreset;
+use codex_common::model_presets::ReasoningEffortPreset;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
@@ -26,6 +28,7 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::ReviewCodeLocation;
 use codex_core::protocol::ReviewFinding;
 use codex_core::protocol::ReviewLineRange;
@@ -34,8 +37,12 @@ use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
+use codex_core::protocol::UndoCompletedEvent;
+use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
+use codex_core::protocol::WarningEvent;
 use codex_protocol::ConversationId;
+use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -52,6 +59,8 @@ use tempfile::NamedTempFile;
 use tempfile::tempdir;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
+
+const TEST_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start new a new conversation when possible to keep conversations small and targeted.";
 
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
@@ -94,6 +103,17 @@ fn upgrade_event_payload_for_tests(mut payload: serde_json::Value) -> serde_json
         }
     }
     payload
+}
+
+fn snapshot(percent: f64) -> RateLimitSnapshot {
+    RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: percent,
+            window_minutes: Some(60),
+            resets_at: None,
+        }),
+        secondary: None,
+    }
 }
 
 #[test]
@@ -279,6 +299,7 @@ fn make_chatwidget_manual() -> (
         token_info: None,
         rate_limit_snapshot: None,
         rate_limit_warnings: RateLimitWarningState::default(),
+        rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
         stream_controller: None,
         running_commands: HashMap::new(),
         task_complete_pending: false,
@@ -294,11 +315,10 @@ fn make_chatwidget_manual() -> (
         suppress_session_configured_redraw: false,
         pending_notification: None,
         is_review_mode: false,
-        ghost_snapshots: Vec::new(),
-        ghost_snapshots_disabled: false,
         needs_final_message_separator: false,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
+        current_rollout_path: None,
     };
     (widget, rx, op_rx)
 }
@@ -388,6 +408,82 @@ fn test_rate_limit_warnings_monthly() {
     );
 }
 
+#[test]
+fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
+    let (mut chat, _, _) = make_chatwidget_manual();
+    chat.auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.config.model = NUDGE_MODEL_SLUG.to_string();
+
+    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
+
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+}
+
+#[test]
+fn rate_limit_switch_prompt_shows_once_per_session() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let (mut chat, _, _) = make_chatwidget_manual();
+    chat.config.model = "gpt-5".to_string();
+    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+
+    chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
+    assert!(
+        chat.rate_limit_warnings.primary_index >= 1,
+        "warnings not emitted"
+    );
+    chat.maybe_show_pending_rate_limit_prompt();
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+
+    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+}
+
+#[test]
+fn rate_limit_switch_prompt_defers_until_task_complete() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let (mut chat, _, _) = make_chatwidget_manual();
+    chat.config.model = "gpt-5".to_string();
+    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+
+    chat.bottom_pane.set_task_running(true);
+    chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Pending
+    ));
+
+    chat.bottom_pane.set_task_running(false);
+    chat.maybe_show_pending_rate_limit_prompt();
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+}
+
+#[test]
+fn rate_limit_switch_prompt_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+    chat.auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.config.model = "gpt-5".to_string();
+
+    chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
+    chat.maybe_show_pending_rate_limit_prompt();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("rate_limit_switch_prompt_popup", popup);
+}
+
 // (removed experimental resize snapshot test)
 
 #[test]
@@ -402,6 +498,7 @@ fn exec_approval_emits_proposed_command_and_decision_history() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        risk: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -418,7 +515,7 @@ fn exec_approval_emits_proposed_command_and_decision_history() {
     // The approval modal should display the command snippet for user confirmation.
     let area = Rect::new(0, 0, 80, chat.desired_height(80));
     let mut buf = ratatui::buffer::Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
     assert_snapshot!("exec_approval_modal_exec", format!("{buf:?}"));
 
     // Approve via keyboard and verify a concise decision history line is added
@@ -444,6 +541,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        risk: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -458,7 +556,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
 
     let area = Rect::new(0, 0, 80, chat.desired_height(80));
     let mut buf = ratatui::buffer::Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
     let mut saw_first_line = false;
     for y in 0..area.height {
         let mut row = String::new();
@@ -492,6 +590,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
         command: vec!["bash".into(), "-lc".into(), long],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
+        risk: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -526,6 +625,7 @@ fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
             command,
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             parsed_cmd,
+            is_user_shell_command: false,
         }),
     });
 }
@@ -845,6 +945,163 @@ fn slash_init_skips_when_project_doc_exists() {
     );
 }
 
+#[test]
+fn slash_quit_requests_exit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.dispatch_command(SlashCommand::Quit);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ExitRequest));
+}
+
+#[test]
+fn slash_exit_requests_exit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.dispatch_command(SlashCommand::Exit);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ExitRequest));
+}
+
+#[test]
+fn slash_undo_sends_op() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.dispatch_command(SlashCommand::Undo);
+
+    match rx.try_recv() {
+        Ok(AppEvent::CodexOp(Op::Undo)) => {}
+        other => panic!("expected AppEvent::CodexOp(Op::Undo), got {other:?}"),
+    }
+}
+
+#[test]
+fn slash_rollout_displays_current_path() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let rollout_path = PathBuf::from("/tmp/codex-test-rollout.jsonl");
+    chat.current_rollout_path = Some(rollout_path.clone());
+
+    chat.dispatch_command(SlashCommand::Rollout);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected info message for rollout path");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains(&rollout_path.display().to_string()),
+        "expected rollout path to be shown: {rendered}"
+    );
+}
+
+#[test]
+fn slash_rollout_handles_missing_path() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.dispatch_command(SlashCommand::Rollout);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected info message explaining missing path"
+    );
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("not available"),
+        "expected missing rollout path message: {rendered}"
+    );
+}
+
+#[test]
+fn undo_success_events_render_info_messages() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".to_string(),
+        msg: EventMsg::UndoStarted(UndoStartedEvent {
+            message: Some("Undo requested for the last turn...".to_string()),
+        }),
+    });
+    assert!(
+        chat.bottom_pane.status_indicator_visible(),
+        "status indicator should be visible during undo"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".to_string(),
+        msg: EventMsg::UndoCompleted(UndoCompletedEvent {
+            success: true,
+            message: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected final status only");
+    assert!(
+        !chat.bottom_pane.status_indicator_visible(),
+        "status indicator should be hidden after successful undo"
+    );
+
+    let completed = lines_to_single_string(&cells[0]);
+    assert!(
+        completed.contains("Undo completed successfully."),
+        "expected default success message, got {completed:?}"
+    );
+}
+
+#[test]
+fn undo_failure_events_render_error_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "turn-2".to_string(),
+        msg: EventMsg::UndoStarted(UndoStartedEvent { message: None }),
+    });
+    assert!(
+        chat.bottom_pane.status_indicator_visible(),
+        "status indicator should be visible during undo"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-2".to_string(),
+        msg: EventMsg::UndoCompleted(UndoCompletedEvent {
+            success: false,
+            message: Some("Failed to restore workspace state.".to_string()),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected final status only");
+    assert!(
+        !chat.bottom_pane.status_indicator_visible(),
+        "status indicator should be hidden after failed undo"
+    );
+
+    let completed = lines_to_single_string(&cells[0]);
+    assert!(
+        completed.contains("Failed to restore workspace state."),
+        "expected failure message, got {completed:?}"
+    );
+}
+
+#[test]
+fn undo_started_hides_interrupt_hint() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "turn-hint".to_string(),
+        msg: EventMsg::UndoStarted(UndoStartedEvent { message: None }),
+    });
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be active");
+    assert!(
+        !status.interrupt_hint_visible(),
+        "undo should hide the interrupt hint because the operation cannot be cancelled"
+    );
+}
+
 /// The commit picker shows only commit subjects (no timestamps).
 #[test]
 fn review_commit_picker_shows_subjects_without_timestamps() {
@@ -873,7 +1130,7 @@ fn review_commit_picker_shows_subjects_without_timestamps() {
     let height = chat.desired_height(width);
     let area = ratatui::layout::Rect::new(0, 0, width, height);
     let mut buf = ratatui::buffer::Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
 
     let mut blob = String::new();
     for y in 0..area.height {
@@ -995,6 +1252,37 @@ fn interrupt_exec_marks_failed_snapshot() {
     assert_snapshot!("interrupt_exec_marks_failed", exec_blob);
 }
 
+// Snapshot test: after an interrupted turn, a gentle error message is inserted
+// suggesting the user to tell the model what to do differently and to use /feedback.
+#[test]
+fn interrupted_turn_error_message_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    // Simulate an in-progress task so the widget is in a running state.
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }),
+    });
+
+    // Abort the turn (like pressing Esc) and drain inserted history.
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        !cells.is_empty(),
+        "expected error message to be inserted after interruption"
+    );
+    let last = lines_to_single_string(cells.last().unwrap());
+    assert_snapshot!("interrupted_turn_error_message", last);
+}
+
 /// Opening custom prompt from the review popup, pressing Esc returns to the
 /// parent popup, pressing Esc again dismisses all panels (back to normal mode).
 #[test]
@@ -1070,7 +1358,7 @@ fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
     let height = chat.desired_height(width);
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
-    (chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
     for y in 0..area.height {
         let mut row = String::new();
         for x in 0..area.width {
@@ -1092,7 +1380,7 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     let height = chat.desired_height(width);
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
-    (chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
 
     let mut lines: Vec<String> = (0..area.height)
         .map(|row| {
@@ -1138,7 +1426,34 @@ fn approvals_selection_popup_snapshot() {
     chat.open_approvals_popup();
 
     let popup = render_bottom_popup(&chat, 80);
+    #[cfg(target_os = "windows")]
+    insta::with_settings!({ snapshot_suffix => "windows" }, {
+        assert_snapshot!("approvals_selection_popup", popup);
+    });
+    #[cfg(not(target_os = "windows"))]
     assert_snapshot!("approvals_selection_popup", popup);
+}
+
+#[test]
+fn approvals_popup_includes_wsl_note_for_auto_mode() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    if cfg!(target_os = "windows") {
+        chat.config.forced_auto_mode_downgraded_on_windows = true;
+    }
+    chat.open_approvals_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_eq!(
+        popup.contains("Requires Windows Subsystem for Linux (WSL)"),
+        cfg!(target_os = "windows"),
+        "expected auto preset description to mention WSL requirement only on Windows, popup: {popup}"
+    );
+    assert_eq!(
+        popup.contains("Codex forced your settings back to Read Only on this Windows machine."),
+        cfg!(target_os = "windows") && chat.config.forced_auto_mode_downgraded_on_windows,
+        "expected downgrade notice only when auto mode is forced off on Windows, popup: {popup}"
+    );
 }
 
 #[test]
@@ -1153,6 +1468,20 @@ fn full_access_confirmation_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("full_access_confirmation_popup", popup);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_auto_mode_instructions_popup_lists_install_steps() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.open_windows_auto_mode_instructions();
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("wsl --install"),
+        "expected WSL instructions popup to include install command, popup: {popup}"
+    );
 }
 
 #[test]
@@ -1170,6 +1499,66 @@ fn model_reasoning_selection_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_reasoning_selection_popup", popup);
+}
+
+#[test]
+fn single_reasoning_option_skips_selection() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    static SINGLE_EFFORT: [ReasoningEffortPreset; 1] = [ReasoningEffortPreset {
+        effort: ReasoningEffortConfig::High,
+        description: "Maximizes reasoning depth for complex or ambiguous problems",
+    }];
+    let preset = ModelPreset {
+        id: "model-with-single-reasoning",
+        model: "model-with-single-reasoning",
+        display_name: "model-with-single-reasoning",
+        description: "",
+        default_reasoning_effort: ReasoningEffortConfig::High,
+        supported_reasoning_efforts: &SINGLE_EFFORT,
+        is_default: false,
+    };
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !popup.contains("Select Reasoning Level"),
+        "expected reasoning selection popup to be skipped"
+    );
+
+    let mut events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        events.push(ev);
+    }
+
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, AppEvent::UpdateReasoningEffort(Some(effort)) if *effort == ReasoningEffortConfig::High)),
+        "expected reasoning effort to be applied automatically; events: {events:?}"
+    );
+}
+
+#[test]
+fn feedback_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Open the feedback category selection popup via slash command.
+    chat.dispatch_command(SlashCommand::Feedback);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("feedback_selection_popup", popup);
+}
+
+#[test]
+fn feedback_upload_consent_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Open the consent popup directly for a chosen category.
+    chat.open_feedback_consent(crate::app_event::FeedbackCategory::Bug);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("feedback_upload_consent_popup", popup);
 }
 
 #[test]
@@ -1307,6 +1696,7 @@ async fn binary_size_transcript_snapshot() {
                                     command: e.command,
                                     cwd: e.cwd,
                                     parsed_cmd,
+                                    is_user_shell_command: false,
                                 }),
                             }
                         }
@@ -1324,7 +1714,8 @@ async fn binary_size_transcript_snapshot() {
                             }
                             has_emitted_history = true;
                             transcript.push_str(&lines_to_single_string(&lines));
-                            crate::insert_history::insert_history_lines(&mut terminal, lines);
+                            crate::insert_history::insert_history_lines(&mut terminal, lines)
+                                .expect("Failed to insert history lines in test");
                         }
                     }
                 }
@@ -1345,7 +1736,8 @@ async fn binary_size_transcript_snapshot() {
                             }
                             has_emitted_history = true;
                             transcript.push_str(&lines_to_single_string(&lines));
-                            crate::insert_history::insert_history_lines(&mut terminal, lines);
+                            crate::insert_history::insert_history_lines(&mut terminal, lines)
+                                .expect("Failed to insert history lines in test");
                         }
                     }
                 }
@@ -1421,6 +1813,7 @@ fn approval_modal_exec_snapshot() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        risk: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -1437,7 +1830,7 @@ fn approval_modal_exec_snapshot() {
     terminal.set_viewport_area(viewport);
 
     terminal
-        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw approval modal");
     assert!(
         terminal
@@ -1465,6 +1858,7 @@ fn approval_modal_exec_without_reason_snapshot() {
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
+        risk: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -1477,7 +1871,7 @@ fn approval_modal_exec_without_reason_snapshot() {
         ratatui::Terminal::new(VT100Backend::new(80, height)).expect("create terminal");
     terminal.set_viewport_area(Rect::new(0, 0, 80, height));
     terminal
-        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw approval modal (no reason)");
     assert_snapshot!(
         "approval_modal_exec_no_reason",
@@ -1516,7 +1910,7 @@ fn approval_modal_patch_snapshot() {
         ratatui::Terminal::new(VT100Backend::new(80, height)).expect("create terminal");
     terminal.set_viewport_area(Rect::new(0, 0, 80, height));
     terminal
-        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw patch approval modal");
     assert_snapshot!(
         "approval_modal_patch",
@@ -1608,7 +2002,7 @@ fn ui_snapshots_small_heights_idle() {
         let name = format!("chat_small_idle_h{h}");
         let mut terminal = Terminal::new(TestBackend::new(40, h)).expect("create terminal");
         terminal
-            .draw(|f| f.render_widget_ref(&chat, f.area()))
+            .draw(|f| chat.render(f.area(), f.buffer_mut()))
             .expect("draw chat idle");
         assert_snapshot!(name, terminal.backend());
     }
@@ -1638,7 +2032,7 @@ fn ui_snapshots_small_heights_task_running() {
         let name = format!("chat_small_running_h{h}");
         let mut terminal = Terminal::new(TestBackend::new(40, h)).expect("create terminal");
         terminal
-            .draw(|f| f.render_widget_ref(&chat, f.area()))
+            .draw(|f| chat.render(f.area(), f.buffer_mut()))
             .expect("draw chat running");
         assert_snapshot!(name, terminal.backend());
     }
@@ -1675,6 +2069,7 @@ fn status_widget_and_approval_modal_snapshot() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        risk: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -1687,7 +2082,7 @@ fn status_widget_and_approval_modal_snapshot() {
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
         .expect("create terminal");
     terminal
-        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw status + approval modal");
     assert_snapshot!("status_widget_and_approval_modal", terminal.backend());
 }
@@ -1716,7 +2111,7 @@ fn status_widget_active_snapshot() {
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
         .expect("create terminal");
     terminal
-        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw status widget");
     assert_snapshot!("status_widget_active", terminal.backend());
 }
@@ -1751,7 +2146,7 @@ fn apply_patch_events_emit_history_cells() {
 
     let area = Rect::new(0, 0, 80, chat.desired_height(80));
     let mut buf = ratatui::buffer::Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
     let mut saw_summary = false;
     for y in 0..area.height {
         let mut row = String::new();
@@ -2038,7 +2433,7 @@ fn apply_patch_untrusted_shows_approval_modal() {
     // Render and ensure the approval modal title is present
     let area = Rect::new(0, 0, 80, 12);
     let mut buf = Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
 
     let mut contains_title = false;
     for y in 0..area.height {
@@ -2092,7 +2487,7 @@ fn apply_patch_request_shows_diff_summary() {
 
     let area = Rect::new(0, 0, 80, chat.desired_height(80));
     let mut buf = ratatui::buffer::Buffer::empty(area);
-    (&chat).render_ref(area, &mut buf);
+    chat.render(area, &mut buf);
 
     let mut saw_header = false;
     let mut saw_line1 = false;
@@ -2162,7 +2557,7 @@ fn plan_update_renders_history_cell() {
 fn stream_error_updates_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
     chat.bottom_pane.set_task_running(true);
-    let msg = "Re-connecting... 2/5";
+    let msg = "Reconnecting... 2/5";
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
         msg: EventMsg::StreamError(StreamErrorEvent {
@@ -2180,6 +2575,25 @@ fn stream_error_updates_status_indicator() {
         .status_widget()
         .expect("status indicator should be visible");
     assert_eq!(status.header(), msg);
+}
+
+#[test]
+fn warning_event_adds_warning_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::Warning(WarningEvent {
+            message: TEST_WARNING_MESSAGE.to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one warning history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains(TEST_WARNING_MESSAGE),
+        "warning cell missing content: {rendered}"
+    );
 }
 
 #[test]
@@ -2353,6 +2767,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
                     path: "diff_render.rs".into(),
                 },
             ],
+            is_user_shell_command: false,
         }),
     });
     chat.handle_codex_event(Event {
@@ -2392,11 +2807,12 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     term.set_viewport_area(viewport);
 
     for lines in drain_insert_history(&mut rx) {
-        crate::insert_history::insert_history_lines(&mut term, lines);
+        crate::insert_history::insert_history_lines(&mut term, lines)
+            .expect("Failed to insert history lines in test");
     }
 
     term.draw(|f| {
-        (&chat).render_ref(f.area(), f.buffer_mut());
+        chat.render(f.area(), f.buffer_mut());
     })
     .unwrap();
 
@@ -2469,7 +2885,8 @@ printf 'fenced within fenced\n'
             while let Ok(app_ev) = rx.try_recv() {
                 if let AppEvent::InsertHistoryCell(cell) = app_ev {
                     let lines = cell.display_lines(width);
-                    crate::insert_history::insert_history_lines(&mut term, lines);
+                    crate::insert_history::insert_history_lines(&mut term, lines)
+                        .expect("Failed to insert history lines in test");
                     inserted_any = true;
                 }
             }
@@ -2487,8 +2904,34 @@ printf 'fenced within fenced\n'
         }),
     });
     for lines in drain_insert_history(&mut rx) {
-        crate::insert_history::insert_history_lines(&mut term, lines);
+        crate::insert_history::insert_history_lines(&mut term, lines)
+            .expect("Failed to insert history lines in test");
     }
 
+    assert_snapshot!(term.backend().vt100().screen().contents());
+}
+
+#[test]
+fn chatwidget_tall() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }),
+    });
+    for i in 0..30 {
+        chat.queue_user_message(format!("Hello, world! {i}").into());
+    }
+    let width: u16 = 80;
+    let height: u16 = 24;
+    let backend = VT100Backend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    let desired_height = chat.desired_height(width).min(height);
+    term.set_viewport_area(Rect::new(0, height - desired_height, width, desired_height));
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .unwrap();
     assert_snapshot!(term.backend().vt100().screen().contents());
 }

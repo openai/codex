@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use codex_core::AuthManager;
+use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::read_openai_api_key_from_env;
@@ -9,6 +10,7 @@ use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -148,6 +150,7 @@ pub(crate) struct AuthModeWidget {
     pub error: Option<String>,
     pub sign_in_state: Arc<RwLock<SignInState>>,
     pub codex_home: PathBuf,
+    pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub login_status: LoginStatus,
     pub auth_manager: Arc<AuthManager>,
     pub forced_chatgpt_workspace_id: Option<String>,
@@ -426,7 +429,9 @@ impl AuthModeWidget {
                         should_request_frame = true;
                     }
                     KeyCode::Char(c)
-                        if !key_event.modifiers.contains(KeyModifiers::CONTROL)
+                        if key_event.kind == KeyEventKind::Press
+                            && !key_event.modifiers.contains(KeyModifiers::SUPER)
+                            && !key_event.modifiers.contains(KeyModifiers::CONTROL)
                             && !key_event.modifiers.contains(KeyModifiers::ALT) =>
                     {
                         if state.prepopulated_from_env {
@@ -512,7 +517,11 @@ impl AuthModeWidget {
             self.disallow_api_login();
             return;
         }
-        match login_with_api_key(&self.codex_home, &api_key) {
+        match login_with_api_key(
+            &self.codex_home,
+            &api_key,
+            self.cli_auth_credentials_store_mode,
+        ) {
             Ok(()) => {
                 self.error = None;
                 self.login_status = LoginStatus::AuthMode(AuthMode::ApiKey);
@@ -553,6 +562,7 @@ impl AuthModeWidget {
             self.codex_home.clone(),
             CLIENT_ID.to_string(),
             self.forced_chatgpt_workspace_id.clone(),
+            self.cli_auth_credentials_store_mode,
         );
         match run_login_server(opts) {
             Ok(child) => {
@@ -640,6 +650,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
+    use codex_core::auth::AuthCredentialsStoreMode;
+
     fn widget_forced_chatgpt() -> (AuthModeWidget, TempDir) {
         let codex_home = TempDir::new().unwrap();
         let codex_home_path = codex_home.path().to_path_buf();
@@ -649,8 +661,13 @@ mod tests {
             error: None,
             sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
             codex_home: codex_home_path.clone(),
+            cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             login_status: LoginStatus::NotAuthenticated,
-            auth_manager: AuthManager::shared(codex_home_path, false),
+            auth_manager: AuthManager::shared(
+                codex_home_path,
+                false,
+                AuthCredentialsStoreMode::File,
+            ),
             forced_chatgpt_workspace_id: None,
             forced_login_method: Some(ForcedLoginMethod::Chatgpt),
         };
