@@ -80,7 +80,6 @@ mod wrapping;
 #[cfg(test)]
 pub mod test_backend;
 
-use crate::onboarding::TrustDirectorySelection;
 use crate::onboarding::WSL_INSTRUCTIONS;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
@@ -366,13 +365,8 @@ async fn run_ratatui_app(
                 update_action: None,
             });
         }
-        // if the user acknowledged windows or made an explicit decision ato trust the directory, reload the config accordingly
-        if should_show_windows_wsl_screen
-            || onboarding_result
-                .directory_trust_decision
-                .map(|d| d == TrustDirectorySelection::Trust)
-                .unwrap_or(false)
-        {
+        // if the user acknowledged windows or made any trust decision, reload the config accordingly
+        if should_show_windows_wsl_screen || onboarding_result.directory_trust_decision.is_some() {
             load_config_or_exit(cli_kv_overrides, overrides).await
         } else {
             initial_config
@@ -528,7 +522,7 @@ fn should_show_trust_screen(config: &Config) -> bool {
         // Respect explicit approval/sandbox overrides made by the user.
         return false;
     }
-    // otherwise, skip iff the active project is trusted
+    // otherwise, skip if the active project is trusted
     !config.active_project.is_trusted()
 }
 

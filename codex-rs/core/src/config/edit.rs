@@ -29,9 +29,9 @@ pub enum ConfigEdit {
     SetWindowsWslSetupAcknowledged(bool),
     /// Replace the entire `[mcp_servers]` table.
     ReplaceMcpServers(BTreeMap<String, McpServerConfig>),
-    /// Set trust_level = "trusted" under `[projects."<path>"]`,
+    /// Set trust_level under `[projects."<path>"]`,
     /// migrating inline tables to explicit tables.
-    SetProjectTrusted(PathBuf),
+    SetProjectTrustLevel { path: PathBuf, level: String },
     /// Set the value stored at the exact dotted path.
     SetPath {
         segments: Vec<String>,
@@ -254,10 +254,10 @@ impl ConfigDocument {
             ConfigEdit::ReplaceMcpServers(servers) => Ok(self.replace_mcp_servers(servers)),
             ConfigEdit::SetPath { segments, value } => Ok(self.insert(segments, value.clone())),
             ConfigEdit::ClearPath { segments } => Ok(self.clear_owned(segments)),
-            ConfigEdit::SetProjectTrusted(project_path) => {
+            ConfigEdit::SetProjectTrustLevel { path, level } => {
                 // Delegate to the existing, tested logic in config.rs to
                 // ensure tables are explicit and migration is preserved.
-                crate::config::set_project_trusted_inner(&mut self.doc, project_path.as_path())?;
+                crate::config::set_project_trust_level_inner(&mut self.doc, path.as_path(), level)?;
                 Ok(true)
             }
         }
@@ -498,10 +498,24 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn set_project_trusted<P: Into<PathBuf>>(mut self, project_path: P) -> Self {
-        self.edits
-            .push(ConfigEdit::SetProjectTrusted(project_path.into()));
+    pub fn set_project_trust_level<P: Into<PathBuf>>(
+        mut self,
+        project_path: P,
+        trust_level: &str,
+    ) -> Self {
+        self.edits.push(ConfigEdit::SetProjectTrustLevel {
+            path: project_path.into(),
+            level: trust_level.to_string(),
+        });
         self
+    }
+
+    pub fn set_project_trusted<P: Into<PathBuf>>(self, project_path: P) -> Self {
+        self.set_project_trust_level(project_path, "trusted")
+    }
+
+    pub fn set_project_untrusted<P: Into<PathBuf>>(self, project_path: P) -> Self {
+        self.set_project_trust_level(project_path, "untrusted")
     }
 
     /// Apply edits on a blocking thread.

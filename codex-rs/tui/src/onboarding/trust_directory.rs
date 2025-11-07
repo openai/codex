@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use codex_core::config::set_project_trusted;
+use codex_core::config::{set_project_trusted, set_project_untrusted};
 use codex_core::git_info::resolve_root_git_project_for_trust;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -163,6 +163,16 @@ impl TrustDirectoryWidget {
 
     fn handle_dont_trust(&mut self) {
         self.highlighted = TrustDirectorySelection::DontTrust;
+        let target =
+            resolve_root_git_project_for_trust(&self.cwd).unwrap_or_else(|| self.cwd.clone());
+        if let Err(e) = set_project_untrusted(&self.codex_home, &target) {
+            tracing::error!("Failed to set project untrusted: {e:?}");
+            self.error = Some(format!(
+                "Failed to set untrusted for {}: {e}",
+                target.display()
+            ));
+        }
+
         self.selection = Some(TrustDirectorySelection::DontTrust);
     }
 }

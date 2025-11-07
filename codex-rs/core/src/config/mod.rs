@@ -382,15 +382,16 @@ fn ensure_no_inline_bearer_tokens(value: &TomlValue) -> std::io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn set_project_trusted_inner(
+pub(crate) fn set_project_trust_level_inner(
     doc: &mut DocumentMut,
     project_path: &Path,
+    trust_level: &str,
 ) -> anyhow::Result<()> {
     // Ensure we render a human-friendly structure:
     //
     // [projects]
     // [projects."/path/to/project"]
-    // trust_level = "trusted"
+    // trust_level = "trusted" or "untrusted"
     //
     // rather than inline tables like:
     //
@@ -446,17 +447,27 @@ pub(crate) fn set_project_trusted_inner(
         return Err(anyhow::anyhow!("project table missing for {project_key}"));
     };
     proj_tbl.set_implicit(false);
-    proj_tbl["trust_level"] = toml_edit::value("trusted");
+    proj_tbl["trust_level"] = toml_edit::value(trust_level);
     Ok(())
 }
 
-/// Patch `CODEX_HOME/config.toml` project state.
+/// Patch `CODEX_HOME/config.toml` project state to mark project as trusted.
 /// Use with caution.
 pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Result<()> {
     use crate::config::edit::ConfigEditsBuilder;
 
     ConfigEditsBuilder::new(codex_home)
         .set_project_trusted(project_path)
+        .apply_blocking()
+}
+
+/// Patch `CODEX_HOME/config.toml` project state to mark project as untrusted.
+/// Use with caution.
+pub fn set_project_untrusted(codex_home: &Path, project_path: &Path) -> anyhow::Result<()> {
+    use crate::config::edit::ConfigEditsBuilder;
+
+    ConfigEditsBuilder::new(codex_home)
+        .set_project_untrusted(project_path)
         .apply_blocking()
 }
 
@@ -696,6 +707,13 @@ impl ProjectConfig {
             None => false,
         }
     }
+
+    pub fn is_untrusted(&self) -> bool {
+        match &self.trust_level {
+            Some(trust_level) => trust_level == "untrusted",
+            None => false,
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
@@ -735,9 +753,9 @@ impl ConfigToml {
             .or(profile_sandbox_mode)
             .or(self.sandbox_mode)
             .or_else(|| {
-                // if no sandbox_mode is set, but user has marked directory as trusted, use WorkspaceWrite
+                // if no sandbox_mode is set, but user has marked directory as trusted or untrusted, use WorkspaceWrite
                 self.get_active_project(resolved_cwd).and_then(|p| {
-                    if p.is_trusted() {
+                    if p.is_trusted() || p.is_untrusted() {
                         Some(SandboxMode::WorkspaceWrite)
                     } else {
                         None
@@ -958,6 +976,9 @@ impl Config {
                 if active_project.is_trusted() {
                     // If no explicit approval policy is set, but we trust cwd, default to OnRequest
                     AskForApproval::OnRequest
+                } else if active_project.is_untrusted() {
+                    // If project is explicitly marked untrusted, require approval for non-safe commands
+                    AskForApproval::UnlessTrusted
                 } else {
                     AskForApproval::default()
                 }
@@ -3164,7 +3185,7 @@ model_verbosity = "high"
         let project_dir = Path::new("/some/path");
         let mut doc = DocumentMut::new();
 
-        set_project_trusted_inner(&mut doc, project_dir)?;
+        set_project_trust_level_inner(&mut doc, project_dir, "trusted")?;
 
         let contents = doc.to_string();
 
@@ -3204,7 +3225,7 @@ trust_level = "trusted"
         let mut doc = initial.parse::<DocumentMut>()?;
 
         // Run the function; it should convert to explicit tables and set trusted
-        set_project_trusted_inner(&mut doc, project_dir)?;
+        set_project_trust_level_inner(&mut doc, project_dir, "trusted")?;
 
         let contents = doc.to_string();
 
@@ -3231,7 +3252,7 @@ model = "foo""#;
 
         // Approve a new directory
         let new_project = Path::new("/Users/mbolin/code/codex2");
-        set_project_trusted_inner(&mut doc, new_project)?;
+        set_project_trust_level_inner(&mut doc, new_project, "trusted")?;
 
         let contents = doc.to_string();
 
@@ -3251,6 +3272,69 @@ trust_level = "trusted"
 trust_level = "trusted"
 "#;
         assert_eq!(contents, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_untrusted_project_gets_workspace_write_sandbox() -> anyhow::Result<()> {
+        let config_with_untrusted = r#"
+[projects."/tmp/test"]
+trust_level = "untrusted"
+"#;
+
+        let cfg = toml::from_str::<ConfigToml>(config_with_untrusted)
+            .expect("TOML deserialization should succeed");
+
+        let resolution = cfg.derive_sandbox_policy(
+            None,
+            None,
+            &PathBuf::from("/tmp/test"),
+        );
+
+        // Verify that untrusted projects get WorkspaceWrite, not ReadOnly
+        assert!(
+            matches!(resolution.policy, SandboxPolicy::WorkspaceWrite { .. }),
+            "Expected WorkspaceWrite for untrusted project, got {:?}",
+            resolution.policy
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_untrusted_project_gets_unless_trusted_approval_policy() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        // Create TOML config with untrusted project
+        let config_toml_str = r#"
+[projects."/tmp/test"]
+trust_level = "untrusted"
+"#;
+        let cfg = toml::from_str::<ConfigToml>(config_toml_str)
+            .expect("TOML deserialization should succeed");
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides {
+                cwd: Some(PathBuf::from("/tmp/test")),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        // Verify that untrusted projects get UnlessTrusted approval policy
+        assert_eq!(
+            config.approval_policy,
+            AskForApproval::UnlessTrusted,
+            "Expected UnlessTrusted approval policy for untrusted project"
+        );
+
+        // Verify that untrusted projects still get WorkspaceWrite sandbox
+        assert!(
+            matches!(config.sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }),
+            "Expected WorkspaceWrite sandbox for untrusted project"
+        );
 
         Ok(())
     }
