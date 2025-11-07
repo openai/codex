@@ -24,7 +24,6 @@ use crate::protocol::SandboxPolicy;
 use crate::protocol::TaskStartedEvent;
 use crate::sandboxing::ExecEnv;
 use crate::state::TaskKind;
-use crate::tools::format_exec_output_for_model;
 use crate::tools::format_exec_output_str;
 use crate::user_shell_command::user_shell_command_record_item;
 
@@ -128,10 +127,15 @@ impl SessionTask for UserShellCommandTask {
         match exec_result {
             Err(CancelErr::Cancelled) => {
                 let aborted_message = "command aborted by user".to_string();
-                let output_items = [user_shell_command_record_item(
-                    &raw_command,
-                    &aborted_message,
-                )];
+                let exec_output = ExecToolCallOutput {
+                    exit_code: -1,
+                    stdout: StreamOutput::new(String::new()),
+                    stderr: StreamOutput::new(aborted_message.clone()),
+                    aggregated_output: StreamOutput::new(aborted_message.clone()),
+                    duration: Duration::ZERO,
+                    timed_out: false,
+                };
+                let output_items = [user_shell_command_record_item(&raw_command, &exec_output)];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
                     .await;
@@ -166,11 +170,7 @@ impl SessionTask for UserShellCommandTask {
                     )
                     .await;
 
-                let output_payload = format_exec_output_for_model(&output);
-                let output_items = [user_shell_command_record_item(
-                    &raw_command,
-                    &output_payload,
-                )];
+                let output_items = [user_shell_command_record_item(&raw_command, &output)];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
                     .await;
@@ -200,11 +200,7 @@ impl SessionTask for UserShellCommandTask {
                         }),
                     )
                     .await;
-                let output_payload = format_exec_output_for_model(&exec_output);
-                let output_items = [user_shell_command_record_item(
-                    &raw_command,
-                    &output_payload,
-                )];
+                let output_items = [user_shell_command_record_item(&raw_command, &exec_output)];
                 session
                     .record_conversation_items(turn_context.as_ref(), &output_items)
                     .await;
