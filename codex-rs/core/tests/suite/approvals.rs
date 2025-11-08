@@ -1106,7 +1106,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
         ScenarioSpec {
             name: "unified exec on request no approval for safe command",
             approval_policy: OnRequest,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
             action: ActionKind::RunUnifiedExecCommand {
                 command: "echo \"hello unified exec\"",
             },
@@ -1121,7 +1121,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
         ScenarioSpec {
             name: "unified exec on request requires approval unless trusted",
             approval_policy: AskForApproval::UnlessTrusted,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
             action: ActionKind::RunUnifiedExecCommand {
                 command: "git reset --hard",
             },
