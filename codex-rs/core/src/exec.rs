@@ -658,7 +658,6 @@ fn kill_child_process_group(_: &mut Child) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use std::time::Duration;
 
     fn make_exec_output(
