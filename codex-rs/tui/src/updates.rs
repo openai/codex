@@ -185,6 +185,7 @@ pub enum UpdateAction {
     BrewUpgrade,
 }
 
+#[cfg(any(not(debug_assertions), test))]
 pub(crate) fn get_update_action() -> Option<UpdateAction> {
     let exe = std::env::current_exe().unwrap_or_default();
     let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
