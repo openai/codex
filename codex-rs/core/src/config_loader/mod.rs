@@ -223,7 +223,7 @@ fn check_project_config_allows(project_toml: &TomlValue) -> bool {
     // Check explicit allow_project_config setting
     if let Some(allow) = project_toml
         .get("allow_project_config")
-        .and_then(|v| v.as_bool())
+        .and_then(TomlValue::as_bool)
     {
         return allow;
     }
@@ -231,7 +231,7 @@ fn check_project_config_allows(project_toml: &TomlValue) -> bool {
     // Fall back to checking trust_level (trusted projects allow by default)
     let is_trusted = project_toml
         .get("trust_level")
-        .and_then(|v| v.as_str())
+        .and_then(TomlValue::as_str)
         .map(|s| s == "trusted")
         .unwrap_or(false);
 

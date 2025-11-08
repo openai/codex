@@ -579,7 +579,10 @@ mod tests {
             temp_dir.path().to_path_buf(),
         )?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
-        config.active_project = ProjectConfig { trust_level: None };
+        config.active_project = ProjectConfig {
+            trust_level: None,
+            allow_project_config: None,
+        };
         set_windows_sandbox_enabled(false);
 
         let should_show = should_show_trust_screen(&config);
