@@ -172,7 +172,7 @@ mod windows_impl {
         cwd: &Path,
         env_map: &HashMap<String, String>,
         logs_base_dir: Option<&Path>,
-    ) -> Result<()> {
+    ) -> Result<Vec<PathBuf>> {
         audit::audit_everyone_writable(cwd, env_map, logs_base_dir)
     }
 
@@ -438,7 +438,7 @@ mod stub {
         _cwd: &Path,
         _env_map: &HashMap<String, String>,
         _logs_base_dir: Option<&Path>,
-    ) -> Result<()> {
+    ) -> Result<Vec<std::path::PathBuf>> {
         bail!("Windows sandbox is only available on Windows")
     }
 

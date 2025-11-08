@@ -174,13 +174,14 @@ impl App {
             skip_world_writable_scan_once: false,
         };
 
-        // On startup, if Auto mode (workspace-write) is active, warn about world-writable dirs on Windows.
+        // On startup, if Auto mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
         {
             let should_check = codex_core::get_platform_sandbox().is_some()
                 && matches!(
                     app.config.sandbox_policy,
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | codex_core::protocol::SandboxPolicy::ReadOnly
                 )
                 && !app
                     .config
@@ -192,7 +193,7 @@ impl App {
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
-                Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, tx, false);
+                Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, tx);
             }
         }
 
@@ -386,9 +387,18 @@ impl App {
             AppEvent::OpenFullAccessConfirmation { preset } => {
                 self.chat_widget.open_full_access_confirmation(preset);
             }
-            AppEvent::OpenWorldWritableWarningConfirmation { preset } => {
-                self.chat_widget
-                    .open_world_writable_warning_confirmation(preset);
+            AppEvent::OpenWorldWritableWarningConfirmation {
+                preset,
+                sample_paths,
+                extra_count,
+                failed_scan,
+            } => {
+                self.chat_widget.open_world_writable_warning_confirmation(
+                    preset,
+                    sample_paths,
+                    extra_count,
+                    failed_scan,
+                );
             }
             AppEvent::OpenFeedbackNote {
                 category,
@@ -449,14 +459,15 @@ impl App {
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
                 #[cfg(target_os = "windows")]
-                let policy_is_workspace_write = matches!(
+                let policy_is_workspace_write_or_ro = matches!(
                     policy,
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | codex_core::protocol::SandboxPolicy::ReadOnly
                 );
 
                 self.chat_widget.set_sandbox_policy(policy);
 
-                // If sandbox policy becomes workspace-write, run the Windows world-writable scan.
+                // If sandbox policy becomes workspace-write or read-only, run the Windows world-writable scan.
                 #[cfg(target_os = "windows")]
                 {
                     // One-shot suppression if the user just confirmed continue.
@@ -466,7 +477,7 @@ impl App {
                     }
 
                     let should_check = codex_core::get_platform_sandbox().is_some()
-                        && policy_is_workspace_write
+                        && policy_is_workspace_write_or_ro
                         && !self.chat_widget.world_writable_warning_hidden();
                     if should_check {
                         let cwd = self.config.cwd.clone();
@@ -474,7 +485,7 @@ impl App {
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
                         let logs_base_dir = self.config.codex_home.clone();
-                        Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, tx, false);
+                        Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, tx);
                     }
                 }
             }
@@ -628,28 +639,48 @@ impl App {
         env_map: std::collections::HashMap<String, String>,
         logs_base_dir: PathBuf,
         tx: AppEventSender,
-        apply_preset_on_continue: bool,
     ) {
+        #[inline]
+        fn normalize_windows_path_for_display(p: &std::path::Path) -> String {
+            let canon = dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+            canon.display().to_string().replace('/', "\\")
+        }
         tokio::task::spawn_blocking(move || {
-            if codex_windows_sandbox::preflight_audit_everyone_writable(
+            let result = codex_windows_sandbox::preflight_audit_everyone_writable(
                 &cwd,
                 &env_map,
                 Some(logs_base_dir.as_path()),
-            )
-            .is_err()
+            );
+            if let Ok(ref paths) = result
+                && !paths.is_empty()
             {
-                if apply_preset_on_continue {
-                    if let Some(preset) = codex_common::approval_presets::builtin_approval_presets()
-                        .into_iter()
-                        .find(|p| p.id == "auto")
-                    {
-                        tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
-                            preset: Some(preset),
-                        });
-                    }
+                let as_strings: Vec<String> = paths
+                    .iter()
+                    .map(|p| normalize_windows_path_for_display(p))
+                    .collect();
+                let sample_paths: Vec<String> = as_strings.iter().take(3).cloned().collect();
+                let extra_count = if as_strings.len() > sample_paths.len() {
+                    as_strings.len() - sample_paths.len()
                 } else {
-                    tx.send(AppEvent::OpenWorldWritableWarningConfirmation { preset: None });
-                }
+                    0
+                };
+
+                tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
+                    preset: None,
+                    sample_paths,
+                    extra_count,
+                    failed_scan: false,
+                });
+            } else if result.is_err() {
+                // Scan failed: still warn, but with no examples and mark as failed.
+                let sample_paths: Vec<String> = Vec::new();
+                let extra_count = 0usize;
+                tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
+                    preset: None,
+                    sample_paths,
+                    extra_count,
+                    failed_scan: true,
+                });
             }
         });
     }
