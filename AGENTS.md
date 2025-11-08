@@ -84,6 +84,7 @@ If you don’t have the tool:
 - Use `ResponseMock::single_request()` when a test should only issue one POST, or `ResponseMock::requests()` to inspect every captured `ResponsesRequest`.
 - `ResponsesRequest` exposes helpers (`body_json`, `input`, `function_call_output`, `custom_tool_call_output`, `call_output`, `header`, `path`, `query_param`) so assertions can target structured payloads instead of manual JSON digging.
 - Build SSE payloads with the provided `ev_*` constructors and the `sse(...)`.
+- Prefer `wait_for_event` over `wait_for_event_with_timeout`.
 
 - Typical pattern:
 

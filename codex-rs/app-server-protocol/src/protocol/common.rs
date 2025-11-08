@@ -191,7 +191,7 @@ client_request_definitions! {
     #[serde(rename = "account/read")]
     #[ts(rename = "account/read")]
     GetAccount {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: v2::GetAccountParams,
         response: v2::GetAccountResponse,
     },
 
@@ -263,6 +263,7 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v1::LogoutChatGptResponse,
     },
+    /// DEPRECATED in favor of GetAccount
     GetAuthStatus {
         params: v1::GetAuthStatusParams,
         response: v1::GetAuthStatusResponse,
@@ -758,12 +759,17 @@ mod tests {
     fn serialize_get_account() -> Result<()> {
         let request = ClientRequest::GetAccount {
             request_id: RequestId::Integer(5),
-            params: None,
+            params: v2::GetAccountParams {
+                refresh_token: false,
+            },
         };
         assert_eq!(
             json!({
                 "method": "account/read",
                 "id": 5,
+                "params": {
+                    "refreshToken": false
+                }
             }),
             serde_json::to_value(&request)?,
         );
@@ -772,19 +778,16 @@ mod tests {
 
     #[test]
     fn account_serializes_fields_in_camel_case() -> Result<()> {
-        let api_key = v2::Account::ApiKey {
-            api_key: "secret".to_string(),
-        };
+        let api_key = v2::Account::ApiKey {};
         assert_eq!(
             json!({
                 "type": "apiKey",
-                "apiKey": "secret",
             }),
             serde_json::to_value(&api_key)?,
         );
 
         let chatgpt = v2::Account::Chatgpt {
-            email: Some("user@example.com".to_string()),
+            email: "user@example.com".to_string(),
             plan_type: PlanType::Plus,
         };
         assert_eq!(

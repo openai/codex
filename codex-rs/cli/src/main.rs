@@ -26,8 +26,10 @@ use std::path::PathBuf;
 use supports_color::Stream;
 
 mod mcp_cmd;
+mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
+use crate::wsl_paths::normalize_for_wsl;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::features::is_known_feature_key;
@@ -270,7 +272,11 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     let (cmd, args) = action.command_args();
     let cmd_str = action.command_str();
     println!("Updating Codex via `{cmd_str}`...");
-    let status = std::process::Command::new(cmd).args(args).status()?;
+    let command_path = normalize_for_wsl(cmd);
+    let normalized_args: Vec<String> = args.iter().map(normalize_for_wsl).collect();
+    let status = std::process::Command::new(&command_path)
+        .args(&normalized_args)
+        .status()?;
     if !status.success() {
         anyhow::bail!("`{cmd_str}` failed with status {status}");
     }

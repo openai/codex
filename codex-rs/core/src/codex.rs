@@ -1643,8 +1643,7 @@ async fn spawn_review_thread(
     let mut review_features = config.features.clone();
     review_features
         .disable(crate::features::Feature::WebSearchRequest)
-        .disable(crate::features::Feature::ViewImageTool)
-        .disable(crate::features::Feature::StreamableShell);
+        .disable(crate::features::Feature::ViewImageTool);
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_family: &review_model_family,
         features: &review_features,
@@ -1928,6 +1927,7 @@ async fn run_turn(
                 return Err(CodexErr::UsageLimitReached(e));
             }
             Err(CodexErr::UsageNotIncluded) => return Err(CodexErr::UsageNotIncluded),
+            Err(e @ CodexErr::QuotaExceeded) => return Err(e),
             Err(e @ CodexErr::RefreshTokenFailed(_)) => return Err(e),
             Err(e) => {
                 // Use the configured provider-specific stream retry budget.

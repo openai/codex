@@ -60,7 +60,6 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
     config.features.disable(Feature::ApplyPatchFreeform);
     config.features.disable(Feature::ViewImageTool);
     config.features.disable(Feature::WebSearchRequest);
-    config.features.disable(Feature::StreamableShell);
     config.features.disable(Feature::UnifiedExec);
 
     let conversation_manager =

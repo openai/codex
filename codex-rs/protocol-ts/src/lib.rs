@@ -46,6 +46,8 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     {
         let status = Command::new(prettier_bin)
             .arg("--write")
+            .arg("--log-level")
+            .arg("warn")
             .args(ts_files.iter().map(|p| p.as_os_str()))
             .status()
             .with_context(|| format!("Failed to invoke Prettier at {}", prettier_bin.display()))?;
