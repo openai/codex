@@ -9,8 +9,8 @@ expression: terminal.backend().vt100().screen().contents()
 
   $ echo hello world
 
-› 1. Yes, proceed
-  2. Yes, and don't ask again for this command
-  3. No, and tell Codex what to do differently esc
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for this command (a)
+  3. No, and tell Codex what to do differently (esc)
 
   Press enter to confirm or esc to cancel
