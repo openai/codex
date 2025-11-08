@@ -193,7 +193,7 @@ impl App {
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
-                Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, tx, false);
+                Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, tx);
             }
         }
 
@@ -387,9 +387,9 @@ impl App {
             AppEvent::OpenFullAccessConfirmation { preset } => {
                 self.chat_widget.open_full_access_confirmation(preset);
             }
-            AppEvent::OpenWorldWritableWarningConfirmation { preset, sample_paths, extra_count } => {
+            AppEvent::OpenWorldWritableWarningConfirmation { preset, sample_paths, extra_count, failed_scan } => {
                 self.chat_widget
-                    .open_world_writable_warning_confirmation(preset, sample_paths, extra_count);
+                    .open_world_writable_warning_confirmation(preset, sample_paths, extra_count, failed_scan);
             }
             AppEvent::OpenFeedbackNote {
                 category,
@@ -476,7 +476,7 @@ impl App {
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
                         let logs_base_dir = self.config.codex_home.clone();
-                        Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, tx, false);
+                        Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, tx);
                     }
                 }
             }
@@ -630,7 +630,6 @@ impl App {
         env_map: std::collections::HashMap<String, String>,
         logs_base_dir: PathBuf,
         tx: AppEventSender,
-        apply_preset_on_continue: bool,
     ) {
         #[inline]
         fn normalize_windows_path_for_display(p: &std::path::Path) -> String {
@@ -643,7 +642,7 @@ impl App {
                 &env_map,
                 Some(logs_base_dir.as_path()),
             );
-            if let Ok(paths) = result
+            if let Ok(ref paths) = result
                 && !paths.is_empty()
             {
                 let as_strings: Vec<String> =
@@ -655,24 +654,22 @@ impl App {
                     0
                 };
 
-                if apply_preset_on_continue {
-                    if let Some(preset) = codex_common::approval_presets::builtin_approval_presets()
-                        .into_iter()
-                        .find(|p| p.id == "auto")
-                    {
-                        tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
-                            preset: Some(preset),
-                            sample_paths,
-                            extra_count,
-                        });
-                    }
-                } else {
-                    tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
-                        preset: None,
-                        sample_paths,
-                        extra_count,
-                    });
-                }
+                tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
+                    preset: None,
+                    sample_paths,
+                    extra_count,
+                    failed_scan: false,
+                });
+            } else if result.is_err() {
+                // Scan failed: still warn, but with no examples and mark as failed.
+                let sample_paths: Vec<String> = Vec::new();
+                let extra_count = 0usize;
+                tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
+                    preset: None,
+                    sample_paths,
+                    extra_count,
+                    failed_scan: true,
+                });
             }
         });
     }

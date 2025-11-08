@@ -83,6 +83,8 @@ pub(crate) enum AppEvent {
         sample_paths: Vec<String>,
         /// If there are more than `sample_paths`, this carries the remaining count.
         extra_count: usize,
+        /// True when the scan failed (e.g. ACL query error) and protections could not be verified.
+        failed_scan: bool,
     },
 
     /// Show Windows Subsystem for Linux setup instructions for auto mode.

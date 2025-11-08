@@ -2051,7 +2051,7 @@ impl ChatWidget {
                         for (k, v) in std::env::vars() {
                             env_map.insert(k, v);
                         }
-                        let (sample_paths, extra_count) =
+                        let (sample_paths, extra_count, failed_scan) =
                             match codex_windows_sandbox::preflight_audit_everyone_writable(
                                 &self.config.cwd,
                                 &env_map,
@@ -2076,15 +2076,17 @@ impl ChatWidget {
                                     } else {
                                         0
                                     };
-                                    (samples, extra)
+                                    (samples, extra, false)
                                 }
-                                _ => (Vec::new(), 0),
+                                Err(_) => (Vec::new(), 0, true),
+                                _ => (Vec::new(), 0, false),
                             };
                         vec![Box::new(move |tx| {
                             tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
                                 preset: Some(preset_clone.clone()),
                                 sample_paths: sample_paths.clone(),
                                 extra_count,
+                                failed_scan,
                             });
                         })]
                     } else {
@@ -2149,7 +2151,7 @@ impl ChatWidget {
             Some(self.config.codex_home.as_path()),
         ) {
             Ok(paths) => !paths.is_empty(),
-            Err(_) => false,
+            Err(_) => true,
         }
     }
 
@@ -2223,6 +2225,7 @@ impl ChatWidget {
         preset: Option<ApprovalPreset>,
         sample_paths: Vec<String>,
         extra_count: usize,
+        failed_scan: bool,
     ) {
         let (approval, sandbox) = match &preset {
             Some(p) => (Some(p.approval), Some(p.sandbox.clone())),
@@ -2235,13 +2238,22 @@ impl ChatWidget {
             _ => "Auto mode",
         };
         let title_line = Line::from("Unprotected directories found").bold();
-        let info_line = Line::from(vec![
-            "Some important directories on this system are world-writable. ".into(),
-            format!(
-                "The Windows sandbox cannot protect writes to these locations in {mode_label}."
-            )
-            .fg(Color::Red),
-        ]);
+        let info_line = if failed_scan {
+            Line::from(vec![
+                "We couldn't complete the world-writable scan, so protections cannot be verified. "
+                    .into(),
+                format!("The Windows sandbox cannot guarantee protection in {mode_label}.")
+                    .fg(Color::Red),
+            ])
+        } else {
+            Line::from(vec![
+                "Some important directories on this system are world-writable. ".into(),
+                format!(
+                    "The Windows sandbox cannot protect writes to these locations in {mode_label}."
+                )
+                .fg(Color::Red),
+            ])
+        };
         header_children.push(Box::new(title_line));
         header_children.push(Box::new(
             Paragraph::new(vec![info_line]).wrap(Wrap { trim: false }),
@@ -2315,6 +2327,7 @@ impl ChatWidget {
         _preset: Option<ApprovalPreset>,
         _sample_paths: Vec<String>,
         _extra_count: usize,
+        _failed_scan: bool,
     ) {
     }
 
