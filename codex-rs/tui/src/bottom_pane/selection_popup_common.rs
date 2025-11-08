@@ -3,6 +3,7 @@ use ratatui::layout::Rect;
 // Note: Table-based layout previously used Constraint; the manual renderer
 // below no longer requires it.
 use ratatui::style::Color;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -180,8 +181,9 @@ pub(crate) fn render_rows(
         );
         if Some(i) == state.selected_idx {
             // Match previous behavior: cyan + bold for the selected row.
+            // Reset the style first to avoid inheriting dim from keyboard shortcuts.
             full_line.spans.iter_mut().for_each(|span| {
-                span.style = span.style.fg(Color::Cyan).bold();
+                span.style = Style::default().fg(Color::Cyan).bold();
             });
         }
 
