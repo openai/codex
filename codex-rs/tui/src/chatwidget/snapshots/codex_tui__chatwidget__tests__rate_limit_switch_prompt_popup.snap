@@ -1,12 +1,11 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 480
 expression: popup
 ---
   Approaching rate limits
-  You've used over 90% of your limit. Switch to gpt-5-codex-mini for lower cre
+  Switch to gpt-5-codex-mini for lower credit usage?
 
-› 1. Switch to gpt-5-codex-mini  Optimized for codex. Cheaper, faster, and
+› 1. Switch to gpt-5-codex-mini  Optimized for codex. Cheaper, faster, but
                                  less capable.
   2. Keep current model
 

@@ -49,7 +49,7 @@ async fn thread_resume_returns_existing_thread() -> Result<()> {
     .await??;
     let ThreadResumeResponse { thread: resumed } =
         to_response::<ThreadResumeResponse>(resume_resp)?;
-    assert_eq!(resumed.id, thread.id);
+    assert_eq!(resumed, thread);
 
     Ok(())
 }

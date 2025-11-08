@@ -123,14 +123,11 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
 pub enum Account {
     #[serde(rename = "apiKey", rename_all = "camelCase")]
     #[ts(rename = "apiKey", rename_all = "camelCase")]
-    ApiKey { api_key: String },
+    ApiKey {},
 
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
-    Chatgpt {
-        email: Option<String>,
-        plan_type: PlanType,
-    },
+    Chatgpt { email: String, plan_type: PlanType },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -196,8 +193,17 @@ pub struct GetAccountRateLimitsResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct GetAccountParams {
+    #[serde(default)]
+    pub refresh_token: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct GetAccountResponse {
-    pub account: Account,
+    pub account: Option<Account>,
+    pub requires_openai_auth: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
@@ -348,6 +354,11 @@ pub struct ThreadCompactResponse {}
 #[ts(export_to = "v2/")]
 pub struct Thread {
     pub id: String,
+    /// Usually the first user message in the thread, if available.
+    pub preview: String,
+    pub model_provider: String,
+    /// Unix timestamp (in seconds) when the thread was created.
+    pub created_at: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

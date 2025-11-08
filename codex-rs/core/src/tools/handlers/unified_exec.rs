@@ -1,8 +1,5 @@
-use std::time::Duration;
-
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde::Serialize;
 
 use crate::function_tool::FunctionCallError;
 use crate::protocol::EventMsg;
@@ -163,11 +160,7 @@ impl ToolHandler for UnifiedExecHandler {
                 .await;
         }
 
-        let content = serialize_response(&response).map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "failed to serialize unified exec output: {err:?}"
-            ))
-        })?;
+        let content = format_response(&response);
 
         Ok(ToolOutput::Function {
             content,
@@ -177,32 +170,30 @@ impl ToolHandler for UnifiedExecHandler {
     }
 }
 
-#[derive(Serialize)]
-struct SerializedUnifiedExecResponse<'a> {
-    chunk_id: &'a str,
-    wall_time_seconds: f64,
-    output: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    session_id: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    exit_code: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    original_token_count: Option<usize>,
-}
+fn format_response(response: &UnifiedExecResponse) -> String {
+    let mut sections = Vec::new();
 
-fn serialize_response(response: &UnifiedExecResponse) -> Result<String, serde_json::Error> {
-    let payload = SerializedUnifiedExecResponse {
-        chunk_id: &response.chunk_id,
-        wall_time_seconds: duration_to_seconds(response.wall_time),
-        output: &response.output,
-        session_id: response.session_id,
-        exit_code: response.exit_code,
-        original_token_count: response.original_token_count,
-    };
+    if !response.chunk_id.is_empty() {
+        sections.push(format!("Chunk ID: {}", response.chunk_id));
+    }
 
-    serde_json::to_string(&payload)
-}
+    let wall_time_seconds = response.wall_time.as_secs_f64();
+    sections.push(format!("Wall time: {wall_time_seconds:.4} seconds"));
 
-fn duration_to_seconds(duration: Duration) -> f64 {
-    duration.as_secs_f64()
+    if let Some(exit_code) = response.exit_code {
+        sections.push(format!("Process exited with code {exit_code}"));
+    }
+
+    if let Some(session_id) = response.session_id {
+        sections.push(format!("Process running with session ID {session_id}"));
+    }
+
+    if let Some(original_token_count) = response.original_token_count {
+        sections.push(format!("Original token count: {original_token_count}"));
+    }
+
+    sections.push("Output:".to_string());
+    sections.push(response.output.clone());
+
+    sections.join("\n")
 }

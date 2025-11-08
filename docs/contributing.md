@@ -24,6 +24,7 @@ If you want to add a new feature or change the behavior of an existing one, plea
 ### Opening a pull request
 
 - Fill in the PR template (or include similar information) - **What? Why? How?**
+- Include a link to a bug report or enhancement request in the issue tracker
 - Run **all** checks locally (`cargo test && cargo clippy --tests && cargo fmt -- --config imports_granularity=Item`). CI failures that could have been caught locally slow down the process.
 - Make sure your branch is up-to-date with `main` and that you have resolved merge conflicts.
 - Mark the PR as **Ready for review** only when you believe it is in a merge-able state.
