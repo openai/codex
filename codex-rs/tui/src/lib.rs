@@ -71,8 +71,9 @@ mod terminal_palette;
 mod text_formatting;
 mod tui;
 mod ui_consts;
+pub mod update_action;
 mod update_prompt;
-pub mod updates;
+mod updates;
 mod version;
 
 mod wrapping;
