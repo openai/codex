@@ -66,6 +66,7 @@ pub(crate) async fn spawn_child_async(
 
     #[cfg(unix)]
     unsafe {
+        #[cfg(target_os = "linux")]
         let parent_pid = libc::getpid();
         cmd.pre_exec(|| {
             if libc::setpgid(0, 0) == -1 {
