@@ -1,18 +1,25 @@
-use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use clap::ArgGroup;
 use codex_common::CliConfigOverrides;
+use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
-use codex_core::config::write_global_mcp_servers;
-use codex_core::config_types::McpServerConfig;
+use codex_core::config::types::McpServerConfig;
+use codex_core::config::types::McpServerTransportConfig;
+use codex_core::features::Feature;
+use codex_core::mcp::auth::compute_auth_statuses;
+use codex_core::protocol::McpAuthStatus;
+use codex_rmcp_client::delete_oauth_tokens;
+use codex_rmcp_client::perform_oauth_login;
+use codex_rmcp_client::supports_oauth_login;
 
 /// [experimental] Launch Codex as an MCP server or manage configured MCP servers.
 ///
@@ -28,14 +35,11 @@ pub struct McpCli {
     pub config_overrides: CliConfigOverrides,
 
     #[command(subcommand)]
-    pub cmd: Option<McpSubcommand>,
+    pub subcommand: McpSubcommand,
 }
 
 #[derive(Debug, clap::Subcommand)]
 pub enum McpSubcommand {
-    /// [experimental] Run the Codex MCP server (stdio transport).
-    Serve,
-
     /// [experimental] List configured MCP servers.
     List(ListArgs),
 
@@ -47,6 +51,14 @@ pub enum McpSubcommand {
 
     /// [experimental] Remove a global MCP server entry.
     Remove(RemoveArgs),
+
+    /// [experimental] Authenticate with a configured MCP server via OAuth.
+    /// Requires experimental_use_rmcp_client = true in config.toml.
+    Login(LoginArgs),
+
+    /// [experimental] Remove stored OAuth credentials for a server.
+    /// Requires experimental_use_rmcp_client = true in config.toml.
+    Logout(LogoutArgs),
 }
 
 #[derive(Debug, clap::Parser)]
@@ -71,13 +83,61 @@ pub struct AddArgs {
     /// Name for the MCP server configuration.
     pub name: String,
 
-    /// Environment variables to set when launching the server.
-    #[arg(long, value_parser = parse_env_pair, value_name = "KEY=VALUE")]
-    pub env: Vec<(String, String)>,
+    #[command(flatten)]
+    pub transport_args: AddMcpTransportArgs,
+}
 
+#[derive(Debug, clap::Args)]
+#[command(
+    group(
+        ArgGroup::new("transport")
+            .args(["command", "url"])
+            .required(true)
+            .multiple(false)
+    )
+)]
+pub struct AddMcpTransportArgs {
+    #[command(flatten)]
+    pub stdio: Option<AddMcpStdioArgs>,
+
+    #[command(flatten)]
+    pub streamable_http: Option<AddMcpStreamableHttpArgs>,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct AddMcpStdioArgs {
     /// Command to launch the MCP server.
-    #[arg(trailing_var_arg = true, num_args = 1..)]
+    /// Use --url for a streamable HTTP server.
+    #[arg(
+            trailing_var_arg = true,
+            num_args = 0..,
+        )]
     pub command: Vec<String>,
+
+    /// Environment variables to set when launching the server.
+    /// Only valid with stdio servers.
+    #[arg(
+        long,
+        value_parser = parse_env_pair,
+        value_name = "KEY=VALUE",
+    )]
+    pub env: Vec<(String, String)>,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct AddMcpStreamableHttpArgs {
+    /// URL for a streamable HTTP MCP server.
+    #[arg(long)]
+    pub url: String,
+
+    /// Optional environment variable to read for a bearer token.
+    /// Only valid with streamable HTTP servers.
+    #[arg(
+        long = "bearer-token-env-var",
+        value_name = "ENV_VAR",
+        requires = "url"
+    )]
+    pub bearer_token_env_var: Option<String>,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -86,29 +146,47 @@ pub struct RemoveArgs {
     pub name: String,
 }
 
+#[derive(Debug, clap::Parser)]
+pub struct LoginArgs {
+    /// Name of the MCP server to authenticate with oauth.
+    pub name: String,
+
+    /// Comma-separated list of OAuth scopes to request.
+    #[arg(long, value_delimiter = ',', value_name = "SCOPE,SCOPE")]
+    pub scopes: Vec<String>,
+}
+
+#[derive(Debug, clap::Parser)]
+pub struct LogoutArgs {
+    /// Name of the MCP server to deauthenticate.
+    pub name: String,
+}
+
 impl McpCli {
-    pub async fn run(self, codex_linux_sandbox_exe: Option<PathBuf>) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
         let McpCli {
             config_overrides,
-            cmd,
+            subcommand,
         } = self;
-        let subcommand = cmd.unwrap_or(McpSubcommand::Serve);
 
         match subcommand {
-            McpSubcommand::Serve => {
-                codex_mcp_server::run_main(codex_linux_sandbox_exe, config_overrides).await?;
-            }
             McpSubcommand::List(args) => {
-                run_list(&config_overrides, args)?;
+                run_list(&config_overrides, args).await?;
             }
             McpSubcommand::Get(args) => {
-                run_get(&config_overrides, args)?;
+                run_get(&config_overrides, args).await?;
             }
             McpSubcommand::Add(args) => {
-                run_add(&config_overrides, args)?;
+                run_add(&config_overrides, args).await?;
             }
             McpSubcommand::Remove(args) => {
-                run_remove(&config_overrides, args)?;
+                run_remove(&config_overrides, args).await?;
+            }
+            McpSubcommand::Login(args) => {
+                run_login(&config_overrides, args).await?;
+            }
+            McpSubcommand::Logout(args) => {
+                run_logout(&config_overrides, args).await?;
             }
         }
 
@@ -116,54 +194,127 @@ impl McpCli {
     }
 }
 
-fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<()> {
+async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<()> {
     // Validate any provided overrides even though they are not currently applied.
-    config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+    let overrides = config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+        .await
+        .context("failed to load configuration")?;
 
-    let AddArgs { name, env, command } = add_args;
+    let AddArgs {
+        name,
+        transport_args,
+    } = add_args;
 
     validate_server_name(&name)?;
 
-    let mut command_parts = command.into_iter();
-    let command_bin = command_parts
-        .next()
-        .ok_or_else(|| anyhow!("command is required"))?;
-    let command_args: Vec<String> = command_parts.collect();
-
-    let env_map = if env.is_empty() {
-        None
-    } else {
-        let mut map = HashMap::new();
-        for (key, value) in env {
-            map.insert(key, value);
-        }
-        Some(map)
-    };
-
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let mut servers = load_global_mcp_servers(&codex_home)
+        .await
         .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
 
+    let transport = match transport_args {
+        AddMcpTransportArgs {
+            stdio: Some(stdio), ..
+        } => {
+            let mut command_parts = stdio.command.into_iter();
+            let command_bin = command_parts
+                .next()
+                .ok_or_else(|| anyhow!("command is required"))?;
+            let command_args: Vec<String> = command_parts.collect();
+
+            let env_map = if stdio.env.is_empty() {
+                None
+            } else {
+                Some(stdio.env.into_iter().collect::<HashMap<_, _>>())
+            };
+            McpServerTransportConfig::Stdio {
+                command: command_bin,
+                args: command_args,
+                env: env_map,
+                env_vars: Vec::new(),
+                cwd: None,
+            }
+        }
+        AddMcpTransportArgs {
+            streamable_http:
+                Some(AddMcpStreamableHttpArgs {
+                    url,
+                    bearer_token_env_var,
+                }),
+            ..
+        } => McpServerTransportConfig::StreamableHttp {
+            url,
+            bearer_token_env_var,
+            http_headers: None,
+            env_http_headers: None,
+        },
+        AddMcpTransportArgs { .. } => bail!("exactly one of --command or --url must be provided"),
+    };
+
     let new_entry = McpServerConfig {
-        command: command_bin,
-        args: command_args,
-        env: env_map,
+        transport: transport.clone(),
+        enabled: true,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
+        enabled_tools: None,
+        disabled_tools: None,
     };
 
     servers.insert(name.clone(), new_entry);
 
-    write_global_mcp_servers(&codex_home, &servers)
+    ConfigEditsBuilder::new(&codex_home)
+        .replace_mcp_servers(&servers)
+        .apply()
+        .await
         .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
 
     println!("Added global MCP server '{name}'.");
 
+    if let McpServerTransportConfig::StreamableHttp {
+        url,
+        bearer_token_env_var: None,
+        http_headers,
+        env_http_headers,
+    } = transport
+    {
+        match supports_oauth_login(&url).await {
+            Ok(true) => {
+                if !config.features.enabled(Feature::RmcpClient) {
+                    println!(
+                        "MCP server supports login. Add `experimental_use_rmcp_client = true` \
+                         to your config.toml and run `codex mcp login {name}` to login."
+                    );
+                } else {
+                    println!("Detected OAuth support. Starting OAuth flow…");
+                    perform_oauth_login(
+                        &name,
+                        &url,
+                        config.mcp_oauth_credentials_store_mode,
+                        http_headers.clone(),
+                        env_http_headers.clone(),
+                        &Vec::new(),
+                    )
+                    .await?;
+                    println!("Successfully logged in.");
+                }
+            }
+            Ok(false) => {}
+            Err(_) => println!(
+                "MCP server may or may not require login. Run `codex mcp login {name}` to login."
+            ),
+        }
+    }
+
     Ok(())
 }
 
-fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveArgs) -> Result<()> {
-    config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveArgs) -> Result<()> {
+    config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
 
     let RemoveArgs { name } = remove_args;
 
@@ -171,12 +322,16 @@ fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveArgs) ->
 
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let mut servers = load_global_mcp_servers(&codex_home)
+        .await
         .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
 
     let removed = servers.remove(&name).is_some();
 
     if removed {
-        write_global_mcp_servers(&codex_home, &servers)
+        ConfigEditsBuilder::new(&codex_home)
+            .replace_mcp_servers(&servers)
+            .apply()
+            .await
             .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
     }
 
@@ -189,34 +344,144 @@ fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveArgs) ->
     Ok(())
 }
 
-fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Result<()> {
-    let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs) -> Result<()> {
+    let overrides = config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
     let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+        .await
+        .context("failed to load configuration")?;
+
+    if !config.features.enabled(Feature::RmcpClient) {
+        bail!(
+            "OAuth login is only supported when [features].rmcp_client is true in config.toml. See https://github.com/openai/codex/blob/main/docs/config.md#feature-flags for details."
+        );
+    }
+
+    let LoginArgs { name, scopes } = login_args;
+
+    let Some(server) = config.mcp_servers.get(&name) else {
+        bail!("No MCP server named '{name}' found.");
+    };
+
+    let (url, http_headers, env_http_headers) = match &server.transport {
+        McpServerTransportConfig::StreamableHttp {
+            url,
+            http_headers,
+            env_http_headers,
+            ..
+        } => (url.clone(), http_headers.clone(), env_http_headers.clone()),
+        _ => bail!("OAuth login is only supported for streamable HTTP servers."),
+    };
+
+    perform_oauth_login(
+        &name,
+        &url,
+        config.mcp_oauth_credentials_store_mode,
+        http_headers,
+        env_http_headers,
+        &scopes,
+    )
+    .await?;
+    println!("Successfully logged in to MCP server '{name}'.");
+    Ok(())
+}
+
+async fn run_logout(config_overrides: &CliConfigOverrides, logout_args: LogoutArgs) -> Result<()> {
+    let overrides = config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+        .await
+        .context("failed to load configuration")?;
+
+    let LogoutArgs { name } = logout_args;
+
+    let server = config
+        .mcp_servers
+        .get(&name)
+        .ok_or_else(|| anyhow!("No MCP server named '{name}' found in configuration."))?;
+
+    let url = match &server.transport {
+        McpServerTransportConfig::StreamableHttp { url, .. } => url.clone(),
+        _ => bail!("OAuth logout is only supported for streamable_http transports."),
+    };
+
+    match delete_oauth_tokens(&name, &url, config.mcp_oauth_credentials_store_mode) {
+        Ok(true) => println!("Removed OAuth credentials for '{name}'."),
+        Ok(false) => println!("No OAuth credentials stored for '{name}'."),
+        Err(err) => return Err(anyhow!("failed to delete OAuth credentials: {err}")),
+    }
+
+    Ok(())
+}
+
+async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Result<()> {
+    let overrides = config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+        .await
         .context("failed to load configuration")?;
 
     let mut entries: Vec<_> = config.mcp_servers.iter().collect();
     entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+    let auth_statuses = compute_auth_statuses(
+        config.mcp_servers.iter(),
+        config.mcp_oauth_credentials_store_mode,
+    )
+    .await;
 
     if list_args.json {
         let json_entries: Vec<_> = entries
             .into_iter()
             .map(|(name, cfg)| {
-                let env = cfg.env.as_ref().map(|env| {
-                    env.iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect::<BTreeMap<_, _>>()
-                });
+                let auth_status = auth_statuses
+                    .get(name.as_str())
+                    .map(|entry| entry.auth_status)
+                    .unwrap_or(McpAuthStatus::Unsupported);
+                let transport = match &cfg.transport {
+                    McpServerTransportConfig::Stdio {
+                        command,
+                        args,
+                        env,
+                        env_vars,
+                        cwd,
+                    } => serde_json::json!({
+                        "type": "stdio",
+                        "command": command,
+                        "args": args,
+                        "env": env,
+                        "env_vars": env_vars,
+                        "cwd": cwd,
+                    }),
+                    McpServerTransportConfig::StreamableHttp {
+                        url,
+                        bearer_token_env_var,
+                        http_headers,
+                        env_http_headers,
+                    } => {
+                        serde_json::json!({
+                            "type": "streamable_http",
+                            "url": url,
+                            "bearer_token_env_var": bearer_token_env_var,
+                            "http_headers": http_headers,
+                            "env_http_headers": env_http_headers,
+                        })
+                    }
+                };
+
                 serde_json::json!({
                     "name": name,
-                    "command": cfg.command,
-                    "args": cfg.args,
-                    "env": env,
+                    "enabled": cfg.enabled,
+                    "transport": transport,
                     "startup_timeout_sec": cfg
                         .startup_timeout_sec
                         .map(|timeout| timeout.as_secs_f64()),
                     "tool_timeout_sec": cfg
                         .tool_timeout_sec
                         .map(|timeout| timeout.as_secs_f64()),
+                    "auth_status": auth_status,
                 })
             })
             .collect();
@@ -230,70 +495,190 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
         return Ok(());
     }
 
-    let mut rows: Vec<[String; 4]> = Vec::new();
+    let mut stdio_rows: Vec<[String; 7]> = Vec::new();
+    let mut http_rows: Vec<[String; 5]> = Vec::new();
+
     for (name, cfg) in entries {
-        let args = if cfg.args.is_empty() {
-            "-".to_string()
-        } else {
-            cfg.args.join(" ")
-        };
-
-        let env = match cfg.env.as_ref() {
-            None => "-".to_string(),
-            Some(map) if map.is_empty() => "-".to_string(),
-            Some(map) => {
-                let mut pairs: Vec<_> = map.iter().collect();
-                pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-                pairs
-                    .into_iter()
-                    .map(|(k, v)| format!("{k}={v}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+        match &cfg.transport {
+            McpServerTransportConfig::Stdio {
+                command,
+                args,
+                env,
+                env_vars,
+                cwd,
+            } => {
+                let args_display = if args.is_empty() {
+                    "-".to_string()
+                } else {
+                    args.join(" ")
+                };
+                let env_display = format_env_display(env.as_ref(), env_vars);
+                let cwd_display = cwd
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| "-".to_string());
+                let status = if cfg.enabled {
+                    "enabled".to_string()
+                } else {
+                    "disabled".to_string()
+                };
+                let auth_status = auth_statuses
+                    .get(name.as_str())
+                    .map(|entry| entry.auth_status)
+                    .unwrap_or(McpAuthStatus::Unsupported)
+                    .to_string();
+                stdio_rows.push([
+                    name.clone(),
+                    command.clone(),
+                    args_display,
+                    env_display,
+                    cwd_display,
+                    status,
+                    auth_status,
+                ]);
             }
-        };
-
-        rows.push([name.clone(), cfg.command.clone(), args, env]);
-    }
-
-    let mut widths = ["Name".len(), "Command".len(), "Args".len(), "Env".len()];
-    for row in &rows {
-        for (i, cell) in row.iter().enumerate() {
-            widths[i] = widths[i].max(cell.len());
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                bearer_token_env_var,
+                ..
+            } => {
+                let status = if cfg.enabled {
+                    "enabled".to_string()
+                } else {
+                    "disabled".to_string()
+                };
+                let auth_status = auth_statuses
+                    .get(name.as_str())
+                    .map(|entry| entry.auth_status)
+                    .unwrap_or(McpAuthStatus::Unsupported)
+                    .to_string();
+                let bearer_token_display =
+                    bearer_token_env_var.as_deref().unwrap_or("-").to_string();
+                http_rows.push([
+                    name.clone(),
+                    url.clone(),
+                    bearer_token_display,
+                    status,
+                    auth_status,
+                ]);
+            }
         }
     }
 
-    println!(
-        "{:<name_w$}  {:<cmd_w$}  {:<args_w$}  {:<env_w$}",
-        "Name",
-        "Command",
-        "Args",
-        "Env",
-        name_w = widths[0],
-        cmd_w = widths[1],
-        args_w = widths[2],
-        env_w = widths[3],
-    );
+    if !stdio_rows.is_empty() {
+        let mut widths = [
+            "Name".len(),
+            "Command".len(),
+            "Args".len(),
+            "Env".len(),
+            "Cwd".len(),
+            "Status".len(),
+            "Auth".len(),
+        ];
+        for row in &stdio_rows {
+            for (i, cell) in row.iter().enumerate() {
+                widths[i] = widths[i].max(cell.len());
+            }
+        }
 
-    for row in rows {
         println!(
-            "{:<name_w$}  {:<cmd_w$}  {:<args_w$}  {:<env_w$}",
-            row[0],
-            row[1],
-            row[2],
-            row[3],
+            "{name:<name_w$}  {command:<cmd_w$}  {args:<args_w$}  {env:<env_w$}  {cwd:<cwd_w$}  {status:<status_w$}  {auth:<auth_w$}",
+            name = "Name",
+            command = "Command",
+            args = "Args",
+            env = "Env",
+            cwd = "Cwd",
+            status = "Status",
+            auth = "Auth",
             name_w = widths[0],
             cmd_w = widths[1],
             args_w = widths[2],
             env_w = widths[3],
+            cwd_w = widths[4],
+            status_w = widths[5],
+            auth_w = widths[6],
         );
+
+        for row in &stdio_rows {
+            println!(
+                "{name:<name_w$}  {command:<cmd_w$}  {args:<args_w$}  {env:<env_w$}  {cwd:<cwd_w$}  {status:<status_w$}  {auth:<auth_w$}",
+                name = row[0].as_str(),
+                command = row[1].as_str(),
+                args = row[2].as_str(),
+                env = row[3].as_str(),
+                cwd = row[4].as_str(),
+                status = row[5].as_str(),
+                auth = row[6].as_str(),
+                name_w = widths[0],
+                cmd_w = widths[1],
+                args_w = widths[2],
+                env_w = widths[3],
+                cwd_w = widths[4],
+                status_w = widths[5],
+                auth_w = widths[6],
+            );
+        }
+    }
+
+    if !stdio_rows.is_empty() && !http_rows.is_empty() {
+        println!();
+    }
+
+    if !http_rows.is_empty() {
+        let mut widths = [
+            "Name".len(),
+            "Url".len(),
+            "Bearer Token Env Var".len(),
+            "Status".len(),
+            "Auth".len(),
+        ];
+        for row in &http_rows {
+            for (i, cell) in row.iter().enumerate() {
+                widths[i] = widths[i].max(cell.len());
+            }
+        }
+
+        println!(
+            "{name:<name_w$}  {url:<url_w$}  {token:<token_w$}  {status:<status_w$}  {auth:<auth_w$}",
+            name = "Name",
+            url = "Url",
+            token = "Bearer Token Env Var",
+            status = "Status",
+            auth = "Auth",
+            name_w = widths[0],
+            url_w = widths[1],
+            token_w = widths[2],
+            status_w = widths[3],
+            auth_w = widths[4],
+        );
+
+        for row in &http_rows {
+            println!(
+                "{name:<name_w$}  {url:<url_w$}  {token:<token_w$}  {status:<status_w$}  {auth:<auth_w$}",
+                name = row[0].as_str(),
+                url = row[1].as_str(),
+                token = row[2].as_str(),
+                status = row[3].as_str(),
+                auth = row[4].as_str(),
+                name_w = widths[0],
+                url_w = widths[1],
+                token_w = widths[2],
+                status_w = widths[3],
+                auth_w = widths[4],
+            );
+        }
     }
 
     Ok(())
 }
 
-fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<()> {
-    let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<()> {
+    let overrides = config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
     let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+        .await
         .context("failed to load configuration")?;
 
     let Some(server) = config.mcp_servers.get(&get_args.name) else {
@@ -301,16 +686,40 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
     };
 
     if get_args.json {
-        let env = server.env.as_ref().map(|env| {
-            env.iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect::<BTreeMap<_, _>>()
-        });
+        let transport = match &server.transport {
+            McpServerTransportConfig::Stdio {
+                command,
+                args,
+                env,
+                env_vars,
+                cwd,
+            } => serde_json::json!({
+                "type": "stdio",
+                "command": command,
+                "args": args,
+                "env": env,
+                "env_vars": env_vars,
+                "cwd": cwd,
+            }),
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                bearer_token_env_var,
+                http_headers,
+                env_http_headers,
+            } => serde_json::json!({
+                "type": "streamable_http",
+                "url": url,
+                "bearer_token_env_var": bearer_token_env_var,
+                "http_headers": http_headers,
+                "env_http_headers": env_http_headers,
+            }),
+        };
         let output = serde_json::to_string_pretty(&serde_json::json!({
             "name": get_args.name,
-            "command": server.command,
-            "args": server.args,
-            "env": env,
+            "enabled": server.enabled,
+            "transport": transport,
+            "enabled_tools": server.enabled_tools.clone(),
+            "disabled_tools": server.disabled_tools.clone(),
             "startup_timeout_sec": server
                 .startup_timeout_sec
                 .map(|timeout| timeout.as_secs_f64()),
@@ -322,28 +731,91 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
         return Ok(());
     }
 
+    if !server.enabled {
+        println!("{} (disabled)", get_args.name);
+        return Ok(());
+    }
+
     println!("{}", get_args.name);
-    println!("  command: {}", server.command);
-    let args = if server.args.is_empty() {
-        "-".to_string()
-    } else {
-        server.args.join(" ")
-    };
-    println!("  args: {args}");
-    let env_display = match server.env.as_ref() {
-        None => "-".to_string(),
-        Some(map) if map.is_empty() => "-".to_string(),
-        Some(map) => {
-            let mut pairs: Vec<_> = map.iter().collect();
-            pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-            pairs
-                .into_iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect::<Vec<_>>()
-                .join(", ")
+    println!("  enabled: {}", server.enabled);
+    let format_tool_list = |tools: &Option<Vec<String>>| -> String {
+        match tools {
+            Some(list) if list.is_empty() => "[]".to_string(),
+            Some(list) => list.join(", "),
+            None => "-".to_string(),
         }
     };
-    println!("  env: {env_display}");
+    if server.enabled_tools.is_some() {
+        let enabled_tools_display = format_tool_list(&server.enabled_tools);
+        println!("  enabled_tools: {enabled_tools_display}");
+    }
+    if server.disabled_tools.is_some() {
+        let disabled_tools_display = format_tool_list(&server.disabled_tools);
+        println!("  disabled_tools: {disabled_tools_display}");
+    }
+    match &server.transport {
+        McpServerTransportConfig::Stdio {
+            command,
+            args,
+            env,
+            env_vars,
+            cwd,
+        } => {
+            println!("  transport: stdio");
+            println!("  command: {command}");
+            let args_display = if args.is_empty() {
+                "-".to_string()
+            } else {
+                args.join(" ")
+            };
+            println!("  args: {args_display}");
+            let cwd_display = cwd
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "-".to_string());
+            println!("  cwd: {cwd_display}");
+            let env_display = format_env_display(env.as_ref(), env_vars);
+            println!("  env: {env_display}");
+        }
+        McpServerTransportConfig::StreamableHttp {
+            url,
+            bearer_token_env_var,
+            http_headers,
+            env_http_headers,
+        } => {
+            println!("  transport: streamable_http");
+            println!("  url: {url}");
+            let bearer_token_display = bearer_token_env_var.as_deref().unwrap_or("-");
+            println!("  bearer_token_env_var: {bearer_token_display}");
+            let headers_display = match http_headers {
+                Some(map) if !map.is_empty() => {
+                    let mut pairs: Vec<_> = map.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    pairs
+                        .into_iter()
+                        .map(|(k, _)| format!("{k}=*****"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+                _ => "-".to_string(),
+            };
+            println!("  http_headers: {headers_display}");
+            let env_headers_display = match env_http_headers {
+                Some(map) if !map.is_empty() => {
+                    let mut pairs: Vec<_> = map.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    pairs
+                        .into_iter()
+                        .map(|(k, var)| format!("{k}={var}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+                _ => "-".to_string(),
+            };
+            println!("  env_http_headers: {env_headers_display}");
+        }
+    }
     if let Some(timeout) = server.startup_timeout_sec {
         println!("  startup_timeout_sec: {}", timeout.as_secs_f64());
     }

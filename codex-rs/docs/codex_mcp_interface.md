@@ -1,9 +1,9 @@
-# Codex MCP Interface [experimental]
+# Codex MCP Server Interface [experimental]
 
-This document describes Codex’s experimental MCP interface: a JSON‑RPC API that runs over the Model Context Protocol (MCP) transport to control a local Codex engine.
+This document describes Codex’s experimental MCP server interface: a JSON‑RPC API that runs over the Model Context Protocol (MCP) transport to control a local Codex engine.
 
 - Status: experimental and subject to change without notice
-- Server binary: `codex mcp` (or `codex-mcp-server`)
+- Server binary: `codex mcp-server` (or `codex-mcp-server`)
 - Transport: standard MCP over stdio (JSON‑RPC 2.0, line‑delimited)
 
 ## Overview
@@ -19,8 +19,10 @@ At a glance:
   - `listConversations`, `resumeConversation`, `archiveConversation`
 - Configuration and info
   - `getUserSavedConfig`, `setDefaultModel`, `getUserAgent`, `userInfo`
+  - `model/list` → enumerate available models and reasoning options
 - Auth
-  - `loginApiKey`, `loginChatGpt`, `cancelLoginChatGpt`, `logoutChatGpt`, `getAuthStatus`
+  - `account/read`, `account/login/start`, `account/login/cancel`, `account/logout`, `account/rateLimits/read`
+  - notifications: `account/login/completed`, `account/updated`, `account/rateLimits/updated`
 - Utilities
   - `gitDiffToRemote`, `execOneOffCommand`
 - Approvals (server → client requests)
@@ -36,14 +38,16 @@ See code for full type definitions and exact shapes: `protocol/src/mcp_protocol.
 Run Codex as an MCP server and connect an MCP client:
 
 ```bash
-codex mcp | your_mcp_client
+codex mcp-server | your_mcp_client
 ```
 
 For a simple inspection UI, you can also try:
 
 ```bash
-npx @modelcontextprotocol/inspector codex mcp
+npx @modelcontextprotocol/inspector codex mcp-server
 ```
+
+Use the separate `codex mcp` subcommand to manage configured MCP server launchers in `config.toml`.
 
 ## Conversations
 
@@ -58,6 +62,7 @@ Request `newConversation` params (subset):
 - `sandbox`: `read-only` | `workspace-write` | `danger-full-access`
 - `config`: map of additional config overrides
 - `baseInstructions`: optional instruction override
+- `compactPrompt`: optional replacement for the default compaction prompt
 - `includePlanTool` / `includeApplyPatchTool`: booleans
 
 Response: `{ conversationId, model, reasoningEffort?, rolloutPath }`
@@ -70,6 +75,24 @@ Send input to the active turn:
 Interrupt a running turn: `interruptConversation`.
 
 List/resume/archive: `listConversations`, `resumeConversation`, `archiveConversation`.
+
+## Models
+
+Fetch the catalog of models available in the current Codex build with `model/list`. The request accepts optional pagination inputs:
+
+- `pageSize` – number of models to return (defaults to a server-selected value)
+- `cursor` – opaque string from the previous response’s `nextCursor`
+
+Each response yields:
+
+- `items` – ordered list of models. A model includes:
+  - `id`, `model`, `displayName`, `description`
+  - `supportedReasoningEfforts` – array of objects with:
+    - `reasoningEffort` – one of `minimal|low|medium|high`
+    - `description` – human-friendly label for the effort
+  - `defaultReasoningEffort` – suggested effort for the UI
+  - `isDefault` – whether the model is recommended for most users
+- `nextCursor` – pass into the next request to continue paging (optional)
 
 ## Event stream
 
@@ -91,11 +114,7 @@ The client must reply with `{ decision: "allow" | "deny" }` for each request.
 
 ## Auth helpers
 
-For ChatGPT or API‑key based auth flows, the server exposes helpers:
-
-- `loginApiKey { apiKey }`
-- `loginChatGpt` → returns `{ loginId, authUrl }`; browser completes flow; then `loginChatGptComplete` notification follows
-- `cancelLoginChatGpt { loginId }`, `logoutChatGpt`, `getAuthStatus { includeToken?, refreshToken? }`
+For the complete request/response shapes and flow examples, see the [“Auth endpoints (v2)” section in the app‑server README](../app-server/README.md#auth-endpoints-v2).
 
 ## Example: start and send a message
 

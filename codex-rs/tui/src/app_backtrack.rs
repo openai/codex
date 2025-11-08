@@ -3,13 +3,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app::App;
-use crate::history_cell::CompositeHistoryCell;
+use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_core::protocol::ConversationPathResponseEvent;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -82,15 +82,16 @@ impl App {
 
     /// Handle global Esc presses for backtracking when no overlay is present.
     pub(crate) fn handle_backtrack_esc_key(&mut self, tui: &mut tui::Tui) {
-        // Only handle backtracking when composer is empty to avoid clobbering edits.
-        if self.chat_widget.composer_is_empty() {
-            if !self.backtrack.primed {
-                self.prime_backtrack();
-            } else if self.overlay.is_none() {
-                self.open_backtrack_preview(tui);
-            } else if self.backtrack.overlay_preview_active {
-                self.step_backtrack_and_highlight(tui);
-            }
+        if !self.chat_widget.composer_is_empty() {
+            return;
+        }
+
+        if !self.backtrack.primed {
+            self.prime_backtrack();
+        } else if self.overlay.is_none() {
+            self.open_backtrack_preview(tui);
+        } else if self.backtrack.overlay_preview_active {
+            self.step_backtrack_and_highlight(tui);
         }
     }
 
@@ -102,9 +103,16 @@ impl App {
         nth_user_message: usize,
     ) {
         self.backtrack.pending = Some((base_id, nth_user_message, prefill));
-        self.app_event_tx.send(crate::app_event::AppEvent::CodexOp(
-            codex_core::protocol::Op::GetPath,
-        ));
+        if let Some(path) = self.chat_widget.rollout_path() {
+            let ev = ConversationPathResponseEvent {
+                conversation_id: base_id,
+                path,
+            };
+            self.app_event_tx
+                .send(crate::app_event::AppEvent::ConversationHistory(ev));
+        } else {
+            tracing::error!("rollout path unavailable; cannot backtrack");
+        }
     }
 
     /// Open transcript overlay (enters alternate screen and shows full transcript).
@@ -134,8 +142,9 @@ impl App {
     /// Useful when switching sessions to ensure prior history remains visible.
     pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) {
         if !self.transcript_cells.is_empty() {
+            let width = tui.terminal.last_known_screen_size.width;
             for cell in &self.transcript_cells {
-                tui.insert_history_lines(cell.transcript_lines());
+                tui.insert_history_lines(cell.display_lines(width));
             }
         }
     }
@@ -337,6 +346,7 @@ impl App {
             initial_images: Vec::new(),
             enhanced_keys_supported: self.enhanced_keys_supported,
             auth_manager: self.auth_manager.clone(),
+            feedback: self.feedback.clone(),
         };
         self.chat_widget =
             crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
@@ -384,13 +394,13 @@ fn nth_user_position(
 fn user_positions_iter(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
 ) -> impl Iterator<Item = usize> + '_ {
-    let header_type = TypeId::of::<CompositeHistoryCell>();
+    let session_start_type = TypeId::of::<SessionInfoCell>();
     let user_type = TypeId::of::<UserHistoryCell>();
     let type_of = |cell: &Arc<dyn crate::history_cell::HistoryCell>| cell.as_any().type_id();
 
     let start = cells
         .iter()
-        .rposition(|cell| type_of(cell) == header_type)
+        .rposition(|cell| type_of(cell) == session_start_type)
         .map_or(0, |idx| idx + 1);
 
     cells
@@ -447,7 +457,7 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
-        assert_eq!(intro_text, "> intro");
+        assert_eq!(intro_text, "• intro");
     }
 
     #[test]
@@ -479,7 +489,7 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
-        assert_eq!(intro_text, "> intro");
+        assert_eq!(intro_text, "• intro");
 
         let user_first = cells[1]
             .as_any()

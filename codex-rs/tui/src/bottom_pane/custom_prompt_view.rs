@@ -12,7 +12,9 @@ use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
 use std::cell::RefCell;
 
-use super::popup_consts::STANDARD_POPUP_HINT_LINE;
+use crate::render::renderable::Renderable;
+
+use super::popup_consts::standard_popup_hint_line;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -94,6 +96,16 @@ impl BottomPaneView for CustomPromptView {
         self.complete
     }
 
+    fn handle_paste(&mut self, pasted: String) -> bool {
+        if pasted.is_empty() {
+            return false;
+        }
+        self.textarea.insert_str(&pasted);
+        true
+    }
+}
+
+impl Renderable for CustomPromptView {
     fn desired_height(&self, width: u16) -> u16 {
         let extra_top: u16 = if self.context_label.is_some() { 1 } else { 0 };
         1u16 + extra_top + self.input_height(width) + 3u16
@@ -189,7 +201,7 @@ impl BottomPaneView for CustomPromptView {
 
         let hint_y = hint_blank_y.saturating_add(1);
         if hint_y < area.y.saturating_add(area.height) {
-            Paragraph::new(STANDARD_POPUP_HINT_LINE).render(
+            Paragraph::new(standard_popup_hint_line()).render(
                 Rect {
                     x: area.x,
                     y: hint_y,
@@ -199,14 +211,6 @@ impl BottomPaneView for CustomPromptView {
                 buf,
             );
         }
-    }
-
-    fn handle_paste(&mut self, pasted: String) -> bool {
-        if pasted.is_empty() {
-            return false;
-        }
-        self.textarea.insert_str(&pasted);
-        true
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {

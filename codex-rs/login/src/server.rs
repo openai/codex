@@ -14,9 +14,10 @@ use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
 use base64::Engine;
 use chrono::Utc;
+use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::AuthDotJson;
-use codex_core::auth::get_auth_file;
-use codex_core::default_client::ORIGINATOR;
+use codex_core::auth::save_auth;
+use codex_core::default_client::originator;
 use codex_core::token_data::TokenData;
 use codex_core::token_data::parse_id_token;
 use rand::RngCore;
@@ -25,6 +26,7 @@ use tiny_http::Header;
 use tiny_http::Request;
 use tiny_http::Response;
 use tiny_http::Server;
+use tiny_http::StatusCode;
 
 const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 const DEFAULT_PORT: u16 = 1455;
@@ -37,10 +39,17 @@ pub struct ServerOptions {
     pub port: u16,
     pub open_browser: bool,
     pub force_state: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<String>,
+    pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 }
 
 impl ServerOptions {
-    pub fn new(codex_home: PathBuf, client_id: String) -> Self {
+    pub fn new(
+        codex_home: PathBuf,
+        client_id: String,
+        forced_chatgpt_workspace_id: Option<String>,
+        cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+    ) -> Self {
         Self {
             codex_home,
             client_id,
@@ -48,6 +57,8 @@ impl ServerOptions {
             port: DEFAULT_PORT,
             open_browser: true,
             force_state: None,
+            forced_chatgpt_workspace_id,
+            cli_auth_credentials_store_mode,
         }
     }
 }
@@ -103,7 +114,14 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     let server = Arc::new(server);
 
     let redirect_uri = format!("http://localhost:{actual_port}/auth/callback");
-    let auth_url = build_authorize_url(&opts.issuer, &opts.client_id, &redirect_uri, &pkce, &state);
+    let auth_url = build_authorize_url(
+        &opts.issuer,
+        &opts.client_id,
+        &redirect_uri,
+        &pkce,
+        &state,
+        opts.forced_chatgpt_workspace_id.as_deref(),
+    );
 
     if opts.open_browser {
         let _ = webbrowser::open(&auth_url);
@@ -148,8 +166,15 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
                                 let _ = tokio::task::spawn_blocking(move || req.respond(response)).await;
                                 None
                             }
-                            HandledRequest::ResponseAndExit { response, result } => {
-                                let _ = tokio::task::spawn_blocking(move || req.respond(response)).await;
+                            HandledRequest::ResponseAndExit {
+                                headers,
+                                body,
+                                result,
+                            } => {
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    send_response_with_disconnect(req, headers, body)
+                                })
+                                .await;
                                 Some(result)
                             }
                             HandledRequest::RedirectWithHeader(header) => {
@@ -185,7 +210,8 @@ enum HandledRequest {
     Response(Response<Cursor<Vec<u8>>>),
     RedirectWithHeader(Header),
     ResponseAndExit {
-        response: Response<Cursor<Vec<u8>>>,
+        headers: Vec<Header>,
+        body: Vec<u8>,
         result: io::Result<()>,
     },
 }
@@ -231,6 +257,13 @@ async fn process_request(
                 .await
             {
                 Ok(tokens) => {
+                    if let Err(message) = ensure_workspace_allowed(
+                        opts.forced_chatgpt_workspace_id.as_deref(),
+                        &tokens.id_token,
+                    ) {
+                        eprintln!("Workspace restriction error: {message}");
+                        return login_error_response(&message);
+                    }
                     // Obtain API key via token-exchange and persist
                     let api_key = obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
                         .await
@@ -241,6 +274,7 @@ async fn process_request(
                         tokens.id_token.clone(),
                         tokens.access_token.clone(),
                         tokens.refresh_token.clone(),
+                        opts.cli_auth_credentials_store_mode,
                     )
                     .await
                     {
@@ -275,20 +309,21 @@ async fn process_request(
         }
         "/success" => {
             let body = include_str!("assets/success.html");
-            let mut resp = Response::from_data(body.as_bytes());
-            if let Ok(h) = tiny_http::Header::from_bytes(
-                &b"Content-Type"[..],
-                &b"text/html; charset=utf-8"[..],
-            ) {
-                resp.add_header(h);
-            }
             HandledRequest::ResponseAndExit {
-                response: resp,
+                headers: match Header::from_bytes(
+                    &b"Content-Type"[..],
+                    &b"text/html; charset=utf-8"[..],
+                ) {
+                    Ok(header) => vec![header],
+                    Err(_) => Vec::new(),
+                },
+                body: body.as_bytes().to_vec(),
                 result: Ok(()),
             }
         }
         "/cancel" => HandledRequest::ResponseAndExit {
-            response: Response::from_string("Login cancelled"),
+            headers: Vec::new(),
+            body: b"Login cancelled".to_vec(),
             result: Err(io::Error::new(
                 io::ErrorKind::Interrupted,
                 "Login cancelled",
@@ -298,28 +333,85 @@ async fn process_request(
     }
 }
 
+/// tiny_http filters `Connection` headers out of `Response` objects, so using
+/// `req.respond` never informs the client (or the library) that a keep-alive
+/// socket should be closed. That leaves the per-connection worker parked in a
+/// loop waiting for more requests, which in turn causes the next login attempt
+/// to hang on the old connection. This helper bypasses tiny_http’s response
+/// machinery: it extracts the raw writer, prints the HTTP response manually,
+/// and always appends `Connection: close`, ensuring the socket is closed from
+/// the server side. Ideally, tiny_http would provide an API to control
+/// server-side connection persistence, but it does not.
+fn send_response_with_disconnect(
+    req: Request,
+    mut headers: Vec<Header>,
+    body: Vec<u8>,
+) -> io::Result<()> {
+    let status = StatusCode(200);
+    let mut writer = req.into_writer();
+    let reason = status.default_reason_phrase();
+    write!(writer, "HTTP/1.1 {} {}\r\n", status.0, reason)?;
+    headers.retain(|h| !h.field.equiv("Connection"));
+    if let Ok(close_header) = Header::from_bytes(&b"Connection"[..], &b"close"[..]) {
+        headers.push(close_header);
+    }
+
+    let content_length_value = format!("{}", body.len());
+    if let Ok(content_length_header) =
+        Header::from_bytes(&b"Content-Length"[..], content_length_value.as_bytes())
+    {
+        headers.push(content_length_header);
+    }
+
+    for header in headers {
+        write!(
+            writer,
+            "{}: {}\r\n",
+            header.field.as_str(),
+            header.value.as_str()
+        )?;
+    }
+
+    writer.write_all(b"\r\n")?;
+    writer.write_all(&body)?;
+    writer.flush()
+}
+
 fn build_authorize_url(
     issuer: &str,
     client_id: &str,
     redirect_uri: &str,
     pkce: &PkceCodes,
     state: &str,
+    forced_chatgpt_workspace_id: Option<&str>,
 ) -> String {
-    let query = vec![
-        ("response_type", "code"),
-        ("client_id", client_id),
-        ("redirect_uri", redirect_uri),
-        ("scope", "openid profile email offline_access"),
-        ("code_challenge", &pkce.code_challenge),
-        ("code_challenge_method", "S256"),
-        ("id_token_add_organizations", "true"),
-        ("codex_cli_simplified_flow", "true"),
-        ("state", state),
-        ("originator", ORIGINATOR.value.as_str()),
+    let mut query = vec![
+        ("response_type".to_string(), "code".to_string()),
+        ("client_id".to_string(), client_id.to_string()),
+        ("redirect_uri".to_string(), redirect_uri.to_string()),
+        (
+            "scope".to_string(),
+            "openid profile email offline_access".to_string(),
+        ),
+        (
+            "code_challenge".to_string(),
+            pkce.code_challenge.to_string(),
+        ),
+        ("code_challenge_method".to_string(), "S256".to_string()),
+        ("id_token_add_organizations".to_string(), "true".to_string()),
+        ("codex_cli_simplified_flow".to_string(), "true".to_string()),
+        ("state".to_string(), state.to_string()),
+        (
+            "originator".to_string(),
+            originator().value.as_str().to_string(),
+        ),
     ];
+    if let Some(workspace_id) = forced_chatgpt_workspace_id {
+        query.push(("allowed_workspace_id".to_string(), workspace_id.to_string()));
+    }
     let qs = query
         .into_iter()
-        .map(|(k, v)| format!("{}={}", k, urlencoding::encode(v)))
+        .map(|(k, v)| format!("{k}={}", urlencoding::encode(&v)))
         .collect::<Vec<_>>()
         .join("&");
     format!("{issuer}/oauth/authorize?{qs}")
@@ -393,13 +485,13 @@ fn bind_server(port: u16) -> io::Result<Server> {
     }
 }
 
-struct ExchangedTokens {
-    id_token: String,
-    access_token: String,
-    refresh_token: String,
+pub(crate) struct ExchangedTokens {
+    pub id_token: String,
+    pub access_token: String,
+    pub refresh_token: String,
 }
 
-async fn exchange_code_for_tokens(
+pub(crate) async fn exchange_code_for_tokens(
     issuer: &str,
     client_id: &str,
     redirect_uri: &str,
@@ -443,23 +535,17 @@ async fn exchange_code_for_tokens(
     })
 }
 
-async fn persist_tokens_async(
+pub(crate) async fn persist_tokens_async(
     codex_home: &Path,
     api_key: Option<String>,
     id_token: String,
     access_token: String,
     refresh_token: String,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
     let codex_home = codex_home.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        let auth_file = get_auth_file(&codex_home);
-        if let Some(parent) = auth_file.parent()
-            && !parent.exists()
-        {
-            std::fs::create_dir_all(parent).map_err(io::Error::other)?;
-        }
-
         let mut tokens = TokenData {
             id_token: parse_id_token(&id_token).map_err(io::Error::other)?,
             access_token,
@@ -477,7 +563,7 @@ async fn persist_tokens_async(
             tokens: Some(tokens),
             last_refresh: Some(Utc::now()),
         };
-        codex_core::auth::write_auth_json(&auth_file, &auth)
+        save_auth(&codex_home, &auth, auth_credentials_store_mode)
     })
     .await
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?
@@ -562,7 +648,48 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
     serde_json::Map::new()
 }
 
-async fn obtain_api_key(issuer: &str, client_id: &str, id_token: &str) -> io::Result<String> {
+pub(crate) fn ensure_workspace_allowed(
+    expected: Option<&str>,
+    id_token: &str,
+) -> Result<(), String> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+
+    let claims = jwt_auth_claims(id_token);
+    let Some(actual) = claims.get("chatgpt_account_id").and_then(JsonValue::as_str) else {
+        return Err("Login is restricted to a specific workspace, but the token did not include an chatgpt_account_id claim.".to_string());
+    };
+
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(format!("Login is restricted to workspace id {expected}."))
+    }
+}
+
+// Respond to the oauth server with an error so the code becomes unusable by anybody else.
+fn login_error_response(message: &str) -> HandledRequest {
+    let mut headers = Vec::new();
+    if let Ok(header) = Header::from_bytes(&b"Content-Type"[..], &b"text/plain; charset=utf-8"[..])
+    {
+        headers.push(header);
+    }
+    HandledRequest::ResponseAndExit {
+        headers,
+        body: message.as_bytes().to_vec(),
+        result: Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            message.to_string(),
+        )),
+    }
+}
+
+pub(crate) async fn obtain_api_key(
+    issuer: &str,
+    client_id: &str,
+    id_token: &str,
+) -> io::Result<String> {
     // Token exchange for an API key access token
     #[derive(serde::Deserialize)]
     struct ExchangeResp {

@@ -5,25 +5,25 @@ use std::time::Duration;
 use std::time::Instant;
 
 use codex_core::protocol::Op;
+use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::exec_cell::spinner;
 use crate::key_hint;
+use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
-use crate::ui_consts::LIVE_PREFIX_COLS;
 
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
     header: String,
-    /// Queued user messages to display under the status line.
-    queued_messages: Vec<String>,
+    show_interrupt_hint: bool,
 
     elapsed_running: Duration,
     last_resume_at: Instant,
@@ -34,7 +34,7 @@ pub(crate) struct StatusIndicatorWidget {
 
 // Format elapsed seconds into a compact human-friendly form used by the status line.
 // Examples: 0s, 59s, 1m 00s, 59m 59s, 1h 00m 00s, 2h 03m 09s
-fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
+pub fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
     if elapsed_secs < 60 {
         return format!("{elapsed_secs}s");
     }
@@ -53,7 +53,7 @@ impl StatusIndicatorWidget {
     pub(crate) fn new(app_event_tx: AppEventSender, frame_requester: FrameRequester) -> Self {
         Self {
             header: String::from("Working"),
-            queued_messages: Vec::new(),
+            show_interrupt_hint: true,
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
             is_paused: false,
@@ -63,50 +63,27 @@ impl StatusIndicatorWidget {
         }
     }
 
-    pub fn desired_height(&self, width: u16) -> u16 {
-        // Status line + optional blank line + wrapped queued messages (up to 3 lines per message)
-        // + optional ellipsis line per truncated message + 1 spacer line
-        let inner_width = width.max(1) as usize;
-        let mut total: u16 = 1; // status line
-        if !self.queued_messages.is_empty() {
-            total = total.saturating_add(1); // blank line between status and queued messages
-        }
-        let text_width = inner_width.saturating_sub(3); // account for " ↳ " prefix
-        if text_width > 0 {
-            for q in &self.queued_messages {
-                let wrapped = textwrap::wrap(q, text_width);
-                let lines = wrapped.len().min(3) as u16;
-                total = total.saturating_add(lines);
-                if wrapped.len() > 3 {
-                    total = total.saturating_add(1); // ellipsis line
-                }
-            }
-            if !self.queued_messages.is_empty() {
-                total = total.saturating_add(1); // keybind hint line
-            }
-        } else {
-            // At least one line per message if width is extremely narrow
-            total = total.saturating_add(self.queued_messages.len() as u16);
-        }
-        total.saturating_add(1) // spacer line
-    }
-
     pub(crate) fn interrupt(&self) {
         self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
     }
 
     /// Update the animated header label (left of the brackets).
     pub(crate) fn update_header(&mut self, header: String) {
-        if self.header != header {
-            self.header = header;
-        }
+        self.header = header;
     }
 
-    /// Replace the queued messages displayed beneath the header.
-    pub(crate) fn set_queued_messages(&mut self, queued: Vec<String>) {
-        self.queued_messages = queued;
-        // Ensure a redraw so changes are visible.
-        self.frame_requester.schedule_frame();
+    #[cfg(test)]
+    pub(crate) fn header(&self) -> &str {
+        &self.header
+    }
+
+    pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
+        self.show_interrupt_hint = visible;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn interrupt_hint_visible(&self) -> bool {
+        self.show_interrupt_hint
     }
 
     pub(crate) fn pause_timer(&mut self) {
@@ -134,21 +111,29 @@ impl StatusIndicatorWidget {
         self.frame_requester.schedule_frame();
     }
 
-    fn elapsed_seconds_at(&self, now: Instant) -> u64 {
+    fn elapsed_duration_at(&self, now: Instant) -> Duration {
         let mut elapsed = self.elapsed_running;
         if !self.is_paused {
             elapsed += now.saturating_duration_since(self.last_resume_at);
         }
-        elapsed.as_secs()
+        elapsed
     }
 
-    fn elapsed_seconds(&self) -> u64 {
+    fn elapsed_seconds_at(&self, now: Instant) -> u64 {
+        self.elapsed_duration_at(now).as_secs()
+    }
+
+    pub fn elapsed_seconds(&self) -> u64 {
         self.elapsed_seconds_at(Instant::now())
     }
 }
 
-impl WidgetRef for StatusIndicatorWidget {
-    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+impl Renderable for StatusIndicatorWidget {
+    fn desired_height(&self, _width: u16) -> u16 {
+        1
+    }
+
+    fn render(&self, area: Rect, buf: &mut Buffer) {
         if area.is_empty() {
             return;
         }
@@ -156,45 +141,27 @@ impl WidgetRef for StatusIndicatorWidget {
         // Schedule next animation frame.
         self.frame_requester
             .schedule_frame_in(Duration::from_millis(32));
-        let elapsed = self.elapsed_seconds();
-        let pretty_elapsed = fmt_elapsed_compact(elapsed);
+        let now = Instant::now();
+        let elapsed_duration = self.elapsed_duration_at(now);
+        let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
-        let mut spans = vec![" ".repeat(LIVE_PREFIX_COLS as usize).into()];
+        let mut spans = Vec::with_capacity(5);
+        spans.push(spinner(Some(self.last_resume_at)));
+        spans.push(" ".into());
         spans.extend(shimmer_spans(&self.header));
-        spans.extend(vec![
-            " ".into(),
-            format!("({pretty_elapsed} • ").dim(),
-            "Esc".dim().bold(),
-            " to interrupt)".dim(),
-        ]);
-
-        // Build lines: status, then queued messages, then spacer.
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from(spans));
-        if !self.queued_messages.is_empty() {
-            lines.push(Line::from(""));
-        }
-        // Wrap queued messages using textwrap and show up to the first 3 lines per message.
-        let text_width = area.width.saturating_sub(3); // " ↳ " prefix
-        for q in &self.queued_messages {
-            let wrapped = textwrap::wrap(q, text_width as usize);
-            for (i, piece) in wrapped.iter().take(3).enumerate() {
-                let prefix = if i == 0 { " ↳ " } else { "   " };
-                let content = format!("{prefix}{piece}");
-                lines.push(Line::from(content.dim().italic()));
-            }
-            if wrapped.len() > 3 {
-                lines.push(Line::from("   …".dim().italic()));
-            }
-        }
-        if !self.queued_messages.is_empty() {
-            let shortcut = key_hint::alt("↑");
-            lines.push(Line::from(vec!["   ".into(), shortcut, " edit".into()]).dim());
+        spans.push(" ".into());
+        if self.show_interrupt_hint {
+            spans.extend(vec![
+                format!("({pretty_elapsed} • ").dim(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " to interrupt)".dim(),
+            ]);
+        } else {
+            spans.push(format!("({pretty_elapsed})").dim());
         }
 
-        let paragraph = Paragraph::new(lines);
-        paragraph.render_ref(area, buf);
+        Line::from(spans).render_ref(area, buf);
     }
 }
 
@@ -234,7 +201,7 @@ mod tests {
         // Render into a fixed-size test terminal and snapshot the backend.
         let mut terminal = Terminal::new(TestBackend::new(80, 2)).expect("terminal");
         terminal
-            .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
+            .draw(|f| w.render(f.area(), f.buffer_mut()))
             .expect("draw");
         insta::assert_snapshot!(terminal.backend());
     }
@@ -248,22 +215,7 @@ mod tests {
         // Render into a fixed-size test terminal and snapshot the backend.
         let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal");
         terminal
-            .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
-            .expect("draw");
-        insta::assert_snapshot!(terminal.backend());
-    }
-
-    #[test]
-    fn renders_with_queued_messages() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
-        w.set_queued_messages(vec!["first".to_string(), "second".to_string()]);
-
-        // Render into a fixed-size test terminal and snapshot the backend.
-        let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal");
-        terminal
-            .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
+            .draw(|f| w.render(f.area(), f.buffer_mut()))
             .expect("draw");
         insta::assert_snapshot!(terminal.backend());
     }

@@ -1,6 +1,6 @@
-use crate::config_types::EnvironmentVariablePattern;
-use crate::config_types::ShellEnvironmentPolicy;
-use crate::config_types::ShellEnvironmentPolicyInherit;
+use crate::config::types::EnvironmentVariablePattern;
+use crate::config::types::ShellEnvironmentPolicy;
+use crate::config::types::ShellEnvironmentPolicyInherit;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -71,7 +71,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_types::ShellEnvironmentPolicyInherit;
+    use crate::config::types::ShellEnvironmentPolicyInherit;
     use maplit::hashmap;
 
     fn make_vars(pairs: &[(&str, &str)]) -> Vec<(String, String)> {

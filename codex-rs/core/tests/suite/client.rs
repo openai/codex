@@ -1,3 +1,4 @@
+use codex_app_server_protocol::AuthMode;
 use codex_core::CodexAuth;
 use codex_core::ContentItem;
 use codex_core::ConversationManager;
@@ -8,21 +9,28 @@ use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::Prompt;
-use codex_core::ReasoningItemContent;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
+use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
+use codex_core::error::CodexErr;
+use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_core::protocol::SessionSource;
+use codex_otel::otel_event_manager::OtelEventManager;
+use codex_protocol::ConversationId;
+use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
-use core_test_support::non_sandbox_test;
 use core_test_support::responses;
+use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use futures::StreamExt;
 use serde_json::json;
@@ -33,6 +41,7 @@ use uuid::Uuid;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::body_string_contains;
 use wiremock::matchers::header_regex;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
@@ -46,6 +55,18 @@ fn sse_completed(id: &str) -> String {
 #[expect(clippy::unwrap_used)]
 fn assert_message_role(request_body: &serde_json::Value, role: &str) {
     assert_eq!(request_body["role"].as_str().unwrap(), role);
+}
+
+#[expect(clippy::expect_used)]
+fn assert_message_equals(request_body: &serde_json::Value, text: &str) {
+    let content = request_body["content"][0]["text"]
+        .as_str()
+        .expect("invalid message content");
+
+    assert_eq!(
+        content, text,
+        "expected message content '{content}' to equal '{text}'"
+    );
 }
 
 #[expect(clippy::expect_used)]
@@ -126,7 +147,7 @@ fn write_auth_json(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_includes_initial_messages_and_sends_prior_items() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     // Create a fake rollout session file with prior user + system + assistant messages.
     let tmpdir = TempDir::new().unwrap();
@@ -145,7 +166,8 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
                 "instructions": "be nice",
                 "cwd": ".",
                 "originator": "test_originator",
-                "cli_version": "test_version"
+                "cli_version": "test_version",
+                "model_provider": "test-provider"
             }
         })
     )
@@ -214,15 +236,9 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
 
     // Mock server that will receive the resumed request
     let server = MockServer::start().await;
-    let first = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_completed("resp1"), "text/event-stream");
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(first)
-        .expect(1)
-        .mount(&server)
-        .await;
+    let resp_mock =
+        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
+            .await;
 
     // Configure Codex to resume from our file
     let model_provider = ModelProviderInfo {
@@ -260,7 +276,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     // 2) Submit new input; the request body must include the prior item followed by the new user input.
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
@@ -268,8 +284,8 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         .unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let request = &server.received_requests().await.unwrap()[0];
-    let request_body = request.body_json::<serde_json::Value>().unwrap();
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
     let expected_input = json!([
         {
             "type": "message",
@@ -292,7 +308,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn includes_conversation_id_and_model_headers_in_request() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     // Mock server
     let server = MockServer::start().await;
@@ -332,7 +348,7 @@ async fn includes_conversation_id_and_model_headers_in_request() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
@@ -360,20 +376,12 @@ async fn includes_conversation_id_and_model_headers_in_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn includes_base_instructions_override_in_request() {
+    skip_if_no_network!();
     // Mock server
     let server = MockServer::start().await;
-
-    // First request – must NOT include `previous_response_id`.
-    let first = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_completed("resp1"), "text/event-stream");
-
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(first)
-        .expect(1)
-        .mount(&server)
-        .await;
+    let resp_mock =
+        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
+            .await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -395,7 +403,7 @@ async fn includes_base_instructions_override_in_request() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
@@ -404,8 +412,8 @@ async fn includes_base_instructions_override_in_request() {
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let request = &server.received_requests().await.unwrap()[0];
-    let request_body = request.body_json::<serde_json::Value>().unwrap();
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
 
     assert!(
         request_body["instructions"]
@@ -417,7 +425,7 @@ async fn includes_base_instructions_override_in_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chatgpt_auth_sends_correct_request() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     // Mock server
     let server = MockServer::start().await;
@@ -455,7 +463,7 @@ async fn chatgpt_auth_sends_correct_request() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
@@ -491,7 +499,7 @@ async fn chatgpt_auth_sends_correct_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     // Mock server
     let server = MockServer::start().await;
@@ -529,12 +537,13 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
 
-    let auth_manager = match CodexAuth::from_codex_home(codex_home.path()) {
-        Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
-        Ok(None) => panic!("No CodexAuth found in codex_home"),
-        Err(e) => panic!("Failed to load CodexAuth: {e}"),
-    };
-    let conversation_manager = ConversationManager::new(auth_manager);
+    let auth_manager =
+        match CodexAuth::from_auth_storage(codex_home.path(), AuthCredentialsStoreMode::File) {
+            Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
+            Ok(None) => panic!("No CodexAuth found in codex_home"),
+            Err(e) => panic!("Failed to load CodexAuth: {e}"),
+        };
+    let conversation_manager = ConversationManager::new(auth_manager, SessionSource::Exec);
     let NewConversation {
         conversation: codex,
         ..
@@ -545,7 +554,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
@@ -557,18 +566,12 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn includes_user_instructions_message_in_request() {
+    skip_if_no_network!();
     let server = MockServer::start().await;
 
-    let first = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_completed("resp1"), "text/event-stream");
-
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(first)
-        .expect(1)
-        .mount(&server)
-        .await;
+    let resp_mock =
+        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
+            .await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -590,7 +593,7 @@ async fn includes_user_instructions_message_in_request() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
@@ -599,8 +602,8 @@ async fn includes_user_instructions_message_in_request() {
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let request = &server.received_requests().await.unwrap()[0];
-    let request_body = request.body_json::<serde_json::Value>().unwrap();
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
 
     assert!(
         !request_body["instructions"]
@@ -609,16 +612,84 @@ async fn includes_user_instructions_message_in_request() {
             .contains("be nice")
     );
     assert_message_role(&request_body["input"][0], "user");
-    assert_message_starts_with(&request_body["input"][0], "<user_instructions>");
-    assert_message_ends_with(&request_body["input"][0], "</user_instructions>");
+    assert_message_starts_with(&request_body["input"][0], "# AGENTS.md instructions for ");
+    assert_message_ends_with(&request_body["input"][0], "</INSTRUCTIONS>");
+    let ui_text = request_body["input"][0]["content"][0]["text"]
+        .as_str()
+        .expect("invalid message content");
+    assert!(ui_text.contains("<INSTRUCTIONS>"));
+    assert!(ui_text.contains("be nice"));
     assert_message_role(&request_body["input"][1], "user");
     assert_message_starts_with(&request_body["input"][1], "<environment_context>");
     assert_message_ends_with(&request_body["input"][1], "</environment_context>");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_developer_instructions_message_in_request() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock =
+        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
+            .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider = model_provider;
+    config.user_instructions = Some("be nice".to_string());
+    config.developer_instructions = Some("be useful".to_string());
+
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create new conversation")
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert!(
+        !request_body["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("be nice")
+    );
+    assert_message_role(&request_body["input"][0], "developer");
+    assert_message_equals(&request_body["input"][0], "be useful");
+    assert_message_role(&request_body["input"][1], "user");
+    assert_message_starts_with(&request_body["input"][1], "# AGENTS.md instructions for ");
+    assert_message_ends_with(&request_body["input"][1], "</INSTRUCTIONS>");
+    let ui_text = request_body["input"][1]["content"][0]["text"]
+        .as_str()
+        .expect("invalid message content");
+    assert!(ui_text.contains("<INSTRUCTIONS>"));
+    assert!(ui_text.contains("be nice"));
+    assert_message_role(&request_body["input"][2], "user");
+    assert_message_starts_with(&request_body["input"][2], "<environment_context>");
+    assert_message_ends_with(&request_body["input"][2], "</environment_context>");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn azure_responses_request_includes_store_and_reasoning_ids() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     let server = MockServer::start().await;
 
@@ -643,6 +714,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         base_url: Some(format!("{}/openai", server.uri())),
         env_key: None,
         env_key_instructions: None,
+        experimental_bearer_token: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -661,13 +733,28 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let summary = config.model_reasoning_summary;
     let config = Arc::new(config);
 
+    let conversation_id = ConversationId::new();
+
+    let otel_event_manager = OtelEventManager::new(
+        conversation_id,
+        config.model.as_str(),
+        config.model_family.slug.as_str(),
+        None,
+        Some("test@test.com".to_string()),
+        Some(AuthMode::ChatGPT),
+        false,
+        "test".to_string(),
+    );
+
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
+        otel_event_manager,
         provider,
         effort,
         summary,
-        ConversationId::new(),
+        conversation_id,
+        codex_protocol::protocol::SessionSource::Exec,
     );
 
     let mut prompt = Prompt::default();
@@ -754,6 +841,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn token_count_includes_rate_limits_snapshot() {
+    skip_if_no_network!();
     let server = MockServer::start().await;
 
     let sse_body = responses::sse(vec![responses::ev_completed_with_tokens("resp_rate", 123)]);
@@ -762,9 +850,10 @@ async fn token_count_includes_rate_limits_snapshot() {
         .insert_header("content-type", "text/event-stream")
         .insert_header("x-codex-primary-used-percent", "12.5")
         .insert_header("x-codex-secondary-used-percent", "40.0")
-        .insert_header("x-codex-primary-over-secondary-limit-percent", "75.0")
         .insert_header("x-codex-primary-window-minutes", "10")
         .insert_header("x-codex-secondary-window-minutes", "60")
+        .insert_header("x-codex-primary-reset-at", "1704069000")
+        .insert_header("x-codex-secondary-reset-at", "1704074400")
         .set_body_raw(sse_body, "text/event-stream");
 
     Mock::given(method("POST"))
@@ -790,14 +879,45 @@ async fn token_count_includes_rate_limits_snapshot() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
         .await
         .unwrap();
 
-    let token_event = wait_for_event(&codex, |msg| matches!(msg, EventMsg::TokenCount(_))).await;
+    let first_token_event =
+        wait_for_event(&codex, |msg| matches!(msg, EventMsg::TokenCount(_))).await;
+    let rate_limit_only = match first_token_event {
+        EventMsg::TokenCount(ev) => ev,
+        _ => unreachable!(),
+    };
+
+    let rate_limit_json = serde_json::to_value(&rate_limit_only).unwrap();
+    pretty_assertions::assert_eq!(
+        rate_limit_json,
+        json!({
+            "info": null,
+            "rate_limits": {
+                "primary": {
+                    "used_percent": 12.5,
+                    "window_minutes": 10,
+                    "resets_at": 1704069000
+                },
+                "secondary": {
+                    "used_percent": 40.0,
+                    "window_minutes": 60,
+                    "resets_at": 1704074400
+                }
+            }
+        })
+    );
+
+    let token_event = wait_for_event(
+        &codex,
+        |msg| matches!(msg, EventMsg::TokenCount(ev) if ev.info.is_some()),
+    )
+    .await;
     let final_payload = match token_event {
         EventMsg::TokenCount(ev) => ev,
         _ => unreachable!(),
@@ -822,15 +942,20 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "reasoning_output_tokens": 0,
                     "total_tokens": 123
                 },
-                // Default model is gpt-5-codex in tests → 272000 context window
-                "model_context_window": 272000
+                // Default model is gpt-5-codex in tests → 95% usable context window
+                "model_context_window": 258400
             },
             "rate_limits": {
-                "primary_used_percent": 12.5,
-                "secondary_used_percent": 40.0,
-                "primary_to_secondary_ratio_percent": 75.0,
-                "primary_window_minutes": 10,
-                "secondary_window_minutes": 60
+                "primary": {
+                    "used_percent": 12.5,
+                    "window_minutes": 10,
+                    "resets_at": 1704069000
+                },
+                "secondary": {
+                    "used_percent": 40.0,
+                    "window_minutes": 60,
+                    "resets_at": 1704074400
+                }
             }
         })
     );
@@ -841,13 +966,200 @@ async fn token_count_includes_rate_limits_snapshot() {
     let final_snapshot = final_payload
         .rate_limits
         .expect("latest rate limit snapshot should be retained");
-    assert_eq!(final_snapshot.primary_used_percent, 12.5);
+    assert_eq!(
+        final_snapshot
+            .primary
+            .as_ref()
+            .map(|window| window.used_percent),
+        Some(12.5)
+    );
+    assert_eq!(
+        final_snapshot
+            .primary
+            .as_ref()
+            .and_then(|window| window.resets_at),
+        Some(1704069000)
+    );
 
     wait_for_event(&codex, |msg| matches!(msg, EventMsg::TaskComplete(_))).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let response = ResponseTemplate::new(429)
+        .insert_header("x-codex-primary-used-percent", "100.0")
+        .insert_header("x-codex-secondary-used-percent", "87.5")
+        .insert_header("x-codex-primary-over-secondary-limit-percent", "95.0")
+        .insert_header("x-codex-primary-window-minutes", "15")
+        .insert_header("x-codex-secondary-window-minutes", "60")
+        .set_body_json(json!({
+            "error": {
+                "type": "usage_limit_reached",
+                "message": "limit reached",
+                "resets_at": 1704067242,
+                "plan_type": "pro"
+            }
+        }));
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(response)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut builder = test_codex();
+    let codex_fixture = builder.build(&server).await?;
+    let codex = codex_fixture.codex.clone();
+
+    let expected_limits = json!({
+        "primary": {
+            "used_percent": 100.0,
+            "window_minutes": 15,
+            "resets_at": null
+        },
+        "secondary": {
+            "used_percent": 87.5,
+            "window_minutes": 60,
+            "resets_at": null
+        }
+    });
+
+    let submission_id = codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .expect("submission should succeed while emitting usage limit error events");
+
+    let token_event = wait_for_event(&codex, |msg| matches!(msg, EventMsg::TokenCount(_))).await;
+    let EventMsg::TokenCount(event) = token_event else {
+        unreachable!();
+    };
+
+    let event_json = serde_json::to_value(&event).expect("serialize token count event");
+    pretty_assertions::assert_eq!(
+        event_json,
+        json!({
+            "info": null,
+            "rate_limits": expected_limits
+        })
+    );
+
+    let error_event = wait_for_event(&codex, |msg| matches!(msg, EventMsg::Error(_))).await;
+    let EventMsg::Error(error_event) = error_event else {
+        unreachable!();
+    };
+    assert!(
+        error_event.message.to_lowercase().contains("usage limit"),
+        "unexpected error message for submission {submission_id}: {}",
+        error_event.message
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    const EFFECTIVE_CONTEXT_WINDOW: i64 = (272_000 * 95) / 100;
+
+    responses::mount_sse_once_match(
+        &server,
+        body_string_contains("trigger context window"),
+        responses::sse_failed(
+            "resp_context_window",
+            "context_length_exceeded",
+            "Your input exceeds the context window of this model. Please adjust your input and try again.",
+        ),
+    )
+    .await;
+
+    responses::mount_sse_once_match(
+        &server,
+        body_string_contains("seed turn"),
+        sse_completed("resp_seed"),
+    )
+    .await;
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.model = "gpt-5".to_string();
+            config.model_family = find_family_for_model("gpt-5").expect("known gpt-5 model family");
+            config.model_context_window = Some(272_000);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "seed turn".into(),
+            }],
+        })
+        .await?;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "trigger context window".into(),
+            }],
+        })
+        .await?;
+
+    let token_event = wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::TokenCount(payload)
+                if payload.info.as_ref().is_some_and(|info| {
+                    info.model_context_window == Some(info.total_token_usage.total_tokens)
+                        && info.total_token_usage.total_tokens > 0
+                })
+        )
+    })
+    .await;
+
+    let EventMsg::TokenCount(token_payload) = token_event else {
+        unreachable!("wait_for_event returned unexpected event");
+    };
+
+    let info = token_payload
+        .info
+        .expect("token usage info present when context window is exceeded");
+
+    assert_eq!(info.model_context_window, Some(EFFECTIVE_CONTEXT_WINDOW));
+    assert_eq!(
+        info.total_token_usage.total_tokens,
+        EFFECTIVE_CONTEXT_WINDOW
+    );
+
+    let error_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
+    let expected_context_window_message = CodexErr::ContextWindowExceeded.to_string();
+    assert!(
+        matches!(
+            error_event,
+            EventMsg::Error(ref err) if err.message == expected_context_window_message
+        ),
+        "expected context window error; got {error_event:?}"
+    );
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn azure_overrides_assign_properties_used_for_responses_url() {
+    skip_if_no_network!();
     let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
 
     // Mock server
@@ -881,6 +1193,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         base_url: Some(format!("{}/openai", server.uri())),
         // Reuse the existing environment variable to avoid using unsafe code
         env_key: Some(existing_env_var_with_random_value.to_string()),
+        experimental_bearer_token: None,
         query_params: Some(std::collections::HashMap::from([(
             "api-version".to_string(),
             "2025-04-01-preview".to_string(),
@@ -912,7 +1225,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
@@ -924,6 +1237,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn env_var_overrides_loaded_auth() {
+    skip_if_no_network!();
     let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
 
     // Mock server
@@ -962,6 +1276,7 @@ async fn env_var_overrides_loaded_auth() {
             "2025-04-01-preview".to_string(),
         )])),
         env_key_instructions: None,
+        experimental_bearer_token: None,
         wire_api: WireApi::Responses,
         http_headers: Some(std::collections::HashMap::from([(
             "Custom-Header".to_string(),
@@ -988,7 +1303,7 @@ async fn env_var_overrides_loaded_auth() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
@@ -1011,7 +1326,7 @@ fn create_dummy_codex_auth() -> CodexAuth {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Skip under Codex sandbox network restrictions (mirrors other tests).
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     // Mock server that will receive three sequential requests and return the same SSE stream
     // each time: a few deltas, then a final assistant message, then completed.
@@ -1020,6 +1335,10 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Build a small SSE stream with deltas and a final assistant message.
     // We emit the same body for all 3 turns; ids vary but are unused by assertions.
     let sse_raw = r##"[
+        {"type":"response.output_item.added", "item":{
+            "type":"message", "role":"assistant",
+            "content":[{"type":"output_text","text":""}]
+        }},
         {"type":"response.output_text.delta", "delta":"Hey "},
         {"type":"response.output_text.delta", "delta":"there"},
         {"type":"response.output_text.delta", "delta":"!\n"},
@@ -1066,7 +1385,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Turn 1: user sends U1; wait for completion.
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text { text: "U1".into() }],
+            items: vec![UserInput::Text { text: "U1".into() }],
         })
         .await
         .unwrap();
@@ -1075,7 +1394,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Turn 2: user sends U2; wait for completion.
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text { text: "U2".into() }],
+            items: vec![UserInput::Text { text: "U2".into() }],
         })
         .await
         .unwrap();
@@ -1084,7 +1403,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Turn 3: user sends U3; wait for completion.
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text { text: "U3".into() }],
+            items: vec![UserInput::Text { text: "U3".into() }],
         })
         .await
         .unwrap();

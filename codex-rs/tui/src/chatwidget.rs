@@ -4,9 +4,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_core::config::Config;
-use codex_core::config_types::Notifications;
+use codex_core::config::types::Notifications;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
+use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -15,6 +16,7 @@ use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -22,15 +24,13 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExitedReviewModeEvent;
-use codex_core::protocol::InputItem;
-use codex_core::protocol::InputMessageKind;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
-use codex_core::protocol::RateLimitSnapshotEvent;
+use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
@@ -38,27 +38,34 @@ use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
+use codex_core::protocol::UndoCompletedEvent;
+use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::UserMessageEvent;
+use codex_core::protocol::ViewImageToolCallEvent;
+use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use rand::Rng;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Constraint;
-use ratatui::layout::Layout;
 use ratatui::layout::Rect;
-use ratatui::widgets::Widget;
-use ratatui::widgets::WidgetRef;
+use ratatui::style::Color;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
@@ -67,22 +74,30 @@ use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
-use crate::bottom_pane::popup_consts::STANDARD_POPUP_HINT_LINE;
+use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::diff_render::display_path_for;
+use crate::exec_cell::CommandOutput;
+use crate::exec_cell::ExecCell;
+use crate::exec_cell::new_active_exec_command;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
-use crate::history_cell::CommandOutput;
-use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
-use crate::history_cell::PatchEventType;
+use crate::history_cell::McpToolCallCell;
 use crate::markdown::append_markdown;
+#[cfg(target_os = "windows")]
+use crate::onboarding::WSL_INSTRUCTIONS;
+use crate::render::Insets;
+use crate::render::renderable::ColumnRenderable;
+use crate::render::renderable::FlexRenderable;
+use crate::render::renderable::Renderable;
+use crate::render::renderable::RenderableExt;
+use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
+use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
-// streaming internals are provided by crate::streaming and crate::markdown_stream
-use crate::user_approval_widget::ApprovalRequest;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -90,9 +105,10 @@ use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
 mod session_header;
 use self::session_header::SessionHeader;
-use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
-//
+use std::path::Path;
+
+use chrono::Local;
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
@@ -103,15 +119,21 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
-use std::path::Path;
+use codex_protocol::plan_tool::UpdatePlanArgs;
+use strum::IntoEnumIterator;
 
+const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
+const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
+    is_user_shell_command: bool,
 }
 
-const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [50.0, 75.0, 90.0];
+const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
+const NUDGE_MODEL_SLUG: &str = "gpt-5-codex-mini";
+const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
 
 #[derive(Default)]
 struct RateLimitWarningState {
@@ -122,32 +144,79 @@ struct RateLimitWarningState {
 impl RateLimitWarningState {
     fn take_warnings(
         &mut self,
-        secondary_used_percent: f64,
-        primary_used_percent: f64,
+        secondary_used_percent: Option<f64>,
+        secondary_window_minutes: Option<i64>,
+        primary_used_percent: Option<f64>,
+        primary_window_minutes: Option<i64>,
     ) -> Vec<String> {
-        let mut warnings = Vec::new();
-
-        while self.secondary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
-            && secondary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index]
-        {
-            let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index];
-            warnings.push(format!(
-                "Heads up, you've used over {threshold:.0}% of your weekly limit. Run /status for a breakdown."
-            ));
-            self.secondary_index += 1;
+        let reached_secondary_cap =
+            matches!(secondary_used_percent, Some(percent) if percent == 100.0);
+        let reached_primary_cap = matches!(primary_used_percent, Some(percent) if percent == 100.0);
+        if reached_secondary_cap || reached_primary_cap {
+            return Vec::new();
         }
 
-        while self.primary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
-            && primary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index]
-        {
-            let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index];
-            warnings.push(format!(
-                "Heads up, you've used over {threshold:.0}% of your 5h limit. Run /status for a breakdown."
-            ));
-            self.primary_index += 1;
+        let mut warnings = Vec::new();
+
+        if let Some(secondary_used_percent) = secondary_used_percent {
+            let mut highest_secondary: Option<f64> = None;
+            while self.secondary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
+                && secondary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index]
+            {
+                highest_secondary = Some(RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index]);
+                self.secondary_index += 1;
+            }
+            if let Some(threshold) = highest_secondary {
+                let limit_label = secondary_window_minutes
+                    .map(get_limits_duration)
+                    .unwrap_or_else(|| "weekly".to_string());
+                warnings.push(format!(
+                    "Heads up, you've used over {threshold:.0}% of your {limit_label} limit. Run /status for a breakdown."
+                ));
+            }
+        }
+
+        if let Some(primary_used_percent) = primary_used_percent {
+            let mut highest_primary: Option<f64> = None;
+            while self.primary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
+                && primary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index]
+            {
+                highest_primary = Some(RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index]);
+                self.primary_index += 1;
+            }
+            if let Some(threshold) = highest_primary {
+                let limit_label = primary_window_minutes
+                    .map(get_limits_duration)
+                    .unwrap_or_else(|| "5h".to_string());
+                warnings.push(format!(
+                    "Heads up, you've used over {threshold:.0}% of your {limit_label} limit. Run /status for a breakdown."
+                ));
+            }
         }
 
         warnings
+    }
+}
+
+pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
+    const MINUTES_PER_HOUR: i64 = 60;
+    const MINUTES_PER_DAY: i64 = 24 * MINUTES_PER_HOUR;
+    const MINUTES_PER_WEEK: i64 = 7 * MINUTES_PER_DAY;
+    const MINUTES_PER_MONTH: i64 = 30 * MINUTES_PER_DAY;
+    const ROUNDING_BIAS_MINUTES: i64 = 3;
+
+    let windows_minutes = windows_minutes.max(0);
+
+    if windows_minutes <= MINUTES_PER_DAY.saturating_add(ROUNDING_BIAS_MINUTES) {
+        let adjusted = windows_minutes.saturating_add(ROUNDING_BIAS_MINUTES);
+        let hours = std::cmp::max(1, adjusted / MINUTES_PER_HOUR);
+        format!("{hours}h")
+    } else if windows_minutes <= MINUTES_PER_WEEK.saturating_add(ROUNDING_BIAS_MINUTES) {
+        "weekly".to_string()
+    } else if windows_minutes <= MINUTES_PER_MONTH.saturating_add(ROUNDING_BIAS_MINUTES) {
+        "monthly".to_string()
+    } else {
+        "annual".to_string()
     }
 }
 
@@ -160,20 +229,30 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) initial_images: Vec<PathBuf>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) feedback: codex_feedback::CodexFeedback,
+}
+
+#[derive(Default)]
+enum RateLimitSwitchPromptState {
+    #[default]
+    Idle,
+    Pending,
+    Shown,
 }
 
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane,
-    active_exec_cell: Option<ExecCell>,
+    active_cell: Option<Box<dyn HistoryCell>>,
     config: Config,
     auth_manager: Arc<AuthManager>,
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
-    rate_limit_snapshot: Option<RateLimitSnapshotEvent>,
+    rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
     rate_limit_warnings: RateLimitWarningState,
+    rate_limit_switch_prompt: RateLimitSwitchPromptState,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
@@ -184,6 +263,10 @@ pub(crate) struct ChatWidget {
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
+    // Current status header shown in the status indicator.
+    current_status_header: String,
+    // Previous status header to restore after a transient stream retry.
+    retry_status_header: Option<String>,
     conversation_id: Option<ConversationId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
@@ -197,6 +280,14 @@ pub(crate) struct ChatWidget {
     pending_notification: Option<Notification>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
+    // Whether to add a final message separator after the last message
+    needs_final_message_separator: bool,
+
+    last_rendered_width: std::cell::Cell<Option<usize>>,
+    // Feedback sink for /feedback
+    feedback: codex_feedback::CodexFeedback,
+    // Current session rollout path (if known)
+    current_rollout_path: Option<PathBuf>,
 }
 
 struct UserMessage {
@@ -213,6 +304,15 @@ impl From<String> for UserMessage {
     }
 }
 
+impl From<&str> for UserMessage {
+    fn from(text: &str) -> Self {
+        Self {
+            text: text.to_string(),
+            image_paths: Vec::new(),
+        }
+    }
+}
+
 fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Option<UserMessage> {
     if text.is_empty() && image_paths.is_empty() {
         None
@@ -223,16 +323,24 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 
 impl ChatWidget {
     fn flush_answer_stream_with_separator(&mut self) {
-        if let Some(mut controller) = self.stream_controller.take() {
-            let sink = AppEventHistorySink(self.app_event_tx.clone());
-            controller.finalize(&sink);
+        if let Some(mut controller) = self.stream_controller.take()
+            && let Some(cell) = controller.finalize()
+        {
+            self.add_boxed_history(cell);
         }
     }
+
+    fn set_status_header(&mut self, header: String) {
+        self.current_status_header = header.clone();
+        self.bottom_pane.update_status_header(header);
+    }
+
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.conversation_id = Some(event.session_id);
+        self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
@@ -252,6 +360,39 @@ impl ChatWidget {
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn open_feedback_note(
+        &mut self,
+        category: crate::app_event::FeedbackCategory,
+        include_logs: bool,
+    ) {
+        // Build a fresh snapshot at the time of opening the note overlay.
+        let snapshot = self.feedback.snapshot(self.conversation_id);
+        let rollout = if include_logs {
+            self.current_rollout_path.clone()
+        } else {
+            None
+        };
+        let view = crate::bottom_pane::FeedbackNoteView::new(
+            category,
+            snapshot,
+            rollout,
+            self.app_event_tx.clone(),
+            include_logs,
+        );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn open_feedback_consent(&mut self, category: crate::app_event::FeedbackCategory) {
+        let params = crate::bottom_pane::feedback_upload_consent_params(
+            self.app_event_tx.clone(),
+            category,
+            self.current_rollout_path.clone(),
+        );
+        self.bottom_pane.show_selection_view(params);
+        self.request_redraw();
     }
 
     fn on_agent_message(&mut self, message: String) {
@@ -277,7 +418,7 @@ impl ChatWidget {
 
         if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
             // Update the shimmer header to the extracted reasoning chunk header.
-            self.bottom_pane.update_status_header(header);
+            self.set_status_header(header);
         } else {
             // Fallback while we don't yet have a bold header: leave existing header as-is.
         }
@@ -311,18 +452,17 @@ impl ChatWidget {
     fn on_task_started(&mut self) {
         self.bottom_pane.clear_ctrl_c_quit_hint();
         self.bottom_pane.set_task_running(true);
+        self.retry_status_header = None;
+        self.bottom_pane.set_interrupt_hint_visible(true);
+        self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
         self.request_redraw();
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>) {
-        // If a stream is currently active, finalize only that stream to flush any tail
-        // without emitting stray headers for other streams.
-        if let Some(mut controller) = self.stream_controller.take() {
-            let sink = AppEventHistorySink(self.app_event_tx.clone());
-            controller.finalize(&sink);
-        }
+        // If a stream is currently active, finalize it.
+        self.flush_answer_stream_with_separator();
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
@@ -334,36 +474,85 @@ impl ChatWidget {
         self.notify(Notification::AgentTurnComplete {
             response: last_agent_message.unwrap_or_default(),
         });
+
+        self.maybe_show_pending_rate_limit_prompt();
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
-        self.bottom_pane.set_token_usage(info.clone());
-        self.token_info = info;
+        if let Some(info) = info {
+            let context_window = info
+                .model_context_window
+                .or(self.config.model_context_window);
+            let percent = context_window.map(|window| {
+                info.last_token_usage
+                    .percent_of_context_window_remaining(window)
+            });
+            self.bottom_pane.set_context_window_percent(percent);
+            self.token_info = Some(info);
+        }
     }
 
-    fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshotEvent>) {
+    fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
         if let Some(snapshot) = snapshot {
             let warnings = self.rate_limit_warnings.take_warnings(
-                snapshot.secondary_used_percent,
-                snapshot.primary_used_percent,
+                snapshot
+                    .secondary
+                    .as_ref()
+                    .map(|window| window.used_percent),
+                snapshot
+                    .secondary
+                    .as_ref()
+                    .and_then(|window| window.window_minutes),
+                snapshot.primary.as_ref().map(|window| window.used_percent),
+                snapshot
+                    .primary
+                    .as_ref()
+                    .and_then(|window| window.window_minutes),
             );
-            self.rate_limit_snapshot = Some(snapshot);
+
+            let high_usage = snapshot
+                .secondary
+                .as_ref()
+                .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
+                .unwrap_or(false)
+                || snapshot
+                    .primary
+                    .as_ref()
+                    .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
+                    .unwrap_or(false);
+
+            if high_usage
+                && self.config.model != NUDGE_MODEL_SLUG
+                && !matches!(
+                    self.rate_limit_switch_prompt,
+                    RateLimitSwitchPromptState::Shown
+                )
+            {
+                self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
+            }
+
+            let display = crate::status::rate_limit_snapshot_display(&snapshot, Local::now());
+            self.rate_limit_snapshot = Some(display);
+
             if !warnings.is_empty() {
                 for warning in warnings {
                     self.add_to_history(history_cell::new_warning_event(warning));
                 }
                 self.request_redraw();
             }
+        } else {
+            self.rate_limit_snapshot = None;
         }
     }
     /// Finalize any active exec as failed and stop/clear running UI state.
     fn finalize_turn(&mut self) {
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
-        self.finalize_active_exec_cell_as_failed();
+        self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
         self.stream_controller = None;
+        self.maybe_show_pending_rate_limit_prompt();
     }
 
     fn on_error(&mut self, message: String) {
@@ -375,6 +564,11 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
+    fn on_warning(&mut self, message: String) {
+        self.add_to_history(history_cell::new_warning_event(message));
+        self.request_redraw();
+    }
+
     /// Handle a turn aborted due to user interrupt (Esc).
     /// When there are queued user messages, restore them into the composer
     /// separated by newlines rather than auto‑submitting the next one.
@@ -384,18 +578,26 @@ impl ChatWidget {
 
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
-                "Conversation interrupted - tell the model what to do differently".to_owned(),
+                "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_owned(),
             ));
         }
 
         // If any messages were queued during the task, restore them into the composer.
         if !self.queued_user_messages.is_empty() {
-            let combined = self
+            let queued_text = self
                 .queued_user_messages
                 .iter()
                 .map(|m| m.text.clone())
                 .collect::<Vec<_>>()
                 .join("\n");
+            let existing_text = self.bottom_pane.composer_text();
+            let combined = if existing_text.is_empty() {
+                queued_text
+            } else if queued_text.is_empty() {
+                existing_text
+            } else {
+                format!("{queued_text}\n{existing_text}")
+            };
             self.bottom_pane.set_composer_text(combined);
             // Clear the queue and update the status indicator list.
             self.queued_user_messages.clear();
@@ -405,7 +607,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_plan_update(&mut self, update: codex_core::plan_tool::UpdatePlanArgs) {
+    fn on_plan_update(&mut self, update: UpdatePlanArgs) {
         self.add_to_history(history_cell::new_plan_update(update));
     }
 
@@ -442,12 +644,18 @@ impl ChatWidget {
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
         self.add_to_history(history_cell::new_patch_event(
-            PatchEventType::ApplyBegin {
-                auto_approved: event.auto_approved,
-            },
             event.changes,
             &self.config.cwd,
         ));
+    }
+
+    fn on_view_image_tool_call(&mut self, event: ViewImageToolCallEvent) {
+        self.flush_answer_stream_with_separator();
+        self.add_to_history(history_cell::new_view_image_tool_call(
+            event.path,
+            &self.config.cwd,
+        ));
+        self.request_redraw();
     }
 
     fn on_patch_apply_end(&mut self, event: codex_core::protocol::PatchApplyEndEvent) {
@@ -499,30 +707,67 @@ impl ChatWidget {
     }
 
     fn on_shutdown_complete(&mut self) {
-        self.app_event_tx.send(AppEvent::ExitRequest);
+        self.request_exit();
     }
 
     fn on_turn_diff(&mut self, unified_diff: String) {
         debug!("TurnDiffEvent: {unified_diff}");
     }
 
+    fn on_deprecation_notice(&mut self, event: DeprecationNoticeEvent) {
+        let DeprecationNoticeEvent { summary, details } = event;
+        self.add_to_history(history_cell::new_deprecation_notice(summary, details));
+        self.request_redraw();
+    }
+
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
     }
 
-    fn on_stream_error(&mut self, message: String) {
-        // Show stream errors in the transcript so users see retry/backoff info.
-        self.add_to_history(history_cell::new_stream_error_event(message));
-        self.request_redraw();
+    fn on_undo_started(&mut self, event: UndoStartedEvent) {
+        self.bottom_pane.ensure_status_indicator();
+        self.bottom_pane.set_interrupt_hint_visible(false);
+        let message = event
+            .message
+            .unwrap_or_else(|| "Undo in progress...".to_string());
+        self.set_status_header(message);
     }
+
+    fn on_undo_completed(&mut self, event: UndoCompletedEvent) {
+        let UndoCompletedEvent { success, message } = event;
+        self.bottom_pane.hide_status_indicator();
+        let message = message.unwrap_or_else(|| {
+            if success {
+                "Undo completed successfully.".to_string()
+            } else {
+                "Undo failed.".to_string()
+            }
+        });
+        if success {
+            self.add_info_message(message, None);
+        } else {
+            self.add_error_message(message);
+        }
+    }
+
+    fn on_stream_error(&mut self, message: String) {
+        if self.retry_status_header.is_none() {
+            self.retry_status_header = Some(self.current_status_header.clone());
+        }
+        self.set_status_header(message);
+    }
+
     /// Periodic tick to commit at most one queued line to history with a small delay,
     /// animating the output.
     pub(crate) fn on_commit_tick(&mut self) {
         if let Some(controller) = self.stream_controller.as_mut() {
-            let sink = AppEventHistorySink(self.app_event_tx.clone());
-            let finished = controller.on_commit_tick(&sink);
-            if finished {
-                self.handle_stream_finished();
+            let (cell, is_idle) = controller.on_commit_tick();
+            if let Some(cell) = cell {
+                self.bottom_pane.hide_status_indicator();
+                self.add_boxed_history(cell);
+            }
+            if is_idle {
+                self.app_event_tx.send(AppEvent::StopCommitAnimation);
             }
         }
     }
@@ -551,7 +796,7 @@ impl ChatWidget {
 
     fn handle_stream_finished(&mut self) {
         if self.task_complete_pending {
-            self.bottom_pane.set_task_running(false);
+            self.bottom_pane.hide_status_indicator();
             self.task_complete_pending = false;
         }
         // A completed stream indicates non-exec content was just inserted.
@@ -561,47 +806,67 @@ impl ChatWidget {
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
         // Before streaming agent content, flush any active exec cell group.
-        self.flush_active_exec_cell();
+        self.flush_active_cell();
 
         if self.stream_controller.is_none() {
-            self.stream_controller = Some(StreamController::new(self.config.clone()));
+            if self.needs_final_message_separator {
+                let elapsed_seconds = self
+                    .bottom_pane
+                    .status_widget()
+                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
+                self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
+                self.needs_final_message_separator = false;
+            }
+            self.stream_controller = Some(StreamController::new(
+                self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
+            ));
         }
-        if let Some(controller) = self.stream_controller.as_mut() {
-            let sink = AppEventHistorySink(self.app_event_tx.clone());
-            controller.push_and_maybe_commit(&delta, &sink);
+        if let Some(controller) = self.stream_controller.as_mut()
+            && controller.push(&delta)
+        {
+            self.app_event_tx.send(AppEvent::StartCommitAnimation);
         }
         self.request_redraw();
     }
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
-        let (command, parsed) = match running {
-            Some(rc) => (rc.command, rc.parsed_cmd),
-            None => (vec![ev.call_id.clone()], Vec::new()),
+        let (command, parsed, is_user_shell_command) = match running {
+            Some(rc) => (rc.command, rc.parsed_cmd, rc.is_user_shell_command),
+            None => (vec![ev.call_id.clone()], Vec::new(), false),
         };
 
-        if self.active_exec_cell.is_none() {
-            // This should have been created by handle_exec_begin_now, but in case it wasn't,
-            // create it now.
-            self.active_exec_cell = Some(history_cell::new_active_exec_command(
+        let needs_new = self
+            .active_cell
+            .as_ref()
+            .map(|cell| cell.as_any().downcast_ref::<ExecCell>().is_none())
+            .unwrap_or(true);
+        if needs_new {
+            self.flush_active_cell();
+            self.active_cell = Some(Box::new(new_active_exec_command(
                 ev.call_id.clone(),
                 command,
                 parsed,
-            ));
+                is_user_shell_command,
+            )));
         }
-        if let Some(cell) = self.active_exec_cell.as_mut() {
+
+        if let Some(cell) = self
+            .active_cell
+            .as_mut()
+            .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
+        {
             cell.complete_call(
                 &ev.call_id,
                 CommandOutput {
                     exit_code: ev.exit_code,
-                    stdout: ev.stdout.clone(),
-                    stderr: ev.stderr.clone(),
                     formatted_output: ev.formatted_output.clone(),
+                    aggregated_output: ev.aggregated_output.clone(),
                 },
                 ev.duration,
             );
             if cell.should_flush() {
-                self.flush_active_exec_cell();
+                self.flush_active_cell();
             }
         }
     }
@@ -619,8 +884,6 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
-        // Emit the proposed command into history (like proposed patches)
-        self.add_to_history(history_cell::new_proposed_command(&ev.command));
         let command = shlex::try_join(ev.command.iter().map(String::as_str))
             .unwrap_or_else(|_| ev.command.join(" "));
         self.notify(Notification::ExecApprovalRequested { command });
@@ -629,6 +892,7 @@ impl ChatWidget {
             id,
             command: ev.command,
             reason: ev.reason,
+            risk: ev.risk,
         };
         self.bottom_pane.push_approval_request(request);
         self.request_redraw();
@@ -640,16 +904,12 @@ impl ChatWidget {
         ev: ApplyPatchApprovalRequestEvent,
     ) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(history_cell::new_patch_event(
-            PatchEventType::ApprovalRequest,
-            ev.changes.clone(),
-            &self.config.cwd,
-        ));
 
         let request = ApprovalRequest::ApplyPatch {
             id,
             reason: ev.reason,
-            grant_root: ev.grant_root,
+            changes: ev.changes.clone(),
+            cwd: self.config.cwd.clone(),
         };
         self.bottom_pane.push_approval_request(request);
         self.request_redraw();
@@ -666,73 +926,73 @@ impl ChatWidget {
             RunningCommand {
                 command: ev.command.clone(),
                 parsed_cmd: ev.parsed_cmd.clone(),
+                is_user_shell_command: ev.is_user_shell_command,
             },
         );
-        if let Some(exec) = &self.active_exec_cell {
-            if let Some(new_exec) = exec.with_added_call(
+        if let Some(cell) = self
+            .active_cell
+            .as_mut()
+            .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
+            && let Some(new_exec) = cell.with_added_call(
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd.clone(),
-            ) {
-                self.active_exec_cell = Some(new_exec);
-            } else {
-                // Make a new cell.
-                self.flush_active_exec_cell();
-                self.active_exec_cell = Some(history_cell::new_active_exec_command(
-                    ev.call_id.clone(),
-                    ev.command.clone(),
-                    ev.parsed_cmd,
-                ));
-            }
+                ev.is_user_shell_command,
+            )
+        {
+            *cell = new_exec;
         } else {
-            self.active_exec_cell = Some(history_cell::new_active_exec_command(
+            self.flush_active_cell();
+
+            self.active_cell = Some(Box::new(new_active_exec_command(
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd,
-            ));
+                ev.is_user_shell_command,
+            )));
         }
 
-        // Request a redraw so the working header and command list are visible immediately.
         self.request_redraw();
     }
 
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(history_cell::new_active_mcp_tool_call(ev.invocation));
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(history_cell::new_active_mcp_tool_call(
+            ev.call_id,
+            ev.invocation,
+        )));
+        self.request_redraw();
     }
     pub(crate) fn handle_mcp_end_now(&mut self, ev: McpToolCallEndEvent) {
         self.flush_answer_stream_with_separator();
-        self.add_boxed_history(history_cell::new_completed_mcp_tool_call(
-            80,
-            ev.invocation,
-            ev.duration,
-            ev.result
-                .as_ref()
-                .map(|r| !r.is_error.unwrap_or(false))
-                .unwrap_or(false),
-            ev.result,
-        ));
-    }
 
-    fn layout_areas(&self, area: Rect) -> [Rect; 3] {
-        let bottom_min = self.bottom_pane.desired_height(area.width).min(area.height);
-        let remaining = area.height.saturating_sub(bottom_min);
+        let McpToolCallEndEvent {
+            call_id,
+            invocation,
+            duration,
+            result,
+        } = ev;
 
-        let active_desired = self
-            .active_exec_cell
-            .as_ref()
-            .map_or(0, |c| c.desired_height(area.width) + 1);
-        let active_height = active_desired.min(remaining);
-        // Note: no header area; remaining is not used beyond computing active height.
+        let extra_cell = match self
+            .active_cell
+            .as_mut()
+            .and_then(|cell| cell.as_any_mut().downcast_mut::<McpToolCallCell>())
+        {
+            Some(cell) if cell.call_id() == call_id => cell.complete(duration, result),
+            _ => {
+                self.flush_active_cell();
+                let mut cell = history_cell::new_active_mcp_tool_call(call_id, invocation);
+                let extra_cell = cell.complete(duration, result);
+                self.active_cell = Some(Box::new(cell));
+                extra_cell
+            }
+        };
 
-        let header_height = 0u16;
-
-        Layout::vertical([
-            Constraint::Length(header_height),
-            Constraint::Length(active_height),
-            Constraint::Min(bottom_min),
-        ])
-        .areas(area)
+        self.flush_active_cell();
+        if let Some(extra) = extra_cell {
+            self.add_boxed_history(extra);
+        }
     }
 
     pub(crate) fn new(
@@ -747,6 +1007,7 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            feedback,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -764,7 +1025,7 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
             }),
-            active_exec_cell: None,
+            active_cell: None,
             config: config.clone(),
             auth_manager,
             session_header: SessionHeader::new(config.model),
@@ -775,18 +1036,25 @@ impl ChatWidget {
             token_info: None,
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
+            rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            current_status_header: String::from("Working"),
+            retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
             pending_notification: None,
             is_review_mode: false,
+            needs_final_message_separator: false,
+            last_rendered_width: std::cell::Cell::new(None),
+            feedback,
+            current_rollout_path: None,
         }
     }
 
@@ -804,6 +1072,7 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            feedback,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -823,7 +1092,7 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
             }),
-            active_exec_cell: None,
+            active_cell: None,
             config: config.clone(),
             auth_manager,
             session_header: SessionHeader::new(config.model),
@@ -834,46 +1103,45 @@ impl ChatWidget {
             token_info: None,
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
+            rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            current_status_header: String::from("Working"),
+            retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: true,
             pending_notification: None,
             is_review_mode: false,
+            needs_final_message_separator: false,
+            last_rendered_width: std::cell::Cell::new(None),
+            feedback,
+            current_rollout_path: None,
         }
-    }
-
-    pub fn desired_height(&self, width: u16) -> u16 {
-        self.bottom_pane.desired_height(width)
-            + self
-                .active_exec_cell
-                .as_ref()
-                .map_or(0, |c| c.desired_height(width) + 1)
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
-                code: KeyCode::Char('c'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                code: KeyCode::Char(c),
+                modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } => {
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c') => {
                 self.on_ctrl_c();
                 return;
             }
             KeyEvent {
-                code: KeyCode::Char('v'),
-                modifiers: KeyModifiers::CONTROL,
+                code: KeyCode::Char(c),
+                modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } => {
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'v') => {
                 if let Ok((path, info)) = paste_image_to_temp_png() {
                     self.attach_image(path, info.width, info.height, info.encoded_format.label());
                 }
@@ -907,12 +1175,7 @@ impl ChatWidget {
                             text,
                             image_paths: self.bottom_pane.take_recent_submission_images(),
                         };
-                        if self.bottom_pane.is_task_running() {
-                            self.queued_user_messages.push_back(user_message);
-                            self.refresh_queued_user_messages();
-                        } else {
-                            self.submit_user_message(user_message);
-                        }
+                        self.queue_user_message(user_message);
                     }
                     InputResult::Command(cmd) => {
                         self.dispatch_command(cmd);
@@ -949,12 +1212,27 @@ impl ChatWidget {
             return;
         }
         match cmd {
+            SlashCommand::Feedback => {
+                // Step 1: pick a category (UI built in feedback_view)
+                let params =
+                    crate::bottom_pane::feedback_selection_params(self.app_event_tx.clone());
+                self.bottom_pane.show_selection_view(params);
+                self.request_redraw();
+            }
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
             }
             SlashCommand::Init => {
+                let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
+                if init_target.exists() {
+                    let message = format!(
+                        "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
+                    );
+                    self.add_info_message(message, None);
+                    return;
+                }
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
-                self.submit_text_message(INIT_PROMPT.to_string());
+                self.submit_user_message(INIT_PROMPT.to_string().into());
             }
             SlashCommand::Compact => {
                 self.clear_token_usage();
@@ -969,14 +1247,20 @@ impl ChatWidget {
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
             }
-            SlashCommand::Quit => {
-                self.app_event_tx.send(AppEvent::ExitRequest);
+            SlashCommand::Quit | SlashCommand::Exit => {
+                self.request_exit();
             }
             SlashCommand::Logout => {
-                if let Err(e) = codex_core::auth::logout(&self.config.codex_home) {
+                if let Err(e) = codex_core::auth::logout(
+                    &self.config.codex_home,
+                    self.config.cli_auth_credentials_store_mode,
+                ) {
                     tracing::error!("failed to logout: {e}");
                 }
-                self.app_event_tx.send(AppEvent::ExitRequest);
+                self.request_exit();
+            }
+            SlashCommand::Undo => {
+                self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
             }
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
@@ -1004,7 +1288,16 @@ impl ChatWidget {
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
-            #[cfg(debug_assertions)]
+            SlashCommand::Rollout => {
+                if let Some(path) = self.rollout_path() {
+                    self.add_info_message(
+                        format!("Current rollout path: {}", path.display()),
+                        None,
+                    );
+                } else {
+                    self.add_info_message("Rollout path is not available yet.".to_string(), None);
+                }
+            }
             SlashCommand::TestApproval => {
                 use codex_core::protocol::EventMsg;
                 use std::collections::HashMap;
@@ -1067,10 +1360,10 @@ impl ChatWidget {
         }
     }
 
-    fn flush_active_exec_cell(&mut self) {
-        if let Some(active) = self.active_exec_cell.take() {
-            self.app_event_tx
-                .send(AppEvent::InsertHistoryCell(Box::new(active)));
+    fn flush_active_cell(&mut self) {
+        if let Some(active) = self.active_cell.take() {
+            self.needs_final_message_separator = true;
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
     }
 
@@ -1081,25 +1374,53 @@ impl ChatWidget {
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
         if !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
-            self.flush_active_exec_cell();
+            self.flush_active_cell();
+            self.needs_final_message_separator = true;
         }
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
 
+    fn queue_user_message(&mut self, user_message: UserMessage) {
+        if self.bottom_pane.is_task_running() {
+            self.queued_user_messages.push_back(user_message);
+            self.refresh_queued_user_messages();
+        } else {
+            self.submit_user_message(user_message);
+        }
+    }
+
     fn submit_user_message(&mut self, user_message: UserMessage) {
         let UserMessage { text, image_paths } = user_message;
-        let mut items: Vec<InputItem> = Vec::new();
+        if text.is_empty() && image_paths.is_empty() {
+            return;
+        }
+
+        let mut items: Vec<UserInput> = Vec::new();
+
+        // Special-case: "!cmd" executes a local shell command instead of sending to the model.
+        if let Some(stripped) = text.strip_prefix('!') {
+            let cmd = stripped.trim();
+            if cmd.is_empty() {
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_info_event(
+                        USER_SHELL_COMMAND_HELP_TITLE.to_string(),
+                        Some(USER_SHELL_COMMAND_HELP_HINT.to_string()),
+                    ),
+                )));
+                return;
+            }
+            self.submit_op(Op::RunUserShellCommand {
+                command: cmd.to_string(),
+            });
+            return;
+        }
 
         if !text.is_empty() {
-            items.push(InputItem::Text { text: text.clone() });
+            items.push(UserInput::Text { text: text.clone() });
         }
 
         for path in image_paths {
-            items.push(InputItem::LocalImage { path });
-        }
-
-        if items.is_empty() {
-            return;
+            items.push(UserInput::LocalImage { path });
         }
 
         self.codex_op_tx
@@ -1121,6 +1442,7 @@ impl ChatWidget {
         if !text.is_empty() {
             self.add_to_history(history_cell::new_user_prompt(text));
         }
+        self.needs_final_message_separator = false;
     }
 
     /// Replay a subset of initial events into the UI to seed the transcript when
@@ -1182,6 +1504,7 @@ impl ChatWidget {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
+            EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
@@ -1207,6 +1530,7 @@ impl ChatWidget {
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),
             EventMsg::ExecCommandEnd(ev) => self.on_exec_command_end(ev),
+            EventMsg::ViewImageToolCall(ev) => self.on_view_image_tool_call(ev),
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),
@@ -1216,23 +1540,28 @@ impl ChatWidget {
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
+            EventMsg::DeprecationNotice(ev) => self.on_deprecation_notice(ev),
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 self.on_background_event(message)
             }
+            EventMsg::UndoStarted(ev) => self.on_undo_started(ev),
+            EventMsg::UndoCompleted(ev) => self.on_undo_completed(ev),
             EventMsg::StreamError(StreamErrorEvent { message }) => self.on_stream_error(message),
             EventMsg::UserMessage(ev) => {
                 if from_replay {
                     self.on_user_message_event(ev);
                 }
             }
-            EventMsg::ConversationPath(ev) => {
-                self.app_event_tx
-                    .send(crate::app_event::AppEvent::ConversationHistory(ev));
-            }
             EventMsg::EnteredReviewMode(review_request) => {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
+            EventMsg::RawResponseItem(_)
+            | EventMsg::ItemStarted(_)
+            | EventMsg::ItemCompleted(_)
+            | EventMsg::AgentMessageContentDelta(_)
+            | EventMsg::ReasoningContentDelta(_)
+            | EventMsg::ReasoningRawContentDelta(_) => {}
         }
     }
 
@@ -1249,7 +1578,7 @@ impl ChatWidget {
         if let Some(output) = review.review_output {
             self.flush_answer_stream_with_separator();
             self.flush_interrupt_queue();
-            self.flush_active_exec_cell();
+            self.flush_active_cell();
 
             if output.findings.is_empty() {
                 let explanation = output.overall_explanation.trim().to_string();
@@ -1261,7 +1590,7 @@ impl ChatWidget {
                 } else {
                     // Show explanation when there are no structured findings.
                     let mut rendered: Vec<ratatui::text::Line<'static>> = vec!["".into()];
-                    append_markdown(&explanation, &mut rendered, &self.config);
+                    append_markdown(&explanation, None, &mut rendered);
                     let body_cell = AgentMessageCell::new(rendered, false);
                     self.app_event_tx
                         .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
@@ -1270,7 +1599,7 @@ impl ChatWidget {
                 let message_text =
                     codex_core::review_format::format_review_findings_block(&output.findings, None);
                 let mut message_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
-                append_markdown(&message_text, &mut message_lines, &self.config);
+                append_markdown(&message_text, None, &mut message_lines);
                 let body_cell = AgentMessageCell::new(message_lines, true);
                 self.app_event_tx
                     .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
@@ -1286,18 +1615,14 @@ impl ChatWidget {
     }
 
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
-        match event.kind {
-            Some(InputMessageKind::EnvironmentContext)
-            | Some(InputMessageKind::UserInstructions) => {
-                // Skip XML‑wrapped context blocks in the transcript.
-            }
-            Some(InputMessageKind::Plain) | None => {
-                let message = event.message.trim();
-                if !message.is_empty() {
-                    self.add_to_history(history_cell::new_user_prompt(message.to_string()));
-                }
-            }
+        let message = event.message.trim();
+        if !message.is_empty() {
+            self.add_to_history(history_cell::new_user_prompt(message.to_string()));
         }
+    }
+
+    fn request_exit(&self) {
+        self.app_event_tx.send(AppEvent::ExitRequest);
     }
 
     fn request_redraw(&mut self) {
@@ -1318,12 +1643,16 @@ impl ChatWidget {
         }
     }
 
-    /// Mark the active exec cell as failed (✗) and flush it into history.
-    fn finalize_active_exec_cell_as_failed(&mut self) {
-        if let Some(cell) = self.active_exec_cell.take() {
-            let cell = cell.into_failed();
-            // Insert finalized exec into history and keep grouping consistent.
-            self.add_to_history(cell);
+    /// Mark the active cell as failed (✗) and flush it into history.
+    fn finalize_active_cell_as_failed(&mut self) {
+        if let Some(mut cell) = self.active_cell.take() {
+            // Insert finalized cell into history and keep grouping consistent.
+            if let Some(exec) = cell.as_any_mut().downcast_mut::<ExecCell>() {
+                exec.mark_failed();
+            } else if let Some(tool) = cell.as_any_mut().downcast_mut::<McpToolCallCell>() {
+                tool.mark_failed();
+            }
+            self.add_boxed_history(cell);
         }
     }
 
@@ -1358,82 +1687,293 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_status_output(&mut self) {
-        let default_usage;
-        let usage_ref = if let Some(ti) = &self.token_info {
-            &ti.total_token_usage
+        let default_usage = TokenUsage::default();
+        let (total_usage, context_usage) = if let Some(ti) = &self.token_info {
+            (&ti.total_token_usage, Some(&ti.last_token_usage))
         } else {
-            default_usage = TokenUsage::default();
-            &default_usage
+            (&default_usage, Some(&default_usage))
         };
-        self.add_to_history(history_cell::new_status_output(
+        self.add_to_history(crate::status::new_status_output(
             &self.config,
-            usage_ref,
+            total_usage,
+            context_usage,
             &self.conversation_id,
             self.rate_limit_snapshot.as_ref(),
+            Local::now(),
         ));
     }
 
-    /// Open a popup to choose the model preset (model + reasoning effort).
+    fn lower_cost_preset(&self) -> Option<ModelPreset> {
+        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
+        builtin_model_presets(auth_mode)
+            .into_iter()
+            .find(|preset| preset.model == NUDGE_MODEL_SLUG)
+    }
+
+    fn maybe_show_pending_rate_limit_prompt(&mut self) {
+        if !matches!(
+            self.rate_limit_switch_prompt,
+            RateLimitSwitchPromptState::Pending
+        ) {
+            return;
+        }
+        if let Some(preset) = self.lower_cost_preset() {
+            self.open_rate_limit_switch_prompt(preset);
+            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Shown;
+        } else {
+            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
+        }
+    }
+
+    fn open_rate_limit_switch_prompt(&mut self, preset: ModelPreset) {
+        let switch_model = preset.model.to_string();
+        let display_name = preset.display_name.to_string();
+        let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
+
+        let switch_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                model: Some(switch_model.clone()),
+                effort: Some(Some(default_effort)),
+                summary: None,
+            }));
+            tx.send(AppEvent::UpdateModel(switch_model.clone()));
+            tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
+        })];
+
+        let keep_actions: Vec<SelectionAction> = Vec::new();
+        let description = if preset.description.is_empty() {
+            Some("Uses fewer credits for upcoming turns.".to_string())
+        } else {
+            Some(preset.description.to_string())
+        };
+
+        let items = vec![
+            SelectionItem {
+                name: format!("Switch to {display_name}"),
+                description,
+                selected_description: None,
+                is_current: false,
+                actions: switch_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Keep current model".to_string(),
+                description: None,
+                selected_description: None,
+                is_current: false,
+                actions: keep_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Approaching rate limits".to_string()),
+            subtitle: Some(format!("Switch to {display_name} for lower credit usage?")),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    /// Open a popup to choose the model (stage 1). After selecting a model,
+    /// a second popup is shown to choose the reasoning effort.
     pub(crate) fn open_model_popup(&mut self) {
         let current_model = self.config.model.clone();
-        let current_effort = self.config.model_reasoning_effort;
         let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
         let presets: Vec<ModelPreset> = builtin_model_presets(auth_mode);
 
         let mut items: Vec<SelectionItem> = Vec::new();
-        for preset in presets.iter() {
-            let name = preset.label.to_string();
-            let description = Some(preset.description.to_string());
-            let is_current = preset.model == current_model && preset.effort == current_effort;
-            let model_slug = preset.model.to_string();
-            let effort = preset.effort;
-            let current_model = current_model.clone();
+        for preset in presets.into_iter() {
+            let description = if preset.description.is_empty() {
+                None
+            } else {
+                Some(preset.description.to_string())
+            };
+            let is_current = preset.model == current_model;
+            let preset_for_action = preset;
+            let single_supported_effort = preset_for_action.supported_reasoning_efforts.len() == 1;
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenReasoningPopup {
+                    model: preset_for_action,
+                });
+            })];
+            items.push(SelectionItem {
+                name: preset.display_name.to_string(),
+                description,
+                is_current,
+                actions,
+                dismiss_on_select: single_supported_effort,
+                ..Default::default()
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Select Model and Effort".to_string()),
+            subtitle: Some("Switch the model for this and future Codex CLI sessions".to_string()),
+            footer_hint: Some("Press enter to select reasoning effort, or esc to dismiss.".into()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    /// Open a popup to choose the reasoning effort (stage 2) for the given model.
+    pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
+        let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
+        let supported = preset.supported_reasoning_efforts;
+
+        struct EffortChoice {
+            stored: Option<ReasoningEffortConfig>,
+            display: ReasoningEffortConfig,
+        }
+        let mut choices: Vec<EffortChoice> = Vec::new();
+        for effort in ReasoningEffortConfig::iter() {
+            if supported.iter().any(|option| option.effort == effort) {
+                choices.push(EffortChoice {
+                    stored: Some(effort),
+                    display: effort,
+                });
+            }
+        }
+        if choices.is_empty() {
+            choices.push(EffortChoice {
+                stored: Some(default_effort),
+                display: default_effort,
+            });
+        }
+
+        if choices.len() == 1 {
+            if let Some(effort) = choices.first().and_then(|c| c.stored) {
+                self.apply_model_and_effort(preset.model.to_string(), Some(effort));
+            } else {
+                self.apply_model_and_effort(preset.model.to_string(), None);
+            }
+            return;
+        }
+
+        let default_choice: Option<ReasoningEffortConfig> = choices
+            .iter()
+            .any(|choice| choice.stored == Some(default_effort))
+            .then_some(Some(default_effort))
+            .flatten()
+            .or_else(|| choices.iter().find_map(|choice| choice.stored))
+            .or(Some(default_effort));
+
+        let model_slug = preset.model.to_string();
+        let is_current_model = self.config.model == preset.model;
+        let highlight_choice = if is_current_model {
+            self.config.model_reasoning_effort
+        } else {
+            default_choice
+        };
+        let mut items: Vec<SelectionItem> = Vec::new();
+        for choice in choices.iter() {
+            let effort = choice.display;
+            let mut effort_label = effort.to_string();
+            if let Some(first) = effort_label.get_mut(0..1) {
+                first.make_ascii_uppercase();
+            }
+            if choice.stored == default_choice {
+                effort_label.push_str(" (default)");
+            }
+
+            let description = choice
+                .stored
+                .and_then(|effort| {
+                    supported
+                        .iter()
+                        .find(|option| option.effort == effort)
+                        .map(|option| option.description.to_string())
+                })
+                .filter(|text| !text.is_empty());
+
+            let warning = "⚠ High reasoning effort can quickly consume Plus plan rate limits.";
+            let show_warning =
+                preset.model.starts_with("gpt-5-codex") && effort == ReasoningEffortConfig::High;
+            let selected_description = show_warning.then(|| {
+                description
+                    .as_ref()
+                    .map_or(warning.to_string(), |d| format!("{d}\n{warning}"))
+            });
+
+            let model_for_action = model_slug.clone();
+            let effort_for_action = choice.stored;
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
                     cwd: None,
                     approval_policy: None,
                     sandbox_policy: None,
-                    model: Some(model_slug.clone()),
-                    effort: Some(effort),
+                    model: Some(model_for_action.clone()),
+                    effort: Some(effort_for_action),
                     summary: None,
                 }));
-                tx.send(AppEvent::UpdateModel(model_slug.clone()));
-                tx.send(AppEvent::UpdateReasoningEffort(effort));
+                tx.send(AppEvent::UpdateModel(model_for_action.clone()));
+                tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
                 tx.send(AppEvent::PersistModelSelection {
-                    model: model_slug.clone(),
-                    effort,
+                    model: model_for_action.clone(),
+                    effort: effort_for_action,
                 });
                 tracing::info!(
-                    "New model: {}, New effort: {}, Current model: {}, Current effort: {}",
-                    model_slug.clone(),
-                    effort
-                        .map(|effort| effort.to_string())
-                        .unwrap_or_else(|| "none".to_string()),
-                    current_model,
-                    current_effort
-                        .map(|effort| effort.to_string())
-                        .unwrap_or_else(|| "none".to_string())
+                    "Selected model: {}, Selected effort: {}",
+                    model_for_action,
+                    effort_for_action
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "default".to_string())
                 );
             })];
+
             items.push(SelectionItem {
-                name,
+                name: effort_label,
                 description,
-                is_current,
+                selected_description,
+                is_current: is_current_model && choice.stored == highlight_choice,
                 actions,
                 dismiss_on_select: true,
-                search_value: None,
+                ..Default::default()
             });
         }
 
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from(
+            format!("Select Reasoning Level for {model_slug}").bold(),
+        ));
+
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: "Select model and reasoning level".to_string(),
-            subtitle: Some(
-                "Switch between OpenAI models for this and future Codex CLI session".to_string(),
-            ),
-            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            header: Box::new(header),
+            footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
         });
+    }
+
+    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                model: Some(model.clone()),
+                effort: Some(effort),
+                summary: None,
+            }));
+        self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
+        self.app_event_tx
+            .send(AppEvent::UpdateReasoningEffort(effort));
+        self.app_event_tx.send(AppEvent::PersistModelSelection {
+            model: model.clone(),
+            effort,
+        });
+        tracing::info!(
+            "Selected model: {}, Selected effort: {}",
+            model,
+            effort
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "default".to_string())
+        );
     }
 
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
@@ -1442,42 +1982,329 @@ impl ChatWidget {
         let current_sandbox = self.config.sandbox_policy.clone();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
+        #[cfg(target_os = "windows")]
+        let header_renderable: Box<dyn Renderable> = if self
+            .config
+            .forced_auto_mode_downgraded_on_windows
+        {
+            use ratatui_macros::line;
+
+            let mut header = ColumnRenderable::new();
+            header.push(line![
+                "Codex forced your settings back to Read Only on this Windows machine.".bold()
+            ]);
+            header.push(line![
+                "To re-enable Auto mode, run Codex inside Windows Subsystem for Linux (WSL) or enable Full Access manually.".dim()
+                ]);
+            Box::new(header)
+        } else {
+            Box::new(())
+        };
+        #[cfg(not(target_os = "windows"))]
+        let header_renderable: Box<dyn Renderable> = Box::new(());
         for preset in presets.into_iter() {
             let is_current =
                 current_approval == preset.approval && current_sandbox == preset.sandbox;
-            let approval = preset.approval;
-            let sandbox = preset.sandbox.clone();
             let name = preset.label.to_string();
-            let description = Some(preset.description.to_string());
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                    cwd: None,
-                    approval_policy: Some(approval),
-                    sandbox_policy: Some(sandbox.clone()),
-                    model: None,
-                    effort: None,
-                    summary: None,
-                }));
-                tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
-                tx.send(AppEvent::UpdateSandboxPolicy(sandbox.clone()));
-            })];
+            let description_text = preset.description;
+            let description = if cfg!(target_os = "windows")
+                && preset.id == "auto"
+                && codex_core::get_platform_sandbox().is_none()
+            {
+                Some(format!(
+                    "{description_text}\nRequires Windows Subsystem for Linux (WSL). Show installation instructions..."
+                ))
+            } else {
+                Some(description_text.to_string())
+            };
+            let requires_confirmation = preset.id == "full-access"
+                && !self
+                    .config
+                    .notices
+                    .hide_full_access_warning
+                    .unwrap_or(false);
+            let actions: Vec<SelectionAction> = if requires_confirmation {
+                let preset_clone = preset.clone();
+                vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenFullAccessConfirmation {
+                        preset: preset_clone.clone(),
+                    });
+                })]
+            } else if preset.id == "auto" {
+                #[cfg(target_os = "windows")]
+                {
+                    if codex_core::get_platform_sandbox().is_none() {
+                        vec![Box::new(|tx| {
+                            tx.send(AppEvent::ShowWindowsAutoModeInstructions);
+                        })]
+                    } else if !self
+                        .config
+                        .notices
+                        .hide_world_writable_warning
+                        .unwrap_or(false)
+                        && self.windows_world_writable_flagged()
+                    {
+                        let preset_clone = preset.clone();
+                        vec![Box::new(move |tx| {
+                            tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
+                                preset: Some(preset_clone.clone()),
+                            });
+                        })]
+                    } else {
+                        Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                }
+            } else {
+                Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+            };
             items.push(SelectionItem {
                 name,
                 description,
                 is_current,
                 actions,
                 dismiss_on_select: true,
-                search_value: None,
+                ..Default::default()
             });
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: "Select Approval Mode".to_string(),
-            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            title: Some("Select Approval Mode".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
             items,
+            header: header_renderable,
             ..Default::default()
         });
     }
+
+    fn approval_preset_actions(
+        approval: AskForApproval,
+        sandbox: SandboxPolicy,
+    ) -> Vec<SelectionAction> {
+        vec![Box::new(move |tx| {
+            let sandbox_clone = sandbox.clone();
+            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: Some(approval),
+                sandbox_policy: Some(sandbox_clone.clone()),
+                model: None,
+                effort: None,
+                summary: None,
+            }));
+            tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
+            tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
+        })]
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_world_writable_flagged(&self) -> bool {
+        use std::collections::HashMap;
+        let mut env_map: HashMap<String, String> = HashMap::new();
+        for (k, v) in std::env::vars() {
+            env_map.insert(k, v);
+        }
+        match codex_windows_sandbox::preflight_audit_everyone_writable(
+            &self.config.cwd,
+            &env_map,
+            Some(self.config.codex_home.as_path()),
+        ) {
+            Ok(()) => false,
+            Err(_) => true,
+        }
+    }
+
+    pub(crate) fn open_full_access_confirmation(&mut self, preset: ApprovalPreset) {
+        let approval = preset.approval;
+        let sandbox = preset.sandbox;
+        let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
+        let title_line = Line::from("Enable full access?").bold();
+        let info_line = Line::from(vec![
+            "When Codex runs with full access, it can edit any file on your computer and run commands with network, without your approval. "
+                .into(),
+            "Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior."
+                .fg(Color::Red),
+        ]);
+        header_children.push(Box::new(title_line));
+        header_children.push(Box::new(
+            Paragraph::new(vec![info_line]).wrap(Wrap { trim: false }),
+        ));
+        let header = ColumnRenderable::with(header_children);
+
+        let mut accept_actions = Self::approval_preset_actions(approval, sandbox.clone());
+        accept_actions.push(Box::new(|tx| {
+            tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
+        }));
+
+        let mut accept_and_remember_actions = Self::approval_preset_actions(approval, sandbox);
+        accept_and_remember_actions.push(Box::new(|tx| {
+            tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
+            tx.send(AppEvent::PersistFullAccessWarningAcknowledged);
+        }));
+
+        let deny_actions: Vec<SelectionAction> = vec![Box::new(|tx| {
+            tx.send(AppEvent::OpenApprovalsPopup);
+        })];
+
+        let items = vec![
+            SelectionItem {
+                name: "Yes, continue anyway".to_string(),
+                description: Some("Apply full access for this session".to_string()),
+                actions: accept_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Yes, and don't ask again".to_string(),
+                description: Some("Enable full access and remember this choice".to_string()),
+                actions: accept_and_remember_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Cancel".to_string(),
+                description: Some("Go back without enabling full access".to_string()),
+                actions: deny_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            header: Box::new(header),
+            ..Default::default()
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn open_world_writable_warning_confirmation(
+        &mut self,
+        preset: Option<ApprovalPreset>,
+    ) {
+        let (approval, sandbox) = match &preset {
+            Some(p) => (Some(p.approval), Some(p.sandbox.clone())),
+            None => (None, None),
+        };
+        let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
+        let title_line = Line::from("Auto mode has unprotected directories").bold();
+        let info_line = Line::from(vec![
+            "Some important directories on this system are world-writable. ".into(),
+            "The Windows sandbox cannot protect writes to these locations in Auto mode."
+                .fg(Color::Red),
+        ]);
+        header_children.push(Box::new(title_line));
+        header_children.push(Box::new(
+            Paragraph::new(vec![info_line]).wrap(Wrap { trim: false }),
+        ));
+        let header = ColumnRenderable::with(header_children);
+
+        // Build actions ensuring acknowledgement happens before applying the new sandbox policy,
+        // so downstream policy-change hooks don't re-trigger the warning.
+        let mut accept_actions: Vec<SelectionAction> = Vec::new();
+        // Suppress the immediate re-scan once after user confirms continue.
+        accept_actions.push(Box::new(|tx| {
+            tx.send(AppEvent::SkipNextWorldWritableScan);
+        }));
+        if let (Some(approval), Some(sandbox)) = (approval, sandbox.clone()) {
+            accept_actions.extend(Self::approval_preset_actions(approval, sandbox));
+        }
+
+        let mut accept_and_remember_actions: Vec<SelectionAction> = Vec::new();
+        accept_and_remember_actions.push(Box::new(|tx| {
+            tx.send(AppEvent::UpdateWorldWritableWarningAcknowledged(true));
+            tx.send(AppEvent::PersistWorldWritableWarningAcknowledged);
+        }));
+        if let (Some(approval), Some(sandbox)) = (approval, sandbox) {
+            accept_and_remember_actions.extend(Self::approval_preset_actions(approval, sandbox));
+        }
+
+        let deny_actions: Vec<SelectionAction> = if preset.is_some() {
+            vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenApprovalsPopup);
+            })]
+        } else {
+            Vec::new()
+        };
+
+        let items = vec![
+            SelectionItem {
+                name: "Continue".to_string(),
+                description: Some("Apply Auto mode for this session".to_string()),
+                actions: accept_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Continue and don't warn again".to_string(),
+                description: Some("Enable Auto mode and remember this choice".to_string()),
+                actions: accept_and_remember_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Cancel".to_string(),
+                description: Some("Go back without enabling Auto mode".to_string()),
+                actions: deny_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            header: Box::new(header),
+            ..Default::default()
+        });
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn open_world_writable_warning_confirmation(
+        &mut self,
+        _preset: Option<ApprovalPreset>,
+    ) {
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn open_windows_auto_mode_instructions(&mut self) {
+        use ratatui_macros::line;
+
+        let mut header = ColumnRenderable::new();
+        header.push(line![
+            "Auto mode requires Windows Subsystem for Linux (WSL2).".bold()
+        ]);
+        header.push(line!["Run Codex inside WSL to enable sandboxed commands."]);
+        header.push(line![""]);
+        header.push(Paragraph::new(WSL_INSTRUCTIONS).wrap(Wrap { trim: false }));
+
+        let items = vec![SelectionItem {
+            name: "Back".to_string(),
+            description: Some(
+                "Return to the approval mode list. Auto mode stays disabled outside WSL."
+                    .to_string(),
+            ),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenApprovalsPopup);
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: None,
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            header: Box::new(header),
+            ..Default::default()
+        });
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn open_windows_auto_mode_instructions(&mut self) {}
 
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
@@ -1487,6 +2314,22 @@ impl ChatWidget {
     /// Set the sandbox policy in the widget's config copy.
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) {
         self.config.sandbox_policy = policy;
+    }
+
+    pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
+        self.config.notices.hide_full_access_warning = Some(acknowledged);
+    }
+
+    pub(crate) fn set_world_writable_warning_acknowledged(&mut self, acknowledged: bool) {
+        self.config.notices.hide_world_writable_warning = Some(acknowledged);
+    }
+
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn world_writable_warning_hidden(&self) -> bool {
+        self.config
+            .notices
+            .hide_world_writable_warning
+            .unwrap_or(false)
     }
 
     /// Set the reasoning effort in the widget's config copy.
@@ -1575,7 +2418,13 @@ impl ChatWidget {
     }
 
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
-        self.add_to_history(history_cell::new_mcp_tools_output(&self.config, ev.tools));
+        self.add_to_history(history_cell::new_mcp_tools_output(
+            &self.config,
+            ev.tools,
+            ev.resources,
+            ev.resource_templates,
+            &ev.auth_statuses,
+        ));
     }
 
     fn on_list_custom_prompts(&mut self, ev: ListCustomPromptsResponseEvent) {
@@ -1589,9 +2438,20 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = Vec::new();
 
         items.push(SelectionItem {
+            name: "Review against a base branch".to_string(),
+            description: Some("(PR Style)".into()),
+            actions: vec![Box::new({
+                let cwd = self.config.cwd.clone();
+                move |tx| {
+                    tx.send(AppEvent::OpenReviewBranchPicker(cwd.clone()));
+                }
+            })],
+            dismiss_on_select: false,
+            ..Default::default()
+        });
+
+        items.push(SelectionItem {
             name: "Review uncommitted changes".to_string(),
-            description: None,
-            is_current: false,
             actions: vec![Box::new(
                 move |tx: &AppEventSender| {
                     tx.send(AppEvent::CodexOp(Op::Review {
@@ -1603,14 +2463,12 @@ impl ChatWidget {
                 },
             )],
             dismiss_on_select: true,
-            search_value: None,
+            ..Default::default()
         });
 
         // New: Review a specific commit (opens commit picker)
         items.push(SelectionItem {
             name: "Review a commit".to_string(),
-            description: None,
-            is_current: false,
             actions: vec![Box::new({
                 let cwd = self.config.cwd.clone();
                 move |tx| {
@@ -1618,37 +2476,21 @@ impl ChatWidget {
                 }
             })],
             dismiss_on_select: false,
-            search_value: None,
-        });
-
-        items.push(SelectionItem {
-            name: "Review against a base branch".to_string(),
-            description: None,
-            is_current: false,
-            actions: vec![Box::new({
-                let cwd = self.config.cwd.clone();
-                move |tx| {
-                    tx.send(AppEvent::OpenReviewBranchPicker(cwd.clone()));
-                }
-            })],
-            dismiss_on_select: false,
-            search_value: None,
+            ..Default::default()
         });
 
         items.push(SelectionItem {
             name: "Custom review instructions".to_string(),
-            description: None,
-            is_current: false,
             actions: vec![Box::new(move |tx| {
                 tx.send(AppEvent::OpenReviewCustomPrompt);
             })],
             dismiss_on_select: false,
-            search_value: None,
+            ..Default::default()
         });
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: "Select a review preset".into(),
-            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            title: Some("Select a review preset".into()),
+            footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
         });
@@ -1665,8 +2507,6 @@ impl ChatWidget {
             let branch = option.clone();
             items.push(SelectionItem {
                 name: format!("{current_branch} -> {branch}"),
-                description: None,
-                is_current: false,
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
                     tx3.send(AppEvent::CodexOp(Op::Review {
                         review_request: ReviewRequest {
@@ -1679,12 +2519,13 @@ impl ChatWidget {
                 })],
                 dismiss_on_select: true,
                 search_value: Some(option),
+                ..Default::default()
             });
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: "Select a base branch".to_string(),
-            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            title: Some("Select a base branch".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search branches".to_string()),
@@ -1704,8 +2545,6 @@ impl ChatWidget {
 
             items.push(SelectionItem {
                 name: subject.clone(),
-                description: None,
-                is_current: false,
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
                     let hint = format!("commit {short}");
                     let prompt = format!(
@@ -1720,12 +2559,13 @@ impl ChatWidget {
                 })],
                 dismiss_on_select: true,
                 search_value: Some(search_val),
+                ..Default::default()
             });
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: "Select a commit to review".to_string(),
-            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            title: Some("Select a commit to review".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search commits".to_string()),
@@ -1755,16 +2595,6 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
-    /// Programmatically submit a user text message as if typed in the
-    /// composer. The text will be added to conversation history and sent to
-    /// the agent.
-    pub(crate) fn submit_text_message(&mut self, text: String) {
-        if text.is_empty() {
-            return;
-        }
-        self.submit_user_message(text.into());
-    }
-
     pub(crate) fn token_usage(&self) -> TokenUsage {
         self.token_info
             .as_ref()
@@ -1776,6 +2606,10 @@ impl ChatWidget {
         self.conversation_id
     }
 
+    pub(crate) fn rollout_path(&self) -> Option<PathBuf> {
+        self.current_rollout_path.clone()
+    }
+
     /// Return a reference to the widget's current config (includes any
     /// runtime overrides applied via TUI, e.g., model or approval policy).
     pub(crate) fn config_ref(&self) -> &Config {
@@ -1784,27 +2618,35 @@ impl ChatWidget {
 
     pub(crate) fn clear_token_usage(&mut self) {
         self.token_info = None;
-        self.bottom_pane.set_token_usage(None);
     }
 
-    pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        let [_, _, bottom_pane_area] = self.layout_areas(area);
-        self.bottom_pane.cursor_pos(bottom_pane_area)
+    fn as_renderable(&self) -> RenderableItem<'_> {
+        let active_cell_renderable = match &self.active_cell {
+            Some(cell) => RenderableItem::Borrowed(cell).inset(Insets::tlbr(1, 0, 0, 0)),
+            None => RenderableItem::Owned(Box::new(())),
+        };
+        let mut flex = FlexRenderable::new();
+        flex.push(1, active_cell_renderable);
+        flex.push(
+            0,
+            RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(1, 0, 0, 0)),
+        );
+        RenderableItem::Owned(Box::new(flex))
     }
 }
 
-impl WidgetRef for &ChatWidget {
-    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let [_, active_cell_area, bottom_pane_area] = self.layout_areas(area);
-        (&self.bottom_pane).render(bottom_pane_area, buf);
-        if !active_cell_area.is_empty()
-            && let Some(cell) = &self.active_exec_cell
-        {
-            let mut active_cell_area = active_cell_area;
-            active_cell_area.y = active_cell_area.y.saturating_add(1);
-            active_cell_area.height -= 1;
-            cell.render_ref(active_cell_area, buf);
-        }
+impl Renderable for ChatWidget {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.as_renderable().render(area, buf);
+        self.last_rendered_width.set(Some(area.width as usize));
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.as_renderable().desired_height(width)
+    }
+
+    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        self.as_renderable().cursor_pos(area)
     }
 }
 
@@ -1925,8 +2767,6 @@ pub(crate) fn show_review_commit_picker_with_entries(
 
         items.push(SelectionItem {
             name: subject.clone(),
-            description: None,
-            is_current: false,
             actions: vec![Box::new(move |tx3: &AppEventSender| {
                 let hint = format!("commit {short}");
                 let prompt = format!(
@@ -1941,12 +2781,13 @@ pub(crate) fn show_review_commit_picker_with_entries(
             })],
             dismiss_on_select: true,
             search_value: Some(search_val),
+            ..Default::default()
         });
     }
 
     chat.bottom_pane.show_selection_view(SelectionViewParams {
-        title: "Select a commit to review".to_string(),
-        footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+        title: Some("Select a commit to review".to_string()),
+        footer_hint: Some(standard_popup_hint_line()),
         items,
         is_searchable: true,
         search_placeholder: Some("Type to search commits".to_string()),
