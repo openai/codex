@@ -1,19 +1,17 @@
 //! Verifies that the agent retries when the SSE stream terminates before
 //! delivering a `response.completed` event.
 
-use std::time::Duration;
-
 use codex_core::ModelProviderInfo;
 use codex_core::WireApi;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_protocol::user_input::UserInput;
 use core_test_support::load_sse_fixture;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event_with_timeout;
+use core_test_support::wait_for_event;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
@@ -73,6 +71,7 @@ async fn retries_on_early_close() {
         // provider is not set.
         env_key: Some("PATH".into()),
         env_key_instructions: None,
+        experimental_bearer_token: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -94,7 +93,7 @@ async fn retries_on_early_close() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })
@@ -102,10 +101,5 @@ async fn retries_on_early_close() {
         .unwrap();
 
     // Wait until TaskComplete (should succeed after retry).
-    wait_for_event_with_timeout(
-        &codex,
-        |event| matches!(event, EventMsg::TaskComplete(_)),
-        Duration::from_secs(10),
-    )
-    .await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 }

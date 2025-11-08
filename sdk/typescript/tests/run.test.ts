@@ -223,6 +223,130 @@ describe("Codex", () => {
     }
   });
 
+  it("passes modelReasoningEffort to exec", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Reasoning effort applied", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread({
+        modelReasoningEffort: "high",
+      });
+      await thread.run("apply reasoning effort");
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      expectPair(commandArgs, ["--config", 'model_reasoning_effort="high"']);
+    } finally {
+      restore();
+      await close();
+    }
+  });
+
+  it("passes networkAccessEnabled to exec", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Network access enabled", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread({
+        networkAccessEnabled: true,
+      });
+      await thread.run("test network access");
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      expectPair(commandArgs, ["--config", "sandbox_workspace_write.network_access=true"]);
+    } finally {
+      restore();
+      await close();
+    }
+  });
+
+  it("passes webSearchEnabled to exec", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Web search enabled", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread({
+        webSearchEnabled: true,
+      });
+      await thread.run("test web search");
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      expectPair(commandArgs, ["--config", "features.web_search_request=true"]);
+    } finally {
+      restore();
+      await close();
+    }
+  });
+
+  it("passes approvalPolicy to exec", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Approval policy set", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread({
+        approvalPolicy: "on-request",
+      });
+      await thread.run("test approval policy");
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      expectPair(commandArgs, ["--config", 'approval_policy="on-request"']);
+    } finally {
+      restore();
+      await close();
+    }
+  });
+
   it("writes output schema to a temporary file and forwards it", async () => {
     const { url, close, requests } = await startResponsesTestProxy({
       statusCode: 200,
@@ -275,6 +399,82 @@ describe("Codex", () => {
       }
       expect(fs.existsSync(schemaPath)).toBe(false);
     } finally {
+      restore();
+      await close();
+    }
+  });
+  it("combines structured text input segments", async () => {
+    const { url, close, requests } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Combined input applied", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread();
+      await thread.run([
+        { type: "text", text: "Describe file changes" },
+        { type: "text", text: "Focus on impacted tests" },
+      ]);
+
+      const payload = requests[0];
+      expect(payload).toBeDefined();
+      const lastUser = payload!.json.input.at(-1);
+      expect(lastUser?.content?.[0]?.text).toBe("Describe file changes\n\nFocus on impacted tests");
+    } finally {
+      await close();
+    }
+  });
+  it("forwards images to exec", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Images applied", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-images-"));
+    const imagesDirectoryEntries: [string, string] = [
+      path.join(tempDir, "first.png"),
+      path.join(tempDir, "second.jpg"),
+    ];
+    imagesDirectoryEntries.forEach((image, index) => {
+      fs.writeFileSync(image, `image-${index}`);
+    });
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread();
+      await thread.run([
+        { type: "text", text: "describe the images" },
+        { type: "local_image", path: imagesDirectoryEntries[0] },
+        { type: "local_image", path: imagesDirectoryEntries[1] },
+      ]);
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      const forwardedImages: string[] = [];
+      for (let i = 0; i < commandArgs!.length; i += 1) {
+        if (commandArgs![i] === "--image") {
+          forwardedImages.push(commandArgs![i + 1] ?? "");
+        }
+      }
+      expect(forwardedImages).toEqual(imagesDirectoryEntries);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
       restore();
       await close();
     }

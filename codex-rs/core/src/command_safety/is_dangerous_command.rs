@@ -1,4 +1,38 @@
-use crate::bash::parse_bash_lc_plain_commands;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
+
+use crate::bash::parse_shell_lc_plain_commands;
+use crate::is_safe_command::is_known_safe_command;
+
+pub fn requires_initial_appoval(
+    policy: AskForApproval,
+    sandbox_policy: &SandboxPolicy,
+    command: &[String],
+    with_escalated_permissions: bool,
+) -> bool {
+    if is_known_safe_command(command) {
+        return false;
+    }
+    match policy {
+        AskForApproval::Never | AskForApproval::OnFailure => false,
+        AskForApproval::OnRequest => {
+            // In DangerFullAccess, only prompt if the command looks dangerous.
+            if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
+                return command_might_be_dangerous(command);
+            }
+
+            // In restricted sandboxes (ReadOnly/WorkspaceWrite), do not prompt for
+            // non‑escalated, non‑dangerous commands — let the sandbox enforce
+            // restrictions (e.g., block network/write) without a user prompt.
+            let wants_escalation: bool = with_escalated_permissions;
+            if wants_escalation {
+                return true;
+            }
+            command_might_be_dangerous(command)
+        }
+        AskForApproval::UnlessTrusted => !is_known_safe_command(command),
+    }
+}
 
 pub fn command_might_be_dangerous(command: &[String]) -> bool {
     if is_dangerous_to_call_with_exec(command) {
@@ -6,7 +40,7 @@ pub fn command_might_be_dangerous(command: &[String]) -> bool {
     }
 
     // Support `bash -lc "<script>"` where the any part of the script might contain a dangerous command.
-    if let Some(all_commands) = parse_bash_lc_plain_commands(command)
+    if let Some(all_commands) = parse_shell_lc_plain_commands(command)
         && all_commands
             .iter()
             .any(|cmd| is_dangerous_to_call_with_exec(cmd))
@@ -52,6 +86,15 @@ mod tests {
     fn bash_git_reset_is_dangerous() {
         assert!(command_might_be_dangerous(&vec_str(&[
             "bash",
+            "-lc",
+            "git reset --hard"
+        ])));
+    }
+
+    #[test]
+    fn zsh_git_reset_is_dangerous() {
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "zsh",
             "-lc",
             "git reset --hard"
         ])));
