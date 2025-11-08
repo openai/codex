@@ -628,8 +628,69 @@ impl ChatComposer {
                 self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
             }
-            KeyEvent { code: KeyCode::Tab, .. }
-            | input @ KeyEvent { code: KeyCode::Enter, .. } if is_plain_enter(self.enhanced_keys_supported, &input) => {
+            KeyEvent { code: KeyCode::Tab, .. } => {
+                let Some(sel) = popup.selected_match() else {
+                    self.active_popup = ActivePopup::None;
+                    return (InputResult::None, true);
+                };
+
+                let sel_path = sel.to_string();
+                // If selected path looks like an image (png/jpeg), attach as image instead of inserting text.
+                let is_image = Self::is_image_path(&sel_path);
+                if is_image {
+                    // Determine dimensions; if that fails fall back to normal path insertion.
+                    let path_buf = PathBuf::from(&sel_path);
+                    if let Ok((w, h)) = image::image_dimensions(&path_buf) {
+                        // Remove the current @token (mirror logic from insert_selected_path without inserting text)
+                        // using the flat text and byte-offset cursor API.
+                        let cursor_offset = self.textarea.cursor();
+                        let text = self.textarea.text();
+                        // Clamp to a valid char boundary to avoid panics when slicing.
+                        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
+                        let before_cursor = &text[..safe_cursor];
+                        let after_cursor = &text[safe_cursor..];
+
+                        // Determine token boundaries in the full text.
+                        let start_idx = before_cursor
+                            .char_indices()
+                            .rfind(|(_, c)| c.is_whitespace())
+                            .map(|(idx, c)| idx + c.len_utf8())
+                            .unwrap_or(0);
+                        let end_rel_idx = after_cursor
+                            .char_indices()
+                            .find(|(_, c)| c.is_whitespace())
+                            .map(|(idx, _)| idx)
+                            .unwrap_or(after_cursor.len());
+                        let end_idx = safe_cursor + end_rel_idx;
+
+                        self.textarea.replace_range(start_idx..end_idx, "");
+                        self.textarea.set_cursor(start_idx);
+
+                        let format_label = match Path::new(&sel_path)
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .map(str::to_ascii_lowercase)
+                        {
+                            Some(ext) if ext == "png" => "PNG",
+                            Some(ext) if ext == "jpg" || ext == "jpeg" => "JPEG",
+                            _ => "IMG",
+                        };
+                        self.attach_image(path_buf, w, h, format_label);
+                        // Add a trailing space to keep typing fluid.
+                        self.textarea.insert_str(" ");
+                    } else {
+                        // Fallback to plain path insertion if metadata read fails.
+                        self.insert_selected_path(&sel_path);
+                    }
+                } else {
+                    // Non-image: inserting file path.
+                    self.insert_selected_path(&sel_path);
+                }
+                // No selection: treat Enter as closing the popup/session.
+                self.active_popup = ActivePopup::None;
+                (InputResult::None, true)
+            }
+            input @ KeyEvent { code: KeyCode::Enter, .. } if is_plain_enter(self.enhanced_keys_supported, &input) => {
                 let Some(sel) = popup.selected_match() else {
                     self.active_popup = ActivePopup::None;
                     return (InputResult::None, true);
