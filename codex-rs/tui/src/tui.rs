@@ -1,6 +1,8 @@
+use std::io;
 use std::io::IsTerminal;
 use std::io::Result;
 use std::io::Stdout;
+use std::io::stdin;
 use std::io::stdout;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -84,8 +86,8 @@ impl Command for EnableAlternateScroll {
     }
 
     #[cfg(windows)]
-    fn execute_winapi(&self) -> std::io::Result<()> {
-        Err(std::io::Error::other(
+    fn execute_winapi(&self) -> io::Result<()> {
+        Err(io::Error::other(
             "tried to execute EnableAlternateScroll using WinAPI; use ANSI instead",
         ))
     }
@@ -105,8 +107,8 @@ impl Command for DisableAlternateScroll {
     }
 
     #[cfg(windows)]
-    fn execute_winapi(&self) -> std::io::Result<()> {
-        Err(std::io::Error::other(
+    fn execute_winapi(&self) -> io::Result<()> {
+        Err(io::Error::other(
             "tried to execute DisableAlternateScroll using WinAPI; use ANSI instead",
         ))
     }
@@ -131,8 +133,11 @@ pub fn restore() -> Result<()> {
 
 /// Initialize the terminal (inline viewport; history stays in normal scrollback)
 pub fn init() -> Result<Terminal> {
+    if !stdin().is_terminal() {
+        return Err(io::Error::other("stdin is not a terminal"));
+    }
     if !stdout().is_terminal() {
-        return Err(std::io::Error::other("stdout is not a terminal"));
+        return Err(io::Error::other("stdout is not a terminal"));
     }
     set_modes()?;
 
@@ -490,7 +495,7 @@ impl Tui {
             }
         }
 
-        std::io::stdout().sync_update(|_| {
+        stdout().sync_update(|_| {
             #[cfg(unix)]
             {
                 if let Some(prepared) = prepared_resume.take() {
@@ -605,8 +610,8 @@ impl Command for PostNotification {
     }
 
     #[cfg(windows)]
-    fn execute_winapi(&self) -> std::io::Result<()> {
-        Err(std::io::Error::other(
+    fn execute_winapi(&self) -> io::Result<()> {
+        Err(io::Error::other(
             "tried to execute PostNotification using WinAPI; use ANSI instead",
         ))
     }
