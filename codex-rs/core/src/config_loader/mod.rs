@@ -207,11 +207,10 @@ fn is_project_config_allowed(user_config: &TomlValue, cwd: &Path) -> bool {
     }
 
     // If in a git repo, try matching the git root
-    if let Some(git_root) = get_git_repo_root(cwd) {
-        if let Some(project_config) = projects_table.get(git_root.to_string_lossy().as_ref()) {
+    if let Some(git_root) = get_git_repo_root(cwd)
+        && let Some(project_config) = projects_table.get(git_root.to_string_lossy().as_ref()) {
             return check_project_config_allows(project_config);
         }
-    }
 
     // No matching project found, default to not allowed
     tracing::debug!("No matching trusted project found for {}", cwd.display());
@@ -229,13 +228,13 @@ fn check_project_config_allows(project_toml: &TomlValue) -> bool {
     }
 
     // Fall back to checking trust_level (trusted projects allow by default)
-    let is_trusted = project_toml
+    
+
+    project_toml
         .get("trust_level")
         .and_then(TomlValue::as_str)
         .map(|s| s == "trusted")
-        .unwrap_or(false);
-
-    is_trusted
+        .unwrap_or(false)
 }
 
 /// Merge config `overlay` into `base`, giving `overlay` precedence.
