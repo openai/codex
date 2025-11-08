@@ -387,9 +387,18 @@ impl App {
             AppEvent::OpenFullAccessConfirmation { preset } => {
                 self.chat_widget.open_full_access_confirmation(preset);
             }
-            AppEvent::OpenWorldWritableWarningConfirmation { preset, sample_paths, extra_count, failed_scan } => {
-                self.chat_widget
-                    .open_world_writable_warning_confirmation(preset, sample_paths, extra_count, failed_scan);
+            AppEvent::OpenWorldWritableWarningConfirmation {
+                preset,
+                sample_paths,
+                extra_count,
+                failed_scan,
+            } => {
+                self.chat_widget.open_world_writable_warning_confirmation(
+                    preset,
+                    sample_paths,
+                    extra_count,
+                    failed_scan,
+                );
             }
             AppEvent::OpenFeedbackNote {
                 category,
@@ -645,8 +654,10 @@ impl App {
             if let Ok(ref paths) = result
                 && !paths.is_empty()
             {
-                let as_strings: Vec<String> =
-                    paths.iter().map(|p| normalize_windows_path_for_display(p)).collect();
+                let as_strings: Vec<String> = paths
+                    .iter()
+                    .map(|p| normalize_windows_path_for_display(p))
+                    .collect();
                 let sample_paths: Vec<String> = as_strings.iter().take(3).cloned().collect();
                 let extra_count = if as_strings.len() > sample_paths.len() {
                     as_strings.len() - sample_paths.len()
