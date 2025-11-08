@@ -5,26 +5,14 @@ use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecOutputStream;
 use codex_core::protocol::Op;
 use codex_core::protocol::TurnAbortReason;
+use core_test_support::assert_regex_match;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use regex_lite::escape;
 use std::path::PathBuf;
 use tempfile::TempDir;
-
-fn scrub_duration(input: &str) -> String {
-    input
-        .lines()
-        .map(|line| {
-            if line.starts_with("Duration: ") {
-                "Duration: <redacted> seconds"
-            } else {
-                line
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
 
 #[tokio::test]
 async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
@@ -195,11 +183,11 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
         .into_iter()
         .find(|text| text.contains("<user_shell_command>"))
         .expect("command message recorded in request");
-    let sanitized = scrub_duration(&command_message);
-    let expected = format!(
-        "<user_shell_command>\n<command>\n{command}\n</command>\n<result>\nExit code: 0\nDuration: <redacted> seconds\nOutput:\nnot-set\n</result>\n</user_shell_command>"
+    let escaped_command = escape(&command);
+    let expected_pattern = format!(
+        r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\nnot-set\n</result>\n</user_shell_command>\z"
     );
-    assert_eq!(sanitized, expected);
+    assert_regex_match(&expected_pattern, &command_message);
 
     Ok(())
 }
@@ -245,16 +233,17 @@ async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<(
         .into_iter()
         .find(|text| text.contains("<user_shell_command>"))
         .expect("command message recorded in request");
-    let sanitized = scrub_duration(&command_message);
 
     let head = (1..=128).map(|i| format!("{i}\n")).collect::<String>();
     let tail = (273..=400).map(|i| format!("{i}\n")).collect::<String>();
     let truncated_body =
         format!("Total output lines: 400\n\n{head}\n[... omitted 144 of 400 lines ...]\n\n{tail}");
-    let expected = format!(
-        "<user_shell_command>\n<command>\n{command}\n</command>\n<result>\nExit code: 0\nDuration: <redacted> seconds\nOutput:\n{truncated_body}\n</result>\n</user_shell_command>"
+    let escaped_command = escape(&command);
+    let escaped_truncated_body = escape(&truncated_body);
+    let expected_pattern = format!(
+        r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n{escaped_truncated_body}\n</result>\n</user_shell_command>\z"
     );
-    assert_eq!(sanitized, expected);
+    assert_regex_match(&expected_pattern, &command_message);
 
     Ok(())
 }
