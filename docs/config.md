@@ -5,6 +5,7 @@ Codex configuration gives you fine-grained control over the model, execution env
 ## Quick navigation
 
 - [Feature flags](#feature-flags)
+- [Project-level configuration](#project-level-configuration)
 - [Model selection](#model-selection)
 - [Execution environment](#execution-environment)
 - [MCP integration](#mcp-integration)
@@ -24,6 +25,16 @@ Codex supports several mechanisms for setting config values:
     - In the first case, the value is the TOML string `"o3"`, while in the second the value is `o3`, which is not valid TOML and therefore treated as the TOML string `"o3"`.
     - Because quotes are interpreted by one's shell, `-c key="true"` will be correctly interpreted in TOML as `key = true` (a boolean) and not `key = "true"` (a string). If for some reason you needed the string `"true"`, you would need to use `-c key='"true"'` (note the two sets of quotes).
 - The `$CODEX_HOME/config.toml` configuration file where the `CODEX_HOME` environment value defaults to `~/.codex`. (Note `CODEX_HOME` will also be where logs and other Codex-related information are stored.)
+
+### Configuration precedence
+
+When multiple configuration sources are present, Codex applies them in the following order (later sources override earlier ones):
+
+1. User config (`~/.codex/config.toml`)
+2. **Project config** (`.codex/config.toml` in the project directory)
+3. Managed config (`/etc/codex/managed_config.toml` on Unix systems)
+4. Managed preferences (macOS only, via device profiles)
+5. CLI overrides (`-c`/`--config` flags and specific flags like `--model`)
 
 Both the `--config` flag and the `config.toml` file support the following options:
 
@@ -56,6 +67,95 @@ Notes:
 
 - Omit a key to accept its default.
 - Legacy booleans such as `experimental_use_exec_command_tool`, `experimental_use_unified_exec_tool`, `include_apply_patch_tool`, and similar `experimental_use_*` keys are deprecated; setting the corresponding `[features].<key>` avoids repeated warnings.
+
+## Project-level configuration
+
+You can create project-specific configuration by placing a `.codex/config.toml` file in your project directory. This allows different projects to have their own settings that override your global user configuration.
+
+### Setting up project configuration
+
+1. **Create the project config directory:**
+   ```bash
+   mkdir -p .codex
+   ```
+
+2. **Trust the project** in your global config (`~/.codex/config.toml`):
+   ```toml
+   [projects."/path/to/your/project"]
+   trust_level = "trusted"
+   ```
+
+   For security, project configs are only loaded for projects you explicitly trust. This prevents malicious repositories from modifying Codex's behavior.
+
+3. **Create project config** at `.codex/config.toml`:
+   ```toml
+   # Project-specific settings
+   sandbox_mode = "workspace-write"
+   approval_policy = "on-request"
+
+   # Project-specific MCP servers
+   [mcp_servers.project-tool]
+   command = "npx"
+   args = ["-y", "@myorg/project-mcp-server"]
+   ```
+
+### Security considerations
+
+- **Trust required**: Project configs only load when the project path is marked as `trusted` in your global config
+- **Explicit control**: Set `allow_project_config = false` to disable project configs even for trusted projects
+- **Warning on untrusted**: If Codex finds a `.codex/config.toml` in an untrusted project, it will warn you but won't load the config
+
+Example of explicitly controlling project config loading:
+
+```toml
+# In ~/.codex/config.toml
+
+# This project is trusted and can use project configs (default behavior)
+[projects."/path/to/trusted-project"]
+trust_level = "trusted"
+
+# This project is trusted but cannot use project configs
+[projects."/path/to/another-project"]
+trust_level = "trusted"
+allow_project_config = false
+
+# This untrusted project can explicitly use project configs
+[projects."/path/to/special-project"]
+allow_project_config = true
+```
+
+### Common use cases
+
+**Project-specific MCP servers:**
+```toml
+# .codex/config.toml in your project
+[mcp_servers.project-docs]
+command = "node"
+args = ["./scripts/mcp-docs-server.js"]
+cwd = "/path/to/project"
+```
+
+**Custom sandbox settings for monorepos:**
+```toml
+# .codex/config.toml
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+writable_roots = [
+  "/path/to/monorepo/packages/frontend",
+  "/path/to/monorepo/packages/backend"
+]
+```
+
+**Project-specific model preferences:**
+```toml
+# .codex/config.toml - use a specific model for this project
+model = "o3"
+model_reasoning_effort = "high"
+```
+
+> [!NOTE]
+> Project configs are discovered by walking up from the current working directory, so they work correctly in nested directories and monorepos. The first `.codex/config.toml` found will be used.
 
 ## Model selection
 
@@ -956,6 +1056,7 @@ Valid values:
 | `experimental_instructions_file`                 | string (path)                                                     | Replace built‑in instructions (experimental).                                                                              |
 | `experimental_use_exec_command_tool`             | boolean                                                           | Use experimental exec command tool.                                                                                        |
 | `projects.<path>.trust_level`                    | string                                                            | Mark project/worktree as trusted (only `"trusted"` is recognized).                                                         |
+| `projects.<path>.allow_project_config`           | boolean                                                           | Allow loading `.codex/config.toml` from this project (defaults to true for trusted projects, false otherwise).             |
 | `tools.web_search`                               | boolean                                                           | Enable web search tool (alias: `web_search_request`) (default: false).                                                     |
 | `tools.view_image`                               | boolean                                                           | Enable or disable the `view_image` tool so Codex can attach local image files from the workspace (default: true).          |
 | `forced_login_method`                            | `chatgpt` \| `api`                                                | Only allow Codex to be used with ChatGPT or API keys.                                                                      |
