@@ -125,7 +125,7 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
         &mut p_sd,
     );
     if code != ERROR_SUCCESS {
-        return Err(anyhow!("GetNamedSecurityInfoW failed: {}", code));
+        return Err(anyhow!("GetNamedSecurityInfoW failed: {code}"));
     }
     let mut added = false;
     if !dacl_has_write_allow_for_sid(p_dacl, psid) {

@@ -135,8 +135,7 @@ pub unsafe fn create_process_as_user(
     if ok == 0 {
         let err = GetLastError() as i32;
         let msg = format!(
-            "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={}",
-            err,
+            "CreateProcessAsUserW failed: {err} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={}",
             format_last_error(err),
             cwd.display(),
             cmdline_str,
@@ -144,7 +143,7 @@ pub unsafe fn create_process_as_user(
             si.dwFlags,
         );
         logging::debug_log(&msg, logs_base_dir);
-        return Err(anyhow!("CreateProcessAsUserW failed: {}", err));
+        return Err(anyhow!("CreateProcessAsUserW failed: {err}"));
     }
     Ok((pi, si))
 }

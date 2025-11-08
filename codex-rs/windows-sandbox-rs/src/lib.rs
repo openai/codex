@@ -83,7 +83,7 @@ mod windows_impl {
         });
         let mut w: Vec<u16> = Vec::new();
         for (k, v) in items {
-            let mut s = to_wide(format!("{}={}", k, v));
+            let mut s = to_wide(format!("{k}={v}"));
             s.pop();
             w.extend_from_slice(&s);
             w.push(0);
@@ -306,7 +306,7 @@ mod windows_impl {
                 CloseHandle(err_w);
                 CloseHandle(h_token);
             }
-            return Err(anyhow::anyhow!("CreateProcessAsUserW failed: {}", err));
+            return Err(anyhow::anyhow!("CreateProcessAsUserW failed: {err}"));
         }
 
         unsafe {
@@ -398,7 +398,7 @@ mod windows_impl {
         if exit_code == 0 {
             log_success(&command, logs_base_dir);
         } else {
-            log_failure(&command, &format!("exit code {}", exit_code), logs_base_dir);
+            log_failure(&command, &format!("exit code {exit_code}"), logs_base_dir);
         }
 
         if !persist_aces {

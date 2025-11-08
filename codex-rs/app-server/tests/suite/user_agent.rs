@@ -14,7 +14,17 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 async fn get_user_agent_returns_current_codex_user_agent() -> Result<()> {
     let codex_home = TempDir::new()?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    // Ensure the child process does not inherit any originator override from
+    // the parent environment. This test asserts the default originator
+    // ("codex_cli_rs"), so we explicitly remove the override if present.
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(
+            codex_core::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR,
+            None,
+        )],
+    )
+    .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_get_user_agent_request().await?;

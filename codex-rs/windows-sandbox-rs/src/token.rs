@@ -192,7 +192,7 @@ unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
     }
     let err = GetLastError();
     if err != 0 {
-        return Err(anyhow!("AdjustTokenPrivileges error {}", err));
+        return Err(anyhow!("AdjustTokenPrivileges error {err}"));
     }
     Ok(())
 }
