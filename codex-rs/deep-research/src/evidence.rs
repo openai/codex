@@ -3,10 +3,13 @@
 /// Provides standardized Evidence structure for tracking sources,
 /// quotes, confidence scores, and reproducibility logging.
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
+use std::hash::Hash;
+use std::hash::Hasher;
+use std::path::Path;
+use std::path::PathBuf;
 
 /// Standard evidence structure for research citations
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,7 +85,8 @@ pub struct ResearchLog {
 impl ResearchLog {
     /// Create a new research log
     pub fn new(query: impl Into<String>, strategy: impl Into<String>) -> Self {
-        use std::time::{SystemTime, UNIX_EPOCH};
+        use std::time::SystemTime;
+        use std::time::UNIX_EPOCH;
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()

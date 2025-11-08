@@ -1,4 +1,4 @@
-﻿# Codex AI Driver - VM環境構築＆テスト自動化スクリプト
+# Codex AI Driver - VM環境構築＆テスト自動化スクリプト
 # Windows Kernel Driver の完全自動テスト環境
 
 <#

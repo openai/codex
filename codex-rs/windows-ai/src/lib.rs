@@ -23,9 +23,7 @@
 //! }
 //! ```
 
-use anyhow::{Context, Result};
-use std::path::PathBuf;
-use tracing::{debug, info, warn};
+use anyhow::Result;
 
 #[cfg(target_os = "windows")]
 mod windows_impl;
@@ -62,33 +60,45 @@ impl WindowsAiRuntime {
             let inner = windows_impl::WindowsAiRuntimeImpl::new()?;
             Ok(Self { inner })
         }
-        
+
         #[cfg(not(target_os = "windows"))]
         {
             anyhow::bail!("Windows AI is only available on Windows 11 25H2+")
         }
     }
-    
+
     /// Get GPU statistics
     pub async fn get_gpu_stats(&self) -> Result<GpuStats> {
         #[cfg(target_os = "windows")]
         {
             self.inner.get_gpu_stats().await
         }
-        
+
         #[cfg(not(target_os = "windows"))]
         {
             anyhow::bail!("Windows AI is only available on Windows")
         }
     }
-    
+
+    /// Get DirectML version (Windows 11 25H2+)
+    #[cfg(target_os = "windows")]
+    pub fn get_directml_version(&self) -> Result<windows_impl::DirectMlVersion> {
+        Ok(self.inner.get_directml_version().clone())
+    }
+
+    /// Check if NPU (Copilot+ PC) is available
+    #[cfg(target_os = "windows")]
+    pub fn is_npu_available(&self) -> bool {
+        self.inner.is_npu_available()
+    }
+
     /// Check if Windows AI is available on this system
     pub fn is_available() -> bool {
         #[cfg(target_os = "windows")]
         {
             windows_impl::check_windows_ai_available()
         }
-        
+
         #[cfg(not(target_os = "windows"))]
         {
             false
@@ -97,117 +107,27 @@ impl WindowsAiRuntime {
 }
 
 /// Kernel Driver integration
+#[cfg(target_os = "windows")]
+pub mod kernel_driver {
+    pub use crate::windows_impl::kernel_driver::*;
+}
+
+#[cfg(not(target_os = "windows"))]
 pub mod kernel_driver {
     use super::*;
-    
-    /// Kernel Driver Bridge
-    pub struct KernelBridge {
-        #[cfg(target_os = "windows")]
-        handle: windows::Win32::Foundation::HANDLE,
-    }
-    
+
+    /// Kernel Driver Bridge (stub for non-Windows)
+    pub struct KernelBridge;
+
     impl KernelBridge {
         /// Open connection to AI kernel driver
         pub fn open() -> Result<Self> {
-            #[cfg(target_os = "windows")]
-            {
-                use windows::Win32::Foundation::*;
-                use windows::Win32::Storage::FileSystem::*;
-                
-                let device_path = windows::core::w!("\\\\.\\AI_Driver");
-                
-                unsafe {
-                    let handle = CreateFileW(
-                        device_path,
-                        FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0,
-                        FILE_SHARE_NONE,
-                        None,
-                        OPEN_EXISTING,
-                        FILE_ATTRIBUTE_NORMAL,
-                        None,
-                    )?;
-                    
-                    if handle.is_invalid() {
-                        anyhow::bail!("Failed to open AI kernel driver");
-                    }
-                    
-                    info!("AI Kernel Driver opened successfully");
-                    Ok(Self { handle })
-                }
-            }
-            
-            #[cfg(not(target_os = "windows"))]
-            {
-                anyhow::bail!("Kernel driver is only available on Windows")
-            }
+            anyhow::bail!("Kernel driver is only available on Windows")
         }
-        
+
         /// Get GPU stats from kernel driver
         pub fn get_gpu_stats(&self) -> Result<GpuStats> {
-            #[cfg(target_os = "windows")]
-            {
-                use windows::Win32::System::IO::DeviceIoControl;
-                
-                const IOCTL_AI_GET_GPU_STATUS: u32 = 0x222010;
-                
-                #[repr(C)]
-                struct RawGpuStatus {
-                    utilization: f32,
-                    memory_used: u64,
-                    memory_total: u64,
-                    temperature: f32,
-                }
-                
-                let mut output = RawGpuStatus {
-                    utilization: 0.0,
-                    memory_used: 0,
-                    memory_total: 0,
-                    temperature: 0.0,
-                };
-                
-                let mut bytes_returned: u32 = 0;
-                
-                unsafe {
-                    let success = DeviceIoControl(
-                        self.handle,
-                        IOCTL_AI_GET_GPU_STATUS,
-                        None,
-                        0,
-                        Some(&mut output as *mut _ as *mut _),
-                        std::mem::size_of::<RawGpuStatus>() as u32,
-                        Some(&mut bytes_returned),
-                        None,
-                    );
-                    
-                    if success.as_bool() {
-                        Ok(GpuStats {
-                            utilization: output.utilization,
-                            memory_used: output.memory_used,
-                            memory_total: output.memory_total,
-                            temperature: output.temperature,
-                        })
-                    } else {
-                        anyhow::bail!("DeviceIoControl failed")
-                    }
-                }
-            }
-            
-            #[cfg(not(target_os = "windows"))]
-            {
-                anyhow::bail!("Kernel driver is only available on Windows")
-            }
-        }
-    }
-    
-    impl Drop for KernelBridge {
-        fn drop(&mut self) {
-            #[cfg(target_os = "windows")]
-            {
-                unsafe {
-                    windows::Win32::Foundation::CloseHandle(self.handle);
-                }
-            }
+            anyhow::bail!("Kernel driver is only available on Windows")
         }
     }
 }
-

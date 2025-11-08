@@ -1,7 +1,11 @@
 /// Orchestrator RPC protocol definitions
 ///
 /// Single-Writer Queue architecture with idempotency
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+/// Orchestrator RPC protocol definitions
+///
+/// Single-Writer Queue architecture with idempotency
+use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 

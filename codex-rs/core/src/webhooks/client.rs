@@ -1,11 +1,15 @@
 //! Webhook client with HMAC signing and retry logic
 
-use super::types::{WebhookConfig, WebhookPayload, WebhookService};
-use anyhow::{Context, Result};
+use super::types::WebhookConfig;
+use super::types::WebhookPayload;
+use super::types::WebhookService;
+use anyhow::Context;
+use anyhow::Result;
 use reqwest::Client;
 use sha2::Sha256;
 use std::time::Duration;
-use tracing::{debug, warn};
+use tracing::debug;
+use tracing::warn;
 
 /// Webhook client
 pub struct WebhookClient {

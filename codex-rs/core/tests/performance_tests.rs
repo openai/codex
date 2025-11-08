@@ -1,10 +1,10 @@
+use codex_core::AuthManager;
 /// Performance tests for Sub-Agent system and Deep Research
 ///
 /// Benchmarks execution time, memory usage, and throughput
 use codex_core::agents::AgentRuntime;
 use codex_core::agents::TokenBudgeter;
 use codex_core::config::Config;
-use codex_core::AuthManager;
 use codex_deep_research::DeepResearcher;
 use codex_deep_research::DeepResearcherConfig;
 use codex_deep_research::MockProvider;
@@ -12,7 +12,9 @@ use codex_deep_research::ResearchPlanner;
 use codex_deep_research::ResearchStrategy;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
-use codex_protocol::config_types::{ReasoningEffort, ReasoningSummary, Verbosity};
+use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Verbosity;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::fs;
@@ -24,10 +26,14 @@ use tempfile::TempDir;
 // Test helper
 fn create_test_runtime(workspace_dir: PathBuf, budget: usize) -> AgentRuntime {
     let config = Arc::new(Config::load_from_disk_or_default().unwrap());
-    let auth_manager = AuthManager::shared(config.codex_home.clone(), false, config.cli_auth_credentials_store_mode);
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        false,
+        config.cli_auth_credentials_store_mode,
+    );
     let otel_manager = OtelEventManager::new_noop();
     let conversation_id = ConversationId::new();
-    
+
     AgentRuntime::new(
         workspace_dir,
         budget,

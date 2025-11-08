@@ -1,6 +1,8 @@
 use anyhow::Result;
-use rusqlite::{Connection, params};
-use serde::{Deserialize, Serialize};
+use rusqlite::Connection;
+use rusqlite::params;
+use serde::Deserialize;
+use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tracing::info;

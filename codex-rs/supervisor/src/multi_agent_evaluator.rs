@@ -4,10 +4,13 @@ use crate::types::Assignment;
 use crate::types::Plan;
 use crate::types::SupervisorConfig;
 use crate::types::TaskResult;
-use anyhow::{Result, bail};
-use serde::{Deserialize, Serialize};
+use anyhow::Result;
+use anyhow::bail;
+use serde::Deserialize;
+use serde::Serialize;
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// Configuration for running multi-agent evaluation loops.
 #[derive(Debug, Clone)]

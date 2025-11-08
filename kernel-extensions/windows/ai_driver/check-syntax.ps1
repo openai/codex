@@ -1,4 +1,4 @@
-﻿# Codex AI Driver - 構文チェックスクリプト
+# Codex AI Driver - 構文チェックスクリプト
 # 型エラー・警告を確認（ビルドはしない）
 
 $ErrorActionPreference = "Continue"

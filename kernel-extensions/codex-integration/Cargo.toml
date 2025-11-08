@@ -7,7 +7,15 @@ license = "Apache-2.0"
 description = "Codex integration with AI kernel extensions"
 
 [dependencies]
-# No dependencies for lightweight integration
+anyhow = "1.0"
+tracing = "0.1"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+] }
 
 [dev-dependencies]
 # None

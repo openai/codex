@@ -3,10 +3,13 @@
 //! Provides thread-safe token usage tracking with configurable budgets,
 //! warning thresholds, and per-agent limits.
 
-use anyhow::{Result, anyhow};
-use serde::{Deserialize, Serialize};
+use anyhow::Result;
+use anyhow::anyhow;
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use std::sync::RwLock;
 
 /// Helper to convert lock poisoned errors
 fn lock_poisoned_err<T>(_: T) -> anyhow::Error {

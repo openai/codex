@@ -3,11 +3,29 @@
 //! This module provides integration between Codex and Windows 11's native AI APIs,
 //! enabling OS-level optimizations and kernel driver acceleration.
 
-use anyhow::{Context, Result};
-use tracing::{debug, info};
+use anyhow::Result;
 
-#[cfg(target_os = "windows")]
-use codex_windows_ai::{GpuStats, WindowsAiRuntime, kernel_driver::KernelBridge};
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
+use anyhow::Context;
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
+use codex_windows_ai::GpuStats;
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
+use codex_windows_ai::WindowsAiRuntime;
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
+use codex_windows_ai::kernel_driver::KernelBridge;
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
+use tracing::debug;
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
+use tracing::info;
+
+#[cfg(not(all(target_os = "windows", feature = "windows-ai")))]
+#[derive(Debug, Clone)]
+pub struct GpuStats {
+    pub utilization: f32,
+    pub memory_used: u64,
+    pub memory_total: u64,
+    pub temperature: f32,
+}
 
 /// Windows AI execution options
 #[derive(Debug, Clone)]
@@ -31,31 +49,33 @@ impl Default for WindowsAiOptions {
 }
 
 /// Execute prompt with Windows AI optimization
-#[cfg(target_os = "windows")]
-pub async fn execute_with_windows_ai(
-    prompt: &str,
-    options: &WindowsAiOptions,
-) -> Result<String> {
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
+pub async fn execute_with_windows_ai(prompt: &str, options: &WindowsAiOptions) -> Result<String> {
     if !options.enabled {
         anyhow::bail!("Windows AI not enabled");
     }
-    
-    info!("Executing with Windows AI (kernel_accelerated: {})", options.kernel_accelerated);
-    
+
+    info!(
+        "Executing with Windows AI (kernel_accelerated: {})",
+        options.kernel_accelerated
+    );
+
     // Initialize Windows AI runtime
-    let runtime = WindowsAiRuntime::new()
-        .context("Failed to initialize Windows AI runtime")?;
-    
+    let runtime = WindowsAiRuntime::new().context("Failed to initialize Windows AI runtime")?;
+
     // Get GPU stats
-    let stats = runtime.get_gpu_stats().await
+    let stats = runtime
+        .get_gpu_stats()
+        .await
         .context("Failed to get GPU stats")?;
-    
-    debug!("GPU Stats: utilization={:.1}%, memory={}/{}MB", 
+
+    debug!(
+        "GPU Stats: utilization={:.1}%, memory={}/{}MB",
         stats.utilization,
         stats.memory_used / 1024 / 1024,
         stats.memory_total / 1024 / 1024
     );
-    
+
     // If kernel acceleration is enabled, use kernel driver
     if options.kernel_accelerated {
         execute_with_kernel_driver(prompt, &runtime).await
@@ -66,68 +86,65 @@ pub async fn execute_with_windows_ai(
 }
 
 /// Execute with kernel driver acceleration
-#[cfg(target_os = "windows")]
-async fn execute_with_kernel_driver(
-    prompt: &str,
-    _runtime: &WindowsAiRuntime,
-) -> Result<String> {
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
+async fn execute_with_kernel_driver(prompt: &str, _runtime: &WindowsAiRuntime) -> Result<String> {
     info!("Attempting kernel driver acceleration");
-    
+
     // Open kernel driver
-    let kernel = KernelBridge::open()
-        .context("Failed to open AI kernel driver - is it installed?")?;
-    
+    let kernel =
+        KernelBridge::open().context("Failed to open AI kernel driver - is it installed?")?;
+
     // Get GPU stats from kernel
-    let kernel_stats = kernel.get_gpu_stats()
+    let kernel_stats = kernel
+        .get_gpu_stats()
         .context("Failed to get kernel GPU stats")?;
-    
-    info!("Kernel GPU Stats: utilization={:.1}%, memory={}/{}MB",
+
+    info!(
+        "Kernel GPU Stats: utilization={:.1}%, memory={}/{}MB",
         kernel_stats.utilization,
         kernel_stats.memory_used / 1024 / 1024,
         kernel_stats.memory_total / 1024 / 1024
     );
-    
+
     // TODO: Register Windows AI runtime with kernel driver for optimization
     // This would enable:
     // - Pinned memory allocation for faster GPU transfers
     // - GPU-aware thread scheduling
     // - Priority boosting for AI tasks
-    
-    Ok(format!("Kernel-accelerated execution: {prompt} (placeholder)"))
+
+    Ok(format!(
+        "Kernel-accelerated execution: {prompt} (placeholder)"
+    ))
 }
 
-/// Stub for non-Windows platforms
-#[cfg(not(target_os = "windows"))]
-pub async fn execute_with_windows_ai(
-    _prompt: &str,
-    _options: &WindowsAiOptions,
-) -> Result<String> {
-    anyhow::bail!("Windows AI is only available on Windows 11 25H2+")
+/// Stub for platforms without Windows AI feature
+#[cfg(not(all(target_os = "windows", feature = "windows-ai")))]
+pub async fn execute_with_windows_ai(_prompt: &str, _options: &WindowsAiOptions) -> Result<String> {
+    anyhow::bail!("Windows AI is only available on Windows 11 25H2+ with windows-ai feature")
 }
 
 /// Get GPU statistics (Windows-only)
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
 pub async fn get_gpu_statistics() -> Result<GpuStats> {
     let runtime = WindowsAiRuntime::new()?;
     runtime.get_gpu_stats().await
 }
 
 /// Get GPU statistics stub
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(all(target_os = "windows", feature = "windows-ai")))]
 pub async fn get_gpu_statistics() -> Result<GpuStats> {
-    anyhow::bail!("Windows AI is only available on Windows")
+    anyhow::bail!("Windows AI is only available on Windows with windows-ai feature")
 }
 
 /// Check if Windows AI is available on this system
 pub fn is_windows_ai_available() -> bool {
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "windows-ai"))]
     {
         WindowsAiRuntime::is_available()
     }
-    
-    #[cfg(not(target_os = "windows"))]
+
+    #[cfg(not(all(target_os = "windows", feature = "windows-ai")))]
     {
         false
     }
 }
-

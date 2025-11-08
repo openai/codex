@@ -1,4 +1,4 @@
-﻿# Codex AI Driver - アンインストールスクリプト
+# Codex AI Driver - アンインストールスクリプト
 # Windows 10/11用
 
 <#

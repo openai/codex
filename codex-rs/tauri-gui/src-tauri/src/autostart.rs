@@ -2,7 +2,8 @@
 // TODO: Full implementation in v1.3.0 when Windows crate API stabilizes
 
 use anyhow::Result;
-use tracing::{info, warn};
+use tracing::info;
+use tracing::warn;
 
 pub fn set_autostart(enabled: bool) -> Result<()> {
     if enabled {

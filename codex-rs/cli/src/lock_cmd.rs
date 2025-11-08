@@ -6,7 +6,8 @@ use anyhow::Result;
 use clap::Parser;
 use codex_common::CliConfigOverrides;
 use codex_core::lock::RepositoryLock;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 pub struct LockCli {
@@ -88,7 +89,8 @@ fn handle_status(lock: RepositoryLock) -> Result<()> {
             if let Some(expires_at) = metadata.expires_at {
                 println!("  Expires at: {} (Unix timestamp)", expires_at);
 
-                use std::time::{SystemTime, UNIX_EPOCH};
+                use std::time::SystemTime;
+                use std::time::UNIX_EPOCH;
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()

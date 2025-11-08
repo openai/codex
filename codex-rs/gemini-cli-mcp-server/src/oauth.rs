@@ -1,12 +1,19 @@
 /// OAuth 2.0 + PKCE authentication module for Gemini API
 ///
 /// Implements RFC 7636 (PKCE) for secure OAuth flows without client secrets
-use anyhow::{Context, Result};
+use anyhow::Context;
+/// OAuth 2.0 + PKCE authentication module for Gemini API
+///
+/// Implements RFC 7636 (PKCE) for secure OAuth flows without client secrets
+use anyhow::Result;
 use base64::Engine;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use serde::Deserialize;
+use serde::Serialize;
+use sha2::Digest;
+use sha2::Sha256;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// OAuth 2.0 configuration for Google Gemini
 #[derive(Debug, Clone)]

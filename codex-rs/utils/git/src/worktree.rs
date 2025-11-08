@@ -4,8 +4,10 @@
 /// using Git worktrees. Each instance gets its own working directory linked to
 /// a unique branch, avoiding file conflicts.
 use crate::errors::GitToolingError;
-use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use anyhow::Context;
+use anyhow::Result;
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 
 /// Git worktree information

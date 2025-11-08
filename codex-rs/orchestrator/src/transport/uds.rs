@@ -1,10 +1,18 @@
 /// Unix Domain Socket transport implementation
-use super::{Connection, Transport, TransportInfo};
-use anyhow::{Context, Result};
+use super::Connection;
+/// Unix Domain Socket transport implementation
+use super::Transport;
+/// Unix Domain Socket transport implementation
+use super::TransportInfo;
+use anyhow::Context;
+use anyhow::Result;
 use async_trait::async_trait;
-use std::path::{Path, PathBuf};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{UnixListener, UnixStream};
+use std::path::Path;
+use std::path::PathBuf;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::net::UnixListener;
+use tokio::net::UnixStream;
 
 const SOCKET_FILENAME: &str = "orchestrator.sock";
 

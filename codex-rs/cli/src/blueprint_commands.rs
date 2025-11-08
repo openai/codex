@@ -2,9 +2,13 @@
 //!
 //! Provides command-line interface for creating, managing, and executing blueprints.
 
-use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
-use codex_core::blueprint::{BlueprintBlock, BlueprintState, ExecutionMode};
+use anyhow::Context;
+use anyhow::Result;
+use clap::Parser;
+use clap::Subcommand;
+use codex_core::blueprint::BlueprintBlock;
+use codex_core::blueprint::BlueprintState;
+use codex_core::blueprint::ExecutionMode;
 use std::path::PathBuf;
 
 /// Blueprint Mode commands
@@ -634,7 +638,8 @@ fn parse_execution_mode(s: &str) -> Result<ExecutionMode, String> {
 }
 
 async fn execute_blueprint(blueprint_id: &str, blueprint_dir: &PathBuf) -> Result<()> {
-    use codex_core::blueprint::{BlueprintExecutor, ExecutionEvent};
+    use codex_core::blueprint::BlueprintExecutor;
+    use codex_core::blueprint::ExecutionEvent;
     use codex_core::orchestration::BlueprintOrchestrator;
     use std::sync::Arc;
 

@@ -3,12 +3,20 @@
 //! High-level API for creating, updating, approving, and exporting blueprints.
 
 use super::persist::BlueprintPersister;
-use super::policy::{ApprovalRole, PolicyEnforcer, PrivilegedOperation};
-use super::schema::{BlueprintBlock, ResearchBlock, Risk, WorkItem};
-use super::state::{BlueprintState, StateTransitionError};
-use anyhow::{Context, Result};
+use super::policy::ApprovalRole;
+use super::policy::PolicyEnforcer;
+use super::policy::PrivilegedOperation;
+use super::schema::BlueprintBlock;
+use super::schema::ResearchBlock;
+use super::schema::Risk;
+use super::schema::WorkItem;
+use super::state::BlueprintState;
+use super::state::StateTransitionError;
+use anyhow::Context;
+use anyhow::Result;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use std::sync::RwLock;
 use thiserror::Error;
 
 /// Errors from blueprint manager operations

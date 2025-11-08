@@ -1,7 +1,9 @@
 //! Gemini authentication provider supporting API Key and OAuth 2.0 modes
 
-use anyhow::{Result, anyhow};
-use serde::{Deserialize, Serialize};
+use anyhow::Result;
+use anyhow::anyhow;
+use serde::Deserialize;
+use serde::Serialize;
 use std::path::Path;
 
 /// Gemini authentication credential source

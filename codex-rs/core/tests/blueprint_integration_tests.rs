@@ -2,12 +2,19 @@
 //!
 //! Tests full lifecycle: create → approve → execute
 
-use codex_core::agents::{AgentRuntime, CompetitionConfig, CompetitionRunner};
-use codex_core::blueprint::{
-    ApprovalRole, BlueprintBlock, BlueprintManager, BlueprintState, Budget, ExecutionMode, WorkItem,
-};
+use codex_core::agents::AgentRuntime;
+use codex_core::agents::CompetitionConfig;
+use codex_core::agents::CompetitionRunner;
+use codex_core::blueprint::ApprovalRole;
+use codex_core::blueprint::BlueprintBlock;
+use codex_core::blueprint::BlueprintManager;
+use codex_core::blueprint::BlueprintState;
+use codex_core::blueprint::Budget;
+use codex_core::blueprint::ExecutionMode;
+use codex_core::blueprint::WorkItem;
 use codex_core::execution::ExecutionEngine;
-use codex_core::orchestration::{BlueprintOrchestrator, CollaborationStore};
+use codex_core::orchestration::BlueprintOrchestrator;
+use codex_core::orchestration::CollaborationStore;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -98,9 +105,11 @@ fn test_execution_mode_switching() {
 
 #[tokio::test]
 async fn test_telemetry_recording() {
-    use codex_core::telemetry::{
-        self, CollectorConfig, EventType, TelemetryEvent, TelemetryStorage,
-    };
+    use codex_core::telemetry::CollectorConfig;
+    use codex_core::telemetry::EventType;
+    use codex_core::telemetry::TelemetryEvent;
+    use codex_core::telemetry::TelemetryStorage;
+    use codex_core::telemetry::{self};
 
     let temp_dir = TempDir::new().unwrap();
     let storage = Arc::new(TelemetryStorage::new(temp_dir.path().to_path_buf()).unwrap());
@@ -130,7 +139,9 @@ async fn test_telemetry_recording() {
 
 #[tokio::test]
 async fn test_webhook_delivery() {
-    use codex_core::webhooks::{WebhookConfig, WebhookPayload, WebhookService};
+    use codex_core::webhooks::WebhookConfig;
+    use codex_core::webhooks::WebhookPayload;
+    use codex_core::webhooks::WebhookService;
 
     // This would require a mock server, so we just test config
     let config = WebhookConfig {
@@ -157,7 +168,8 @@ fn test_competition_config() {
 
 #[test]
 fn test_budget_enforcement() {
-    use codex_core::blueprint::{Budget, BudgetTracker};
+    use codex_core::blueprint::Budget;
+    use codex_core::blueprint::BudgetTracker;
 
     let budget = Budget {
         max_step: Some(1000),
@@ -183,9 +195,10 @@ fn test_budget_enforcement() {
 
 #[test]
 fn test_policy_enforcement() {
-    use codex_core::blueprint::{
-        ApprovalRole, BlueprintPolicy, PolicyEnforcer, PrivilegedOperation,
-    };
+    use codex_core::blueprint::ApprovalRole;
+    use codex_core::blueprint::BlueprintPolicy;
+    use codex_core::blueprint::PolicyEnforcer;
+    use codex_core::blueprint::PrivilegedOperation;
 
     let policy = BlueprintPolicy::default();
     let enforcer = PolicyEnforcer::new(policy);

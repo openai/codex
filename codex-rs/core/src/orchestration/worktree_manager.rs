@@ -3,9 +3,12 @@
 //! Creates isolated worktrees for each AI agent to work independently,
 //! then merges the best result back to the main branch.
 
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use anyhow::Context;
+use anyhow::Result;
+use serde::Deserialize;
+use serde::Serialize;
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

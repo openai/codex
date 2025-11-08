@@ -1,16 +1,21 @@
 // Phase 2: Secure Agent Message Protocol (Ed25519 + AES-256-GCM)
 // Based on design document: _docs/2025-10-28_セキュア通信アーキテクチャ設計書.md
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 #[cfg(feature = "agent_security")]
-use anyhow::{Context, Result};
+use anyhow::Context;
+#[cfg(feature = "agent_security")]
+use anyhow::Result;
 #[cfg(feature = "agent_security")]
 use std::collections::HashMap;
 #[cfg(feature = "agent_security")]
 use std::sync::Arc;
 #[cfg(feature = "agent_security")]
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
+#[cfg(feature = "agent_security")]
+use std::sync::atomic::Ordering;
 #[cfg(feature = "agent_security")]
 use tokio::sync::Mutex;
 
@@ -204,10 +209,10 @@ impl SecureAgentChannel {
 
     /// Encrypt content with AES-256-GCM
     fn encrypt_content(&self, content: &str) -> Result<Vec<u8>> {
-        use aes_gcm::{
-            Aes256Gcm, Nonce,
-            aead::{Aead, KeyInit},
-        };
+        use aes_gcm::Aes256Gcm;
+        use aes_gcm::Nonce;
+        use aes_gcm::aead::Aead;
+        use aes_gcm::aead::KeyInit;
 
         let cipher = Aes256Gcm::new(&self.encryption_key);
         let nonce = Nonce::from_slice(&self.generate_nonce());
@@ -219,10 +224,10 @@ impl SecureAgentChannel {
 
     /// Decrypt content with AES-256-GCM
     fn decrypt_content(&self, ciphertext: &[u8]) -> Result<String> {
-        use aes_gcm::{
-            Aes256Gcm, Nonce,
-            aead::{Aead, KeyInit},
-        };
+        use aes_gcm::Aes256Gcm;
+        use aes_gcm::Nonce;
+        use aes_gcm::aead::Aead;
+        use aes_gcm::aead::KeyInit;
 
         let cipher = Aes256Gcm::new(&self.encryption_key);
         // In production, nonce should be transmitted with ciphertext
@@ -250,7 +255,8 @@ impl SecureAgentChannel {
 
     /// Verify Ed25519 signature
     async fn verify_signature(&self, msg: &SecureAgentMessage) -> Result<()> {
-        use ed25519_dalek::{Signature, Verifier};
+        use ed25519_dalek::Signature;
+        use ed25519_dalek::Verifier;
 
         // Get trusted public key
         let trusted_keys = self.trusted_public_keys.lock().await;

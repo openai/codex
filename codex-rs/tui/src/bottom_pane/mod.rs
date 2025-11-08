@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
+use crate::gpu_stats::GpuStatsSnapshot;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable as _;
@@ -15,8 +16,12 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::WidgetRef;
 use std::time::Duration;
+use std::time::Instant;
+use std::collections::VecDeque;
 
 mod approval_overlay;
 pub(crate) use approval_overlay::ApprovalOverlay;
@@ -41,6 +46,157 @@ mod scroll_state;
 mod selection_popup_common;
 mod textarea;
 pub(crate) use feedback_view::FeedbackNoteView;
+
+const GPU_SPARKLINE_SYMBOLS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+const GPU_HISTORY_CAPACITY: usize = 120;
+const MIN_SPARKLINE_WIDTH: u16 = 12;
+
+struct GpuStatsWidget {
+    history: VecDeque<f32>,
+    max_points: usize,
+    latest: Option<GpuStatsSnapshot>,
+    last_updated: Instant,
+}
+
+impl GpuStatsWidget {
+    fn new() -> Self {
+        Self {
+            history: VecDeque::with_capacity(GPU_HISTORY_CAPACITY),
+            max_points: GPU_HISTORY_CAPACITY,
+            latest: None,
+            last_updated: Instant::now(),
+        }
+    }
+
+    fn update(&mut self, snapshot: GpuStatsSnapshot) {
+        if self.history.len() == self.max_points {
+            self.history.pop_front();
+        }
+        self.history.push_back(snapshot.utilization.clamp(0.0, 100.0));
+        self.last_updated = snapshot.timestamp;
+        self.latest = Some(snapshot);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        if self.latest.is_none() || width == 0 {
+            0
+        } else if width < MIN_SPARKLINE_WIDTH || self.history.len() < 2 {
+            1
+        } else {
+            2
+        }
+    }
+
+    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        if area.is_empty() || self.latest.is_none() {
+            return;
+        }
+
+        let info_line = self.info_line(area.width);
+        info_line.render_ref(
+            Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: 1,
+            },
+            buf,
+        );
+
+        if area.height >= 2 && self.history.len() >= 2 && area.width >= MIN_SPARKLINE_WIDTH {
+            let sparkline = self.sparkline(area.width);
+            sparkline.render_ref(
+                Rect {
+                    x: area.x,
+                    y: area.y.saturating_add(1),
+                    width: area.width,
+                    height: 1,
+                },
+                buf,
+            );
+        }
+    }
+
+    fn info_line(&self, width: u16) -> Line<'static> {
+        let Some(latest) = &self.latest else {
+            return Line::from("GPU stats unavailable".dim());
+        };
+
+        let utilization = format!("{:.0}%", latest.utilization).green().bold();
+        let memory = format!(
+            "{} / {}",
+            format_bytes(latest.memory_used),
+            format_bytes(latest.memory_total)
+        )
+        .cyan();
+        let mut spans = vec![
+            format!("GPU ({})", latest.source.label()).bold(),
+            "  ".into(),
+            utilization,
+            " | ".dim(),
+            memory,
+        ];
+
+        if let Some(temp) = latest.temperature {
+            spans.push(" | ".dim());
+            spans.push(format!("{temp:.0}°C").yellow());
+        }
+
+        if Instant::now()
+            .saturating_duration_since(self.last_updated)
+            .as_secs()
+            >= 5
+            && width >= 30
+        {
+            spans.push(" | ".dim());
+            spans.push("stale".red().dim());
+        }
+
+        Line::from(spans)
+    }
+
+    fn sparkline(&self, width: u16) -> Line<'static> {
+        if self.history.is_empty() {
+            return Line::from("");
+        }
+        let max_points = width as usize;
+        let mut values: Vec<f32> = self
+            .history
+            .iter()
+            .rev()
+            .take(max_points)
+            .copied()
+            .collect();
+        values.reverse();
+
+        let padding = max_points.saturating_sub(values.len());
+        let mut spark = String::with_capacity(max_points);
+        if padding > 0 {
+            spark.push_str(&" ".repeat(padding));
+        }
+
+        for value in values {
+            let scaled = value.clamp(0.0, 100.0) / 100.0;
+            let idx = (scaled * (GPU_SPARKLINE_SYMBOLS.len() as f32 - 1.0)).round() as usize;
+            let symbol = GPU_SPARKLINE_SYMBOLS[idx.min(GPU_SPARKLINE_SYMBOLS.len() - 1)];
+            spark.push(symbol);
+        }
+
+        Line::from(spark.cyan())
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+
+    let bytes_f = bytes as f64;
+    if bytes_f >= GB {
+        format!("{:.1} GB", bytes_f / GB)
+    } else {
+        format!("{:.0} MB", bytes_f / MB.max(1.0))
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
@@ -78,6 +234,7 @@ pub(crate) struct BottomPane {
     /// Queued user messages to show above the composer while a turn is running.
     queued_user_messages: QueuedUserMessages,
     context_window_percent: Option<i64>,
+    gpu_stats: Option<GpuStatsWidget>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -110,6 +267,7 @@ impl BottomPane {
             queued_user_messages: QueuedUserMessages::new(),
             esc_backtrack_hint: false,
             context_window_percent: None,
+            gpu_stats: None,
         }
     }
 
@@ -162,17 +320,23 @@ impl BottomPane {
         if self.active_view().is_some() {
             return [Rect::ZERO, area];
         }
-        let has_queue = !self.queued_user_messages.messages.is_empty();
-        let mut status_height = self
+        let queue_height = self.queued_user_messages.desired_height(area.width);
+        let gpu_height = self
+            .gpu_stats
+            .as_ref()
+            .map_or(0, |widget| widget.desired_height(area.width))
+            .min(area.height.saturating_sub(1));
+        let status_height = self
             .status
             .as_ref()
             .map_or(0, |status| status.desired_height(area.width))
             .min(area.height.saturating_sub(1));
-        if has_queue && status_height > 1 {
-            status_height = status_height.saturating_sub(1);
-        }
-        let combined_height = status_height
-            .saturating_add(self.queued_user_messages.desired_height(area.width))
+        let has_status_content = gpu_height > 0 || status_height > 0;
+        let spacer_height = if queue_height > 0 && has_status_content { 1 } else { 0 };
+        let combined_height = gpu_height
+            .saturating_add(status_height)
+            .saturating_add(spacer_height)
+            .saturating_add(queue_height)
             .min(area.height.saturating_sub(1));
 
         let [status_area, _, content_area] = Layout::vertical([
@@ -425,6 +589,22 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn update_gpu_stats(&mut self, snapshot: GpuStatsSnapshot) {
+        if self.gpu_stats.is_none() {
+            self.gpu_stats = Some(GpuStatsWidget::new());
+        }
+        if let Some(widget) = self.gpu_stats.as_mut() {
+            widget.update(snapshot);
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn clear_gpu_stats(&mut self) {
+        if self.gpu_stats.take().is_some() {
+            self.request_redraw();
+        }
+    }
+
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.composer.is_empty()
     }
@@ -550,24 +730,68 @@ impl WidgetRef for &BottomPane {
         if let Some(view) = self.active_view() {
             view.render(content_area, buf);
         } else {
+            let queue_height = self.queued_user_messages.desired_height(top_area.width);
+            let gpu_height = self
+                .gpu_stats
+                .as_ref()
+                .map(|widget| widget.desired_height(top_area.width).min(top_area.height))
+                .unwrap_or(0);
             let status_height = self
                 .status
                 .as_ref()
                 .map(|status| status.desired_height(top_area.width).min(top_area.height))
                 .unwrap_or(0);
-            if let Some(status) = &self.status
-                && status_height > 0
+            let has_status_content = gpu_height > 0 || status_height > 0;
+            let spacer_height = if queue_height > 0 && has_status_content { 1 } else { 0 };
+
+            let mut cursor_y = top_area.y;
+            let mut remaining = top_area.height;
+
+            if let Some(widget) = &self.gpu_stats
+                && gpu_height > 0
+                && remaining > 0
             {
-                status.render_ref(top_area, buf);
+                let height = gpu_height.min(remaining);
+                let gpu_area = Rect {
+                    x: top_area.x,
+                    y: cursor_y,
+                    width: top_area.width,
+                    height,
+                };
+                widget.render_ref(gpu_area, buf);
+                cursor_y = cursor_y.saturating_add(height);
+                remaining = remaining.saturating_sub(height);
             }
 
-            let queue_area = Rect {
-                x: top_area.x,
-                y: top_area.y.saturating_add(status_height),
-                width: top_area.width,
-                height: top_area.height.saturating_sub(status_height),
-            };
-            if queue_area.height > 0 {
+            if let Some(status) = &self.status
+                && status_height > 0
+                && remaining > 0
+            {
+                let height = status_height.min(remaining);
+                let status_area = Rect {
+                    x: top_area.x,
+                    y: cursor_y,
+                    width: top_area.width,
+                    height,
+                };
+                status.render_ref(status_area, buf);
+                cursor_y = cursor_y.saturating_add(height);
+                remaining = remaining.saturating_sub(height);
+            }
+
+            if spacer_height > 0 && remaining > 0 {
+                cursor_y = cursor_y.saturating_add(1);
+                remaining = remaining.saturating_sub(1);
+            }
+
+            if queue_height > 0 && remaining > 0 {
+                let height = queue_height.min(remaining);
+                let queue_area = Rect {
+                    x: top_area.x,
+                    y: cursor_y,
+                    width: top_area.width,
+                    height,
+                };
                 self.queued_user_messages.render(queue_area, buf);
             }
 
@@ -580,10 +804,12 @@ impl WidgetRef for &BottomPane {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use crate::gpu_stats::{GpuStatsSnapshot, GpuStatsSource};
     use insta::assert_snapshot;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
+    use std::time::Instant;
 
     fn snapshot_buffer(buf: &Buffer) -> String {
         let mut lines = Vec::new();
@@ -870,5 +1096,37 @@ mod tests {
             "status_and_queued_messages_snapshot",
             render_snapshot(&pane, area)
         );
+    }
+
+    #[test]
+    fn gpu_stats_overlay_renders_information() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+        });
+
+        for utilization in [12.0, 37.0, 58.0, 72.0, 66.0] {
+            pane.update_gpu_stats(GpuStatsSnapshot {
+                utilization,
+                memory_used: 4 * 1024 * 1024 * 1024,
+                memory_total: 10 * 1024 * 1024 * 1024,
+                temperature: Some(55.0),
+                source: GpuStatsSource::WindowsAi,
+                timestamp: Instant::now(),
+            });
+        }
+
+        let snapshot = render_snapshot(&pane, Rect::new(0, 0, 60, 4));
+        let mut lines_iter = snapshot.lines();
+        let first_line = lines_iter.next().unwrap_or_default();
+        assert!(first_line.contains("GPU (Windows AI)"));
+        assert!(first_line.contains("4.0 GB"));
+        assert!(snapshot.contains('▆') || snapshot.contains('▇') || snapshot.contains('█'));
     }
 }

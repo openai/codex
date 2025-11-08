@@ -4,4 +4,7 @@
 pub mod oauth;
 
 // Re-export main types
-pub use oauth::{OAuthConfig, OAuthManager, OAuthToken, PKCEChallenge};
+pub use oauth::OAuthConfig;
+pub use oauth::OAuthManager;
+pub use oauth::OAuthToken;
+pub use oauth::PKCEChallenge;

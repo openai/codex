@@ -1,13 +1,15 @@
+use codex_core::AuthManager;
 /// End-to-End tests for Sub-Agent system
 ///
 /// Tests the complete flow: delegate → execute → artifacts → report
 use codex_core::agents::AgentRuntime;
 use codex_core::agents::AgentStatus;
 use codex_core::config::Config;
-use codex_core::AuthManager;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
-use codex_protocol::config_types::{ReasoningEffort, ReasoningSummary, Verbosity};
+use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Verbosity;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::fs;
@@ -27,7 +29,7 @@ fn create_test_runtime(workspace_dir: PathBuf, budget: usize) -> AgentRuntime {
     );
     let otel_manager = OtelEventManager::new_noop();
     let conversation_id = ConversationId::new();
-    
+
     AgentRuntime::new(
         workspace_dir,
         budget,

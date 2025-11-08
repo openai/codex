@@ -3,12 +3,17 @@
 //! Creates multiple git worktrees, executes identical tasks in parallel,
 //! scores results, and auto-merges the winner.
 
-use crate::blueprint::{BlueprintBlock, EvalCriteria};
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use crate::blueprint::BlueprintBlock;
+use crate::blueprint::EvalCriteria;
+use anyhow::Context;
+use anyhow::Result;
+use serde::Deserialize;
+use serde::Serialize;
 use std::path::PathBuf;
 use std::process::Command;
-use tracing::{debug, info, warn};
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
 
 /// Competition configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -19,6 +19,9 @@
 #define IOCTL_AI_GET_SCHEDULER_STATS CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_AI_ALLOC_PINNED       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_AI_FREE_PINNED        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
+// Windows AI Integration (v0.5.0)
+#define IOCTL_AI_REGISTER_WINAI     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_AI_GET_OPTIMIZED_PATH CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 // Forward declarations with CORRECT signatures
 extern NTSTATUS HandleGetGpuStatus(PIRP Irp);
@@ -26,6 +29,8 @@ extern NTSTATUS HandleGetMemoryPool(PIRP Irp);
 extern NTSTATUS HandleGetSchedulerStats(PIRP Irp);
 extern NTSTATUS HandleAllocPinned(PIRP Irp);
 extern NTSTATUS HandleFreePinned(PIRP Irp);
+extern NTSTATUS HandleRegisterWinAi(PIRP Irp);
+extern NTSTATUS HandleGetOptimizedPath(PIRP Irp);
 
 /**
  * IOCTL Device Control Handler
@@ -115,6 +120,18 @@ VOID AiDriverEvtIoDeviceControl(
             KdPrint(("AI Driver: IOCTL_AI_BOOST_PRIORITY (deprecated)\n"));
             status = STATUS_NOT_IMPLEMENTED;
             information = 0;
+            break;
+            
+        case IOCTL_AI_REGISTER_WINAI:
+            KdPrint(("AI Driver: IOCTL_AI_REGISTER_WINAI\n"));
+            status = HandleRegisterWinAi(irp);
+            information = irp->IoStatus.Information;
+            break;
+            
+        case IOCTL_AI_GET_OPTIMIZED_PATH:
+            KdPrint(("AI Driver: IOCTL_AI_GET_OPTIMIZED_PATH\n"));
+            status = HandleGetOptimizedPath(irp);
+            information = irp->IoStatus.Information;
             break;
             
         default:

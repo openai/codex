@@ -47,6 +47,7 @@ mod exec_command;
 mod file_search;
 mod frames;
 mod get_git_diff;
+mod gpu_stats;
 mod history_cell;
 pub mod insert_history;
 mod key_hint;

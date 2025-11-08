@@ -6,7 +6,10 @@ pub mod client;
 pub mod types;
 
 pub use client::WebhookClient;
-pub use types::{CompetitionScore, WebhookConfig, WebhookPayload, WebhookService};
+pub use types::CompetitionScore;
+pub use types::WebhookConfig;
+pub use types::WebhookPayload;
+pub use types::WebhookService;
 
 use anyhow::Result;
 use std::sync::Arc;

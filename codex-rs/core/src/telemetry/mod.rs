@@ -6,8 +6,12 @@ pub mod collector;
 pub mod events;
 pub mod storage;
 
-pub use collector::{CollectorConfig, TelemetryCollector};
-pub use events::{EventType, TelemetryEvent, hash_id, sanitize_url};
+pub use collector::CollectorConfig;
+pub use collector::TelemetryCollector;
+pub use events::EventType;
+pub use events::TelemetryEvent;
+pub use events::hash_id;
+pub use events::sanitize_url;
 pub use storage::TelemetryStorage;
 
 use anyhow::Result;

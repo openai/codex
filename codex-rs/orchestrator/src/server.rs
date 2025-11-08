@@ -3,14 +3,20 @@
 /// Single-Writer Queue architecture with idempotency cache
 use crate::auth::AuthManager;
 use crate::rpc::*;
-use crate::transport::{Connection, Transport, TransportConfig, TransportInfo};
-use anyhow::{Context, Result};
+use crate::transport::Connection;
+use crate::transport::Transport;
+use crate::transport::TransportConfig;
+use crate::transport::TransportInfo;
+use anyhow::Context;
+use anyhow::Result;
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
-use tokio::sync::{RwLock, mpsc};
+use std::time::Duration;
+use std::time::SystemTime;
+use tokio::sync::RwLock;
+use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 /// Idempotency cache entry

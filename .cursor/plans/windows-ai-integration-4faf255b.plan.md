@@ -1,211 +1,265 @@
-<!-- 4faf255b-c10d-4457-8fc6-18e7e40c9992 1de2d9ff-4c06-4040-9877-daa8abd10df9 -->
-# Windows AI API × Codex MCP × Kernel Driver 完全統合
+<!-- 4faf255b-c10d-4457-8fc6-18e7e40c9992 736eec3e-ff87-464f-86c1-e41027c4ce03 -->
+# CUDA完全統合 - CLI AI推論 × MCP × Git可視化GPU高速化
 
 ## 概要
 
-Windows 11 25H2の新しいAI APIをCodexに統合し、既存のMCP実装とカーネルドライバーを組み合わせて、パフォーマンスを約2倍（レイテンシ-60%、スループット+200%）に向上させる。
+CUDA Runtime APIを完全統合し、以下を実現：
+
+1. CLI AI推論のCUDA高速化（MCP経由）
+2. git解析のCUDA並列化（analyze_commits等）
+3. 3D/4D可視化のGPUレンダリング高速化
+4. Windows AI統合との共存
+5. 警告0・型エラー0保証
 
 ## アーキテクチャ
 
 ```
-Codex CLI/Core
-  ↓
-Windows AI API (新規実装)
-  ↓
-Codex MCP Server (既存)
-  ↓
-Kernel Driver (既存、拡張)
-  ↓
-GPU Hardware
+Codex CLI
+  ├→ Windows AI API (既存統合)
+  └→ CUDA Runtime (新規)
+       ├→ MCP Tool (cuda_execute)
+       ├→ Git Analysis (並列化)
+       └→ Kernel Driver (Pinned Memory)
+           ↓
+         GPU (RTX 3080)
 ```
 
 ## 実装フェーズ
 
-### Phase 1: Windows AI APIラッパー作成
+### Phase 1: CUDA Runtimeクレート作成
 
-**新規クレート**: `codex-rs/windows-ai/`
+**新規クレート**: `codex-rs/cuda-runtime/`
+
+**依存**: `cuda-sys`, `cudarc` または自作FFI
 
 ```rust
 // Cargo.toml
 [dependencies]
-windows = { version = "0.58", features = [
-    "AI_Actions",
-    "AI_MachineLearning",
-    "Foundation",
-] }
+cudarc = { version = "0.11", features = ["driver", "nvrtc"] }
 anyhow = { workspace = true }
-tokio = { workspace = true }
+tracing = { workspace = true }
 
 // src/lib.rs
-pub struct WindowsAiRuntime {
-    action_runtime: IActionRuntime,
+pub struct CudaRuntime {
+    device: CudaDevice,
+    stream: CudaStream,
 }
 
-impl WindowsAiRuntime {
+impl CudaRuntime {
     pub fn new() -> Result<Self>;
-    pub async fn invoke_action(&self, prompt: &str) -> Result<String>;
-    pub async fn get_optimized_gpu_path(&self) -> Result<PathBuf>;
+    pub fn allocate_device_memory(&self, size: usize) -> Result<DevicePtr>;
+    pub fn copy_to_device(&self, src: &[u8], dst: DevicePtr) -> Result<()>;
+    pub fn launch_kernel(&self, kernel: &str, grid: Dim3, block: Dim3) -> Result<()>;
 }
 ```
 
 **ファイル**:
 
-- `codex-rs/windows-ai/Cargo.toml`
-- `codex-rs/windows-ai/src/lib.rs`
-- `codex-rs/windows-ai/src/actions.rs`
-- `codex-rs/windows-ai/src/ml.rs`
+- `codex-rs/cuda-runtime/Cargo.toml`
+- `codex-rs/cuda-runtime/src/lib.rs`
+- `codex-rs/cuda-runtime/src/device.rs`
+- `codex-rs/cuda-runtime/src/memory.rs`
+- `codex-rs/cuda-runtime/src/kernel.rs`
 
-### Phase 2: Codex Core統合
+### Phase 2: Git解析CUDA並列化
 
-**変更ファイル**: `codex-rs/core/src/`
+**変更ファイル**: `codex-rs/cli/src/git_commands.rs`
 
-1. `codex-rs/core/Cargo.toml` - windows-aiクレート依存追加
-2. `codex-rs/core/src/windows_ai_integration.rs` (新規) - Windows AI統合レイヤー
-3. `codex-rs/core/src/lib.rs` - モジュール追加
+現在の実装（CPU順次処理）:
+
 ```rust
-// windows_ai_integration.rs
-#[cfg(target_os = "windows")]
-pub async fn execute_with_windows_ai(
-    prompt: &str,
-    use_kernel_driver: bool,
-) -> Result<String> {
-    let runtime = WindowsAiRuntime::new()?;
-    
-    if use_kernel_driver {
-        // カーネルドライバー経由で最適化
-        runtime.invoke_with_kernel_optimization(prompt).await
-    } else {
-        runtime.invoke_action(prompt).await
-    }
+for (i, oid) in revwalk.enumerate() {
+    let commit = repo.find_commit(oid)?;
+    // ... 3D座標計算（遅い）
 }
 ```
 
+CUDA並列化:
 
-### Phase 3: CLI統合
-
-**変更ファイル**: `codex-rs/cli/src/`
-
-1. `codex-rs/cli/Cargo.toml` - windows-ai依存追加
-2. `codex-rs/cli/src/args.rs` - `--use-windows-ai`フラグ追加
-3. `codex-rs/cli/src/main.rs` - Windows AIルーティング追加
 ```rust
-// args.rs
-pub struct CodexArgs {
+// コミット情報をGPUに転送
+let commit_data = prepare_commit_data(&commits);
+cuda.copy_to_device(&commit_data, gpu_buffer)?;
+
+// CUDA kernelで並列計算
+cuda.launch_kernel("calculate_3d_positions", grid, block)?;
+
+// 結果を取得
+cuda.copy_from_device(gpu_buffer, &mut results)?;
+```
+
+**新規ファイル**:
+
+- `codex-rs/cli/src/git_cuda.rs` - CUDA並列化実装
+- `codex-rs/cuda-runtime/kernels/git_analysis.cu` - CUDAカーネル
+
+### Phase 3: MCP経由CUDA公開
+
+**変更ファイル**: `codex-rs/mcp-server/src/`
+
+新しいMCP Tool追加:
+
+```rust
+// tools/cuda.rs
+pub async fn cuda_execute(
+    code: &str,
+    input_data: Vec<f32>,
+) -> Result<Vec<f32>> {
+    let cuda = CudaRuntime::new()?;
+    
+    // JITコンパイル
+    let kernel = cuda.compile_kernel(code)?;
+    
+    // 実行
+    let output = cuda.execute_kernel(&kernel, &input_data)?;
+    
+    Ok(output)
+}
+```
+
+**ファイル**:
+
+- `codex-rs/mcp-server/src/tools/cuda.rs`
+- `codex-rs/mcp-server/src/tools/mod.rs` (更新)
+
+### Phase 4: CLI統合
+
+**変更ファイル**: `codex-rs/cli/src/main.rs`
+
+CLI引数追加:
+
+```rust
+struct MultitoolCli {
+    // 既存フラグ
     #[cfg(target_os = "windows")]
-    #[arg(long, help = "Use Windows 11 AI API for optimization")]
+    #[clap(long, global = true)]
     pub use_windows_ai: bool,
     
-    #[cfg(target_os = "windows")]
-    #[arg(long, help = "Enable kernel driver acceleration")]
-    pub kernel_accelerated: bool,
-}
-```
-
-
-### Phase 4: カーネルドライバーIOCTL拡張
-
-**変更ファイル**: `kernel-extensions/windows/ai_driver/`
-
-1. `ai_driver_ioctl.c` - 新IOCTL追加
-2. `ioctl_handlers.c` - ハンドラー実装
-```c
-// 新IOCTL定義
-#define IOCTL_AI_REGISTER_WINAI_RUNTIME  CTL_CODE(...)
-#define IOCTL_AI_GET_OPTIMIZED_PATH      CTL_CODE(...)
-
-// Windows AIランタイム登録
-NTSTATUS HandleRegisterWinAiRuntime(PIRP Irp) {
-    // Windows AIランタイムハンドルを登録
-    // 最適化されたGPU実行パスを提供
-}
-```
-
-
-### Phase 5: Rust-Kernelブリッジ
-
-**変更ファイル**: `kernel-extensions/codex-integration/src/`
-
-1. `kernel-extensions/codex-integration/src/windows_ai_bridge.rs` (新規)
-```rust
-use windows::core::*;
-
-pub struct KernelDriverBridge {
-    driver_handle: HANDLE,
-}
-
-impl KernelDriverBridge {
-    pub fn register_windows_ai_runtime(&self, runtime_handle: usize) -> Result<()> {
-        // IOCTL経由でカーネルドライバーに登録
-    }
+    // 新規フラグ
+    #[clap(long, global = true)]
+    pub use_cuda: bool,
     
-    pub fn get_optimized_gpu_stats(&self) -> Result<GpuStats> {
-        // カーネルドライバーから統計取得
+    #[clap(long, global = true)]
+    pub cuda_device: Option<i32>,
+}
+```
+
+### Phase 5: Windows AI × CUDA統合
+
+**新規ファイル**: `codex-rs/core/src/hybrid_acceleration.rs`
+
+両方のAPIを協調動作:
+
+```rust
+pub enum AccelerationMode {
+    WindowsAI,
+    CUDA,
+    Hybrid,  // 最速パスを自動選択
+}
+
+pub async fn execute_with_acceleration(
+    prompt: &str,
+    mode: AccelerationMode,
+) -> Result<String> {
+    match mode {
+        AccelerationMode::Hybrid => {
+            // Windows AI + CUDA両方使用
+            // タスクに応じて最適な方を選択
+        }
     }
 }
 ```
 
+### Phase 6: Kamui4D超えの最適化
 
-### Phase 6: テストスイート
+**変更ファイル**:
+
+- `codex-rs/cli/src/git_commands.rs` - CUDA並列化使用
+- `codex-rs/tauri-gui/src/components/git/SceneVR.tsx` - GPUレンダリング最適化
+
+**最適化ポイント**:
+
+1. コミット座標計算: CPU → CUDA（100-1000倍高速化）
+2. ヒートマップ生成: 順次 → 並列（50-100倍）
+3. 3Dレンダリング: InstancedMesh最適化
+
+### Phase 7: テスト・ベンチマーク
 
 **新規ファイル**:
 
-- `codex-rs/windows-ai/tests/integration_test.rs`
-- `kernel-extensions/windows/tests/windows_ai_integration_test.rs`
+- `codex-rs/cuda-runtime/benches/git_analysis_bench.rs`
+- `codex-rs/cuda-runtime/tests/integration_test.rs`
+
+**ベンチマーク**:
+
 ```rust
-#[tokio::test]
-async fn test_windows_ai_action_invocation() {
-    let runtime = WindowsAiRuntime::new().unwrap();
-    let result = runtime.invoke_action("test prompt").await.unwrap();
-    assert!(!result.is_empty());
+#[bench]
+fn bench_git_analysis_cpu(b: &mut Bencher) {
+    // CPU実装: 10,000コミット解析
 }
 
-#[tokio::test]
-async fn test_kernel_driver_integration() {
-    let bridge = KernelDriverBridge::open().unwrap();
-    let stats = bridge.get_gpu_stats().unwrap();
-    assert!(stats.memory_total > 0);
+#[bench]
+fn bench_git_analysis_cuda(b: &mut Bencher) {
+    // CUDA実装: 同じデータ
+    // 期待: 100-1000倍高速
 }
 ```
 
+### Phase 8: 型エラー・警告ゼロ保証
 
-### Phase 7: ドキュメント
+**チェックポイント**:
 
-**新規ファイル**:
+1. `cargo check --all-features`
+2. `cargo clippy --all-features -- -D warnings`
+3. `cargo build --release`
 
-- `docs/windows-ai-integration.md` - 統合ガイド
-- `_docs/2025-11-06_Windows-AI-Integration-Implementation.md` - 実装ログ
+**修正対象**:
+
+- 未使用変数削除
+- 型変換の明示化
+- ライフタイム注釈
+- エラーハンドリング徹底
 
 ## 重要なファイル
 
-既存資産（活用）:
+既存（活用）:
 
-- `codex-rs/mcp-server/` - Codex MCP実装（2000行）
-- `kernel-extensions/windows/ai_driver/` - カーネルドライバー（2088行）
-- `codex-rs/windows-sandbox-rs/` - Windows統合の参考実装
+- `codex-rs/cli/src/git_commands.rs` (320行) - git解析
+- `codex-rs/mcp-server/` (2000行) - MCP実装
+- `codex-rs/windows-ai/` (655行) - Windows AI統合
+- `kernel-extensions/windows/ai_driver/` (2088行) - カーネルドライバー
 
 新規作成:
 
-- `codex-rs/windows-ai/` - Windows AI APIラッパー
-- `codex-rs/core/src/windows_ai_integration.rs` - 統合レイヤー
+- `codex-rs/cuda-runtime/` - CUDA統合（推定800行）
+- `codex-rs/cli/src/git_cuda.rs` - git CUDA並列化（推定400行）
+- `codex-rs/mcp-server/src/tools/cuda.rs` - MCP CUDA tool（推定200行）
+- `codex-rs/core/src/hybrid_acceleration.rs` - ハイブリッド加速（推定300行）
 
 ## 期待される効果
 
-- レイテンシ: 10ms → 4ms (-60%)
-- スループット: 100 req/s → 300 req/s (+200%)
-- GPU利用率: 60% → 85% (+25%)
-- Microsoft公式サポート、MCP標準化、エコシステム統合
+- CLI AI推論: 10ms → 2-3ms (-70-80%)
+- git解析（10,000コミット）: 5秒 → 0.05秒 (100倍)
+- 3D可視化FPS: 30fps → 120fps (4倍)
+- Kamui4Dとの比較: 同等以上のパフォーマンス
+
+## 警告・エラーゼロの保証
+
+- Rust型システムによる静的保証
+- cudarc crateによる安全なFFI
+- エラーハンドリング100%
+- Clippy lint準拠
 
 ### To-dos
 
-- [ ] windows-aiクレート作成（Cargo.toml、基本構造）
-- [ ] Windows AI Actions API FFI実装
-- [ ] Windows ML API FFI実装
-- [ ] Codex coreにwindows_ai_integration.rs追加
-- [ ] 設定ファイルにWindows AI設定追加
-- [ ] CLI引数に--use-windows-ai, --kernel-accelerated追加
-- [ ] Windows AIルーティングロジック実装
-- [ ] カーネルドライバーに新IOCTL追加
-- [ ] Windows AIランタイム登録ハンドラー実装
-- [ ] Rust-Kernelブリッジ実装（windows_ai_bridge.rs）
-- [ ] 統合テストスイート作成
+- [ ] CUDA Runtimeクレート作成（cudarc使用）
+- [ ] CUDA device初期化・メモリ管理実装
+- [ ] git解析CUDA並列化実装（git_cuda.rs）
+- [ ] CUDAカーネル実装（git_analysis.cu相当をRustで）
+- [ ] MCP CUDA tool実装（mcp-server統合）
+- [ ] ハイブリッド加速レイヤー実装（Windows AI × CUDA）
+- [ ] CLI統合（--use-cuda, --cuda-device引数）
+- [ ] 3D/4D可視化GPU最適化
+- [ ] テスト・ベンチマーク作成
+- [ ] 型エラー・警告ゼロ確認（clippy, check）
 - [ ] ドキュメント・実装ログ作成

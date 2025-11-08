@@ -1,4 +1,5 @@
-use tauri::{AppHandle, Runtime};
+use tauri::AppHandle;
+use tauri::Runtime;
 use tracing::info;
 
 /// Check for updates on startup

@@ -1,11 +1,17 @@
-use codex_core::orchestration::parallel_execution::{
-    AgentProgress, AgentResult, AgentTask, AgentType, ComparisonResult, ParallelOrchestrator,
-};
-use codex_core::orchestration::resource_manager::{ResourceCapacity, SystemStats};
-use codex_core::orchestration::worktree_manager::{WorktreeInfo, WorktreeManager};
+use codex_core::orchestration::parallel_execution::AgentProgress;
+use codex_core::orchestration::parallel_execution::AgentResult;
+use codex_core::orchestration::parallel_execution::AgentTask;
+use codex_core::orchestration::parallel_execution::AgentType;
+use codex_core::orchestration::parallel_execution::ComparisonResult;
+use codex_core::orchestration::parallel_execution::ParallelOrchestrator;
+use codex_core::orchestration::resource_manager::ResourceCapacity;
+use codex_core::orchestration::resource_manager::SystemStats;
+use codex_core::orchestration::worktree_manager::WorktreeInfo;
+use codex_core::orchestration::worktree_manager::WorktreeManager;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{State, command};
+use tauri::State;
+use tauri::command;
 use tokio::sync::RwLock;
 
 pub struct OrchestrationState {

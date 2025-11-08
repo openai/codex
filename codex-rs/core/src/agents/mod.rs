@@ -9,9 +9,11 @@ mod types;
 
 pub use alias_loader::AgentAliases;
 pub use budgeter::TokenBudgeter;
-pub use competition::{
-    CompetitionConfig, CompetitionResult, CompetitionRunner, CompetitionScore, CompetitionVariant,
-};
+pub use competition::CompetitionConfig;
+pub use competition::CompetitionResult;
+pub use competition::CompetitionRunner;
+pub use competition::CompetitionScore;
+pub use competition::CompetitionVariant;
 pub use loader::AgentLoader;
 pub use permission_checker::PermissionChecker;
 pub use runtime::AgentRuntime;

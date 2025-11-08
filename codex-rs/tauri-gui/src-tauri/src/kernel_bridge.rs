@@ -1,5 +1,6 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

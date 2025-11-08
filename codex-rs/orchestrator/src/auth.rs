@@ -1,13 +1,24 @@
 /// HMAC-SHA256 authentication for orchestrator RPC
 ///
 /// Provides secure local authentication using shared secret stored in .codex/secret
-use anyhow::{Context, Result, anyhow};
+use anyhow::Context;
+/// HMAC-SHA256 authentication for orchestrator RPC
+///
+/// Provides secure local authentication using shared secret stored in .codex/secret
+use anyhow::Result;
+/// HMAC-SHA256 authentication for orchestrator RPC
+///
+/// Provides secure local authentication using shared secret stored in .codex/secret
+use anyhow::anyhow;
 use base64::Engine;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use serde::Deserialize;
+use serde::Serialize;
+use sha2::Digest;
+use sha2::Sha256;
 use std::fs;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 const SECRET_FILENAME: &str = "secret";
 const TIME_SKEW_TOLERANCE_SECS: u64 = 300; // ±5 minutes

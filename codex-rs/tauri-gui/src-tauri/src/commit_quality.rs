@@ -1,4 +1,5 @@
-use codex_core::git::commit_quality::{CommitQualityAnalyzer, CommitQualityScore};
+use codex_core::git::commit_quality::CommitQualityAnalyzer;
+use codex_core::git::commit_quality::CommitQualityScore;
 use tauri::command;
 
 #[command]
