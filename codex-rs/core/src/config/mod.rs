@@ -280,10 +280,16 @@ impl Config {
     ) -> std::io::Result<Self> {
         let codex_home = find_codex_home()?;
 
+        // Extract cwd to pass to config loader for project config discovery
+        let loader_overrides = crate::config_loader::LoaderOverrides {
+            cwd: overrides.cwd.clone(),
+            ..Default::default()
+        };
+
         let root_value = load_resolved_config(
             &codex_home,
             cli_overrides,
-            crate::config_loader::LoaderOverrides::default(),
+            loader_overrides,
         )
         .await?;
 
@@ -330,6 +336,7 @@ fn apply_overlays(
 ) -> TomlValue {
     let LoadedConfigLayers {
         mut base,
+        project_config,
         managed_config,
         managed_preferences,
     } = layers;
@@ -338,7 +345,11 @@ fn apply_overlays(
         apply_toml_override(&mut base, &path, value);
     }
 
-    for overlay in [managed_config, managed_preferences].into_iter().flatten() {
+    // Apply layers in order of precedence (later layers override earlier ones)
+    for overlay in [project_config, managed_config, managed_preferences]
+        .into_iter()
+        .flatten()
+    {
         merge_toml_values(&mut base, &overlay);
     }
 
@@ -687,6 +698,11 @@ impl From<ConfigToml> for UserSavedConfig {
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
     pub trust_level: Option<String>,
+    /// Whether to allow loading project-level config files (.codex/config.toml).
+    /// This provides an additional layer of security for untrusted projects.
+    /// Defaults to true for trusted projects, false otherwise.
+    #[serde(default)]
+    pub allow_project_config: Option<bool>,
 }
 
 impl ProjectConfig {
@@ -695,6 +711,13 @@ impl ProjectConfig {
             Some(trust_level) => trust_level == "trusted",
             None => false,
         }
+    }
+
+    /// Returns whether project-level config should be loaded for this project.
+    /// Defaults to true for trusted projects, false for untrusted projects.
+    pub fn allows_project_config(&self) -> bool {
+        self.allow_project_config
+            .unwrap_or_else(|| self.is_trusted())
     }
 }
 
@@ -938,7 +961,10 @@ impl Config {
             .collect();
         let active_project = cfg
             .get_active_project(&resolved_cwd)
-            .unwrap_or(ProjectConfig { trust_level: None });
+            .unwrap_or(ProjectConfig {
+                trust_level: None,
+                allow_project_config: None,
+            });
 
         let SandboxPolicyResolution {
             policy: mut sandbox_policy,
@@ -1767,6 +1793,7 @@ trust_level = "trusted"
 
         let overrides = crate::config_loader::LoaderOverrides {
             managed_config_path: Some(managed_path.clone()),
+            cwd: None,
             #[cfg(target_os = "macos")]
             managed_preferences_base64: None,
         };
@@ -1881,6 +1908,7 @@ trust_level = "trusted"
 
         let overrides = crate::config_loader::LoaderOverrides {
             managed_config_path: Some(managed_path),
+            cwd: None,
             #[cfg(target_os = "macos")]
             managed_preferences_base64: None,
         };
@@ -2899,7 +2927,10 @@ model_verbosity = "high"
                 use_experimental_use_rmcp_client: false,
                 features: Features::with_defaults(),
                 active_profile: Some("o3".to_string()),
-                active_project: ProjectConfig { trust_level: None },
+                active_project: ProjectConfig {
+                    trust_level: None,
+                    allow_project_config: None,
+                },
                 windows_wsl_setup_acknowledged: false,
                 notices: Default::default(),
                 disable_paste_burst: false,
@@ -2970,7 +3001,7 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             features: Features::with_defaults(),
             active_profile: Some("gpt3".to_string()),
-            active_project: ProjectConfig { trust_level: None },
+            active_project: ProjectConfig { trust_level: None, allow_project_config: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             disable_paste_burst: false,
@@ -3056,7 +3087,7 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             features: Features::with_defaults(),
             active_profile: Some("zdr".to_string()),
-            active_project: ProjectConfig { trust_level: None },
+            active_project: ProjectConfig { trust_level: None, allow_project_config: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             disable_paste_burst: false,
@@ -3128,7 +3159,7 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             features: Features::with_defaults(),
             active_profile: Some("gpt5".to_string()),
-            active_project: ProjectConfig { trust_level: None },
+            active_project: ProjectConfig { trust_level: None, allow_project_config: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             disable_paste_burst: false,

@@ -14,6 +14,7 @@ const CODEX_MANAGED_CONFIG_SYSTEM_PATH: &str = "/etc/codex/managed_config.toml";
 #[derive(Debug)]
 pub(crate) struct LoadedConfigLayers {
     pub base: TomlValue,
+    pub project_config: Option<TomlValue>,
     pub managed_config: Option<TomlValue>,
     pub managed_preferences: Option<TomlValue>,
 }
@@ -21,6 +22,7 @@ pub(crate) struct LoadedConfigLayers {
 #[derive(Debug, Default)]
 pub(crate) struct LoaderOverrides {
     pub managed_config_path: Option<PathBuf>,
+    pub cwd: Option<PathBuf>,
     #[cfg(target_os = "macos")]
     pub managed_preferences_base64: Option<String>,
 }
@@ -33,7 +35,12 @@ pub(crate) struct LoaderOverrides {
 //                    ^
 //                    |
 //        +-------------------------+
-//        |  managed_config.toml   |
+//        |  managed_config.toml    |
+//        +-------------------------+
+//                    ^
+//                    |
+//        +-------------------------+
+//        | .codex/config.toml (**) |
 //        +-------------------------+
 //                    ^
 //                    |
@@ -42,6 +49,7 @@ pub(crate) struct LoaderOverrides {
 //        +-------------------------+
 //
 // (*) Only available on macOS via managed device profiles.
+// (**) Project-level config found by walking up from cwd.
 
 pub async fn load_config_as_toml(codex_home: &Path) -> io::Result<TomlValue> {
     load_config_as_toml_with_overrides(codex_home, LoaderOverrides::default()).await
@@ -73,19 +81,52 @@ async fn load_config_layers_internal(
     #[cfg(target_os = "macos")]
     let LoaderOverrides {
         managed_config_path,
+        cwd,
         managed_preferences_base64,
     } = overrides;
 
     #[cfg(not(target_os = "macos"))]
     let LoaderOverrides {
         managed_config_path,
+        cwd,
     } = overrides;
 
     let managed_config_path =
         managed_config_path.unwrap_or_else(|| managed_config_default_path(codex_home));
 
+    // Resolve cwd to find project config
+    let resolved_cwd = match cwd {
+        Some(p) if p.is_absolute() => p,
+        Some(p) => std::env::current_dir()?.join(p),
+        None => std::env::current_dir()?,
+    };
+
     let user_config_path = codex_home.join(CONFIG_TOML_FILE);
     let user_config = read_config_from_path(&user_config_path, true).await?;
+
+    // Load project config only if it exists AND is allowed by trust settings
+    let project_config = if let Some(project_config_path) = find_project_config_path(&resolved_cwd) {
+        // Check if this project is allowed to use project configs
+        let empty_table = default_empty_table();
+        let user_config_value = user_config.as_ref().unwrap_or(&empty_table);
+        if is_project_config_allowed(user_config_value, &resolved_cwd) {
+            tracing::info!(
+                "Loading project config from {} (project is trusted)",
+                project_config_path.display()
+            );
+            read_config_from_path(&project_config_path, false).await?
+        } else {
+            tracing::warn!(
+                "Found project config at {} but project is not trusted. \
+                 Set trust_level = \"trusted\" in ~/.codex/config.toml to enable project configs.",
+                project_config_path.display()
+            );
+            None
+        }
+    } else {
+        None
+    };
+
     let managed_config = read_config_from_path(&managed_config_path, false).await?;
 
     #[cfg(target_os = "macos")]
@@ -97,6 +138,7 @@ async fn load_config_layers_internal(
 
     Ok(LoadedConfigLayers {
         base: user_config.unwrap_or_else(default_empty_table),
+        project_config,
         managed_config,
         managed_preferences,
     })
@@ -127,6 +169,72 @@ async fn read_config_from_path(
             Err(err)
         }
     }
+}
+
+/// Find a project-level config file by walking up from the given directory.
+/// Looks for `.codex/config.toml` in the current directory and all parent directories.
+/// Returns the path to the first config file found, or None if no project config exists.
+fn find_project_config_path(cwd: &Path) -> Option<PathBuf> {
+    let mut current = cwd;
+
+    loop {
+        let candidate = current.join(".codex").join(CONFIG_TOML_FILE);
+        if candidate.exists() && candidate.is_file() {
+            tracing::debug!("Found project config at {}", candidate.display());
+            return Some(candidate);
+        }
+
+        // Move up to parent directory, or stop if we've reached the filesystem root
+        current = current.parent()?;
+    }
+}
+
+/// Check if a project is allowed to use project-level configs based on the user config.
+/// This parses the projects section of the user config to determine trust settings.
+fn is_project_config_allowed(user_config: &TomlValue, cwd: &Path) -> bool {
+    use crate::git_info::get_git_repo_root;
+
+    let Some(projects_table) = user_config.get("projects").and_then(|v| v.as_table()) else {
+        // No projects configured means no trust, so project configs not allowed
+        tracing::debug!("No projects configured, project config not allowed");
+        return false;
+    };
+
+    // First, try exact match with cwd
+    if let Some(project_config) = projects_table.get(cwd.to_string_lossy().as_ref()) {
+        return check_project_config_allows(project_config);
+    }
+
+    // If in a git repo, try matching the git root
+    if let Some(git_root) = get_git_repo_root(cwd) {
+        if let Some(project_config) = projects_table.get(git_root.to_string_lossy().as_ref()) {
+            return check_project_config_allows(project_config);
+        }
+    }
+
+    // No matching project found, default to not allowed
+    tracing::debug!("No matching trusted project found for {}", cwd.display());
+    false
+}
+
+/// Check if a project config TOML value allows project configs.
+fn check_project_config_allows(project_toml: &TomlValue) -> bool {
+    // Check explicit allow_project_config setting
+    if let Some(allow) = project_toml
+        .get("allow_project_config")
+        .and_then(|v| v.as_bool())
+    {
+        return allow;
+    }
+
+    // Fall back to checking trust_level (trusted projects allow by default)
+    let is_trusted = project_toml
+        .get("trust_level")
+        .and_then(|v| v.as_str())
+        .map(|s| s == "trusted")
+        .unwrap_or(false);
+
+    is_trusted
 }
 
 /// Merge config `overlay` into `base`, giving `overlay` precedence.
@@ -162,11 +270,16 @@ fn managed_config_default_path(codex_home: &Path) -> PathBuf {
 fn apply_managed_layers(layers: LoadedConfigLayers) -> TomlValue {
     let LoadedConfigLayers {
         mut base,
+        project_config,
         managed_config,
         managed_preferences,
     } = layers;
 
-    for overlay in [managed_config, managed_preferences].into_iter().flatten() {
+    // Apply layers in order of precedence (later layers override earlier ones)
+    for overlay in [project_config, managed_config, managed_preferences]
+        .into_iter()
+        .flatten()
+    {
         merge_toml_values(&mut base, &overlay);
     }
 
@@ -205,6 +318,7 @@ extra = true
 
         let overrides = LoaderOverrides {
             managed_config_path: Some(managed_path),
+            cwd: None,
             #[cfg(target_os = "macos")]
             managed_preferences_base64: None,
         };
@@ -232,6 +346,7 @@ extra = true
         let managed_path = tmp.path().join("managed_config.toml");
         let overrides = LoaderOverrides {
             managed_config_path: Some(managed_path),
+            cwd: None,
             #[cfg(target_os = "macos")]
             managed_preferences_base64: None,
         };
@@ -292,6 +407,7 @@ flag = true
 
         let overrides = LoaderOverrides {
             managed_config_path: Some(managed_path),
+            cwd: None,
             managed_preferences_base64: Some(encoded),
         };
 
@@ -307,5 +423,141 @@ flag = true
             Some(&TomlValue::String("managed".to_string()))
         );
         assert_eq!(nested.get("flag"), Some(&TomlValue::Boolean(false)));
+    }
+
+    #[tokio::test]
+    async fn loads_project_config_for_trusted_project() {
+        let tmp = tempdir().expect("tempdir");
+        let project_dir = tmp.path().join("project");
+        std::fs::create_dir_all(project_dir.join(".codex")).expect("create project .codex dir");
+
+        // Write user config with trusted project
+        std::fs::write(
+            tmp.path().join(CONFIG_TOML_FILE),
+            format!(
+                r#"foo = 1
+
+[projects."{}"]
+trust_level = "trusted"
+"#,
+                project_dir.display()
+            ),
+        )
+        .expect("write base config");
+
+        // Write project config
+        std::fs::write(
+            project_dir.join(".codex").join(CONFIG_TOML_FILE),
+            r#"foo = 2
+bar = "from_project"
+"#,
+        )
+        .expect("write project config");
+
+        let overrides = LoaderOverrides {
+            cwd: Some(project_dir.clone()),
+            managed_config_path: Some(tmp.path().join("nonexistent_managed.toml")),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: None,
+        };
+
+        let loaded = load_config_as_toml_with_overrides(tmp.path(), overrides)
+            .await
+            .expect("load config");
+        let table = loaded.as_table().expect("top-level table expected");
+
+        // Project config should override user config
+        assert_eq!(table.get("foo"), Some(&TomlValue::Integer(2)));
+        assert_eq!(
+            table.get("bar"),
+            Some(&TomlValue::String("from_project".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn ignores_project_config_for_untrusted_project() {
+        let tmp = tempdir().expect("tempdir");
+        let project_dir = tmp.path().join("project");
+        std::fs::create_dir_all(project_dir.join(".codex")).expect("create project .codex dir");
+
+        // Write user config WITHOUT trusting the project
+        std::fs::write(
+            tmp.path().join(CONFIG_TOML_FILE),
+            r#"foo = 1
+"#,
+        )
+        .expect("write base config");
+
+        // Write project config (should be ignored)
+        std::fs::write(
+            project_dir.join(".codex").join(CONFIG_TOML_FILE),
+            r#"foo = 2
+bar = "from_project"
+"#,
+        )
+        .expect("write project config");
+
+        let overrides = LoaderOverrides {
+            cwd: Some(project_dir.clone()),
+            managed_config_path: Some(tmp.path().join("nonexistent_managed.toml")),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: None,
+        };
+
+        let loaded = load_config_as_toml_with_overrides(tmp.path(), overrides)
+            .await
+            .expect("load config");
+        let table = loaded.as_table().expect("top-level table expected");
+
+        // Project config should be ignored, only user config applies
+        assert_eq!(table.get("foo"), Some(&TomlValue::Integer(1)));
+        assert_eq!(table.get("bar"), None);
+    }
+
+    #[tokio::test]
+    async fn project_config_respects_allow_project_config_setting() {
+        let tmp = tempdir().expect("tempdir");
+        let project_dir = tmp.path().join("project");
+        std::fs::create_dir_all(project_dir.join(".codex")).expect("create project .codex dir");
+
+        // Write user config with trusted project but allow_project_config = false
+        std::fs::write(
+            tmp.path().join(CONFIG_TOML_FILE),
+            format!(
+                r#"foo = 1
+
+[projects."{}"]
+trust_level = "trusted"
+allow_project_config = false
+"#,
+                project_dir.display()
+            ),
+        )
+        .expect("write base config");
+
+        // Write project config (should be ignored despite trust)
+        std::fs::write(
+            project_dir.join(".codex").join(CONFIG_TOML_FILE),
+            r#"foo = 2
+bar = "from_project"
+"#,
+        )
+        .expect("write project config");
+
+        let overrides = LoaderOverrides {
+            cwd: Some(project_dir.clone()),
+            managed_config_path: Some(tmp.path().join("nonexistent_managed.toml")),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: None,
+        };
+
+        let loaded = load_config_as_toml_with_overrides(tmp.path(), overrides)
+            .await
+            .expect("load config");
+        let table = loaded.as_table().expect("top-level table expected");
+
+        // Project config should be ignored due to allow_project_config = false
+        assert_eq!(table.get("foo"), Some(&TomlValue::Integer(1)));
+        assert_eq!(table.get("bar"), None);
     }
 }
