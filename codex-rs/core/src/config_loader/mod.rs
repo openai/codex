@@ -105,7 +105,8 @@ async fn load_config_layers_internal(
     let user_config = read_config_from_path(&user_config_path, true).await?;
 
     // Load project config only if it exists AND is allowed by trust settings
-    let project_config = if let Some(project_config_path) = find_project_config_path(&resolved_cwd) {
+    let project_config = if let Some(project_config_path) = find_project_config_path(&resolved_cwd)
+    {
         // Check if this project is allowed to use project configs
         let empty_table = default_empty_table();
         let user_config_value = user_config.as_ref().unwrap_or(&empty_table);

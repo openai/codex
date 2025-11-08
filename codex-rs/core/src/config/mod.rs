@@ -286,12 +286,7 @@ impl Config {
             ..Default::default()
         };
 
-        let root_value = load_resolved_config(
-            &codex_home,
-            cli_overrides,
-            loader_overrides,
-        )
-        .await?;
+        let root_value = load_resolved_config(&codex_home, cli_overrides, loader_overrides).await?;
 
         let cfg: ConfigToml = root_value.try_into().map_err(|e| {
             tracing::error!("Failed to deserialize overridden config: {e}");
@@ -3001,7 +2996,10 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             features: Features::with_defaults(),
             active_profile: Some("gpt3".to_string()),
-            active_project: ProjectConfig { trust_level: None, allow_project_config: None },
+            active_project: ProjectConfig {
+                trust_level: None,
+                allow_project_config: None,
+            },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             disable_paste_burst: false,
@@ -3087,7 +3085,10 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             features: Features::with_defaults(),
             active_profile: Some("zdr".to_string()),
-            active_project: ProjectConfig { trust_level: None, allow_project_config: None },
+            active_project: ProjectConfig {
+                trust_level: None,
+                allow_project_config: None,
+            },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             disable_paste_burst: false,
@@ -3159,7 +3160,10 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             features: Features::with_defaults(),
             active_profile: Some("gpt5".to_string()),
-            active_project: ProjectConfig { trust_level: None, allow_project_config: None },
+            active_project: ProjectConfig {
+                trust_level: None,
+                allow_project_config: None,
+            },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             disable_paste_burst: false,
