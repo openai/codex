@@ -10,30 +10,10 @@ use core_test_support::responses;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use std::path::PathBuf;
-use std::process::Command;
-use std::process::Stdio;
 use tempfile::TempDir;
-
-fn detect_python_executable() -> Option<String> {
-    let candidates = ["python3", "python"];
-    candidates.iter().find_map(|candidate| {
-        Command::new(candidate)
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .ok()
-            .and_then(|status| status.success().then(|| (*candidate).to_string()))
-    })
-}
 
 #[tokio::test]
 async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
-    let Some(python) = detect_python_executable() else {
-        eprintln!("skipping test: python3 not found in PATH");
-        return;
-    };
-
     // Create a temporary working directory with a known file.
     let cwd = TempDir::new().unwrap();
     let file_name = "hello.txt";
@@ -58,10 +38,8 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
         .await
         .expect("create new conversation");
 
-    // 1) python should list the file
-    let list_cmd = format!(
-        "{python} -c \"import pathlib; print('\\n'.join(sorted(p.name for p in pathlib.Path('.').iterdir())))\""
-    );
+    // 1) shell command should list the file
+    let list_cmd = "ls".to_string();
     codex
         .submit(Op::RunUserShellCommand { command: list_cmd })
         .await
@@ -79,10 +57,8 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
         "ls output should include {file_name}, got: {stdout:?}"
     );
 
-    // 2) python should print the file contents verbatim
-    let cat_cmd = format!(
-        "{python} -c \"import pathlib; print(pathlib.Path('{file_name}').read_text(), end='')\""
-    );
+    // 2) shell command should print the file contents verbatim
+    let cat_cmd = format!("cat {file_name}");
     codex
         .submit(Op::RunUserShellCommand { command: cat_cmd })
         .await
@@ -98,7 +74,7 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
     };
     assert_eq!(exit_code, 0);
     if cfg!(windows) {
-        // Windows' Python writes CRLF line endings; normalize so the assertion remains portable.
+        // Windows shells emit CRLF line endings; normalize so the assertion remains portable.
         stdout = stdout.replace("\r\n", "\n");
     }
     assert_eq!(stdout, contents);
@@ -106,10 +82,6 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
 
 #[tokio::test]
 async fn user_shell_cmd_can_be_interrupted() {
-    let Some(python) = detect_python_executable() else {
-        eprintln!("skipping test: python3 not found in PATH");
-        return;
-    };
     // Set up isolated config and conversation.
     let codex_home = TempDir::new().unwrap();
     let config = load_default_config_for_test(&codex_home);
@@ -124,7 +96,7 @@ async fn user_shell_cmd_can_be_interrupted() {
         .expect("create new conversation");
 
     // Start a long-running command and then interrupt it.
-    let sleep_cmd = format!("{python} -c \"import time; time.sleep(5)\"");
+    let sleep_cmd = "sleep 5".to_string();
     codex
         .submit(Op::RunUserShellCommand { command: sleep_cmd })
         .await
@@ -144,30 +116,11 @@ async fn user_shell_cmd_can_be_interrupted() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyhow::Result<()> {
-    let Some(python) = detect_python_executable() else {
-        eprintln!("skipping test: python3 not found in PATH");
-        return Ok(());
-    };
-
     let server = responses::start_mock_server().await;
     let mut builder = core_test_support::test_codex::test_codex();
     let test = builder.build(&server).await?;
 
-    let script_path = test.workspace_path("print_sandbox_env.py");
-    tokio::fs::write(
-        &script_path,
-        "import os\nimport sys\nvalue = os.environ.get('CODEX_SANDBOX', 'not-set')\n\
-         sys.stdout.write(value)\n",
-    )
-    .await?;
-
-    let script_display = script_path.display().to_string();
-    let script_arg = if script_display.contains(' ') {
-        format!("\"{script_display}\"")
-    } else {
-        script_display
-    };
-    let command = format!("{python} {script_arg}");
+    let command = r#"printf '%s' "${CODEX_SANDBOX:-not-set}""#.to_string();
 
     test.codex
         .submit(Op::RunUserShellCommand {
