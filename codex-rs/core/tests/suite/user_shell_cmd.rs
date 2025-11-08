@@ -12,6 +12,20 @@ use core_test_support::wait_for_event_match;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+fn scrub_duration(input: &str) -> String {
+    input
+        .lines()
+        .map(|line| {
+            if line.starts_with("Duration: ") {
+                "Duration: <redacted> seconds"
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[tokio::test]
 async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
     // Create a temporary working directory with a known file.
@@ -123,7 +137,7 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     #[cfg(windows)]
     let command = r#"$val = $env:CODEX_SANDBOX; if ([string]::IsNullOrEmpty($val)) { $val = 'not-set' } ; [System.Console]::Write($val)"#.to_string();
     #[cfg(not(windows))]
-    let command = r#"printf '%s' "${CODEX_SANDBOX:-not-set}""#.to_string();
+    let command = r#"sh -c "printf '%s' \"${CODEX_SANDBOX:-not-set}\"""#.to_string();
 
     test.codex
         .submit(Op::RunUserShellCommand {
@@ -176,20 +190,6 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
 
     let request = mock.single_request();
 
-    fn scrub_duration(input: &str) -> String {
-        input
-            .lines()
-            .map(|line| {
-                if line.starts_with("Duration: ") {
-                    "Duration: <redacted> seconds"
-                } else {
-                    line
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
     let command_message = request
         .message_input_texts("user")
         .into_iter()
@@ -198,6 +198,61 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     let sanitized = scrub_duration(&command_message);
     let expected = format!(
         "<user_shell_command>\n<command>\n{command}\n</command>\n<result>\nExit code: 0\nDuration: <redacted> seconds\nOutput:\nnot-set\n</result>\n</user_shell_command>"
+    );
+    assert_eq!(sanitized, expected);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let mut builder = core_test_support::test_codex::test_codex();
+    let test = builder.build(&server).await?;
+
+    #[cfg(windows)]
+    let command = r#"for ($i=1; $i -le 400; $i++) { Write-Output $i }"#.to_string();
+    #[cfg(not(windows))]
+    let command = "seq 1 400".to_string();
+
+    test.codex
+        .submit(Op::RunUserShellCommand {
+            command: command.clone(),
+        })
+        .await?;
+
+    let end_event = wait_for_event_match(&test.codex, |ev| match ev {
+        EventMsg::ExecCommandEnd(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(end_event.exit_code, 0);
+
+    let _ = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let responses = vec![responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "done"),
+        responses::ev_completed("resp-1"),
+    ])];
+    let mock = responses::mount_sse_sequence(&server, responses).await;
+
+    test.submit_turn("follow-up after shell command").await?;
+
+    let request = mock.single_request();
+    let command_message = request
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.contains("<user_shell_command>"))
+        .expect("command message recorded in request");
+    let sanitized = scrub_duration(&command_message);
+
+    let head = (1..=128).map(|i| format!("{i}\n")).collect::<String>();
+    let tail = (273..=400).map(|i| format!("{i}\n")).collect::<String>();
+    let truncated_body =
+        format!("Total output lines: 400\n\n{head}\n[... omitted 144 of 400 lines ...]\n\n{tail}");
+    let expected = format!(
+        "<user_shell_command>\n<command>\n{command}\n</command>\n<result>\nExit code: 0\nDuration: <redacted> seconds\nOutput:\n{truncated_body}\n</result>\n</user_shell_command>"
     );
     assert_eq!(sanitized, expected);
 
