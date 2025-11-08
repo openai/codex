@@ -183,6 +183,7 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
         .into_iter()
         .find(|text| text.contains("<user_shell_command>"))
         .expect("command message recorded in request");
+    let command_message = command_message.replace("\r\n", "\n");
     let escaped_command = escape(&command);
     let expected_pattern = format!(
         r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\nnot-set\n</result>\n</user_shell_command>\z"
@@ -233,6 +234,7 @@ async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<(
         .into_iter()
         .find(|text| text.contains("<user_shell_command>"))
         .expect("command message recorded in request");
+    let command_message = command_message.replace("\r\n", "\n");
 
     let head = (1..=128).map(|i| format!("{i}\n")).collect::<String>();
     let tail = (273..=400).map(|i| format!("{i}\n")).collect::<String>();
