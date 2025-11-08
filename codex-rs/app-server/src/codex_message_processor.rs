@@ -4,6 +4,8 @@ use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use chrono::DateTime;
+use chrono::Utc;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
@@ -1202,8 +1204,31 @@ impl CodexMessageProcessor {
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(new_conv) => {
-                let thread = Thread {
-                    id: new_conv.conversation_id.to_string(),
+                let conversation_id = new_conv.conversation_id;
+                let rollout_path = new_conv.session_configured.rollout_path.clone();
+                let fallback_provider = self.config.model_provider_id.as_str();
+
+                // A bit hacky, but the summary contains a lot of useful information for the thread
+                // that unfortunately does not get returned from conversation_manager.new_conversation().
+                let thread = match read_summary_from_rollout(
+                    rollout_path.as_path(),
+                    fallback_provider,
+                )
+                .await
+                {
+                    Ok(summary) => summary_to_thread(summary),
+                    Err(err) => {
+                        warn!(
+                            "failed to load summary for new thread {}: {}",
+                            conversation_id, err
+                        );
+                        Thread {
+                            id: conversation_id.to_string(),
+                            preview: String::new(),
+                            model_provider: self.config.model_provider_id.clone(),
+                            created_at: chrono::Utc::now().timestamp(),
+                        }
+                    }
                 };
 
                 let response = ThreadStartResponse {
@@ -1213,12 +1238,12 @@ impl CodexMessageProcessor {
                 // Auto-attach a conversation listener when starting a thread.
                 // Use the same behavior as the v1 API with experimental_raw_events=false.
                 if let Err(err) = self
-                    .attach_conversation_listener(new_conv.conversation_id, false)
+                    .attach_conversation_listener(conversation_id, false)
                     .await
                 {
                     tracing::warn!(
                         "failed to attach listener for conversation {}: {}",
-                        new_conv.conversation_id,
+                        conversation_id,
                         err.message
                     );
                 }
@@ -1316,12 +1341,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        let data = summaries
-            .into_iter()
-            .map(|s| Thread {
-                id: s.conversation_id.to_string(),
-            })
-            .collect();
+        let data = summaries.into_iter().map(summary_to_thread).collect();
 
         let response = ThreadListResponse { data, next_cursor };
         self.outgoing.send_response(request_id, response).await;
@@ -1408,6 +1428,8 @@ impl CodexMessageProcessor {
             .await
         {
             Ok(_) => {
+                let thread = summary_to_thread(summary);
+
                 // Auto-attach a conversation listener when resuming a thread.
                 if let Err(err) = self
                     .attach_conversation_listener(conversation_id, false)
@@ -1420,11 +1442,7 @@ impl CodexMessageProcessor {
                     );
                 }
 
-                let response = ThreadResumeResponse {
-                    thread: Thread {
-                        id: conversation_id.to_string(),
-                    },
-                };
+                let response = ThreadResumeResponse { thread };
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
@@ -2834,6 +2852,33 @@ fn map_git_info(git_info: &GitInfo) -> ConversationGitInfo {
         sha: git_info.commit_hash.clone(),
         branch: git_info.branch.clone(),
         origin_url: git_info.repository_url.clone(),
+    }
+}
+
+fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
+    timestamp.and_then(|ts| {
+        chrono::DateTime::parse_from_rfc3339(ts)
+            .ok()
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+    })
+}
+
+fn summary_to_thread(summary: ConversationSummary) -> Thread {
+    let ConversationSummary {
+        conversation_id,
+        preview,
+        timestamp,
+        model_provider,
+        ..
+    } = summary;
+
+    let created_at = parse_datetime(timestamp.as_deref());
+
+    Thread {
+        id: conversation_id.to_string(),
+        preview,
+        model_provider,
+        created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
     }
 }
 
