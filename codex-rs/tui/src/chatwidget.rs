@@ -1185,15 +1185,15 @@ impl ChatWidget {
                             text,
                             image_paths: self.bottom_pane.take_recent_submission_images(),
                         };
-                    if self.bottom_pane.is_task_running() || self.stream_controller.is_some() {
-                        // Maintain upstream behavior but integrate your fix
-                        self.queued_user_messages.push_back(user_message);
-                        self.refresh_queued_user_messages();
-                    } else {
-                        // Fallback to the unified queue method from main
-                        self.queue_user_message(user_message);
+                        if self.bottom_pane.is_task_running() || self.stream_controller.is_some() {
+                            // Maintain upstream behavior but integrate your fix
+                            self.queued_user_messages.push_back(user_message);
+                            self.refresh_queued_user_messages();
+                        } else {
+                            // Fallback to the unified queue method from main
+                            self.queue_user_message(user_message);
+                        }
                     }
-                  },
                     InputResult::Command(cmd) => {
                         self.dispatch_command(cmd);
                     }
