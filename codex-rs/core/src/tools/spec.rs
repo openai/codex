@@ -156,7 +156,7 @@ fn create_exec_command_tool() -> ToolSpec {
         "yield_time_ms".to_string(),
         JsonSchema::Number {
             description: Some(
-                "Maximum time in milliseconds to wait for output after writing the input."
+                "How long to wait (in milliseconds) for output before yielding.".to_string(),
             ),
         },
     );
