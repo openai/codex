@@ -1508,6 +1508,7 @@ fn single_reasoning_option_skips_selection() {
     static SINGLE_EFFORT: [ReasoningEffortPreset; 1] = [ReasoningEffortPreset {
         effort: ReasoningEffortConfig::High,
         description: "Maximizes reasoning depth for complex or ambiguous problems",
+        is_default: true,
     }];
     let preset = ModelPreset {
         id: "model-with-single-reasoning",

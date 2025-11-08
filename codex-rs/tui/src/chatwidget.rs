@@ -1829,13 +1829,18 @@ impl ChatWidget {
         struct EffortChoice {
             stored: Option<ReasoningEffortConfig>,
             display: ReasoningEffortConfig,
+            is_default: bool,
         }
         let mut choices: Vec<EffortChoice> = Vec::new();
         for effort in ReasoningEffortConfig::iter() {
-            if supported.iter().any(|option| option.effort == effort) {
+            if let Some(option) = supported
+                .iter()
+                .find(|available| available.effort == effort)
+            {
                 choices.push(EffortChoice {
                     stored: Some(effort),
                     display: effort,
+                    is_default: option.is_default,
                 });
             }
         }
@@ -1843,6 +1848,7 @@ impl ChatWidget {
             choices.push(EffortChoice {
                 stored: Some(default_effort),
                 display: default_effort,
+                is_default: true,
             });
         }
 
@@ -1857,9 +1863,8 @@ impl ChatWidget {
 
         let default_choice: Option<ReasoningEffortConfig> = choices
             .iter()
-            .any(|choice| choice.stored == Some(default_effort))
-            .then_some(Some(default_effort))
-            .flatten()
+            .find(|choice| choice.is_default)
+            .and_then(|choice| choice.stored)
             .or_else(|| choices.iter().find_map(|choice| choice.stored))
             .or(Some(default_effort));
 
@@ -1877,7 +1882,7 @@ impl ChatWidget {
             if let Some(first) = effort_label.get_mut(0..1) {
                 first.make_ascii_uppercase();
             }
-            if choice.stored == default_choice {
+            if choice.is_default {
                 effort_label.push_str(" (default)");
             }
 

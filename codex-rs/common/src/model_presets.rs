@@ -8,6 +8,8 @@ pub struct ReasoningEffortPreset {
     pub effort: ReasoningEffort,
     /// Short human description shown next to the effort in UIs.
     pub description: &'static str,
+    /// Whether this effort should be the default selection in UIs.
+    pub is_default: bool,
 }
 
 /// Metadata describing a Codex-supported model.
@@ -40,14 +42,17 @@ const PRESETS: &[ModelPreset] = &[
             ReasoningEffortPreset {
                 effort: ReasoningEffort::Low,
                 description: "Fastest responses with limited reasoning",
+                is_default: false,
             },
             ReasoningEffortPreset {
                 effort: ReasoningEffort::Medium,
                 description: "Dynamically adjusts reasoning based on the task",
+                is_default: true,
             },
             ReasoningEffortPreset {
                 effort: ReasoningEffort::High,
                 description: "Maximizes reasoning depth for complex or ambiguous problems",
+                is_default: false,
             },
         ],
         is_default: true,
@@ -62,10 +67,12 @@ const PRESETS: &[ModelPreset] = &[
             ReasoningEffortPreset {
                 effort: ReasoningEffort::Medium,
                 description: "Dynamically adjusts reasoning based on the task",
+                is_default: true,
             },
             ReasoningEffortPreset {
                 effort: ReasoningEffort::High,
                 description: "Maximizes reasoning depth for complex or ambiguous problems",
+                is_default: false,
             },
         ],
         is_default: false,
@@ -80,18 +87,22 @@ const PRESETS: &[ModelPreset] = &[
             ReasoningEffortPreset {
                 effort: ReasoningEffort::Minimal,
                 description: "Fastest responses with little reasoning",
+                is_default: false,
             },
             ReasoningEffortPreset {
                 effort: ReasoningEffort::Low,
                 description: "Balances speed with some reasoning; useful for straightforward queries and short explanations",
+                is_default: false,
             },
             ReasoningEffortPreset {
                 effort: ReasoningEffort::Medium,
                 description: "Provides a solid balance of reasoning depth and latency for general-purpose tasks",
+                is_default: true,
             },
             ReasoningEffortPreset {
                 effort: ReasoningEffort::High,
                 description: "Maximizes reasoning depth for complex or ambiguous problems",
+                is_default: false,
             },
         ],
         is_default: false,
@@ -115,5 +126,21 @@ mod tests {
     fn only_one_default_model_is_configured() {
         let default_models = PRESETS.iter().filter(|preset| preset.is_default).count();
         assert!(default_models == 1);
+    }
+
+    #[test]
+    fn each_preset_has_exactly_one_default_reasoning_effort() {
+        for preset in PRESETS {
+            let default_efforts = preset
+                .supported_reasoning_efforts
+                .iter()
+                .filter(|effort| effort.is_default)
+                .count();
+            assert_eq!(
+                default_efforts, 1,
+                "expected exactly one default reasoning effort for preset {}",
+                preset.id
+            );
+        }
     }
 }
