@@ -26,9 +26,11 @@ use std::path::PathBuf;
 use supports_color::Stream;
 
 mod mcp_cmd;
+#[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
+#[cfg(not(windows))]
 use crate::wsl_paths::normalize_for_wsl;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -269,8 +271,9 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 /// Run the update action and print the result.
 fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     println!();
-    let (cmd, args) = action.command_args();
     let cmd_str = action.command_str();
+    #[cfg(not(windows))]
+    let (cmd, args) = action.command_args();
     println!("Updating Codex via `{cmd_str}`...");
     #[cfg(not(windows))]
     let command_path = normalize_for_wsl(cmd);
