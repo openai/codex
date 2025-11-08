@@ -171,8 +171,9 @@ mod windows_impl {
     pub fn preflight_audit_everyone_writable(
         cwd: &Path,
         env_map: &HashMap<String, String>,
+        logs_base_dir: Option<&Path>,
     ) -> Result<()> {
-        audit::audit_everyone_writable(cwd, env_map)
+        audit::audit_everyone_writable(cwd, env_map, logs_base_dir)
     }
 
     pub fn run_windows_sandbox_capture(
@@ -436,6 +437,7 @@ mod stub {
     pub fn preflight_audit_everyone_writable(
         _cwd: &Path,
         _env_map: &HashMap<String, String>,
+        _logs_base_dir: Option<&Path>,
     ) -> Result<()> {
         bail!("Windows sandbox is only available on Windows")
     }

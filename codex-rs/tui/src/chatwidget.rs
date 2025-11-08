@@ -2106,7 +2106,11 @@ impl ChatWidget {
         for (k, v) in std::env::vars() {
             env_map.insert(k, v);
         }
-        match codex_windows_sandbox::preflight_audit_everyone_writable(&self.config.cwd, &env_map) {
+        match codex_windows_sandbox::preflight_audit_everyone_writable(
+            &self.config.cwd,
+            &env_map,
+            Some(self.config.codex_home.as_path()),
+        ) {
             Ok(()) => false,
             Err(_) => true,
         }

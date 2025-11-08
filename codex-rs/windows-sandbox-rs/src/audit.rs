@@ -38,6 +38,22 @@ use windows_sys::Win32::Security::ACCESS_ALLOWED_ACE;
 use windows_sys::Win32::Security::ACE_HEADER;
 use windows_sys::Win32::Security::EqualSid;
 
+// Preflight scan limits
+const MAX_ITEMS_PER_DIR: i32 = 1000;
+const AUDIT_TIME_LIMIT_SECS: i64 = 2;
+const MAX_CHECKED_LIMIT: i32 = 50000;
+// Case-insensitive suffixes (normalized to forward slashes) to skip during one-level child scan
+const SKIP_DIR_SUFFIXES: &[&str] = &[
+    "/windows/installer",
+    "/windows/registration",
+    "/programdata",
+];
+
+fn normalize_path_key(p: &Path) -> String {
+    let n = dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    n.to_string_lossy().replace('\\', "/").to_ascii_lowercase()
+}
+
 fn unique_push(set: &mut HashSet<PathBuf>, out: &mut Vec<PathBuf>, p: PathBuf) {
     if let Ok(abs) = p.canonicalize() {
         if set.insert(abs.clone()) {
@@ -77,11 +93,7 @@ fn gather_candidates(cwd: &Path, env: &std::collections::HashMap<String, String>
         }
     }
     // 5) Core system roots last
-    for p in [
-        PathBuf::from("C:/"),
-        PathBuf::from("C:/Windows"),
-        PathBuf::from("C:/ProgramData"),
-    ] {
+    for p in [PathBuf::from("C:/"), PathBuf::from("C:/Windows")] {
         unique_push(&mut set, &mut out, p);
     }
     out
@@ -164,14 +176,18 @@ unsafe fn path_has_world_write_allow(path: &Path) -> Result<bool> {
 pub fn audit_everyone_writable(
     cwd: &Path,
     env: &std::collections::HashMap<String, String>,
+    logs_base_dir: Option<&Path>,
 ) -> Result<()> {
     let start = Instant::now();
     let mut flagged: Vec<PathBuf> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
     let mut checked = 0usize;
     // Fast path: check CWD immediate children first so workspace issues are caught early.
     if let Ok(read) = std::fs::read_dir(cwd) {
-        for ent in read.flatten().take(250) {
-            if start.elapsed() > Duration::from_secs(5) || checked > 5000 {
+        for ent in read.flatten().take(MAX_ITEMS_PER_DIR as usize) {
+            if start.elapsed() > Duration::from_secs(AUDIT_TIME_LIMIT_SECS as u64)
+                || checked > MAX_CHECKED_LIMIT as usize
+            {
                 break;
             }
             let ft = match ent.file_type() {
@@ -185,26 +201,32 @@ pub fn audit_everyone_writable(
             checked += 1;
             let has = unsafe { path_has_world_write_allow(&p)? };
             if has {
-                flagged.push(p);
+                let key = normalize_path_key(&p);
+                if seen.insert(key) { flagged.push(p); }
             }
         }
     }
     // Continue with broader candidate sweep
     let candidates = gather_candidates(cwd, env);
     for root in candidates {
-        if start.elapsed() > Duration::from_secs(5) || checked > 5000 {
+        if start.elapsed() > Duration::from_secs(AUDIT_TIME_LIMIT_SECS as u64)
+            || checked > MAX_CHECKED_LIMIT as usize
+        {
             break;
         }
         checked += 1;
         let has_root = unsafe { path_has_world_write_allow(&root)? };
         if has_root {
-            flagged.push(root.clone());
+            let key = normalize_path_key(&root);
+            if seen.insert(key) { flagged.push(root.clone()); }
         }
         // one level down best-effort
         if let Ok(read) = std::fs::read_dir(&root) {
-            for ent in read.flatten().take(250) {
+            for ent in read.flatten().take(MAX_ITEMS_PER_DIR as usize) {
                 let p = ent.path();
-                if start.elapsed() > Duration::from_secs(5) || checked > 5000 {
+                if start.elapsed() > Duration::from_secs(AUDIT_TIME_LIMIT_SECS as u64)
+                    || checked > MAX_CHECKED_LIMIT as usize
+                {
                     break;
                 }
                 // Skip reparse points (symlinks/junctions) to avoid auditing link ACLs
@@ -215,11 +237,16 @@ pub fn audit_everyone_writable(
                 if ft.is_symlink() {
                     continue;
                 }
+                // Skip noisy/irrelevant Windows system subdirectories
+                let pl = p.to_string_lossy().to_ascii_lowercase();
+                let norm = pl.replace('\\', "/");
+                if SKIP_DIR_SUFFIXES.iter().any(|s| norm.ends_with(s)) { continue; }
                 if ft.is_dir() {
                     checked += 1;
                     let has_child = unsafe { path_has_world_write_allow(&p)? };
                     if has_child {
-                        flagged.push(p);
+                        let key = normalize_path_key(&p);
+                        if seen.insert(key) { flagged.push(p); }
                     }
                 }
             }
@@ -236,7 +263,7 @@ pub fn audit_everyone_writable(
                 "AUDIT: world-writable scan FAILED; checked={checked}; duration_ms={elapsed_ms}; flagged:{}",
                 list
             ),
-            Some(cwd),
+            logs_base_dir,
         );
         let mut list_err = String::new();
         for p in flagged {
@@ -252,7 +279,7 @@ pub fn audit_everyone_writable(
         &format!(
             "AUDIT: world-writable scan OK; checked={checked}; duration_ms={elapsed_ms}"
         ),
-        Some(cwd),
+        logs_base_dir,
     );
     Ok(())
 }
