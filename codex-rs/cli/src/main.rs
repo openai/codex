@@ -274,6 +274,13 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     println!("Updating Codex via `{cmd_str}`...");
     let command_path = normalize_for_wsl(cmd);
     let normalized_args: Vec<String> = args.iter().map(normalize_for_wsl).collect();
+    // On Windows, run via cmd.exe so .CMD/.BAT are correctly resolved (PATHEXT semantics).
+    #[cfg(windows)]
+    let status = std::process::Command::new("cmd")
+        .args(["/C", &cmd_str])
+        .status()?;
+
+    #[cfg(not(windows))]
     let status = std::process::Command::new(&command_path)
         .args(&normalized_args)
         .status()?;
