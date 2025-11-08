@@ -156,8 +156,7 @@ fn create_exec_command_tool() -> ToolSpec {
         "yield_time_ms".to_string(),
         JsonSchema::Number {
             description: Some(
-                "Maximum time in milliseconds to wait for output after writing the input (default: 1000)."
-                    .to_string(),
+                "Maximum time in milliseconds to wait for output after writing the input."
             ),
         },
     );
@@ -247,9 +246,7 @@ fn create_shell_tool() -> ToolSpec {
     properties.insert(
         "timeout_ms".to_string(),
         JsonSchema::Number {
-            description: Some(
-                "The timeout for the command in milliseconds (default: 1000).".to_string(),
-            ),
+            description: Some("The timeout for the command in milliseconds".to_string()),
         },
     );
 
