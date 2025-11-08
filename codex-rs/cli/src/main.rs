@@ -272,7 +272,9 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     let (cmd, args) = action.command_args();
     let cmd_str = action.command_str();
     println!("Updating Codex via `{cmd_str}`...");
+    #[cfg(not(windows))]
     let command_path = normalize_for_wsl(cmd);
+    #[cfg(not(windows))]
     let normalized_args: Vec<String> = args.iter().map(normalize_for_wsl).collect();
     // On Windows, run via cmd.exe so .CMD/.BAT are correctly resolved (PATHEXT semantics).
     #[cfg(windows)]
