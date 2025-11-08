@@ -120,6 +120,9 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     let mut builder = core_test_support::test_codex::test_codex();
     let test = builder.build(&server).await?;
 
+    #[cfg(windows)]
+    let command = r#"$val = $env:CODEX_SANDBOX; if ([string]::IsNullOrEmpty($val)) { $val = 'not-set' } ; [System.Console]::Write($val)"#.to_string();
+    #[cfg(not(windows))]
     let command = r#"printf '%s' "${CODEX_SANDBOX:-not-set}""#.to_string();
 
     test.codex
@@ -134,10 +137,11 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     })
     .await;
     assert!(begin_event.is_user_shell_command);
-    assert_eq!(
-        begin_event.command.last(),
-        Some(&command),
-        "user command begin event should include the original command as the last arg; got: {:?}",
+    let matches_last_arg = begin_event.command.last() == Some(&command);
+    let matches_split = shlex::split(&command).is_some_and(|split| split == begin_event.command);
+    assert!(
+        matches_last_arg || matches_split,
+        "user command begin event should include the original command; got: {:?}",
         begin_event.command
     );
 
