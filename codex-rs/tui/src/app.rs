@@ -191,7 +191,8 @@ impl App {
                 let cwd = app.config.cwd.clone();
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
-                Self::spawn_world_writable_scan(cwd, env_map, tx, false);
+                let logs_base_dir = app.config.codex_home.clone();
+                Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, tx, false);
             }
         }
 
@@ -472,7 +473,8 @@ impl App {
                         let env_map: std::collections::HashMap<String, String> =
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
-                        Self::spawn_world_writable_scan(cwd, env_map, tx, false);
+                        let logs_base_dir = self.config.codex_home.clone();
+                        Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, tx, false);
                     }
                 }
             }
@@ -624,11 +626,18 @@ impl App {
     fn spawn_world_writable_scan(
         cwd: PathBuf,
         env_map: std::collections::HashMap<String, String>,
+        logs_base_dir: PathBuf,
         tx: AppEventSender,
         apply_preset_on_continue: bool,
     ) {
         tokio::task::spawn_blocking(move || {
-            if codex_windows_sandbox::preflight_audit_everyone_writable(&cwd, &env_map).is_err() {
+            if codex_windows_sandbox::preflight_audit_everyone_writable(
+                &cwd,
+                &env_map,
+                Some(logs_base_dir.as_path()),
+            )
+            .is_err()
+            {
                 if apply_preset_on_continue {
                     if let Some(preset) = codex_common::approval_presets::builtin_approval_presets()
                         .into_iter()
