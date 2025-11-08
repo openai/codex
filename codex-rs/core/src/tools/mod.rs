@@ -1,44 +1,18 @@
 pub mod context;
+pub mod events;
 pub(crate) mod handlers;
+pub mod orchestrator;
 pub mod parallel;
 pub mod registry;
 pub mod router;
+pub mod runtimes;
+pub mod sandboxing;
 pub mod spec;
 
-use crate::apply_patch;
-use crate::apply_patch::ApplyPatchExec;
-use crate::apply_patch::InternalApplyPatchInvocation;
-use crate::apply_patch::convert_apply_patch_to_protocol;
-use crate::codex::Session;
-use crate::codex::TurnContext;
-use crate::error::CodexErr;
-use crate::error::SandboxErr;
-use crate::exec::ExecParams;
+use crate::context_manager::format_output_for_model_body;
 use crate::exec::ExecToolCallOutput;
-use crate::exec::StdoutStream;
-use crate::executor::ExecutionMode;
-use crate::executor::errors::ExecError;
-use crate::executor::linkers::PreparedExec;
-use crate::function_tool::FunctionCallError;
-use crate::tools::context::ApplyPatchCommandContext;
-use crate::tools::context::ExecCommandContext;
-use crate::tools::context::SharedTurnDiffTracker;
-use codex_apply_patch::MaybeApplyPatchVerified;
-use codex_apply_patch::maybe_parse_apply_patch_verified;
-use codex_protocol::protocol::AskForApproval;
-use codex_utils_string::take_bytes_at_char_boundary;
-use codex_utils_string::take_last_bytes_at_char_boundary;
 pub use router::ToolRouter;
 use serde::Serialize;
-use std::sync::Arc;
-use tracing::trace;
-
-// Model-formatting limits: clients get full streams; only content sent to the model is truncated.
-pub(crate) const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
-pub(crate) const MODEL_FORMAT_MAX_LINES: usize = 256; // lines
-pub(crate) const MODEL_FORMAT_HEAD_LINES: usize = MODEL_FORMAT_MAX_LINES / 2;
-pub(crate) const MODEL_FORMAT_TAIL_LINES: usize = MODEL_FORMAT_MAX_LINES - MODEL_FORMAT_HEAD_LINES; // 128
-pub(crate) const MODEL_FORMAT_HEAD_BYTES: usize = MODEL_FORMAT_MAX_BYTES / 2;
 
 // Telemetry preview limits: keep log events smaller than model budgets.
 pub(crate) const TELEMETRY_PREVIEW_MAX_BYTES: usize = 2 * 1024; // 2 KiB
@@ -46,140 +20,9 @@ pub(crate) const TELEMETRY_PREVIEW_MAX_LINES: usize = 64; // lines
 pub(crate) const TELEMETRY_PREVIEW_TRUNCATION_NOTICE: &str =
     "[... telemetry preview truncated ...]";
 
-// TODO(jif) break this down
-pub(crate) async fn handle_container_exec_with_params(
-    tool_name: &str,
-    params: ExecParams,
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-    turn_diff_tracker: SharedTurnDiffTracker,
-    sub_id: String,
-    call_id: String,
-) -> Result<String, FunctionCallError> {
-    let otel_event_manager = turn_context.client.get_otel_event_manager();
-
-    if params.with_escalated_permissions.unwrap_or(false)
-        && !matches!(turn_context.approval_policy, AskForApproval::OnRequest)
-    {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
-            policy = turn_context.approval_policy
-        )));
-    }
-
-    // check if this was a patch, and apply it if so
-    let apply_patch_exec = match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
-        MaybeApplyPatchVerified::Body(changes) => {
-            match apply_patch::apply_patch(
-                sess.as_ref(),
-                turn_context.as_ref(),
-                &sub_id,
-                &call_id,
-                changes,
-            )
-            .await
-            {
-                InternalApplyPatchInvocation::Output(item) => return item,
-                InternalApplyPatchInvocation::DelegateToExec(apply_patch_exec) => {
-                    Some(apply_patch_exec)
-                }
-            }
-        }
-        MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
-            // It looks like an invocation of `apply_patch`, but we
-            // could not resolve it into a patch that would apply
-            // cleanly. Return to model for resample.
-            return Err(FunctionCallError::RespondToModel(format!(
-                "apply_patch verification failed: {parse_error}"
-            )));
-        }
-        MaybeApplyPatchVerified::ShellParseError(error) => {
-            trace!("Failed to parse shell command, {error:?}");
-            None
-        }
-        MaybeApplyPatchVerified::NotApplyPatch => None,
-    };
-
-    let command_for_display = if let Some(exec) = apply_patch_exec.as_ref() {
-        vec!["apply_patch".to_string(), exec.action.patch.clone()]
-    } else {
-        params.command.clone()
-    };
-
-    let exec_command_context = ExecCommandContext {
-        sub_id: sub_id.clone(),
-        call_id: call_id.clone(),
-        command_for_display: command_for_display.clone(),
-        cwd: params.cwd.clone(),
-        apply_patch: apply_patch_exec.as_ref().map(
-            |ApplyPatchExec {
-                 action,
-                 user_explicitly_approved_this_action,
-             }| ApplyPatchCommandContext {
-                user_explicitly_approved_this_action: *user_explicitly_approved_this_action,
-                changes: convert_apply_patch_to_protocol(action),
-            },
-        ),
-        tool_name: tool_name.to_string(),
-        otel_event_manager,
-    };
-
-    let mode = match apply_patch_exec {
-        Some(exec) => ExecutionMode::ApplyPatch(exec),
-        None => ExecutionMode::Shell,
-    };
-
-    sess.services.executor.update_environment(
-        turn_context.sandbox_policy.clone(),
-        turn_context.cwd.clone(),
-    );
-
-    let prepared_exec = PreparedExec::new(
-        exec_command_context,
-        params,
-        command_for_display,
-        mode,
-        Some(StdoutStream {
-            sub_id: sub_id.clone(),
-            call_id: call_id.clone(),
-            tx_event: sess.get_tx_event(),
-        }),
-        turn_context.shell_environment_policy.use_profile,
-    );
-
-    let output_result = sess
-        .run_exec_with_events(
-            turn_diff_tracker.clone(),
-            prepared_exec,
-            turn_context.approval_policy,
-        )
-        .await;
-
-    // always make sure to truncate the output if its length isn't controlled.
-    match output_result {
-        Ok(output) => {
-            let ExecToolCallOutput { exit_code, .. } = &output;
-            let content = format_exec_output_apply_patch(&output);
-            if *exit_code == 0 {
-                Ok(content)
-            } else {
-                Err(FunctionCallError::RespondToModel(content))
-            }
-        }
-        Err(ExecError::Function(err)) => Err(truncate_function_error(err)),
-        Err(ExecError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => Err(
-            FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
-        ),
-        Err(ExecError::Codex(err)) => {
-            let message = format!("execution error: {err:?}");
-            Err(FunctionCallError::RespondToModel(format_exec_output(
-                &message,
-            )))
-        }
-    }
-}
-
-pub fn format_exec_output_apply_patch(exec_output: &ExecToolCallOutput) -> String {
+/// Format the combined exec output for sending back to the model.
+/// Includes exit code and duration metadata; truncates large bodies safely.
+pub fn format_exec_output_for_model(exec_output: &ExecToolCallOutput) -> String {
     let ExecToolCallOutput {
         exit_code,
         duration,
@@ -222,166 +65,15 @@ pub fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
 
     let content = aggregated_output.text.as_str();
 
-    if exec_output.timed_out {
-        let prefixed = format!(
+    let body = if exec_output.timed_out {
+        format!(
             "command timed out after {} milliseconds\n{content}",
             exec_output.duration.as_millis()
-        );
-        return format_exec_output(&prefixed);
-    }
-
-    format_exec_output(content)
-}
-
-fn truncate_function_error(err: FunctionCallError) -> FunctionCallError {
-    match err {
-        FunctionCallError::RespondToModel(msg) => {
-            FunctionCallError::RespondToModel(format_exec_output(&msg))
-        }
-        FunctionCallError::Fatal(msg) => FunctionCallError::Fatal(format_exec_output(&msg)),
-        other => other,
-    }
-}
-
-fn format_exec_output(content: &str) -> String {
-    // Head+tail truncation for the model: show the beginning and end with an elision.
-    // Clients still receive full streams; only this formatted summary is capped.
-    let total_lines = content.lines().count();
-    if content.len() <= MODEL_FORMAT_MAX_BYTES && total_lines <= MODEL_FORMAT_MAX_LINES {
-        return content.to_string();
-    }
-    let output = truncate_formatted_exec_output(content, total_lines);
-    format!("Total output lines: {total_lines}\n\n{output}")
-}
-
-fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
-    let segments: Vec<&str> = content.split_inclusive('\n').collect();
-    let head_take = MODEL_FORMAT_HEAD_LINES.min(segments.len());
-    let tail_take = MODEL_FORMAT_TAIL_LINES.min(segments.len().saturating_sub(head_take));
-    let omitted = segments.len().saturating_sub(head_take + tail_take);
-
-    let head_slice_end: usize = segments
-        .iter()
-        .take(head_take)
-        .map(|segment| segment.len())
-        .sum();
-    let tail_slice_start: usize = if tail_take == 0 {
-        content.len()
-    } else {
-        content.len()
-            - segments
-                .iter()
-                .rev()
-                .take(tail_take)
-                .map(|segment| segment.len())
-                .sum::<usize>()
-    };
-    let marker = format!("\n[... omitted {omitted} of {total_lines} lines ...]\n\n");
-
-    // Byte budgets for head/tail around the marker
-    let mut head_budget = MODEL_FORMAT_HEAD_BYTES.min(MODEL_FORMAT_MAX_BYTES);
-    let tail_budget = MODEL_FORMAT_MAX_BYTES.saturating_sub(head_budget + marker.len());
-    if tail_budget == 0 && marker.len() >= MODEL_FORMAT_MAX_BYTES {
-        // Degenerate case: marker alone exceeds budget; return a clipped marker
-        return take_bytes_at_char_boundary(&marker, MODEL_FORMAT_MAX_BYTES).to_string();
-    }
-    if tail_budget == 0 {
-        // Make room for the marker by shrinking head
-        head_budget = MODEL_FORMAT_MAX_BYTES.saturating_sub(marker.len());
-    }
-
-    let head_slice = &content[..head_slice_end];
-    let head_part = take_bytes_at_char_boundary(head_slice, head_budget);
-    let mut result = String::with_capacity(MODEL_FORMAT_MAX_BYTES.min(content.len()));
-
-    result.push_str(head_part);
-    result.push_str(&marker);
-
-    let remaining = MODEL_FORMAT_MAX_BYTES.saturating_sub(result.len());
-    if remaining == 0 {
-        return result;
-    }
-
-    let tail_slice = &content[tail_slice_start..];
-    let tail_part = take_last_bytes_at_char_boundary(tail_slice, remaining);
-    result.push_str(tail_part);
-
-    result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use regex_lite::Regex;
-
-    fn assert_truncated_message_matches(message: &str, line: &str, total_lines: usize) {
-        let pattern = truncated_message_pattern(line, total_lines);
-        let regex = Regex::new(&pattern).unwrap_or_else(|err| {
-            panic!("failed to compile regex {pattern}: {err}");
-        });
-        let captures = regex
-            .captures(message)
-            .unwrap_or_else(|| panic!("message failed to match pattern {pattern}: {message}"));
-        let body = captures
-            .name("body")
-            .expect("missing body capture")
-            .as_str();
-        assert!(
-            body.len() <= MODEL_FORMAT_MAX_BYTES,
-            "body exceeds byte limit: {} bytes",
-            body.len()
-        );
-    }
-
-    fn truncated_message_pattern(line: &str, total_lines: usize) -> String {
-        let head_take = MODEL_FORMAT_HEAD_LINES.min(total_lines);
-        let tail_take = MODEL_FORMAT_TAIL_LINES.min(total_lines.saturating_sub(head_take));
-        let omitted = total_lines.saturating_sub(head_take + tail_take);
-        let escaped_line = regex_lite::escape(line);
-        format!(
-            r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} omitted {omitted} of {total_lines} lines \.{{3}}]\n\n.*)$",
         )
-    }
+    } else {
+        content.to_string()
+    };
 
-    #[test]
-    fn truncate_formatted_exec_output_truncates_large_error() {
-        let line = "very long execution error line that should trigger truncation\n";
-        let large_error = line.repeat(2_500); // way beyond both byte and line limits
-
-        let truncated = format_exec_output(&large_error);
-
-        let total_lines = large_error.lines().count();
-        assert_truncated_message_matches(&truncated, line, total_lines);
-        assert_ne!(truncated, large_error);
-    }
-
-    #[test]
-    fn truncate_function_error_trims_respond_to_model() {
-        let line = "respond-to-model error that should be truncated\n";
-        let huge = line.repeat(3_000);
-        let total_lines = huge.lines().count();
-
-        let err = truncate_function_error(FunctionCallError::RespondToModel(huge));
-        match err {
-            FunctionCallError::RespondToModel(message) => {
-                assert_truncated_message_matches(&message, line, total_lines);
-            }
-            other => panic!("unexpected error variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn truncate_function_error_trims_fatal() {
-        let line = "fatal error output that should be truncated\n";
-        let huge = line.repeat(3_000);
-        let total_lines = huge.lines().count();
-
-        let err = truncate_function_error(FunctionCallError::Fatal(huge));
-        match err {
-            FunctionCallError::Fatal(message) => {
-                assert_truncated_message_matches(&message, line, total_lines);
-            }
-            other => panic!("unexpected error variant: {other:?}"),
-        }
-    }
+    // Truncate for model consumption before serialization.
+    format_output_for_model_body(&body)
 }

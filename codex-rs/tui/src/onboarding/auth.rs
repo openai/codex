@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use codex_core::AuthManager;
+use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::read_openai_api_key_from_env;
@@ -9,6 +10,7 @@ use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -28,6 +30,7 @@ use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
 use codex_app_server_protocol::AuthMode;
+use codex_protocol::config_types::ForcedLoginMethod;
 use std::sync::RwLock;
 
 use crate::LoginStatus;
@@ -49,6 +52,8 @@ pub(crate) enum SignInState {
     ApiKeyEntry(ApiKeyInputState),
     ApiKeyConfigured,
 }
+
+const API_KEY_DISABLED_MESSAGE: &str = "API key login is disabled.";
 
 #[derive(Clone, Default)]
 pub(crate) struct ApiKeyInputState {
@@ -79,24 +84,40 @@ impl KeyboardHandler for AuthModeWidget {
 
         match key_event.code {
             KeyCode::Up | KeyCode::Char('k') => {
-                self.highlighted_mode = AuthMode::ChatGPT;
+                if self.is_chatgpt_login_allowed() {
+                    self.highlighted_mode = AuthMode::ChatGPT;
+                }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.highlighted_mode = AuthMode::ApiKey;
+                if self.is_api_login_allowed() {
+                    self.highlighted_mode = AuthMode::ApiKey;
+                }
             }
             KeyCode::Char('1') => {
-                self.start_chatgpt_login();
+                if self.is_chatgpt_login_allowed() {
+                    self.start_chatgpt_login();
+                }
             }
-            KeyCode::Char('2') => self.start_api_key_entry(),
+            KeyCode::Char('2') => {
+                if self.is_api_login_allowed() {
+                    self.start_api_key_entry();
+                } else {
+                    self.disallow_api_login();
+                }
+            }
             KeyCode::Enter => {
                 let sign_in_state = { (*self.sign_in_state.read().unwrap()).clone() };
                 match sign_in_state {
                     SignInState::PickMode => match self.highlighted_mode {
-                        AuthMode::ChatGPT => {
+                        AuthMode::ChatGPT if self.is_chatgpt_login_allowed() => {
                             self.start_chatgpt_login();
                         }
-                        AuthMode::ApiKey => {
+                        AuthMode::ApiKey if self.is_api_login_allowed() => {
                             self.start_api_key_entry();
+                        }
+                        AuthMode::ChatGPT => {}
+                        AuthMode::ApiKey => {
+                            self.disallow_api_login();
                         }
                     },
                     SignInState::ChatGptSuccessMessage => {
@@ -129,11 +150,29 @@ pub(crate) struct AuthModeWidget {
     pub error: Option<String>,
     pub sign_in_state: Arc<RwLock<SignInState>>,
     pub codex_home: PathBuf,
+    pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub login_status: LoginStatus,
     pub auth_manager: Arc<AuthManager>,
+    pub forced_chatgpt_workspace_id: Option<String>,
+    pub forced_login_method: Option<ForcedLoginMethod>,
 }
 
 impl AuthModeWidget {
+    fn is_api_login_allowed(&self) -> bool {
+        !matches!(self.forced_login_method, Some(ForcedLoginMethod::Chatgpt))
+    }
+
+    fn is_chatgpt_login_allowed(&self) -> bool {
+        !matches!(self.forced_login_method, Some(ForcedLoginMethod::Api))
+    }
+
+    fn disallow_api_login(&mut self) {
+        self.highlighted_mode = AuthMode::ChatGPT;
+        self.error = Some(API_KEY_DISABLED_MESSAGE.to_string());
+        *self.sign_in_state.write().unwrap() = SignInState::PickMode;
+        self.request_frame.schedule_frame();
+    }
+
     fn render_pick_mode(&self, area: Rect, buf: &mut Buffer) {
         let mut lines: Vec<Line> = vec![
             Line::from(vec![
@@ -176,20 +215,34 @@ impl AuthModeWidget {
             vec![line1, line2]
         };
 
+        let chatgpt_description = if self.is_chatgpt_login_allowed() {
+            "Usage included with Plus, Pro, and Team plans"
+        } else {
+            "ChatGPT login is disabled"
+        };
         lines.extend(create_mode_item(
             0,
             AuthMode::ChatGPT,
             "Sign in with ChatGPT",
-            "Usage included with Plus, Pro, and Team plans",
+            chatgpt_description,
         ));
         lines.push("".into());
-        lines.extend(create_mode_item(
-            1,
-            AuthMode::ApiKey,
-            "Provide your own API key",
-            "Pay for what you use",
-        ));
-        lines.push("".into());
+        if self.is_api_login_allowed() {
+            lines.extend(create_mode_item(
+                1,
+                AuthMode::ApiKey,
+                "Provide your own API key",
+                "Pay for what you use",
+            ));
+            lines.push("".into());
+        } else {
+            lines.push(
+                "  API key login is disabled by this workspace. Sign in with ChatGPT to continue."
+                    .dim()
+                    .into(),
+            );
+            lines.push("".into());
+        }
         lines.push(
             // AE: Following styles.md, this should probably be Cyan because it's a user input tip.
             //     But leaving this for a future cleanup.
@@ -376,7 +429,9 @@ impl AuthModeWidget {
                         should_request_frame = true;
                     }
                     KeyCode::Char(c)
-                        if !key_event.modifiers.contains(KeyModifiers::CONTROL)
+                        if key_event.kind == KeyEventKind::Press
+                            && !key_event.modifiers.contains(KeyModifiers::SUPER)
+                            && !key_event.modifiers.contains(KeyModifiers::CONTROL)
                             && !key_event.modifiers.contains(KeyModifiers::ALT) =>
                     {
                         if state.prepopulated_from_env {
@@ -428,6 +483,10 @@ impl AuthModeWidget {
     }
 
     fn start_api_key_entry(&mut self) {
+        if !self.is_api_login_allowed() {
+            self.disallow_api_login();
+            return;
+        }
         self.error = None;
         let prefill_from_env = read_openai_api_key_from_env();
         let mut guard = self.sign_in_state.write().unwrap();
@@ -454,7 +513,15 @@ impl AuthModeWidget {
     }
 
     fn save_api_key(&mut self, api_key: String) {
-        match login_with_api_key(&self.codex_home, &api_key) {
+        if !self.is_api_login_allowed() {
+            self.disallow_api_login();
+            return;
+        }
+        match login_with_api_key(
+            &self.codex_home,
+            &api_key,
+            self.cli_auth_credentials_store_mode,
+        ) {
             Ok(()) => {
                 self.error = None;
                 self.login_status = LoginStatus::AuthMode(AuthMode::ApiKey);
@@ -491,7 +558,12 @@ impl AuthModeWidget {
         }
 
         self.error = None;
-        let opts = ServerOptions::new(self.codex_home.clone(), CLIENT_ID.to_string());
+        let opts = ServerOptions::new(
+            self.codex_home.clone(),
+            CLIENT_ID.to_string(),
+            self.forced_chatgpt_workspace_id.clone(),
+            self.cli_auth_credentials_store_mode,
+        );
         match run_login_server(opts) {
             Ok(child) => {
                 let sign_in_state = self.sign_in_state.clone();
@@ -569,5 +641,63 @@ impl WidgetRef for AuthModeWidget {
                 self.render_api_key_configured(area, buf);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    use codex_core::auth::AuthCredentialsStoreMode;
+
+    fn widget_forced_chatgpt() -> (AuthModeWidget, TempDir) {
+        let codex_home = TempDir::new().unwrap();
+        let codex_home_path = codex_home.path().to_path_buf();
+        let widget = AuthModeWidget {
+            request_frame: FrameRequester::test_dummy(),
+            highlighted_mode: AuthMode::ChatGPT,
+            error: None,
+            sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
+            codex_home: codex_home_path.clone(),
+            cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+            login_status: LoginStatus::NotAuthenticated,
+            auth_manager: AuthManager::shared(
+                codex_home_path,
+                false,
+                AuthCredentialsStoreMode::File,
+            ),
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: Some(ForcedLoginMethod::Chatgpt),
+        };
+        (widget, codex_home)
+    }
+
+    #[test]
+    fn api_key_flow_disabled_when_chatgpt_forced() {
+        let (mut widget, _tmp) = widget_forced_chatgpt();
+
+        widget.start_api_key_entry();
+
+        assert_eq!(widget.error.as_deref(), Some(API_KEY_DISABLED_MESSAGE));
+        assert!(matches!(
+            &*widget.sign_in_state.read().unwrap(),
+            SignInState::PickMode
+        ));
+    }
+
+    #[test]
+    fn saving_api_key_is_blocked_when_chatgpt_forced() {
+        let (mut widget, _tmp) = widget_forced_chatgpt();
+
+        widget.save_api_key("sk-test".to_string());
+
+        assert_eq!(widget.error.as_deref(), Some(API_KEY_DISABLED_MESSAGE));
+        assert!(matches!(
+            &*widget.sign_in_state.read().unwrap(),
+            SignInState::PickMode
+        ));
+        assert_eq!(widget.login_status, LoginStatus::NotAuthenticated);
     }
 }

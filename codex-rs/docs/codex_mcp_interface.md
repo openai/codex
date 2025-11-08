@@ -19,8 +19,10 @@ At a glance:
   - `listConversations`, `resumeConversation`, `archiveConversation`
 - Configuration and info
   - `getUserSavedConfig`, `setDefaultModel`, `getUserAgent`, `userInfo`
+  - `model/list` → enumerate available models and reasoning options
 - Auth
-  - `loginApiKey`, `loginChatGpt`, `cancelLoginChatGpt`, `logoutChatGpt`, `getAuthStatus`
+  - `account/read`, `account/login/start`, `account/login/cancel`, `account/logout`, `account/rateLimits/read`
+  - notifications: `account/login/completed`, `account/updated`, `account/rateLimits/updated`
 - Utilities
   - `gitDiffToRemote`, `execOneOffCommand`
 - Approvals (server → client requests)
@@ -60,6 +62,7 @@ Request `newConversation` params (subset):
 - `sandbox`: `read-only` | `workspace-write` | `danger-full-access`
 - `config`: map of additional config overrides
 - `baseInstructions`: optional instruction override
+- `compactPrompt`: optional replacement for the default compaction prompt
 - `includePlanTool` / `includeApplyPatchTool`: booleans
 
 Response: `{ conversationId, model, reasoningEffort?, rolloutPath }`
@@ -72,6 +75,24 @@ Send input to the active turn:
 Interrupt a running turn: `interruptConversation`.
 
 List/resume/archive: `listConversations`, `resumeConversation`, `archiveConversation`.
+
+## Models
+
+Fetch the catalog of models available in the current Codex build with `model/list`. The request accepts optional pagination inputs:
+
+- `pageSize` – number of models to return (defaults to a server-selected value)
+- `cursor` – opaque string from the previous response’s `nextCursor`
+
+Each response yields:
+
+- `items` – ordered list of models. A model includes:
+  - `id`, `model`, `displayName`, `description`
+  - `supportedReasoningEfforts` – array of objects with:
+    - `reasoningEffort` – one of `minimal|low|medium|high`
+    - `description` – human-friendly label for the effort
+  - `defaultReasoningEffort` – suggested effort for the UI
+  - `isDefault` – whether the model is recommended for most users
+- `nextCursor` – pass into the next request to continue paging (optional)
 
 ## Event stream
 
@@ -93,11 +114,7 @@ The client must reply with `{ decision: "allow" | "deny" }` for each request.
 
 ## Auth helpers
 
-For ChatGPT or API‑key based auth flows, the server exposes helpers:
-
-- `loginApiKey { apiKey }`
-- `loginChatGpt` → returns `{ loginId, authUrl }`; browser completes flow; then `loginChatGptComplete` notification follows
-- `cancelLoginChatGpt { loginId }`, `logoutChatGpt`, `getAuthStatus { includeToken?, refreshToken? }`
+For the complete request/response shapes and flow examples, see the [“Auth endpoints (v2)” section in the app‑server README](../app-server/README.md#auth-endpoints-v2).
 
 ## Example: start and send a message
 

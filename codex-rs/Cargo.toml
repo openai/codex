@@ -2,10 +2,12 @@
 members = [
     "backend-client",
     "ansi-escape",
+    "async-utils",
     "app-server",
     "app-server-protocol",
     "apply-patch",
     "arg0",
+    "feedback",
     "codex-backend-openapi-models",
     "cloud-tasks",
     "cloud-tasks-client",
@@ -14,11 +16,10 @@ members = [
     "core",
     "exec",
     "execpolicy",
+    "keyring-store",
     "file-search",
-    "git-tooling",
     "linux-sandbox",
     "login",
-    "mcp-client",
     "mcp-server",
     "mcp-types",
     "ollama",
@@ -27,12 +28,17 @@ members = [
     "protocol-ts",
     "rmcp-client",
     "responses-api-proxy",
+    "stdio-to-uds",
     "otel",
     "tui",
-    "git-apply",
+    "utils/git",
+    "utils/cache",
+    "utils/image",
     "utils/json-to-toml",
+    "utils/pty",
     "utils/readiness",
     "utils/string",
+    "utils/tokenizer",
 ]
 resolver = "2"
 
@@ -52,15 +58,18 @@ codex-app-server = { path = "app-server" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
+codex-async-utils = { path = "async-utils" }
+codex-backend-client = { path = "backend-client" }
 codex-chatgpt = { path = "chatgpt" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }
+codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
-codex-git-tooling = { path = "git-tooling" }
+codex-git = { path = "utils/git" }
+codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-login = { path = "login" }
-codex-mcp-client = { path = "mcp-client" }
 codex-mcp-server = { path = "mcp-server" }
 codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
@@ -69,10 +78,16 @@ codex-protocol = { path = "protocol" }
 codex-protocol-ts = { path = "protocol-ts" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
+codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
+codex-utils-cache = { path = "utils/cache" }
+codex-utils-image = { path = "utils/image" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
+codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-string = { path = "utils/string" }
+codex-utils-tokenizer = { path = "utils/tokenizer" }
+codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
@@ -83,8 +98,8 @@ ansi-to-tui = "7.0.0"
 anyhow = "1"
 arboard = "3"
 askama = "0.12"
-assert_matches = "1.5.0"
 assert_cmd = "2"
+assert_matches = "1.5.0"
 async-channel = "2.3.1"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
@@ -107,11 +122,13 @@ env_logger = "0.11.5"
 escargot = "0.5"
 eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
-icu_decimal = "2.0.0"
-icu_locale_core = "2.0.0"
+http = "1.3.1"
+icu_decimal = "2.1"
+icu_provider = { version = "2.1", features = ["sync"] }
+icu_locale_core = "2.1"
 ignore = "0.4.23"
 image = { version = "^0.25.8", default-features = false }
-indexmap = "2.6.0"
+indexmap = "2.12.0"
 insta = "1.43.2"
 itertools = "0.14.0"
 keyring = "3.6"
@@ -119,6 +136,7 @@ landlock = "0.4.1"
 lazy_static = "1"
 libc = "0.2.175"
 log = "0.4"
+lru = "0.12.5"
 maplit = "1.0.2"
 mime_guess = "2.0.5"
 multimap = "0.10.0"
@@ -134,7 +152,6 @@ os_info = "3.12.0"
 owo-colors = "4.2.0"
 paste = "1.0.15"
 path-absolutize = "3.1.1"
-path-clean = "1.0.1"
 pathdiff = "0.2"
 portable-pty = "0.9.0"
 predicates = "3"
@@ -142,11 +159,13 @@ pretty_assertions = "1.4.1"
 pulldown-cmark = "0.10"
 rand = "0.9"
 ratatui = "0.29.0"
+ratatui-macros = "0.6.0"
 regex-lite = "0.1.7"
 reqwest = "0.12"
-rmcp = { version = "0.8.0", default-features = false }
+rmcp = { version = "0.8.5", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
+sentry = "0.34.0"
 serde = "1"
 serde_json = "1"
 serde_with = "3.14"
@@ -161,8 +180,9 @@ strum_macros = "0.27.2"
 supports-color = "3.0.2"
 sys-locale = "0.3.2"
 tempfile = "3.23.0"
+test-log = "0.2.18"
 textwrap = "0.16.2"
-thiserror = "2.0.16"
+thiserror = "2.0.17"
 time = "0.3"
 tiny_http = "0.12"
 tokio = "1"
@@ -180,6 +200,7 @@ tree-sitter = "0.25.10"
 tree-sitter-bash = "0.25"
 tree-sitter-highlight = "0.25.10"
 ts-rs = "11"
+uds_windows = "1.1.0"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2"
 url = "2"
@@ -190,6 +211,7 @@ walkdir = "2.5.0"
 webbrowser = "1.0"
 which = "6"
 wildmatch = "2.5.0"
+
 wiremock = "0.6"
 zeroize = "1.8.1"
 
@@ -234,7 +256,12 @@ unwrap_used = "deny"
 # cargo-shear cannot see the platform-specific openssl-sys usage, so we
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
-ignored = ["openssl-sys", "codex-utils-readiness"]
+ignored = [
+    "icu_provider",
+    "openssl-sys",
+    "codex-utils-readiness",
+    "codex-utils-tokenizer",
+]
 
 [profile.release]
 lto = "fat"
@@ -245,10 +272,16 @@ strip = "symbols"
 # See https://github.com/openai/codex/issues/1411 for details.
 codegen-units = 1
 
+[profile.ci-test]
+debug = 1         # Reduce debug symbol size
+inherits = "test"
+opt-level = 0
+
 [patch.crates-io]
 # Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
+crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
 
 # Uncomment to debug local changes.
 # rmcp = { path = "../../rust-sdk/crates/rmcp" }

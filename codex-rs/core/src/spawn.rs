@@ -66,6 +66,7 @@ pub(crate) async fn spawn_child_async(
 
     #[cfg(unix)]
     unsafe {
+        let parent_pid = libc::getpid();
         cmd.pre_exec(|| {
             if libc::setpgid(0, 0) == -1 {
                 return Err(std::io::Error::last_os_error());
@@ -82,9 +83,10 @@ pub(crate) async fn spawn_child_async(
 
                 // Though if there was a race condition and this pre_exec() block is
                 // run _after_ the parent (i.e., the Codex process) has already
-                // exited, then the parent is the _init_ process (which will never
-                // die), so we should just terminate the child process now.
-                if libc::getppid() == 1 {
+                // exited, then parent will be the closest configured "subreaper"
+                // ancestor process, or PID 1 (init). If the Codex process has exited
+                // already, so should the child process.
+                if libc::getppid() != parent_pid {
                     libc::raise(libc::SIGTERM);
                 }
             }

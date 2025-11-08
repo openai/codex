@@ -8,8 +8,10 @@ use crate::landlock::apply_sandbox_policy_to_current_thread;
 pub struct LandlockCommand {
     /// It is possible that the cwd used in the context of the sandbox policy
     /// is different from the cwd of the process to spawn.
+    #[arg(long = "sandbox-policy-cwd")]
     pub sandbox_policy_cwd: PathBuf,
 
+    #[arg(long = "sandbox-policy")]
     pub sandbox_policy: codex_core::protocol::SandboxPolicy,
 
     /// Full command args to run under landlock.
