@@ -269,6 +269,18 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 /// Run the update action and print the result.
 fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     println!();
+
+    // For Homebrew installations, run `brew update` first to sync the cask index.
+    // Without this, `brew upgrade` may incorrectly report "already latest" when
+    // a newer version exists but the local cask index is stale.
+    if action == UpdateAction::BrewUpgrade {
+        println!("Syncing Homebrew cask index...");
+        let update_status = std::process::Command::new("brew").arg("update").status()?;
+        if !update_status.success() {
+            anyhow::bail!("`brew update` failed with status {update_status}");
+        }
+    }
+
     let (cmd, args) = action.command_args();
     let cmd_str = action.command_str();
     println!("Updating Codex via `{cmd_str}`...");
