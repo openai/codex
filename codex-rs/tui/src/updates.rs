@@ -138,8 +138,8 @@ fn extract_version_from_latest_tag(latest_tag_name: &str) -> anyhow::Result<Stri
         .ok_or_else(|| anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))
 }
 
-// /// Returns the latest version to show in a popup, if it should be shown.
-// /// This respects the user's dismissal choice for the current latest version.
+/// Returns the latest version to show in a popup, if it should be shown.
+/// This respects the user's dismissal choice for the current latest version.
 pub fn get_upgrade_version_for_popup(config: &Config) -> Option<String> {
     let version_file = version_filepath(config);
     let latest = get_upgrade_version(config)?;

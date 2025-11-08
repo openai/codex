@@ -9,22 +9,18 @@ pub enum UpdateAction {
     BrewUpgrade,
 }
 
-#[cfg(any(not(debug_assertions), test))]
+#[cfg(not(debug_assertions))]
 pub(crate) fn get_update_action() -> Option<UpdateAction> {
     let exe = std::env::current_exe().unwrap_or_default();
     let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
     let managed_by_bun = std::env::var_os("CODEX_MANAGED_BY_BUN").is_some();
-    if managed_by_npm {
-        Some(UpdateAction::NpmGlobalLatest)
-    } else if managed_by_bun {
-        Some(UpdateAction::BunGlobalLatest)
-    } else if cfg!(target_os = "macos")
-        && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
-    {
-        Some(UpdateAction::BrewUpgrade)
-    } else {
-        None
-    }
+
+    detect_update_action(
+        cfg!(target_os = "macos"),
+        &exe,
+        managed_by_npm,
+        managed_by_bun,
+    )
 }
 
 impl UpdateAction {
@@ -40,9 +36,30 @@ impl UpdateAction {
     /// Returns string representation of the command-line arguments for invoking the update.
     pub fn command_str(self) -> String {
         let (command, args) = self.command_args();
-        let args_str = args.join(" ");
-        format!("{command} {args_str}")
+        shlex::try_join(std::iter::once(command).chain(args.iter().copied()))
+            .unwrap_or_else(|_| format!("{command} {}", args.join(" ")))
     }
+}
+
+#[cfg(any(not(debug_assertions), test))]
+fn detect_update_action(
+    is_macos: bool,
+    current_exe: &std::path::Path,
+    managed_by_npm: bool,
+    managed_by_bun: bool,
+) -> Option<UpdateAction> {
+    if managed_by_npm {
+        return Some(UpdateAction::NpmGlobalLatest);
+    }
+    if managed_by_bun {
+        return Some(UpdateAction::BunGlobalLatest);
+    }
+    if is_macos
+        && (current_exe.starts_with("/opt/homebrew") || current_exe.starts_with("/usr/local"))
+    {
+        return Some(UpdateAction::BrewUpgrade);
+    }
+    None
 }
 
 #[cfg(test)]
@@ -50,22 +67,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_get_update_action() {
-        let prev = std::env::var_os("CODEX_MANAGED_BY_NPM");
-
-        // First: no npm var -> expect None (we do not run from brew in CI)
-        unsafe { std::env::remove_var("CODEX_MANAGED_BY_NPM") };
-        assert_eq!(get_update_action(), None);
-
-        // Then: with npm var -> expect NpmGlobalLatest
-        unsafe { std::env::set_var("CODEX_MANAGED_BY_NPM", "1") };
-        assert_eq!(get_update_action(), Some(UpdateAction::NpmGlobalLatest));
-
-        // Restore prior value to avoid leaking state
-        if let Some(v) = prev {
-            unsafe { std::env::set_var("CODEX_MANAGED_BY_NPM", v) };
-        } else {
-            unsafe { std::env::remove_var("CODEX_MANAGED_BY_NPM") };
-        }
+    fn detects_update_action_without_env_mutation() {
+        assert_eq!(
+            detect_update_action(false, std::path::Path::new("/any/path"), false, false),
+            None
+        );
+        assert_eq!(
+            detect_update_action(false, std::path::Path::new("/any/path"), true, false),
+            Some(UpdateAction::NpmGlobalLatest)
+        );
+        assert_eq!(
+            detect_update_action(false, std::path::Path::new("/any/path"), false, true),
+            Some(UpdateAction::BunGlobalLatest)
+        );
+        assert_eq!(
+            detect_update_action(
+                true,
+                std::path::Path::new("/opt/homebrew/bin/codex"),
+                false,
+                false
+            ),
+            Some(UpdateAction::BrewUpgrade)
+        );
+        assert_eq!(
+            detect_update_action(
+                true,
+                std::path::Path::new("/usr/local/bin/codex"),
+                false,
+                false
+            ),
+            Some(UpdateAction::BrewUpgrade)
+        );
     }
 }
