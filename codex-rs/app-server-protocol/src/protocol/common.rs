@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 
 use crate::JSONRPCNotification;
@@ -101,18 +102,69 @@ macro_rules! client_request_definitions {
 
 client_request_definitions! {
     /// NEW APIs
-    #[serde(rename = "model/list")]
-    #[ts(rename = "model/list")]
-    ListModels {
-        params: v2::ListModelsParams,
-        response: v2::ListModelsResponse,
+    // Thread lifecycle
+    #[serde(rename = "thread/start")]
+    #[ts(rename = "thread/start")]
+    ThreadStart {
+        params: v2::ThreadStartParams,
+        response: v2::ThreadStartResponse,
+    },
+    #[serde(rename = "thread/resume")]
+    #[ts(rename = "thread/resume")]
+    ThreadResume {
+        params: v2::ThreadResumeParams,
+        response: v2::ThreadResumeResponse,
+    },
+    #[serde(rename = "thread/archive")]
+    #[ts(rename = "thread/archive")]
+    ThreadArchive {
+        params: v2::ThreadArchiveParams,
+        response: v2::ThreadArchiveResponse,
+    },
+    #[serde(rename = "thread/list")]
+    #[ts(rename = "thread/list")]
+    ThreadList {
+        params: v2::ThreadListParams,
+        response: v2::ThreadListResponse,
+    },
+    #[serde(rename = "thread/compact")]
+    #[ts(rename = "thread/compact")]
+    ThreadCompact {
+        params: v2::ThreadCompactParams,
+        response: v2::ThreadCompactResponse,
+    },
+    #[serde(rename = "turn/start")]
+    #[ts(rename = "turn/start")]
+    TurnStart {
+        params: v2::TurnStartParams,
+        response: v2::TurnStartResponse,
+    },
+    #[serde(rename = "turn/interrupt")]
+    #[ts(rename = "turn/interrupt")]
+    TurnInterrupt {
+        params: v2::TurnInterruptParams,
+        response: v2::TurnInterruptResponse,
     },
 
-    #[serde(rename = "account/login")]
-    #[ts(rename = "account/login")]
+    #[serde(rename = "model/list")]
+    #[ts(rename = "model/list")]
+    ModelList {
+        params: v2::ModelListParams,
+        response: v2::ModelListResponse,
+    },
+
+    #[serde(rename = "account/login/start")]
+    #[ts(rename = "account/login/start")]
     LoginAccount {
         params: v2::LoginAccountParams,
         response: v2::LoginAccountResponse,
+    },
+
+    #[serde(rename = "account/login/cancel")]
+    #[ts(rename = "account/login/cancel")]
+    CancelLoginAccount {
+        params: v2::CancelLoginAccountParams,
+        response: v2::CancelLoginAccountResponse,
     },
 
     #[serde(rename = "account/logout")]
@@ -131,15 +183,15 @@ client_request_definitions! {
 
     #[serde(rename = "feedback/upload")]
     #[ts(rename = "feedback/upload")]
-    UploadFeedback {
-        params: v2::UploadFeedbackParams,
-        response: v2::UploadFeedbackResponse,
+    FeedbackUpload {
+        params: v2::FeedbackUploadParams,
+        response: v2::FeedbackUploadResponse,
     },
 
     #[serde(rename = "account/read")]
     #[ts(rename = "account/read")]
     GetAccount {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: v2::GetAccountParams,
         response: v2::GetAccountResponse,
     },
 
@@ -202,6 +254,7 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v1::LoginChatGptResponse,
     },
+    // DEPRECATED in favor of CancelLoginAccount
     CancelLoginChatGpt {
         params: v1::CancelLoginChatGptParams,
         response: v1::CancelLoginChatGptResponse,
@@ -210,6 +263,7 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v1::LogoutChatGptResponse,
     },
+    /// DEPRECATED in favor of GetAccount
     GetAuthStatus {
         params: v1::GetAuthStatusParams,
         response: v1::GetAuthStatusResponse,
@@ -292,7 +346,7 @@ macro_rules! server_request_definitions {
 
         #[allow(clippy::vec_init_then_push)]
         pub fn export_server_response_schemas(
-            out_dir: &::std::path::Path,
+            out_dir: &Path,
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
             let mut schemas = Vec::new();
             paste! {
@@ -303,7 +357,7 @@ macro_rules! server_request_definitions {
 
         #[allow(clippy::vec_init_then_push)]
         pub fn export_server_param_schemas(
-            out_dir: &::std::path::Path,
+            out_dir: &Path,
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
             let mut schemas = Vec::new();
             paste! {
@@ -481,8 +535,15 @@ server_notification_definitions! {
     AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
 
+    #[serde(rename = "account/login/completed")]
+    #[ts(rename = "account/login/completed")]
+    #[strum(serialize = "account/login/completed")]
+    AccountLoginCompleted(v2::AccountLoginCompletedNotification),
+
     /// DEPRECATED NOTIFICATIONS below
     AuthStatusChange(v1::AuthStatusChangeNotification),
+
+    /// Deprecated: use `account/login/completed` instead.
     LoginChatGptComplete(v1::LoginChatGptCompleteNotification),
     SessionConfigured(v1::SessionConfiguredNotification),
 }
@@ -647,7 +708,7 @@ mod tests {
         };
         assert_eq!(
             json!({
-                "method": "account/login",
+                "method": "account/login/start",
                 "id": 2,
                 "params": {
                     "type": "apiKey",
@@ -663,11 +724,11 @@ mod tests {
     fn serialize_account_login_chatgpt() -> Result<()> {
         let request = ClientRequest::LoginAccount {
             request_id: RequestId::Integer(3),
-            params: v2::LoginAccountParams::ChatGpt,
+            params: v2::LoginAccountParams::Chatgpt,
         };
         assert_eq!(
             json!({
-                "method": "account/login",
+                "method": "account/login/start",
                 "id": 3,
                 "params": {
                     "type": "chatgpt"
@@ -698,12 +759,17 @@ mod tests {
     fn serialize_get_account() -> Result<()> {
         let request = ClientRequest::GetAccount {
             request_id: RequestId::Integer(5),
-            params: None,
+            params: v2::GetAccountParams {
+                refresh_token: false,
+            },
         };
         assert_eq!(
             json!({
                 "method": "account/read",
                 "id": 5,
+                "params": {
+                    "refreshToken": false
+                }
             }),
             serde_json::to_value(&request)?,
         );
@@ -712,19 +778,16 @@ mod tests {
 
     #[test]
     fn account_serializes_fields_in_camel_case() -> Result<()> {
-        let api_key = v2::Account::ApiKey {
-            api_key: "secret".to_string(),
-        };
+        let api_key = v2::Account::ApiKey {};
         assert_eq!(
             json!({
                 "type": "apiKey",
-                "apiKey": "secret",
             }),
             serde_json::to_value(&api_key)?,
         );
 
-        let chatgpt = v2::Account::ChatGpt {
-            email: Some("user@example.com".to_string()),
+        let chatgpt = v2::Account::Chatgpt {
+            email: "user@example.com".to_string(),
             plan_type: PlanType::Plus,
         };
         assert_eq!(
@@ -741,16 +804,16 @@ mod tests {
 
     #[test]
     fn serialize_list_models() -> Result<()> {
-        let request = ClientRequest::ListModels {
+        let request = ClientRequest::ModelList {
             request_id: RequestId::Integer(6),
-            params: v2::ListModelsParams::default(),
+            params: v2::ModelListParams::default(),
         };
         assert_eq!(
             json!({
                 "method": "model/list",
                 "id": 6,
                 "params": {
-                    "pageSize": null,
+                    "limit": null,
                     "cursor": null
                 }
             }),
