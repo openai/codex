@@ -5,6 +5,67 @@ All notable changes to Codex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2025-11-09
+
+### Enhanced Vision - Quest 3/Pro Complete Support & CI/CD Integration
+
+This release focuses on complete Quest 3/Pro VR/AR support and comprehensive CI/CD pipeline integration.
+
+### Added
+
+**Quest 3/Pro Complete Support**
+- Hand tracking implementation for Quest 3/Pro
+- Color passthrough support for Quest 3 with Depth API
+- Eye tracking preparation for Quest Pro
+- Face tracking preparation for Quest Pro
+- Enhanced VR/AR Layer architecture
+- WebXR integration improvements
+
+**CI/CD Pipeline Complete**
+- GitHub Actions workflows: Rust CI, Release CI, Security CI, Docs CI
+- Multi-platform builds: Windows, macOS, Linux (x64/ARM64)
+- Automated testing: Unit, Integration, E2E
+- Security scanning: cargo-audit, CVE detection
+- Auto-deployment: Binary generation, npm packaging, GitHub Releases
+
+**Architecture Documentation**
+- Detailed v2.1.0 architecture diagram (Mermaid)
+- SVG and PNG exports for README and SNS
+- Complete module and API relationship documentation
+
+### Changed
+
+- **Version**: 2.0.0 → **2.1.0**
+- Enhanced VR/AR Layer with Quest 3/Pro specific features
+- Improved architecture diagram with detailed module relationships
+- Updated README.md with v2.1.0 features and roadmap
+
+### Documentation
+
+- Added comprehensive v2.1.0 architecture diagram
+- Updated README.md with Quest 3/Pro features
+- Added CI/CD pipeline documentation
+- Created implementation log: `_docs/2025-11-09_v2.1.0-Architecture-Diagram-README-Update.md`
+
+### Performance
+
+- VR rendering: Quest 3 support for 120Hz refresh rate
+- Hand tracking: Native Quest 3/Pro API integration
+- Passthrough AR: Real-time depth sensing on Quest 3
+
+### Contributors
+
+- zapabob - Lead developer
+- Based on OpenAI/codex official repository
+
+### Links
+
+- [Architecture Diagram](./architecture-v2.1.0.svg)
+- [Implementation Log](_docs/2025-11-09_v2.1.0-Architecture-Diagram-README-Update.md)
+- [OpenAI/codex Official](https://github.com/openai/codex)
+
+---
+
 ## [2.0.0] - 2025-11-06
 
 ### 🎊 MAJOR RELEASE - Revolutionary GPU Acceleration & Kamui4D-Exceeding Visualization

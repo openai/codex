@@ -239,6 +239,39 @@ window.electronAPI.onOpenRepo((path) => {
 - **Load balancing**: Multiple backend instances
 - **Caching**: Result caching for repeated queries
 
+## 🥽 VR/AR Architecture (v2.1.0)
+
+### Supported Devices
+
+- **Meta Quest 2**: WebXR, 90Hz, Controller-based, Virtual Desktop
+- **Meta Quest 3**: WebXR, 120Hz, Hand tracking, Color passthrough, Depth API
+- **Meta Quest Pro**: WebXR, 90Hz, Eye tracking, Face tracking, Hand tracking
+- **Apple Vision Pro**: visionOS, RealityKit, Spatial Computing, Hand/Eye tracking
+- **SteamVR**: PCVR support, Virtual Desktop, High refresh rate
+
+### VR/AR Features
+
+- **Hand Tracking**: Quest 3/Pro native hand tracking API
+- **Passthrough AR**: Quest 3 color passthrough with depth sensing
+- **Eye Tracking**: Quest Pro eye tracking for foveated rendering
+- **Face Tracking**: Quest Pro face tracking for avatars
+- **Spatial Anchors**: AR position anchoring for persistent overlays
+
+## 🚀 CI/CD Architecture (v2.1.0)
+
+### GitHub Actions Workflows
+
+- **Rust CI** (`rust-ci.yml`): Multi-platform builds, Clippy lint, Format check, Test execution
+- **Release CI** (`release.yml`): Binary generation, npm packaging, GitHub Releases
+- **Security CI**: cargo-audit, CVE scanning, Dependency checks
+- **Docs CI**: README validation, Documentation checks, Link verification
+
+### Build Targets
+
+- Windows (x64, ARM64)
+- macOS (x64, ARM64)
+- Linux (x64, ARM64, musl)
+
 ## 🔮 Future Architecture
 
 Planned enhancements:
@@ -248,6 +281,7 @@ Planned enhancements:
 3. **Mobile**: React Native visualizer
 4. **WebAssembly**: Client-side computation
 5. **gRPC**: High-performance RPC
+6. **GPU LLM Inference**: TensorRT/vLLM integration (v2.2.0)
 
 ## 📚 Further Reading
 
