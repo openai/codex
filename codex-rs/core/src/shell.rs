@@ -451,21 +451,21 @@ mod tests_windows {
         let wsl_exe = sys32.join("wsl.exe");
         let sys_bash_exe = sys32.join("bash.exe");
         if !wsl_exe.exists() && !sys_bash_exe.exists() {
-            eprintln!("[test] skip: WSL not detected under System32");
+            tracing::warn!("[test] skip: WSL not detected under System32");
             return;
         }
 
         let which_path = match which::which("bash.exe") {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("[test] skip: which('bash.exe') failed: {}", e);
+                tracing::warn!("[test] skip: which('bash.exe') failed: {e}");
                 return;
             }
         };
         let sys_bash_canon = sys_bash_exe.canonicalize().ok();
         let which_canon = which_path.canonicalize().ok();
         if sys_bash_canon.is_some() && which_canon.is_some() && sys_bash_canon == which_canon {
-            eprintln!(
+            tracing::warn!(
                 "[test] skip: which resolved to System32\\bash.exe; ensure target bash precedes WSL in PATH"
             );
             return;
@@ -480,7 +480,7 @@ mod tests_windows {
                 String::from_utf8_lossy(&o.stdout).to_string(),
             ),
             Err(e) => {
-                eprintln!("[test] run bash.exe failed: {}", e);
+                tracing::warn!("[test] run bash.exe failed: {e}");
                 return;
             }
         };
@@ -490,16 +490,18 @@ mod tests_windows {
                 String::from_utf8_lossy(&o.stdout).to_string(),
             ),
             Err(e) => {
-                eprintln!("[test] which path {:?} failed: {}", which_path, e);
+                tracing::warn!("[test] which path {which_path:?} failed: {e}");
                 return;
             }
         };
 
-        eprintln!("[test] which_path: {:?}", which_path);
-        eprintln!("[test] run_ok: {}", run_ok);
-        eprintln!("[test] which_ok: {}", which_ok);
-        eprintln!("[test] run_stdout:\n{}", run_stdout.trim());
-        eprintln!("[test] which_stdout:\n{}", which_stdout.trim());
+        tracing::info!("[test] which_path: {which_path:?}");
+        tracing::info!("[test] run_ok: {run_ok}");
+        tracing::info!("[test] which_ok: {which_ok}");
+        let run_stdout_trimmed = run_stdout.trim();
+        let which_stdout_trimmed = which_stdout.trim();
+        tracing::info!("[test] run_stdout:\n{run_stdout_trimmed}");
+        tracing::info!("[test] which_stdout:\n{which_stdout_trimmed}");
 
         assert!(
             run_ok,
