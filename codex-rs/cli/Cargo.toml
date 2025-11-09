@@ -30,7 +30,6 @@ codex-login = { workspace = true }
 codex-mcp-server = { workspace = true }
 codex-process-hardening = { workspace = true }
 codex-protocol = { workspace = true }
-codex-protocol-ts = { workspace = true }
 codex-responses-api-proxy = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
