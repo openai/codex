@@ -82,6 +82,7 @@ use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::new_active_exec_command;
 use crate::get_git_diff::get_git_diff;
+use crate::gpu_stats::GpuStatsSnapshot;
 use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
@@ -93,7 +94,6 @@ use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
-use crate::gpu_stats::GpuStatsSnapshot;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
@@ -2764,7 +2764,8 @@ impl Renderable for ChatWidget {
 
     fn desired_height(&self, width: u16) -> u16 {
         let [chat_area, _, bottom_pane_area] = self.layout_areas(Rect::new(0, 0, width, 1000));
-        self.history.desired_height(chat_area.width) + self.bottom_pane.desired_height(bottom_pane_area.width)
+        self.history.desired_height(chat_area.width)
+            + self.bottom_pane.desired_height(bottom_pane_area.width)
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
