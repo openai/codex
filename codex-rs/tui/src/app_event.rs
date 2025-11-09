@@ -79,6 +79,12 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWorldWritableWarningConfirmation {
         preset: Option<ApprovalPreset>,
+        /// Up to 3 sample world-writable directories to display in the warning.
+        sample_paths: Vec<String>,
+        /// If there are more than `sample_paths`, this carries the remaining count.
+        extra_count: usize,
+        /// True when the scan failed (e.g. ACL query error) and protections could not be verified.
+        failed_scan: bool,
     },
 
     /// Show Windows Subsystem for Linux setup instructions for auto mode.
