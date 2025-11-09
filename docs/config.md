@@ -860,12 +860,18 @@ notifications = true
 # You can optionally filter to specific notification types.
 # Available types are "agent-turn-complete" and "approval-requested".
 notifications = [ "agent-turn-complete", "approval-requested" ]
+
+# Suppress the proactive "approaching rate limit" banner and model suggestions.
+# Defaults to true (suggestions enabled).
+rate_limit_model_suggestions = false
 ```
 
 > [!NOTE]
 > Codex emits desktop notifications using terminal escape codes. Not all terminals support these (notably, macOS Terminal.app and VS Code's terminal do not support custom notifications. iTerm2, Ghostty and WezTerm do support these notifications).
 
 > [!NOTE] > `tui.notifications` is built‑in and limited to the TUI session. For programmatic or cross‑environment notifications—or to integrate with OS‑specific notifiers—use the top‑level `notify` option to run an external program that receives event JSON. The two settings are independent and can be used together.
+
+Set `rate_limit_model_suggestions` to `false` if you prefer to stay on your current model without Codex nudging you toward lighter presets when a rate limit window gets tight. `/status` will continue to show rate-limit data; this flag only disables the warning message.
 
 ## Authentication and authorization
 
@@ -945,6 +951,7 @@ Valid values:
 | `file_opener`                                    | `vscode` \| `vscode-insiders` \| `windsurf` \| `cursor` \| `none` | URI scheme for clickable citations (default: `vscode`).                                                                    |
 | `tui`                                            | table                                                             | TUI‑specific options.                                                                                                      |
 | `tui.notifications`                              | boolean \| array<string>                                          | Enable desktop notifications in the tui (default: false).                                                                  |
+| `tui.rate_limit_model_suggestions`               | boolean                                                           | Show rate-limit warnings that suggest switching models (default: true; set to `false` to disable).                         |
 | `hide_agent_reasoning`                           | boolean                                                           | Hide model reasoning events.                                                                                               |
 | `show_raw_agent_reasoning`                       | boolean                                                           | Show raw reasoning (when available).                                                                                       |
 | `model_reasoning_effort`                         | `minimal` \| `low` \| `medium` \| `high`                          | Responses API reasoning effort.                                                                                            |

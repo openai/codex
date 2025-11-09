@@ -26,6 +26,8 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::RateLimitSnapshot;
+use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::ReviewCodeLocation;
 use codex_core::protocol::ReviewFinding;
 use codex_core::protocol::ReviewLineRange;
@@ -390,6 +392,27 @@ fn test_rate_limit_warnings_monthly() {
             "Heads up, you've used over 75% of your monthly limit. Run /status for a breakdown.",
         ),],
         "expected one warning per limit for the highest crossed threshold"
+    );
+}
+
+#[test]
+fn rate_limit_warnings_disabled_via_config() {
+    let (mut chat, _tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender();
+    chat.config.rate_limit_model_suggestions = false;
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: 95.0,
+            window_minutes: Some(300),
+            resets_at: None,
+        }),
+        secondary: None,
+    }));
+
+    let inserted = drain_insert_history(&mut rx);
+    assert!(
+        inserted.is_empty(),
+        "expected no warning history cells when model suggestions are disabled"
     );
 }
 

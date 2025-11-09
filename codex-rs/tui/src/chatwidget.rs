@@ -472,30 +472,32 @@ impl ChatWidget {
 
     fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
         if let Some(snapshot) = snapshot {
-            let warnings = self.rate_limit_warnings.take_warnings(
-                snapshot
-                    .secondary
-                    .as_ref()
-                    .map(|window| window.used_percent),
-                snapshot
-                    .secondary
-                    .as_ref()
-                    .and_then(|window| window.window_minutes),
-                snapshot.primary.as_ref().map(|window| window.used_percent),
-                snapshot
-                    .primary
-                    .as_ref()
-                    .and_then(|window| window.window_minutes),
-            );
-
             let display = crate::status::rate_limit_snapshot_display(&snapshot, Local::now());
             self.rate_limit_snapshot = Some(display);
 
-            if !warnings.is_empty() {
-                for warning in warnings {
-                    self.add_to_history(history_cell::new_warning_event(warning));
+            if self.config.rate_limit_model_suggestions {
+                let warnings = self.rate_limit_warnings.take_warnings(
+                    snapshot
+                        .secondary
+                        .as_ref()
+                        .map(|window| window.used_percent),
+                    snapshot
+                        .secondary
+                        .as_ref()
+                        .and_then(|window| window.window_minutes),
+                    snapshot.primary.as_ref().map(|window| window.used_percent),
+                    snapshot
+                        .primary
+                        .as_ref()
+                        .and_then(|window| window.window_minutes),
+                );
+
+                if !warnings.is_empty() {
+                    for warning in warnings {
+                        self.add_to_history(history_cell::new_warning_event(warning));
+                    }
+                    self.request_redraw();
                 }
-                self.request_redraw();
             }
         } else {
             self.rate_limit_snapshot = None;

@@ -140,6 +140,9 @@ file_opener = "vscode"
 # Examples: true | ["agent-turn-complete", "approval-requested"]
 notifications = false
 
+# Disable near-limit suggestions to switch to a lighter model (default: true)
+rate_limit_model_suggestions = false
+
 # Suppress internal reasoning events from output (default: false)
 hide_agent_reasoning = false
 

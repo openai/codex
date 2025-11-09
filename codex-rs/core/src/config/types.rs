@@ -342,13 +342,31 @@ impl Default for Notifications {
     }
 }
 
+fn default_rate_limit_model_suggestions() -> bool {
+    true
+}
+
 /// Collection of settings that are specific to the TUI.
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct Tui {
     /// Enable desktop notifications from the TUI when the terminal is unfocused.
     /// Defaults to `false`.
     #[serde(default)]
     pub notifications: Notifications,
+
+    /// When `true`, Codex will proactively surface rate limit reminders and model suggestions.
+    /// Defaults to `true`.
+    #[serde(default = "default_rate_limit_model_suggestions")]
+    pub rate_limit_model_suggestions: bool,
+}
+
+impl Default for Tui {
+    fn default() -> Self {
+        Self {
+            notifications: Notifications::default(),
+            rate_limit_model_suggestions: default_rate_limit_model_suggestions(),
+        }
+    }
 }
 
 /// Settings for notices we display to users via the tui and app-server clients

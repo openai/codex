@@ -160,6 +160,9 @@ pub struct Config {
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
 
+    /// Whether the TUI should display rate-limit warnings that suggest switching models.
+    pub rate_limit_model_suggestions: bool,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -1087,6 +1090,12 @@ impl Config {
             .or(cfg.review_model)
             .unwrap_or_else(default_review_model);
 
+        let (tui_notifications, rate_limit_model_suggestions) = cfg
+            .tui
+            .as_ref()
+            .map(|t| (t.notifications.clone(), t.rate_limit_model_suggestions))
+            .unwrap_or_else(|| (Notifications::default(), true));
+
         let config = Self {
             model,
             review_model,
@@ -1165,11 +1174,8 @@ impl Config {
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
             notices: cfg.notice.unwrap_or_default(),
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
-            tui_notifications: cfg
-                .tui
-                .as_ref()
-                .map(|t| t.notifications.clone())
-                .unwrap_or_default(),
+            tui_notifications,
+            rate_limit_model_suggestions,
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -2912,6 +2918,7 @@ model_verbosity = "high"
                 notices: Default::default(),
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
+                rate_limit_model_suggestions: true,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -2984,6 +2991,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            rate_limit_model_suggestions: true,
             otel: OtelConfig::default(),
         };
 
@@ -3071,6 +3079,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            rate_limit_model_suggestions: true,
             otel: OtelConfig::default(),
         };
 
@@ -3144,6 +3153,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            rate_limit_model_suggestions: true,
             otel: OtelConfig::default(),
         };
 
@@ -3273,9 +3283,15 @@ mod notifications_tests {
     use assert_matches::assert_matches;
     use serde::Deserialize;
 
+    fn default_true() -> bool {
+        true
+    }
+
     #[derive(Deserialize, Debug, PartialEq)]
     struct TuiTomlTest {
         notifications: Notifications,
+        #[serde(default = "default_true")]
+        rate_limit_model_suggestions: bool,
     }
 
     #[derive(Deserialize, Debug, PartialEq)]
@@ -3291,6 +3307,7 @@ mod notifications_tests {
         "#;
         let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize notifications=true");
         assert_matches!(parsed.tui.notifications, Notifications::Enabled(true));
+        assert!(parsed.tui.rate_limit_model_suggestions);
     }
 
     #[test]
@@ -3305,5 +3322,18 @@ mod notifications_tests {
             parsed.tui.notifications,
             Notifications::Custom(ref v) if v == &vec!["foo".to_string()]
         );
+        assert!(parsed.tui.rate_limit_model_suggestions);
+    }
+
+    #[test]
+    fn test_tui_rate_limit_model_suggestions_false() {
+        let toml = r#"
+            [tui]
+            rate_limit_model_suggestions = false
+        "#;
+        let parsed: RootTomlTest =
+            toml::from_str(toml).expect("deserialize rate_limit_model_suggestions=false");
+        assert!(!parsed.tui.rate_limit_model_suggestions);
+        assert_matches!(parsed.tui.notifications, Notifications::Enabled(false));
     }
 }
