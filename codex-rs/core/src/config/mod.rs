@@ -3278,6 +3278,7 @@ mod notifications_tests {
 
     #[derive(Deserialize, Debug, PartialEq)]
     struct TuiTomlTest {
+        #[serde(default)]
         notifications: Notifications,
         #[serde(default = "default_true")]
         rate_limit_model_suggestions: bool,
