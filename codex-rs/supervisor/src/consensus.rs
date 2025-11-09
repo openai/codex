@@ -2,12 +2,31 @@
 ///
 /// Provides voting, scoring aggregation, and automatic best solution selection
 /// with detailed decision logging.
-use crate::scoring::{
-    DecisionLog, ScoringMetrics, ScoringWeights, calculate_score, rank_solutions,
-};
+use crate::scoring::DecisionLog;
+/// Consensus mechanism for multi-agent decision making
+///
+/// Provides voting, scoring aggregation, and automatic best solution selection
+/// with detailed decision logging.
+use crate::scoring::ScoringMetrics;
+/// Consensus mechanism for multi-agent decision making
+///
+/// Provides voting, scoring aggregation, and automatic best solution selection
+/// with detailed decision logging.
+use crate::scoring::ScoringWeights;
+/// Consensus mechanism for multi-agent decision making
+///
+/// Provides voting, scoring aggregation, and automatic best solution selection
+/// with detailed decision logging.
+use crate::scoring::calculate_score;
+/// Consensus mechanism for multi-agent decision making
+///
+/// Provides voting, scoring aggregation, and automatic best solution selection
+/// with detailed decision logging.
+use crate::scoring::rank_solutions;
 // use crate::types::TaskResult;
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// Consensus strategy for selecting the best solution

@@ -1,0 +1,33 @@
+[package]
+authors = ["zapabob"]
+description = "VRChat world optimization tools for Codex - Material atlas, post-processing optimization, Udon 2 support"
+edition = { workspace = true }
+license = "Apache-2.0"
+name = "codex-vrchat-optimizer"
+version = { workspace = true }
+
+[dependencies]
+# Workspace dependencies
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[features]
+default = []
+udon2 = [] # Udon 2 support
+
+
+
+
+
+
+
+
+
+
+

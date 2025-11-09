@@ -7,6 +7,7 @@ use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
 
 use crate::bottom_pane::ApprovalRequest;
+use crate::gpu_stats::GpuStatsSnapshot;
 use crate::history_cell::HistoryCell;
 
 use codex_core::protocol::AskForApproval;
@@ -115,6 +116,12 @@ pub(crate) enum AppEvent {
     OpenFeedbackConsent {
         category: FeedbackCategory,
     },
+
+    /// Updated GPU statistics for the live overlay.
+    GpuStatsUpdate(GpuStatsSnapshot),
+
+    /// GPU monitoring became unavailable (e.g. device removed or feature disabled).
+    GpuStatsUnavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

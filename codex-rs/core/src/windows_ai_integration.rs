@@ -3,8 +3,7 @@
 //! This module provides integration between Codex and Windows 11's native AI APIs,
 //! enabling OS-level optimizations and kernel driver acceleration.
 
-use anyhow::{Context, Result};
-use tracing::{debug, info};
+use anyhow::Result;
 
 #[cfg(all(target_os = "windows", feature = "windows-ai"))]
 use codex_windows_ai::{GpuStats, WindowsAiRuntime, kernel_driver::KernelBridge};
@@ -106,21 +105,21 @@ pub async fn execute_with_windows_ai(_prompt: &str, _options: &WindowsAiOptions)
 }
 
 /// Get GPU statistics (Windows-only)
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "windows-ai"))]
 pub async fn get_gpu_statistics() -> Result<GpuStats> {
     let runtime = WindowsAiRuntime::new()?;
     runtime.get_gpu_stats().await
 }
 
 /// Get GPU statistics stub
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(all(target_os = "windows", feature = "windows-ai")))]
 pub async fn get_gpu_statistics() -> Result<GpuStats> {
-    anyhow::bail!("Windows AI is only available on Windows")
+    anyhow::bail!("Windows AI is only available on Windows with windows-ai feature")
 }
 
 /// Check if Windows AI is available on this system
 pub fn is_windows_ai_available() -> bool {
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "windows-ai"))]
     {
         WindowsAiRuntime::is_available()
     }

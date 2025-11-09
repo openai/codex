@@ -95,6 +95,7 @@ use crate::markdown::append_markdown;
 use crate::onboarding::WSL_INSTRUCTIONS;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
+use crate::gpu_stats::GpuStatsSnapshot;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
@@ -2404,6 +2405,14 @@ impl ChatWidget {
 
     pub(crate) fn clear_token_usage(&mut self) {
         self.token_info = None;
+    }
+
+    pub(crate) fn update_gpu_stats(&mut self, snapshot: GpuStatsSnapshot) {
+        self.bottom_pane.update_gpu_stats(snapshot);
+    }
+
+    pub(crate) fn clear_gpu_stats(&mut self) {
+        self.bottom_pane.clear_gpu_stats();
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {

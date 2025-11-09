@@ -3,10 +3,15 @@
 //! Provides Git repository analysis capabilities for Kamui4d-style visualization.
 //! Supports CUDA acceleration for 100-1000x speedup.
 
-use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
-use git2::{Commit, Oid, Repository};
-use serde::{Deserialize, Serialize};
+use anyhow::Context;
+use anyhow::Result;
+use clap::Parser;
+use clap::Subcommand;
+use git2::Commit;
+use git2::Oid;
+use git2::Repository;
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 

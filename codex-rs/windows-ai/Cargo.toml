@@ -1,10 +1,10 @@
 [package]
 authors = ["zapabob"]
 description = "Windows 11 AI API integration for Codex"
-edition = "2024"
+edition = { workspace = true }
 license = "Apache-2.0"
 name = "codex-windows-ai"
-version = "0.1.0"
+version = { workspace = true }
 
 [dependencies]
 # Windows AI API

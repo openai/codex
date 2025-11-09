@@ -2,7 +2,11 @@
 //!
 //! Measures performance of Git parsing and 3D coordinate calculation
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::BenchmarkId;
+use criterion::Criterion;
+use criterion::black_box;
+use criterion::criterion_group;
+use criterion::criterion_main;
 use std::path::PathBuf;
 
 fn benchmark_commit_parsing(c: &mut Criterion) {

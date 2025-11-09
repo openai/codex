@@ -3,7 +3,8 @@
 
 #![allow(dead_code)] // These types are defined for future use
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileChangedEvent {

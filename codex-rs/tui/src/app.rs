@@ -13,6 +13,7 @@ use crate::resume_picker::ResumeSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::updates::UpdateAction;
+use crate::gpu_stats::GpuStatsProvider;
 use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
@@ -150,6 +151,7 @@ impl App {
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
+        let gpu_event_tx = app_event_tx.clone();
         let mut app = Self {
             server: conversation_manager,
             app_event_tx,
@@ -168,6 +170,21 @@ impl App {
             feedback: feedback.clone(),
             pending_update_action: None,
         };
+
+        if let Some(mut provider) = GpuStatsProvider::new() {
+            tokio::spawn(async move {
+                loop {
+                    match provider.sample().await {
+                        Some(snapshot) => gpu_event_tx.send(AppEvent::GpuStatsUpdate(snapshot)),
+                        None => {
+                            gpu_event_tx.send(AppEvent::GpuStatsUnavailable);
+                            break;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            });
+        }
 
         #[cfg(not(debug_assertions))]
         if let Some(latest_version) = upgrade_version {
@@ -468,6 +485,12 @@ impl App {
                     ));
                 }
             },
+            AppEvent::GpuStatsUpdate(snapshot) => {
+                self.chat_widget.update_gpu_stats(snapshot);
+            }
+            AppEvent::GpuStatsUnavailable => {
+                self.chat_widget.clear_gpu_stats();
+            }
         }
         Ok(true)
     }

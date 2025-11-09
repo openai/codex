@@ -2,13 +2,21 @@
 //!
 //! Integrates deep research capabilities with Plan planning phase.
 
-use super::policy::{ApprovalRole, PolicyEnforcer, PrivilegedOperation};
-use super::schema::{ResearchBlock, ResearchSource};
-use anyhow::{Context, Result};
-use codex_deep_research::{DeepResearcher, DeepResearcherConfig, ResearchStrategy};
-use serde::{Deserialize, Serialize};
+use super::policy::ApprovalRole;
+use super::policy::PolicyEnforcer;
+use super::policy::PrivilegedOperation;
+use super::schema::ResearchBlock;
+use super::schema::ResearchSource;
+use anyhow::Context;
+use anyhow::Result;
+use codex_deep_research::DeepResearcher;
+use codex_deep_research::DeepResearcherConfig;
+use codex_deep_research::ResearchStrategy;
+use serde::Deserialize;
+use serde::Serialize;
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::debug;
+use tracing::info;
 
 /// Research request for Plan
 #[derive(Debug, Clone, Serialize, Deserialize)]

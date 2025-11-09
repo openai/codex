@@ -16,7 +16,8 @@ mod watcher;
 use std::sync::Arc;
 use tauri::State;
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::error;
+use tracing::info;
 
 // Application state
 #[derive(Clone)]

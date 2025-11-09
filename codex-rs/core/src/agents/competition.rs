@@ -8,7 +8,9 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
-use tracing::{debug, info, warn};
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
 
 /// Competition configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]

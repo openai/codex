@@ -95,6 +95,12 @@ impl WindowsAiRuntime {
 }
 
 /// Kernel Driver integration
+#[cfg(target_os = "windows")]
+pub mod kernel_driver {
+    pub use crate::windows_impl::kernel_driver::*;
+}
+
+#[cfg(not(target_os = "windows"))]
 pub mod kernel_driver {
     use super::*;
 

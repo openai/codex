@@ -2,13 +2,21 @@
 //!
 //! Provides atomic file-based locking with stale detection and metadata tracking.
 
-use anyhow::{Context, Result, anyhow};
-use serde::{Deserialize, Serialize};
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use anyhow::Context;
+use anyhow::Result;
+use anyhow::anyhow;
+use serde::Deserialize;
+use serde::Serialize;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::fs::{self};
+use std::io::Read;
+use std::io::Write;
+use std::path::Path;
+use std::path::PathBuf;
 use std::process;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 const LOCK_FILENAME: &str = "lock.json";
 const LOCK_VERSION: &str = "1.0";

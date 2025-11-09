@@ -1,8 +1,12 @@
-use tauri::{
-    AppHandle, Manager, Runtime,
-    menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-};
+use tauri::AppHandle;
+use tauri::Manager;
+use tauri::Runtime;
+use tauri::menu::Menu;
+use tauri::menu::MenuItem;
+use tauri::tray::MouseButton;
+use tauri::tray::MouseButtonState;
+use tauri::tray::TrayIconBuilder;
+use tauri::tray::TrayIconEvent;
 use tracing::info;
 
 pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {

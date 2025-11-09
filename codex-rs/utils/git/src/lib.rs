@@ -20,16 +20,21 @@ pub use ghost_commits::CreateGhostCommitOptions;
 pub use ghost_commits::create_ghost_commit;
 pub use ghost_commits::restore_ghost_commit;
 pub use ghost_commits::restore_to_commit;
-pub use orchestrated_edit::{
-    BatchEdit, EditConflict, OrchestratedEdit, OrchestratedEditResult, OrchestratedPatch,
-    compute_sha256,
-};
+pub use orchestrated_edit::BatchEdit;
+pub use orchestrated_edit::EditConflict;
+pub use orchestrated_edit::OrchestratedEdit;
+pub use orchestrated_edit::OrchestratedEditResult;
+pub use orchestrated_edit::OrchestratedPatch;
+pub use orchestrated_edit::compute_sha256;
 pub use platform::create_symlink;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
-pub use worktree::{MergeResult, Worktree, WorktreeConfig, WorktreeInfo};
+pub use worktree::MergeResult;
+pub use worktree::Worktree;
+pub use worktree::WorktreeConfig;
+pub use worktree::WorktreeInfo;
 
 type CommitID = String;
 

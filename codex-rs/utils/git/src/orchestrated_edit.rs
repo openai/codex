@@ -4,8 +4,10 @@
 /// lock acquisition through the Orchestrator server. Prevents concurrent edits
 /// from conflicting.
 use crate::errors::GitToolingError;
-use anyhow::{Context, Result};
-use sha2::{Digest, Sha256};
+use anyhow::Context;
+use anyhow::Result;
+use sha2::Digest;
+use sha2::Sha256;
 use std::fs;
 use std::path::PathBuf;
 

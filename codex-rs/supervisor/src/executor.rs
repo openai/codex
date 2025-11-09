@@ -2,8 +2,11 @@ use crate::types::Assignment;
 use crate::types::CoordinationStrategy;
 use crate::types::SupervisorConfig;
 use crate::types::TaskResult;
-use anyhow::{Result, anyhow};
-use std::collections::{HashMap, HashSet, VecDeque};
+use anyhow::Result;
+use anyhow::anyhow;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::collections::VecDeque;
 use tokio::task::JoinSet;
 
 /// Execute assignments according to the coordination strategy while respecting

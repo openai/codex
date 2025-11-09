@@ -4,7 +4,8 @@
 //! Ensures that privileged operations (network, install, destructive commands)
 //! require explicit approval.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use thiserror::Error;
 
 /// Permission tier for an operation

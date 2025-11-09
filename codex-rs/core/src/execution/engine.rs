@@ -5,9 +5,11 @@
 use crate::agents::AgentRuntime;
 use crate::plan::{ExecutionMode, PlanBlock};
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::debug;
+use tracing::info;
 
 /// Execution result
 #[derive(Debug, Clone, Serialize, Deserialize)]

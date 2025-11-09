@@ -9,7 +9,6 @@ name = "codex_core"
 path = "src/lib.rs"
 
 [features]
-default = []
 agent_security = []
 windows-ai = ["codex-windows-ai"]
 cuda = []
@@ -27,18 +26,15 @@ bytes = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 # 🔐 Security dependencies (Phase 1: TLS/mTLS)
 rustls = { workspace = true }
-tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
+tokio-rustls = { workspace = true }
 x509-parser = { workspace = true }
 # 🔐 Security dependencies (Phase 2: Signing/Encryption)
-ed25519-dalek = { workspace = true }
 aes-gcm = { workspace = true }
-hkdf = { workspace = true }
-hmac = { workspace = true }
-hex = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-async-utils = { workspace = true }
+codex-cuda-runtime = { path = "../cuda-runtime", optional = true }
 codex-deep-research = { workspace = true }
 codex-file-search = { workspace = true }
 codex-git = { workspace = true }
@@ -50,12 +46,18 @@ codex-utils-pty = { workspace = true }
 codex-utils-readiness = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-utils-tokenizer = { workspace = true }
+codex-windows-ai = { path = "../windows-ai", optional = true }
+codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
 dashmap = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
+ed25519-dalek = { workspace = true }
 env-flags = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
+hex = { workspace = true }
+hkdf = { workspace = true }
+hmac = { workspace = true }
 hostname = "0.4"
 http = { workspace = true }
 indexmap = { workspace = true }

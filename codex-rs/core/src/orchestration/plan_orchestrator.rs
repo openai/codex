@@ -11,7 +11,8 @@ use crate::telemetry::{EventType, TelemetryEvent};
 use crate::webhooks::{WebhookConfig, WebhookPayload};
 use anyhow::{Context, Result};
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::debug;
+use tracing::info;
 
 /// Plan-aware orchestrator
 pub struct PlanOrchestrator {

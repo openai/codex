@@ -3,7 +3,8 @@
 /// Provides comprehensive quality assessment including tests, linting,
 /// performance, change risk, and readability metrics.
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 // use std::collections::HashMap;
 
 /// Comprehensive scoring metrics for code quality evaluation
@@ -145,7 +146,8 @@ impl DecisionLog {
         reasoning: String,
         evidence_urls: Vec<String>,
     ) -> Self {
-        use std::time::{SystemTime, UNIX_EPOCH};
+        use std::time::SystemTime;
+        use std::time::UNIX_EPOCH;
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()

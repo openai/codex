@@ -4,7 +4,8 @@
 use anyhow::Result;
 use std::path::Path;
 use tauri::AppHandle;
-use tracing::{info, warn};
+use tracing::info;
+use tracing::warn;
 
 use crate::AppState;
 

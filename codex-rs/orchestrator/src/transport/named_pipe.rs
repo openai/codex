@@ -1,5 +1,9 @@
 /// Windows Named Pipe transport implementation
-use super::{Connection, Transport, TransportInfo};
+use super::Connection;
+/// Windows Named Pipe transport implementation
+use super::Transport;
+/// Windows Named Pipe transport implementation
+use super::TransportInfo;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::path::Path;

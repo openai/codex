@@ -3,8 +3,10 @@
 //! Executes multiple AI agents (Codex, GeminiCLI, Claudecode) in parallel
 //! for competition-style development with worktree isolation.
 
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use anyhow::Context;
+use anyhow::Result;
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -14,9 +16,13 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use super::resource_manager::{ResourceGuard, ResourceManager};
-use super::worktree_manager::{WorktreeInfo, WorktreeManager};
-use codex_protocol::config_types::{ReasoningEffort, ReasoningSummary, Verbosity};
+use super::resource_manager::ResourceGuard;
+use super::resource_manager::ResourceManager;
+use super::worktree_manager::WorktreeInfo;
+use super::worktree_manager::WorktreeManager;
+use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Verbosity;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]

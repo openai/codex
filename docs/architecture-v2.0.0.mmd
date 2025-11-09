@@ -1,0 +1,246 @@
+graph TB
+    subgraph Client["🖥️ Client Layer - Kamui4D超え"]
+        CLI["CLI (v2.0.0)<br/>🚀 CUDA並列化<br/>⚡ 100x git解析"]
+        TUI["TUI (v2.0.0)<br/>📊 GPU統計リアルタイム<br/>🎨 120fps可視化"]
+        GUI["GUI (v2.0.0)<br/>🎮 VR/AR対応<br/>🌌 4D可視化<br/>💯 100k+コミット対応"]
+        VSCode["VSCode Extension<br/>Blueprint UI<br/>Multi-language"]
+        Cursor["Cursor IDE<br/>MCP Integration"]
+    end
+
+    subgraph GPU["🔥 GPU Acceleration Layer (NEW v2.0.0)"]
+        WindowsAI["Windows AI API<br/>DirectML<br/>+30% 最適化"]
+        CUDA["CUDA Runtime<br/>Rust-CUDA (cust)<br/>+1000% 並列化"]
+        Hybrid["Hybrid Mode<br/>自動選択<br/>最速パス保証"]
+        KernelDriver["Kernel Driver<br/>Pinned Memory<br/>+40% I/O高速化"]
+    end
+
+    subgraph Visualization["🌌 Kamui4D超えGit可視化 (NEW v2.0.0)"]
+        Git3D["3D Git Graph<br/>120fps保証<br/>InstancedMesh"]
+        Git4D["4D Timeline<br/>時間軸統合<br/>100,000コミット対応"]
+        VRMode["VR Mode<br/>Quest 2 対応<br/>Virtual Desktop最適化"]
+        ARMode["AR Mode<br/>ハンドジェスチャー<br/>MediaPipe"]
+    end
+
+    subgraph Orchestration["🎯 Orchestration Layer"]
+        OrchestratorRPC["Orchestrator RPC<br/>16 methods<br/>HMAC-SHA256"]
+        ProtocolClient["Protocol Client<br/>TypeScript SDK<br/>React hooks"]
+        TaskQueue["Task Queue<br/>Priority-based<br/>Concurrent"]
+        LockManager["Lock Manager<br/>.codex/lock.json"]
+    end
+
+    subgraph Core["⚙️ Core Runtime (Rust v2.0.0)"]
+        CoreEngine["Core Engine<br/>codex-core<br/>GPU統合"]
+        Blueprint["Blueprint Mode<br/>3実行戦略<br/>予算管理"]
+        TokenBudget["Token Budget<br/>Thread-safe"]
+        AuditLog["Audit Logger<br/>構造化ログ"]
+        ProjectDoc["Project Doc<br/>AGENTS.md<br/>多言語対応"]
+        WindowsAIIntegration["Windows AI Integration<br/>OS最適化"]
+        HybridAcceleration["Hybrid Acceleration<br/>Windows AI × CUDA"]
+    end
+
+    subgraph Agents["🤖 Sub-Agent System"]
+        Supervisor["Supervisor<br/>5min timeout<br/>3x retry"]
+        CodeReviewer["Code Reviewer<br/>8言語対応<br/>JA/EN/ZH/KO/FR/DE/ES/PT"]
+        TestGen["Test Generator<br/>80%+ coverage"]
+        SecAudit["Security Auditor<br/>OWASP Top 10"]
+        DeepResearch["Deep Researcher<br/>Multi-source<br/>Citation"]
+        CustomAgent["Custom Agents<br/>YAML定義"]
+    end
+
+    subgraph Research["🔍 Deep Research Engine"]
+        SearchProvider["Search Provider<br/>TTL 1h cache<br/>45x faster"]
+        GeminiCLI["Gemini CLI<br/>OAuth 2.0 PKCE<br/>Google Search"]
+        DuckDuckGo["DuckDuckGo<br/>Zero-cost<br/>No API key"]
+        Citation["Citation Manager<br/>信頼度スコアリング"]
+    end
+
+    subgraph MCP["🔌 MCP Integration (15+ Servers)"]
+        CodexMCP["codex mcp-server<br/>Rust実装<br/>CUDA tool統合"]
+        GeminiMCP["gemini-cli-mcp<br/>Google Search<br/>Gemini 2.5"]
+        ChromeMCP["chrome-devtools<br/>ブラウザ自動化"]
+        PlaywrightMCP["playwright<br/>E2Eテスト"]
+        SequentialMCP["sequential-thinking<br/>CoT推論"]
+        CUDATool["cuda_execute (NEW)<br/>GPU計算<br/>MatMul/VecAdd"]
+    end
+
+    subgraph Storage["💾 Storage & Config"]
+        ConfigTOML["config.toml<br/>モデル設定<br/>Sandbox設定"]
+        SessionDB["Session DB<br/>会話履歴<br/>Checkpoint"]
+        AgentDefs[".codex/agents/<br/>YAML定義"]
+        ArtifactArchive["_docs/<br/>実装ログ"]
+        BlueprintStore["Blueprint Store<br/>State永続化"]
+    end
+
+    subgraph Monitoring["📊 Monitoring & Telemetry"]
+        Telemetry["Telemetry<br/>Privacy-respecting<br/>SHA-256ハッシング"]
+        Webhooks["Webhooks<br/>GitHub/Slack/HTTP<br/>HMAC-SHA256"]
+        GPUMonitor["GPU Monitor (NEW)<br/>リアルタイム統計<br/>Windows AI / CUDA"]
+    end
+
+    subgraph External["🌐 External Integrations"]
+        GitHub["GitHub API<br/>PR自動化"]
+        Slack["Slack Webhooks<br/>通知"]
+        CustomWebhook["Custom Webhooks<br/>HTTP POST"]
+        AudioNotif["Audio Notifications<br/>marisa_owattaze.wav<br/>完了通知"]
+    end
+
+    subgraph LLM["🤖 LLM Providers"]
+        OpenAI["OpenAI<br/>GPT-5-codex<br/>Primary"]
+        Gemini["Google Gemini<br/>2.5 Pro/Flash<br/>Search grounding"]
+        Anthropic["Anthropic<br/>Claude 3.5+<br/>Alternative"]
+        Local["Local/Ollama<br/>Llama<br/>Privacy-first"]
+    end
+
+    %% Client connections
+    CLI --> OrchestratorRPC
+    TUI --> OrchestratorRPC
+    GUI --> Visualization
+    VSCode --> OrchestratorRPC
+    Cursor --> CodexMCP
+    
+    %% GPU Layer connections (NEW)
+    CLI --> GPU
+    TUI --> GPU
+    GUI --> GPU
+    CoreEngine --> HybridAcceleration
+    HybridAcceleration --> WindowsAI
+    HybridAcceleration --> CUDA
+    HybridAcceleration --> Hybrid
+    WindowsAI --> KernelDriver
+    CUDA --> KernelDriver
+    
+    %% Visualization connections (NEW)
+    Visualization --> GPU
+    Git3D --> CUDA
+    Git4D --> CUDA
+    VRMode --> WindowsAI
+    ARMode --> WindowsAI
+    
+    %% Orchestration
+    ProtocolClient --> OrchestratorRPC
+    OrchestratorRPC --> TaskQueue
+    OrchestratorRPC --> LockManager
+    TaskQueue --> CoreEngine
+    
+    %% Core
+    CoreEngine --> Blueprint
+    CoreEngine --> TokenBudget
+    CoreEngine --> AuditLog
+    CoreEngine --> Supervisor
+    CoreEngine --> ProjectDoc
+    CoreEngine --> WindowsAIIntegration
+    
+    %% Agents
+    ProjectDoc --> CodeReviewer
+    Supervisor --> CodeReviewer
+    Supervisor --> TestGen
+    Supervisor --> SecAudit
+    Supervisor --> DeepResearch
+    Supervisor --> CustomAgent
+    
+    %% Research
+    DeepResearch --> SearchProvider
+    SearchProvider --> GeminiCLI
+    SearchProvider --> DuckDuckGo
+    SearchProvider --> Citation
+    
+    %% MCP
+    CoreEngine --> CodexMCP
+    CodexMCP --> GeminiMCP
+    CodexMCP --> ChromeMCP
+    CodexMCP --> PlaywrightMCP
+    CodexMCP --> SequentialMCP
+    CodexMCP --> CUDATool
+    CUDATool --> CUDA
+    
+    %% Storage
+    CoreEngine --> ConfigTOML
+    CoreEngine --> SessionDB
+    Supervisor --> AgentDefs
+    CoreEngine --> ArtifactArchive
+    Blueprint --> BlueprintStore
+    
+    %% Monitoring (Enhanced)
+    CoreEngine --> Telemetry
+    CoreEngine --> Webhooks
+    CoreEngine --> GPUMonitor
+    GPUMonitor --> WindowsAI
+    GPUMonitor --> CUDA
+    Telemetry --> GitHub
+    Webhooks --> Slack
+    Webhooks --> CustomWebhook
+    Supervisor --> AudioNotif
+    
+    %% External
+    CoreEngine --> GitHub
+    CoreEngine --> Slack
+    CoreEngine --> CustomWebhook
+    
+    %% LLM
+    CoreEngine --> OpenAI
+    GeminiCLI --> Gemini
+    CoreEngine --> Anthropic
+    CoreEngine --> Local
+
+    %% Styling
+    classDef clientClass fill:#e1f5ff,stroke:#01579b,stroke-width:3px
+    classDef gpuClass fill:#ffeb3b,stroke:#f57f00,stroke-width:4px
+    classDef vizClass fill:#c8e6c9,stroke:#2e7d32,stroke-width:3px
+    classDef orchClass fill:#fff9c4,stroke:#f57f17,stroke-width:3px
+    classDef coreClass fill:#ffebee,stroke:#c62828,stroke-width:3px
+    classDef agentClass fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef researchClass fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
+    classDef mcpClass fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef storageClass fill:#e0f2f1,stroke:#004d40,stroke-width:2px
+    classDef monitoringClass fill:#f1f8e9,stroke:#558b2f,stroke-width:3px
+    classDef externalClass fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    classDef llmClass fill:#ede7f6,stroke:#311b92,stroke-width:2px
+
+    class CLI,TUI,GUI,VSCode,Cursor clientClass
+    class WindowsAI,CUDA,Hybrid,KernelDriver gpuClass
+    class Git3D,Git4D,VRMode,ARMode vizClass
+    class OrchestratorRPC,ProtocolClient,TaskQueue,LockManager orchClass
+    class CoreEngine,Blueprint,TokenBudget,AuditLog,ProjectDoc,WindowsAIIntegration,HybridAcceleration coreClass
+    class Supervisor,CodeReviewer,TestGen,SecAudit,DeepResearch,CustomAgent agentClass
+    class SearchProvider,GeminiCLI,DuckDuckGo,Citation researchClass
+    class CodexMCP,GeminiMCP,ChromeMCP,PlaywrightMCP,SequentialMCP,CUDATool mcpClass
+    class ConfigTOML,SessionDB,AgentDefs,ArtifactArchive,BlueprintStore storageClass
+    class Telemetry,Webhooks,GPUMonitor monitoringClass
+    class GitHub,Slack,CustomWebhook,AudioNotif externalClass
+    class OpenAI,Gemini,Anthropic,Local llmClass
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

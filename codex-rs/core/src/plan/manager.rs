@@ -8,7 +8,8 @@ use super::schema::{PlanBlock, ResearchBlock, Risk, WorkItem};
 use super::state::{PlanState, StateTransitionError};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use std::sync::RwLock;
 use thiserror::Error;
 
 /// Errors from Plan manager operations

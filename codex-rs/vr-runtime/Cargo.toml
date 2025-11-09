@@ -1,0 +1,37 @@
+[package]
+authors = ["zapabob"]
+description = "VR/AR Runtime abstraction layer for Codex - OpenXR support for Quest/Vive/Index"
+edition = { workspace = true }
+license = "Apache-2.0"
+name = "codex-vr-runtime"
+version = { workspace = true }
+
+[dependencies]
+# Workspace dependencies
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Registry",
+] }
+
+[build-dependencies]
+# OpenXR SDK integration
+# Based on: https://github.com/KhronosGroup/OpenXR-SDK
+bindgen = { version = "0.69", optional = true }
+pkg-config = { version = "0.3", optional = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[features]
+default = []
+openxr = ["bindgen"] # OpenXR support (requires OpenXR SDK)
+# Note: OpenXR SDK integration requires:
+# 1. OpenXR SDK installation from https://github.com/KhronosGroup/OpenXR-SDK
+# 2. Set OPENXR_SDK_PATH environment variable or install to default location
+# 3. Platform-specific loader (Windows: openxr_loader.dll, Linux: libopenxr_loader.so)
