@@ -6,6 +6,7 @@ use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
 use crate::gpu_stats::GpuStatsSnapshot;
 use crate::render::Insets;
 use crate::render::RectExt;
+use crate::render::renderable::Renderable;
 use crate::render::renderable::Renderable as _;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
@@ -815,6 +816,20 @@ impl WidgetRef for &BottomPane {
 
             self.composer.render_ref(content_area, buf);
         }
+    }
+}
+
+impl Renderable for BottomPane {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.render_ref(area, buf);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.desired_height(width)
+    }
+
+    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        self.cursor_pos(area)
     }
 }
 
