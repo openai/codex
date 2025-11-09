@@ -486,24 +486,24 @@ fn rate_limit_switch_prompt_popup_snapshot() {
 }
 
 #[test]
-fn rate_limit_warnings_disabled_via_config() {
+fn rate_limit_switch_prompt_disabled_via_config() {
     let (mut chat, _tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender();
     chat.config.rate_limit_model_suggestions = false;
 
-    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
-        primary: Some(RateLimitWindow {
-            used_percent: 95.0,
-            window_minutes: Some(300),
-            resets_at: None,
-        }),
-        secondary: None,
-    }));
+    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
 
+    // Warnings should still surface.
     let inserted = drain_insert_history(&mut rx);
     assert!(
-        inserted.is_empty(),
-        "expected no warning history cells when model suggestions are disabled"
+        !inserted.is_empty(),
+        "expected warning history cells even when prompt is disabled"
     );
+
+    // But the switch prompt must remain idle.
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
 }
 
 // (removed experimental resize snapshot test)

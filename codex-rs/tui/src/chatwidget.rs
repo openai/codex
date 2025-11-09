@@ -497,51 +497,50 @@ impl ChatWidget {
             let display = crate::status::rate_limit_snapshot_display(&snapshot, Local::now());
             self.rate_limit_snapshot = Some(display);
 
-            if self.config.rate_limit_model_suggestions {
-                let warnings = self.rate_limit_warnings.take_warnings(
-                    snapshot
-                        .secondary
-                        .as_ref()
-                        .map(|window| window.used_percent),
-                    snapshot
-                        .secondary
-                        .as_ref()
-                        .and_then(|window| window.window_minutes),
-                    snapshot.primary.as_ref().map(|window| window.used_percent),
-                    snapshot
-                        .primary
-                        .as_ref()
-                        .and_then(|window| window.window_minutes),
-                );
-
-                if !warnings.is_empty() {
-                    for warning in warnings {
-                        self.add_to_history(history_cell::new_warning_event(warning));
-                    }
-                    self.request_redraw();
-                }
-
-                let high_usage = snapshot
+            let warnings = self.rate_limit_warnings.take_warnings(
+                snapshot
                     .secondary
                     .as_ref()
-                    .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
-                    .unwrap_or(false)
-                    || snapshot
-                        .primary
-                        .as_ref()
-                        .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
-                        .unwrap_or(false);
+                    .map(|window| window.used_percent),
+                snapshot
+                    .secondary
+                    .as_ref()
+                    .and_then(|window| window.window_minutes),
+                snapshot.primary.as_ref().map(|window| window.used_percent),
+                snapshot
+                    .primary
+                    .as_ref()
+                    .and_then(|window| window.window_minutes),
+            );
 
-                if high_usage
-                    && self.config.model != NUDGE_MODEL_SLUG
-                    && !matches!(
-                        self.rate_limit_switch_prompt,
-                        RateLimitSwitchPromptState::Shown
-                    )
-                {
-                    self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
+            if !warnings.is_empty() {
+                for warning in warnings {
+                    self.add_to_history(history_cell::new_warning_event(warning));
                 }
-            } else {
+                self.request_redraw();
+            }
+
+            let high_usage = snapshot
+                .secondary
+                .as_ref()
+                .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
+                .unwrap_or(false)
+                || snapshot
+                    .primary
+                    .as_ref()
+                    .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
+                    .unwrap_or(false);
+
+            if self.config.rate_limit_model_suggestions
+                && high_usage
+                && self.config.model != NUDGE_MODEL_SLUG
+                && !matches!(
+                    self.rate_limit_switch_prompt,
+                    RateLimitSwitchPromptState::Shown
+                )
+            {
+                self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
+            } else if !self.config.rate_limit_model_suggestions {
                 self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
             }
         } else {
