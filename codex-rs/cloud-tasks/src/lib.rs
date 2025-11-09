@@ -8,6 +8,7 @@ pub mod util;
 pub use cli::Cli;
 
 use anyhow::anyhow;
+use codex_login::AuthManager;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
@@ -56,11 +57,8 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
     };
     append_error_log(format!("startup: base_url={base_url} path_style={style}"));
 
-    let auth_manager = util::load_cli_auth_manager().await;
-    let auth = match auth_manager
-        .as_ref()
-        .and_then(codex_login::AuthManager::auth)
-    {
+    let auth_manager = util::load_auth_manager().await;
+    let auth = match auth_manager.as_ref().and_then(AuthManager::auth) {
         Some(auth) => auth,
         None => {
             eprintln!(

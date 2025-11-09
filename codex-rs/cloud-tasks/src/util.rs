@@ -2,6 +2,10 @@ use base64::Engine as _;
 use chrono::Utc;
 use reqwest::header::HeaderMap;
 
+use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
+use codex_login::AuthManager;
+
 pub fn set_user_agent_suffix(suffix: &str) {
     if let Ok(mut guard) = codex_core::default_client::USER_AGENT_SUFFIX.lock() {
         guard.replace(suffix.to_string());
@@ -54,14 +58,16 @@ pub fn extract_chatgpt_account_id(token: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-pub async fn load_cli_auth_manager() -> Option<codex_login::AuthManager> {
-    let home = codex_core::config::find_codex_home().ok()?;
-    let store_mode = codex_core::config::load_config_as_toml_with_cli_overrides(&home, Vec::new())
+pub async fn load_auth_manager() -> Option<AuthManager> {
+    // TODO: pass in cli overrides once cloud tasks properly support them.
+    let config = Config::load_with_cli_overrides(Vec::new(), ConfigOverrides::default())
         .await
-        .ok()
-        .and_then(|cfg| cfg.cli_auth_credentials_store)
-        .unwrap_or_default();
-    Some(codex_login::AuthManager::new(home, false, store_mode))
+        .ok()?;
+    Some(AuthManager::new(
+        config.codex_home,
+        false,
+        config.cli_auth_credentials_store_mode,
+    ))
 }
 
 /// Build headers for ChatGPT-backed requests: `User-Agent`, optional `Authorization`,
@@ -79,7 +85,7 @@ pub async fn build_chatgpt_headers() -> HeaderMap {
         USER_AGENT,
         HeaderValue::from_str(&ua).unwrap_or(HeaderValue::from_static("codex-cli")),
     );
-    if let Some(am) = load_cli_auth_manager().await
+    if let Some(am) = load_auth_manager().await
         && let Some(auth) = am.auth()
         && let Ok(tok) = auth.get_token().await
         && !tok.is_empty()
