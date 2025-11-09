@@ -107,7 +107,7 @@ impl PlanOrchestrator {
     async fn emit_telemetry_event(
         &self,
         event_type: EventType,
-        Plan: &PlanBlock,
+        plan: &PlanBlock,
         result: Option<&OrchestratedResult>,
     ) {
         if let Some(collector) = crate::telemetry::instance() {
@@ -118,7 +118,7 @@ impl PlanOrchestrator {
             }
 
             // Add metadata
-            event = event.with_metadata("mode", Plan.mode.to_string());
+            event = event.with_metadata("mode", plan.mode.to_string());
 
             if let Some(r) = result {
                 event = event.with_metadata("was_orchestrated", r.was_orchestrated);
@@ -136,7 +136,7 @@ impl PlanOrchestrator {
     async fn trigger_webhook(
         &self,
         _event_name: &str,
-        Plan: &PlanBlock,
+        plan: &PlanBlock,
         result: Option<&OrchestratedResult>,
     ) {
         if self.webhook_configs.is_empty() {
@@ -151,18 +151,18 @@ impl PlanOrchestrator {
                 r.total_execution_time_secs
             )
         } else {
-            format!("Execution started for Plan: {}", Plan.title)
+            format!("Execution started for Plan: {}", plan.title)
         };
 
         let mut payload = WebhookPayload::new(
-            Plan.id.clone(),
-            Plan.title.clone(),
-            Plan.state.clone(),
+            plan.id.clone(),
+            plan.title.clone(),
+            plan.state.clone(),
             summary,
         );
 
-        payload = payload.with_mode(Plan.mode.to_string());
-        payload = payload.with_artifacts(Plan.artifacts.clone());
+        payload = payload.with_mode(plan.mode.to_string());
+        payload = payload.with_artifacts(plan.artifacts.clone());
 
         // Send webhooks asynchronously
         for config in &self.webhook_configs {
@@ -217,7 +217,7 @@ mod tests {
 
         let bp = PlanBlock::new("Test".to_string(), "test".to_string());
 
-        let result = orchestrator.execute_Plan(&bp).await;
+        let result = orchestrator.execute_plan(&bp).await;
         assert!(result.is_err());
     }
 }

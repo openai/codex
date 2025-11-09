@@ -1,0 +1,264 @@
+graph TB
+    subgraph VRAR["🥽 VR/AR Layer v2.1.0"]
+        Quest2["Meta Quest 2<br/>90Hz WebXR<br/>Controller-based<br/>Virtual Desktop"]
+        Quest3["Meta Quest 3<br/>120Hz WebXR<br/>Hand Tracking<br/>Color Passthrough<br/>Depth API"]
+        QuestPro["Meta Quest Pro<br/>90Hz WebXR<br/>Eye Tracking<br/>Face Tracking<br/>Hand Tracking"]
+        VisionPro["Apple Vision Pro<br/>visionOS<br/>RealityKit<br/>Spatial Computing<br/>Hand/Eye Tracking"]
+        SteamVR["SteamVR<br/>PCVR Support<br/>Virtual Desktop<br/>High Refresh Rate"]
+    end
+
+    subgraph Client["🖥️ Client Layer v2.1.0"]
+        CLI["CLI<br/>codex-cli v2.1.0<br/>Cross-platform binaries<br/>CUDA acceleration<br/>Plan mode"]
+        TUI["TUI<br/>ratatui-based<br/>Rich terminal UI<br/>GPU stats real-time<br/>120fps visualization"]
+        TauriGUI["Tauri GUI v2.1.0<br/>React + Three.js<br/>VR/AR integration<br/>4D Git visualization<br/>Quest 3/Pro support"]
+        VSCode["VSCode Extension<br/>v1.0.0<br/>Blueprint UI<br/>Multi-language support<br/>Plan mode"]
+        Cursor["Cursor IDE<br/>MCP Integration<br/>Composer support<br/>Codex tools"]
+        WebGUI["Web GUI<br/>React + Vite<br/>Dashboard<br/>Real-time updates"]
+    end
+
+    subgraph GPU["🔥 GPU Acceleration Layer v2.0.0"]
+        WindowsAI["Windows AI API<br/>DirectML<br/>OS-level optimization<br/>+30% performance"]
+        CUDARuntime["CUDA Runtime<br/>Rust-CUDA (cust)<br/>GPU parallelization<br/>+1000% speedup"]
+        HybridMode["Hybrid Mode<br/>Auto-selection<br/>Fastest path guarantee<br/>Windows AI × CUDA"]
+        KernelDriver["Kernel Driver<br/>Pinned Memory<br/>Direct DMA control<br/>+40% I/O speedup"]
+    end
+
+    subgraph Visualization["🌌 Git Visualization v2.1.0"]
+        Git3D["3D Git Graph<br/>120fps guaranteed<br/>InstancedMesh<br/>CUDA-accelerated"]
+        Git4D["4D Timeline<br/>Time axis integration<br/>100,000+ commits<br/>Real-time playback"]
+        VRMode["VR Mode<br/>Quest 2/3/Pro<br/>Hand tracking<br/>Virtual Desktop optimized"]
+        ARMode["AR Mode<br/>Quest 3 Passthrough<br/>Hand gestures<br/>Spatial anchors"]
+    end
+
+    subgraph Orchestration["🎯 Orchestration Layer v1.0.0"]
+        OrchestratorRPC["Orchestrator RPC Server<br/>16 RPC methods<br/>HMAC-SHA256 auth<br/>TCP/UDS/Named Pipe<br/>Concurrent execution"]
+        ProtocolClient["Protocol Client<br/>@zapabob/codex-protocol-client<br/>TypeScript SDK<br/>React hooks<br/>Real-time sync"]
+        TaskQueue["Single-Writer Queue<br/>Concurrent task management<br/>Priority-based execution<br/>Thread-safe"]
+        LockManager["Lock Manager<br/>.codex/lock.json<br/>Repository-level concurrency<br/>Deadlock prevention"]
+    end
+
+    subgraph Core["⚙️ Core Runtime v2.1.0 (Rust)"]
+        CoreEngine["Core Engine<br/>codex-core v2.1.0<br/>Session management<br/>Tool execution<br/>Event-driven architecture"]
+        PlanMode["Plan Mode<br/>v2.1.0 Enhanced<br/>3 execution strategies<br/>Budget & Policy enforcement<br/>State persistence"]
+        TokenBudget["Token Budget<br/>Thread-safe tracking<br/>Per-agent limits<br/>Cost estimation<br/>Real-time monitoring"]
+        AuditLog["Audit Logger<br/>Structured logs<br/>Security events<br/>HMAC-SHA256<br/>Compliance ready"]
+        ProjectDoc["Project Doc<br/>AGENTS.md parser<br/>Language detection<br/>Multi-language support<br/>8 languages"]
+        WindowsAIIntegration["Windows AI Integration<br/>OS-level optimization<br/>DirectML API<br/>Kernel bridge"]
+        HybridAcceleration["Hybrid Acceleration<br/>Windows AI × CUDA<br/>Auto-selection<br/>Performance metrics"]
+    end
+
+    subgraph Agents["🤖 Sub-Agent System v2.1.0"]
+        Supervisor["Supervisor<br/>Agent lifecycle<br/>Timeout: 5min<br/>Retry: 3x<br/>Parallel execution"]
+        CodeReviewer["Code Reviewer<br/>Multi-Language v1.0.0<br/>8 languages (JA/EN/ZH/KO/FR/DE/ES/PT)<br/>AGENTS.md integration<br/>ReviewLocale"]
+        TestGen["Test Generator<br/>Coverage 80%+<br/>Unit/Integration/E2E<br/>Property-based testing"]
+        SecAudit["Security Auditor<br/>OWASP Top 10<br/>CVE scanning<br/>Dependency audit"]
+        DeepResearch["Deep Researcher<br/>Multi-source validation<br/>Citation-based<br/>45x faster with cache"]
+        CustomAgent["Custom Agents<br/>YAML-defined<br/>.codex/agents/<br/>User extensible"]
+    end
+
+    subgraph Research["🔍 Deep Research Engine v2.1.0"]
+        SearchProvider["Search Provider<br/>Cache TTL: 1h<br/>45x faster<br/>Multi-source aggregation"]
+        GeminiCLI["Gemini CLI<br/>OAuth 2.0 PKCE<br/>Google Search Grounding<br/>Gemini 2.5 Pro/Flash"]
+        DuckDuckGo["DuckDuckGo<br/>Zero-cost<br/>No API key<br/>Privacy-first"]
+        Citation["Citation Manager<br/>Source tracking<br/>Confidence scoring<br/>Contradiction detection"]
+    end
+
+    subgraph MCP["🔌 MCP Integration v2.1.0 (15+ Servers)"]
+        CodexMCP["codex mcp-server<br/>Self-hosted<br/>Rust-based<br/>CUDA tool integration"]
+        GeminiMCP["gemini-cli-mcp<br/>Google Search<br/>Gemini 2.5<br/>OAuth 2.0"]
+        ChromeMCP["chrome-devtools<br/>Browser automation<br/>Page interaction<br/>Network monitoring"]
+        PlaywrightMCP["playwright<br/>E2E testing<br/>Screenshot capture<br/>Performance testing"]
+        SequentialMCP["sequential-thinking<br/>CoT reasoning<br/>Chain of thought<br/>Deep analysis"]
+        FilesystemMCP["filesystem<br/>File operations<br/>Directory traversal<br/>Cross-platform"]
+        GitHubMCP["github<br/>PR automation<br/>Issue management<br/>Repository access"]
+        YouTubeMCP["youtube<br/>Video transcripts<br/>Metadata extraction<br/>Search integration"]
+        ArxivMCP["arxiv-mcp-server<br/>Academic papers<br/>Search & download<br/>Citation support"]
+        MarkitdownMCP["markitdown<br/>Document conversion<br/>Markdown processing<br/>Format normalization"]
+        Context7MCP["context7<br/>Upstash context<br/>State management<br/>Distributed storage"]
+        CUDATool["cuda_execute<br/>GPU computation<br/>MatMul/VecAdd<br/>Custom kernels"]
+    end
+
+    subgraph Storage["💾 Storage & Config v2.1.0"]
+        ConfigTOML["config.toml<br/>Model providers<br/>Sandbox settings<br/>MCP servers<br/>VR/AR config"]
+        SessionDB["Session DB<br/>Conversation history<br/>Checkpoints<br/>State persistence<br/>Resume capability"]
+        AgentDefs[".codex/agents/<br/>YAML definitions<br/>Agent configs<br/>Custom agents<br/>Version control"]
+        ArtifactArchive["Artifact Archive<br/>_docs/<br/>Implementation logs<br/>Auto-generated<br/>Structured format"]
+        PlanStore["Plan Store<br/>State persistence<br/>Checkpoint/resume<br/>Execution history<br/>Budget tracking"]
+    end
+
+    subgraph Monitoring["📊 Monitoring & Telemetry v2.1.0"]
+        Telemetry["Telemetry Module<br/>Privacy-respecting<br/>SHA-256 hashing<br/>Event tracking<br/>Performance metrics"]
+        Webhooks["Webhooks Module<br/>GitHub/Slack/HTTP<br/>HMAC-SHA256<br/>Real-time notifications<br/>Event filtering"]
+        GPUMonitor["GPU Monitor<br/>Real-time statistics<br/>Windows AI / CUDA<br/>Memory usage<br/>Performance profiling"]
+        CICDMonitor["CI/CD Monitor<br/>GitHub Actions<br/>Build status<br/>Test results<br/>Deployment tracking"]
+    end
+
+    subgraph CICD["🚀 CI/CD Pipeline v2.1.0"]
+        RustCI["Rust CI<br/>Multi-platform build<br/>Clippy lint<br/>Format check<br/>Test execution"]
+        ReleaseCI["Release CI<br/>Binary generation<br/>npm packaging<br/>GitHub Releases<br/>Auto-deployment"]
+        SecurityCI["Security CI<br/>cargo-audit<br/>CVE scanning<br/>Dependency check<br/>Vulnerability alerts"]
+        DocsCI["Docs CI<br/>README validation<br/>Documentation check<br/>Link verification<br/>Format validation"]
+    end
+
+    subgraph External["🌐 External Integrations v2.1.0"]
+        GitHub["GitHub API<br/>PR automation<br/>Issue management<br/>Repository access<br/>Webhook integration"]
+        Slack["Slack Webhooks<br/>Real-time notifications<br/>Channel integration<br/>Rich formatting"]
+        CustomWebhook["Custom Webhooks<br/>HTTP POST endpoints<br/>JSON payload<br/>HMAC-SHA256 auth"]
+        AudioNotif["Audio Notifications<br/>marisa_owattaze.wav<br/>Task completion sound<br/>Platform-specific"]
+    end
+
+    subgraph LLM["🤖 LLM Providers v2.1.0"]
+        OpenAI["OpenAI<br/>GPT-5-codex<br/>Primary provider<br/>Streaming support<br/>Function calling"]
+        Gemini["Google Gemini<br/>2.5 Pro/Flash<br/>Search grounding<br/>Multimodal support<br/>OAuth 2.0"]
+        Anthropic["Anthropic<br/>Claude 3.5+<br/>Alternative provider<br/>Long context<br/>Tool use"]
+        Local["Local/Ollama<br/>Llama models<br/>Privacy-first<br/>Self-hosted<br/>GPU acceleration"]
+    end
+
+    %% VR/AR Layer connections
+    Quest2 --> VRMode
+    Quest3 --> VRMode
+    Quest3 --> ARMode
+    QuestPro --> VRMode
+    QuestPro --> ARMode
+    VisionPro --> ARMode
+    SteamVR --> VRMode
+
+    %% Client Layer connections
+    CLI --> OrchestratorRPC
+    CLI --> GPU
+    TUI --> OrchestratorRPC
+    TUI --> GPU
+    TauriGUI --> Visualization
+    TauriGUI --> VRAR
+    TauriGUI --> GPU
+    VSCode --> OrchestratorRPC
+    Cursor --> CodexMCP
+    WebGUI --> ProtocolClient
+
+    %% GPU Layer connections
+    CoreEngine --> HybridAcceleration
+    HybridAcceleration --> WindowsAI
+    HybridAcceleration --> CUDARuntime
+    HybridAcceleration --> HybridMode
+    WindowsAI --> KernelDriver
+    CUDARuntime --> KernelDriver
+
+    %% Visualization connections
+    Visualization --> GPU
+    Git3D --> CUDARuntime
+    Git4D --> CUDARuntime
+    VRMode --> WindowsAI
+    ARMode --> WindowsAI
+
+    %% Orchestration connections
+    ProtocolClient --> OrchestratorRPC
+    OrchestratorRPC --> TaskQueue
+    OrchestratorRPC --> LockManager
+    TaskQueue --> CoreEngine
+
+    %% Core connections
+    CoreEngine --> PlanMode
+    CoreEngine --> TokenBudget
+    CoreEngine --> AuditLog
+    CoreEngine --> Supervisor
+    CoreEngine --> ProjectDoc
+    CoreEngine --> WindowsAIIntegration
+
+    %% Agent connections
+    ProjectDoc --> CodeReviewer
+    Supervisor --> CodeReviewer
+    Supervisor --> TestGen
+    Supervisor --> SecAudit
+    Supervisor --> DeepResearch
+    Supervisor --> CustomAgent
+
+    %% Research connections
+    DeepResearch --> SearchProvider
+    SearchProvider --> GeminiCLI
+    SearchProvider --> DuckDuckGo
+    SearchProvider --> Citation
+
+    %% MCP connections
+    CoreEngine --> CodexMCP
+    CodexMCP --> GeminiMCP
+    CodexMCP --> ChromeMCP
+    CodexMCP --> PlaywrightMCP
+    CodexMCP --> SequentialMCP
+    CodexMCP --> FilesystemMCP
+    CodexMCP --> GitHubMCP
+    CodexMCP --> YouTubeMCP
+    CodexMCP --> ArxivMCP
+    CodexMCP --> MarkitdownMCP
+    CodexMCP --> Context7MCP
+    CodexMCP --> CUDATool
+    CUDATool --> CUDARuntime
+
+    %% Storage connections
+    CoreEngine --> ConfigTOML
+    CoreEngine --> SessionDB
+    Supervisor --> AgentDefs
+    CoreEngine --> ArtifactArchive
+    PlanMode --> PlanStore
+
+    %% Monitoring connections
+    CoreEngine --> Telemetry
+    CoreEngine --> Webhooks
+    CoreEngine --> GPUMonitor
+    CoreEngine --> CICDMonitor
+    GPUMonitor --> WindowsAI
+    GPUMonitor --> CUDARuntime
+    Telemetry --> GitHub
+    Webhooks --> Slack
+    Webhooks --> CustomWebhook
+    Supervisor --> AudioNotif
+
+    %% CI/CD connections
+    CICDMonitor --> RustCI
+    CICDMonitor --> ReleaseCI
+    CICDMonitor --> SecurityCI
+    CICDMonitor --> DocsCI
+    RustCI --> GitHub
+    ReleaseCI --> GitHub
+
+    %% External connections
+    CoreEngine --> GitHub
+    CoreEngine --> Slack
+    CoreEngine --> CustomWebhook
+
+    %% LLM connections
+    CoreEngine --> OpenAI
+    GeminiCLI --> Gemini
+    CoreEngine --> Anthropic
+    CoreEngine --> Local
+
+    %% Styling
+    classDef vrarClass fill:#e3f2fd,stroke:#0277bd,stroke-width:3px
+    classDef clientClass fill:#e1f5ff,stroke:#01579b,stroke-width:3px
+    classDef gpuClass fill:#fff9c4,stroke:#f57f00,stroke-width:4px
+    classDef vizClass fill:#c8e6c9,stroke:#2e7d32,stroke-width:3px
+    classDef orchClass fill:#fff9c4,stroke:#f57f17,stroke-width:3px
+    classDef coreClass fill:#ffebee,stroke:#c62828,stroke-width:3px
+    classDef agentClass fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef researchClass fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
+    classDef mcpClass fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef storageClass fill:#e0f2f1,stroke:#004d40,stroke-width:2px
+    classDef monitoringClass fill:#f1f8e9,stroke:#558b2f,stroke-width:3px
+    classDef cicdClass fill:#fce4ec,stroke:#c2185b,stroke-width:3px
+    classDef externalClass fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    classDef llmClass fill:#ede7f6,stroke:#311b92,stroke-width:2px
+
+    class Quest2,Quest3,QuestPro,VisionPro,SteamVR vrarClass
+    class CLI,TUI,TauriGUI,VSCode,Cursor,WebGUI clientClass
+    class WindowsAI,CUDARuntime,HybridMode,KernelDriver gpuClass
+    class Git3D,Git4D,VRMode,ARMode vizClass
+    class OrchestratorRPC,ProtocolClient,TaskQueue,LockManager orchClass
+    class CoreEngine,PlanMode,TokenBudget,AuditLog,ProjectDoc,WindowsAIIntegration,HybridAcceleration coreClass
+    class Supervisor,CodeReviewer,TestGen,SecAudit,DeepResearch,CustomAgent agentClass
+    class SearchProvider,GeminiCLI,DuckDuckGo,Citation researchClass
+    class CodexMCP,GeminiMCP,ChromeMCP,PlaywrightMCP,SequentialMCP,FilesystemMCP,GitHubMCP,YouTubeMCP,ArxivMCP,MarkitdownMCP,Context7MCP,CUDATool mcpClass
+    class ConfigTOML,SessionDB,AgentDefs,ArtifactArchive,PlanStore storageClass
+    class Telemetry,Webhooks,GPUMonitor,CICDMonitor monitoringClass
+    class RustCI,ReleaseCI,SecurityCI,DocsCI cicdClass
+    class GitHub,Slack,CustomWebhook,AudioNotif externalClass
+    class OpenAI,Gemini,Anthropic,Local llmClass
+

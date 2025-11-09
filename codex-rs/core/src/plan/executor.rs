@@ -318,7 +318,7 @@ impl PlanExecutor {
         // Execute via orchestrator
         let result = self
             .orchestrator
-            .execute_Plan(Plan)
+            .execute_plan(Plan)
             .await
             .context("Orchestrator execution failed")?;
 

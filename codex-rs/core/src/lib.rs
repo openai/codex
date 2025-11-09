@@ -63,6 +63,7 @@ pub mod token_data;
 mod truncate;
 mod unified_exec;
 mod user_instructions;
+pub mod context_manager;
 pub use model_provider_info::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 pub use model_provider_info::ModelProviderInfo;
 pub use model_provider_info::WireApi;
@@ -95,7 +96,6 @@ pub mod turn_diff_tracker;
 #[cfg(feature = "windows-ai")]
 pub mod windows_ai_integration;
 
-pub mod hybrid_acceleration;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::INTERACTIVE_SESSION_SOURCES;
 pub use rollout::RolloutRecorder;

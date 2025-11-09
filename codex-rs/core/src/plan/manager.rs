@@ -246,7 +246,7 @@ impl PlanManager {
 
     /// List all Plan IDs
     pub fn list_Plans(&self) -> Result<Vec<String>> {
-        self.persister.list_Plans().context("Failed to list Plans")
+        self.persister.list_plans().context("Failed to list Plans")
     }
 
     /// Delete a Plan (soft delete - marks as superseded)

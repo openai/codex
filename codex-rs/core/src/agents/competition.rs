@@ -3,7 +3,7 @@
 //! Creates multiple git worktrees, executes identical tasks in parallel,
 //! scores results, and auto-merges the winner.
 
-use crate::blueprint::{EvalCriteria, PlanBlock};
+use crate::plan::schema::{EvalCriteria, PlanBlock};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -392,7 +392,7 @@ impl CompetitionRunner {
 
         info!(
             "Starting competition with {} variants for plan {}",
-            self.config.num_variants, plan.id
+            self.config.num_variants, blueprint.id
         );
 
         // Create variants
@@ -411,7 +411,7 @@ impl CompetitionRunner {
             // Score variant
             let score = self
                 .scorer
-                .score_variant(&worktree_path, &plan.eval)
+                .score_variant(&worktree_path, &blueprint.eval)
                 .await?;
 
             variants.push(CompetitionVariant {

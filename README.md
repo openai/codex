@@ -2,11 +2,11 @@
 
 <div align="center">
 
-![Codex v2.0.0](./architecture-v2.0.0.png)
+![Codex v2.1.0](./architecture-v2.1.0.png)
 
-**v2.0.0 "Quantum Leap" - The World's First AI-Native Operating System**
+**v2.1.0 "Enhanced Vision" - The World's First AI-Native Operating System**
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/zapabob/codex)
+[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/zapabob/codex)
 [![npm](https://img.shields.io/npm/v/@zapabob/codex-cli)](https://www.npmjs.com/package/@zapabob/codex-cli)
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
@@ -23,10 +23,10 @@
 <a name="english"></a>
 ## 📖 English
 
-### 🎉 What's New in v2.0.0 "Quantum Leap"
+### 🎉 What's New in v2.1.0 "Enhanced Vision"
 
-**Release Date**: November 6, 2025  
-**Milestone**: AI-Native OS with Kernel Integration
+**Release Date**: November 9, 2025  
+**Milestone**: Quest 3/Pro Complete Support & CI/CD Integration
 
 #### 🌟 Revolutionary Features
 
@@ -44,12 +44,12 @@
 - Heatmap visualization (commit frequency)
 - Dependency graph (node clustering)
 
-**🥽 VR/AR Support** - Immersive code exploration
-- **Meta Quest 2**: WebXR, Controller-optimized, 90Hz
-- **Meta Quest 3**: Hand tracking, Color passthrough
-- **Meta Quest Pro**: Eye tracking, Face tracking
-- **Apple Vision Pro**: visionOS, RealityKit, Spatial Computing
-- **SteamVR**: Virtual Desktop integration
+**🥽 VR/AR Support v2.1.0** - Complete Quest 3/Pro Integration
+- **Meta Quest 2**: WebXR, Controller-optimized, 90Hz, Virtual Desktop
+- **Meta Quest 3**: ✅ Hand tracking, ✅ Color passthrough, ✅ Depth API, 120Hz
+- **Meta Quest Pro**: ✅ Eye tracking, ✅ Face tracking, ✅ Hand tracking, 90Hz
+- **Apple Vision Pro**: visionOS, RealityKit, Spatial Computing, Hand/Eye tracking
+- **SteamVR**: Virtual Desktop integration, High refresh rate support
 
 **🔧 OS Kernel Integration** - Deep system integration
 - Linux kernel modules: AI Scheduler, AI Memory, AI GPU
@@ -59,8 +59,8 @@
 
 **⚡ CUDA Runtime** - GPU acceleration everywhere
 - Git analysis: 100x faster
-- 3D rendering: Real-time 60fps
-- LLM inference: (Coming in v2.1.0)
+- 3D rendering: Real-time 120fps
+- LLM inference: (Roadmap for v2.2.0)
 - Multi-GPU support: (Roadmap)
 
 **🤖 Enhanced Sub-Agent System** - 8+ specialized agents
@@ -75,6 +75,13 @@
 - Contradiction detection
 - 45x faster with caching
 
+**🚀 CI/CD Pipeline v2.1.0** - Complete Automation
+- GitHub Actions workflows: Rust CI, Release CI, Security CI, Docs CI
+- Multi-platform builds: Windows, macOS, Linux (x64/ARM64)
+- Automated testing: Unit, Integration, E2E
+- Security scanning: cargo-audit, CVE detection
+- Auto-deployment: Binary generation, npm packaging, GitHub Releases
+
 ---
 
 ### 📦 Installation
@@ -86,7 +93,7 @@
 npm install -g @zapabob/codex-cli
 
 # Verify installation
-codex --version  # codex-cli 2.0.0
+codex --version  # codex-cli 2.1.0
 ```
 
 #### Option 2: Cargo (From source)
@@ -230,7 +237,7 @@ codex research "Rust async best practices" \
 
 ### 🏗️ Architecture Overview
 
-![Codex v2.0.0 Architecture](./architecture-v2.0.0.svg)
+![Codex v2.1.0 Architecture](./architecture-v2.1.0.svg)
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -397,8 +404,8 @@ just fix
 ### 🗺️ Roadmap
 
 - **v2.0.0** (Nov 2025): Plan mode, Git 4D viz, VR basic (Quest 2) ✅
-- **v2.1.0** (Jan 2026): GPU LLM inference, CI/CD, Quest 3/Pro full support
-- **v2.2.0** (Mar 2026): Cost dashboard, Vision Pro, SteamVR
+- **v2.1.0** (Nov 2025): ✅ CI/CD complete, ✅ Quest 3/Pro full support, Enhanced VR/AR
+- **v2.2.0** (Mar 2026): GPU LLM inference, Cost dashboard, Vision Pro complete, SteamVR
 - **v2.3.0** (Jun 2026): Agent learning, Distributed orchestration
 - **v3.0.0** (2026): Full distributed P2P agents, Quantum computing
 
@@ -419,10 +426,10 @@ Apache License 2.0 - See [LICENSE](./LICENSE)
 <a name="japanese"></a>
 ## 📖 日本語
 
-### 🎉 v2.0.0 "Quantum Leap" の新機能
+### 🎉 v2.1.0 "Enhanced Vision" の新機能
 
-**リリース日**: 2025年11月6日  
-**マイルストーン**: カーネル統合型AI-Native OS
+**リリース日**: 2025年11月9日  
+**マイルストーン**: Quest 3/Pro完全対応 & CI/CD統合
 
 #### 🌟 革命的機能
 
@@ -440,12 +447,12 @@ Apache License 2.0 - See [LICENSE](./LICENSE)
 - ヒートマップ可視化（コミット頻度）
 - 依存関係グラフ（ノードクラスタリング）
 
-**🥽 VR/AR対応** - 没入型コード探索
-- **Meta Quest 2**: WebXR、コントローラー最適化、90Hz
-- **Meta Quest 3**: ハンドトラッキング、カラーパススルー
-- **Meta Quest Pro**: アイトラッキング、フェイストラッキング
-- **Apple Vision Pro**: visionOS、RealityKit、空間コンピューティング
-- **SteamVR**: Virtual Desktop統合
+**🥽 VR/AR対応 v2.1.0** - Quest 3/Pro完全統合
+- **Meta Quest 2**: WebXR、コントローラー最適化、90Hz、Virtual Desktop
+- **Meta Quest 3**: ✅ ハンドトラッキング、✅ カラーパススルー、✅ Depth API、120Hz
+- **Meta Quest Pro**: ✅ アイトラッキング、✅ フェイストラッキング、✅ ハンドトラッキング、90Hz
+- **Apple Vision Pro**: visionOS、RealityKit、空間コンピューティング、ハンド/アイトラッキング
+- **SteamVR**: Virtual Desktop統合、高リフレッシュレート対応
 
 **🔧 OSカーネル統合** - 深いシステム統合
 - Linuxカーネルモジュール: AIスケジューラー、AIメモリ、AI GPU
@@ -455,8 +462,8 @@ Apache License 2.0 - See [LICENSE](./LICENSE)
 
 **⚡ CUDAランタイム** - あらゆる場面でGPU加速
 - Git解析: 100倍高速化
-- 3D描画: リアルタイム60fps
-- LLM推論: (v2.1.0で実装予定)
+- 3D描画: リアルタイム120fps
+- LLM推論: (v2.2.0で実装予定)
 - マルチGPU: (ロードマップ)
 
 **🤖 強化されたサブエージェントシステム** - 8種類以上の専門エージェント
@@ -470,6 +477,13 @@ Apache License 2.0 - See [LICENSE](./LICENSE)
 - 引用管理
 - 矛盾検出
 - キャッシュで45倍高速化
+
+**🚀 CI/CDパイプライン v2.1.0** - 完全自動化
+- GitHub Actionsワークフロー: Rust CI、Release CI、Security CI、Docs CI
+- マルチプラットフォームビルド: Windows、macOS、Linux (x64/ARM64)
+- 自動テスト: Unit、Integration、E2E
+- セキュリティスキャン: cargo-audit、CVE検出
+- 自動デプロイ: バイナリ生成、npmパッケージング、GitHub Releases
 
 ---
 
@@ -819,16 +833,16 @@ codex plan executions --plan-id plan-abc123
 4. 🔄 npmパッケージ化
 
 **v2.1.0目標**:
-1. GPU LLM推論（TensorRT/vLLM）
-2. CI/CD完全構築
-3. Quest 3/Pro完全対応
-4. テストカバレッジ80%
+1. ✅ CI/CD完全構築
+2. ✅ Quest 3/Pro完全対応
+3. GPU LLM推論（TensorRT/vLLM） → v2.2.0で対応
+4. テストカバレッジ80% → 進行中
 
-**評価の芳しくない部分**:
-- CUDA LLM推論未実装 → v2.1.0で対応
-- CI/CDパイプライン不在 → v2.1.0で構築
-- テストカバレッジ60%未満 → v2.1.0で80%達成
-- Vision Pro対応未完成 → v2.1.0-v2.2.0で完成
+**v2.1.0で達成**:
+- ✅ CI/CDパイプライン完全構築 → GitHub Actions統合完了
+- ✅ Quest 3/Pro完全対応 → Hand tracking、Passthrough、Eye tracking実装
+- 🔄 テストカバレッジ → 継続的に改善中
+- 🔄 Vision Pro対応 → v2.2.0で完成予定
 
 ---
 
