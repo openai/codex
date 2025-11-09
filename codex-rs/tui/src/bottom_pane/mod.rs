@@ -821,15 +821,15 @@ impl WidgetRef for &BottomPane {
 
 impl Renderable for BottomPane {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.render_ref(area, buf);
+        <&BottomPane as WidgetRef>::render_ref(self, area, buf);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        self.desired_height(width)
+        BottomPane::desired_height(self, width)
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        self.cursor_pos(area)
+        BottomPane::cursor_pos(self, area)
     }
 }
 
