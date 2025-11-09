@@ -44,10 +44,8 @@ codex-login = { workspace = true }
 codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
 color-eyre = { workspace = true }
-crossterm = { workspace = true, features = [
-    "bracketed-paste",
-    "event-stream",
-] }
+crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
+derive_more = { workspace = true, features = ["is_variant"] }
 diffy = { workspace = true }
 dirs = { workspace = true }
 git2 = { workspace = true }
@@ -94,6 +92,8 @@ unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
 
+codex-windows-sandbox = { workspace = true }
+
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
@@ -109,5 +109,5 @@ chrono = { workspace = true, features = ["serde"] }
 insta = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
-vt100 = { workspace = true }
 serial_test = { workspace = true }
+vt100 = { workspace = true }

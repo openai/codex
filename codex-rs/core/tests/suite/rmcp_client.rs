@@ -25,7 +25,6 @@ use core_test_support::responses::mount_sse_once_match;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_with_timeout;
 use escargot::CargoBuild;
 use mcp_types::ContentBlock;
 use serde_json::Value;
@@ -125,11 +124,9 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
         })
         .await?;
 
-    let begin_event = wait_for_event_with_timeout(
-        &fixture.codex,
-        |ev| matches!(ev, EventMsg::McpToolCallBegin(_)),
-        Duration::from_secs(10),
-    )
+    let begin_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallBegin(_))
+    })
     .await;
 
     let EventMsg::McpToolCallBegin(begin) = begin_event else {
@@ -268,11 +265,9 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
         .await?;
 
     // Wait for tool begin/end and final completion.
-    let begin_event = wait_for_event_with_timeout(
-        &fixture.codex,
-        |ev| matches!(ev, EventMsg::McpToolCallBegin(_)),
-        Duration::from_secs(10),
-    )
+    let begin_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallBegin(_))
+    })
     .await;
     let EventMsg::McpToolCallBegin(begin) = begin_event else {
         unreachable!("begin");
@@ -465,11 +460,9 @@ async fn stdio_image_completions_round_trip() -> anyhow::Result<()> {
         })
         .await?;
 
-    let begin_event = wait_for_event_with_timeout(
-        &fixture.codex,
-        |ev| matches!(ev, EventMsg::McpToolCallBegin(_)),
-        Duration::from_secs(10),
-    )
+    let begin_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallBegin(_))
+    })
     .await;
     let EventMsg::McpToolCallBegin(begin) = begin_event else {
         unreachable!("begin");
@@ -609,11 +602,9 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
         })
         .await?;
 
-    let begin_event = wait_for_event_with_timeout(
-        &fixture.codex,
-        |ev| matches!(ev, EventMsg::McpToolCallBegin(_)),
-        Duration::from_secs(10),
-    )
+    let begin_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallBegin(_))
+    })
     .await;
 
     let EventMsg::McpToolCallBegin(begin) = begin_event else {
@@ -762,11 +753,9 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
         })
         .await?;
 
-    let begin_event = wait_for_event_with_timeout(
-        &fixture.codex,
-        |ev| matches!(ev, EventMsg::McpToolCallBegin(_)),
-        Duration::from_secs(10),
-    )
+    let begin_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallBegin(_))
+    })
     .await;
 
     let EventMsg::McpToolCallBegin(begin) = begin_event else {
@@ -947,11 +936,9 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
         })
         .await?;
 
-    let begin_event = wait_for_event_with_timeout(
-        &fixture.codex,
-        |ev| matches!(ev, EventMsg::McpToolCallBegin(_)),
-        Duration::from_secs(10),
-    )
+    let begin_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallBegin(_))
+    })
     .await;
 
     let EventMsg::McpToolCallBegin(begin) = begin_event else {

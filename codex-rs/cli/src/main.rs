@@ -623,7 +623,11 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     let (cmd, args) = action.command_args();
     let cmd_str = action.command_str();
     println!("Updating Codex via `{cmd_str}`...");
-    let status = std::process::Command::new(cmd).args(args).status()?;
+    let command_path = normalize_for_wsl(cmd);
+    let normalized_args: Vec<String> = args.iter().map(normalize_for_wsl).collect();
+    let status = std::process::Command::new(&command_path)
+        .args(&normalized_args)
+        .status()?;
     if !status.success() {
         anyhow::bail!("`{cmd_str}` failed with status {status}");
     }

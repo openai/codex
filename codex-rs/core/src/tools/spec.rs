@@ -15,11 +15,11 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConfigShellToolType {
     Default,
     Local,
-    Streamable,
+    UnifiedExec,
 }
 
 #[derive(Debug, Clone)]
@@ -30,7 +30,6 @@ pub(crate) struct ToolsConfig {
     #[allow(dead_code)]
     pub deep_web_search: bool,
     pub include_view_image_tool: bool,
-    pub experimental_unified_exec_tool: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -45,18 +44,14 @@ impl ToolsConfig {
             model_family,
             features,
         } = params;
-        let use_streamable_shell_tool = features.enabled(Feature::StreamableShell);
-        let experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
 
-        let shell_type = if use_streamable_shell_tool {
-            ConfigShellToolType::Streamable
-        } else if model_family.uses_local_shell_tool {
-            ConfigShellToolType::Local
+        let shell_type = if features.enabled(Feature::UnifiedExec) {
+            ConfigShellToolType::UnifiedExec
         } else {
-            ConfigShellToolType::Default
+            model_family.shell_type.clone()
         };
 
         let apply_patch_tool_type = match model_family.apply_patch_tool_type {
@@ -77,7 +72,6 @@ impl ToolsConfig {
             web_search_request: include_web_search_request,
             deep_web_search: false, // TODO: integrate with Features system
             include_view_image_tool,
-            experimental_unified_exec_tool,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }
@@ -889,15 +883,6 @@ pub(crate) fn build_specs(
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
 
-    let use_unified_exec = config.experimental_unified_exec_tool
-        || matches!(config.shell_type, ConfigShellToolType::Streamable);
-
-    if use_unified_exec {
-        builder.push_spec(create_exec_command_tool());
-        builder.push_spec(create_write_stdin_tool());
-        builder.register_handler("exec_command", unified_exec_handler.clone());
-        builder.register_handler("write_stdin", unified_exec_handler);
-    }
     match &config.shell_type {
         ConfigShellToolType::Default => {
             builder.push_spec(create_shell_tool());
@@ -905,8 +890,11 @@ pub(crate) fn build_specs(
         ConfigShellToolType::Local => {
             builder.push_spec(ToolSpec::LocalShell {});
         }
-        ConfigShellToolType::Streamable => {
-            // Already handled by use_unified_exec.
+        ConfigShellToolType::UnifiedExec => {
+            builder.push_spec(create_exec_command_tool());
+            builder.push_spec(create_write_stdin_tool());
+            builder.register_handler("exec_command", unified_exec_handler.clone());
+            builder.register_handler("write_stdin", unified_exec_handler);
         }
     }
 
@@ -1058,7 +1046,7 @@ mod tests {
         match config.shell_type {
             ConfigShellToolType::Default => Some("shell"),
             ConfigShellToolType::Local => Some("local_shell"),
-            ConfigShellToolType::Streamable => None,
+            ConfigShellToolType::UnifiedExec => None,
         }
     }
 
@@ -1108,7 +1096,7 @@ mod tests {
     }
 
     #[test]
-    fn test_full_toolset_specs_for_gpt5_codex() {
+    fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         let model_family = find_family_for_model("gpt-5-codex")
             .expect("gpt-5-codex should be a valid model family");
         let mut features = Features::with_defaults();
@@ -1142,7 +1130,6 @@ mod tests {
         for spec in [
             create_exec_command_tool(),
             create_write_stdin_tool(),
-            create_shell_tool(),
             create_list_mcp_resources_tool(),
             create_list_mcp_resource_templates_tool(),
             create_read_mcp_resource_tool(),
@@ -1169,32 +1156,106 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_build_specs_contains_expected_basics() {
-        let model_family = find_family_for_model("codex-mini-latest")
-            .expect("codex-mini-latest should be a valid model family");
-        let mut features = Features::with_defaults();
-        features.enable(Feature::WebSearchRequest);
-        features.enable(Feature::UnifiedExec);
+    fn assert_model_tools(model_family: &str, features: &Features, expected_tools: &[&str]) {
+        let model_family = find_family_for_model(model_family)
+            .unwrap_or_else(|| panic!("{model_family} should be a valid model family"));
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: &features,
+            features,
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
-        assert_eq!(
-            &tool_names,
+        assert_eq!(&tool_names, &expected_tools,);
+    }
+
+    #[test]
+    fn test_build_specs_gpt5_codex_default() {
+        assert_model_tools(
+            "gpt-5-codex",
+            &Features::with_defaults(),
+            &[
+                "shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_build_specs_gpt5_codex_unified_exec_web_search() {
+        assert_model_tools(
+            "gpt-5-codex",
+            Features::with_defaults()
+                .enable(Feature::UnifiedExec)
+                .enable(Feature::WebSearchRequest),
             &[
                 "exec_command",
                 "write_stdin",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "web_search",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_codex_mini_defaults() {
+        assert_model_tools(
+            "codex-mini-latest",
+            &Features::with_defaults(),
+            &[
                 "local_shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_porcupine_defaults() {
+        assert_model_tools(
+            "porcupine",
+            &Features::with_defaults(),
+            &[
+                "exec_command",
+                "write_stdin",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_codex_mini_unified_exec_web_search() {
+        assert_model_tools(
+            "codex-mini-latest",
+            Features::with_defaults()
+                .enable(Feature::UnifiedExec)
+                .enable(Feature::WebSearchRequest),
+            &[
+                "exec_command",
+                "write_stdin",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
                 "web_search",
                 "view_image",
-            ]
+            ],
         );
     }
 

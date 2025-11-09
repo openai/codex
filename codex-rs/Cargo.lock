@@ -231,9 +231,11 @@ dependencies = [
  "chrono",
  "codex-app-server-protocol",
  "codex-core",
+ "codex-protocol",
  "serde",
  "serde_json",
  "tokio",
+ "uuid",
  "wiremock",
 ]
 
@@ -2010,8 +2012,10 @@ dependencies = [
  "codex-login",
  "codex-ollama",
  "codex-protocol",
+ "codex-windows-sandbox",
  "color-eyre",
  "crossterm",
+ "derive_more 2.0.1",
  "diffy",
  "dirs",
  "dunce",
@@ -2136,6 +2140,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dirs-next",
+ "dunce",
  "rand 0.8.5",
  "serde",
  "serde_json",
@@ -2941,6 +2946,7 @@ version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bda628edc44c4bb645fbe0f758797143e4e07926f7ebf4e9bdfbd3d2ce621df3"
 dependencies = [
+ "convert_case 0.7.1",
  "proc-macro2",
  "quote",
  "syn 2.0.109",
