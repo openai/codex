@@ -25,7 +25,6 @@ use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use color_eyre::eyre::Result;
-use std::process;
 use std::sync::Arc;
 use std::sync::RwLock;
 
@@ -58,6 +57,7 @@ pub(crate) struct OnboardingScreen {
     steps: Vec<Step>,
     is_done: bool,
     windows_install_selected: bool,
+    should_exit: bool,
 }
 
 pub(crate) struct OnboardingScreenArgs {
@@ -72,6 +72,7 @@ pub(crate) struct OnboardingScreenArgs {
 pub(crate) struct OnboardingResult {
     pub directory_trust_decision: Option<TrustDirectorySelection>,
     pub windows_install_selected: bool,
+    pub should_exit: bool,
 }
 
 impl OnboardingScreen {
@@ -138,6 +139,7 @@ impl OnboardingScreen {
             steps,
             is_done: false,
             windows_install_selected: false,
+            should_exit: false,
         }
     }
 
@@ -201,6 +203,10 @@ impl OnboardingScreen {
     pub fn windows_install_selected(&self) -> bool {
         self.windows_install_selected
     }
+
+    pub fn should_exit(&self) -> bool {
+        self.should_exit
+    }
 }
 
 impl KeyboardHandler for OnboardingScreen {
@@ -226,8 +232,7 @@ impl KeyboardHandler for OnboardingScreen {
                 if self.is_auth_in_progress() {
                     // If the user cancels the auth menu, exit the app rather than
                     // leave the user at a prompt in an unauthed state.
-                    let _ = crate::tui::restore();
-                    process::exit(0);
+                    self.should_exit = true;
                 }
                 self.is_done = true;
             }
@@ -447,5 +452,6 @@ pub(crate) async fn run_onboarding_app(
     Ok(OnboardingResult {
         directory_trust_decision: onboarding_screen.directory_trust_decision(),
         windows_install_selected: onboarding_screen.windows_install_selected(),
+        should_exit: onboarding_screen.should_exit(),
     })
 }
