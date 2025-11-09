@@ -64,9 +64,18 @@ Complete architecture documentation for the Codex AI-Native OS project.
 
 **CLI** (`codex-rs/cli/`):
 - Command-line interface
-- TUI (Terminal UI)
+- TUI (Terminal UI) with GPU stats
 - Configuration management
 - Session handling
+- Plan mode support
+- CUDA acceleration
+
+**Tauri GUI** (`codex-rs/tauri-gui/`):
+- React + Three.js frontend
+- VR/AR integration (Quest 2/3/Pro, Vision Pro)
+- 4D Git visualization
+- Real-time GPU monitoring
+- Hand tracking support (Quest 3/Pro)
 
 #### Kernel Integration
 
@@ -86,9 +95,13 @@ Complete architecture documentation for the Codex AI-Native OS project.
 
 **Frontend** (React + Three.js):
 - 3D/4D visualization
-- GPU-accelerated rendering
+- GPU-accelerated rendering (120fps)
 - Timeline slider
 - Search/Filter/Bookmarks
+- VR/AR mode (WebXR)
+- Hand tracking (Quest 3/Pro)
+- Passthrough AR (Quest 3)
+- Eye tracking (Quest Pro)
 
 **Desktop** (Electron):
 - System tray integration
@@ -247,5 +260,5 @@ Planned enhancements:
 
 **Maintained by**: zapabob  
 **License**: Apache 2.0 (user-space), GPL v2 (kernel modules)  
-**Version**: 1.0.0
+**Version**: 2.1.0
 
