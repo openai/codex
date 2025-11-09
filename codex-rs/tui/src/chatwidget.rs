@@ -2756,7 +2756,7 @@ impl ChatWidget {
             Constraint::Length(0),
             Constraint::Length(self.bottom_pane.desired_height(area.width)),
         ])
-        .split(area)
+        .areas(area)
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
