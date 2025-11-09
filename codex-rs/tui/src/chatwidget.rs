@@ -2756,16 +2756,20 @@ impl ChatWidget {
 
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.as_renderable().render(area, buf);
+        let [chat_area, _, bottom_pane_area] = self.layout_areas(area);
+        self.history.render(chat_area, buf);
+        self.bottom_pane.render(bottom_pane_area, buf);
         self.last_rendered_width.set(Some(area.width as usize));
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        self.as_renderable().desired_height(width)
+        let [chat_area, _, bottom_pane_area] = self.layout_areas(Rect::new(0, 0, width, 1000));
+        self.history.desired_height(chat_area.width) + self.bottom_pane.desired_height(bottom_pane_area.width)
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        self.as_renderable().cursor_pos(area)
+        let [_, _, bottom_pane_area] = self.layout_areas(area);
+        self.bottom_pane.cursor_pos(bottom_pane_area)
     }
 }
 
