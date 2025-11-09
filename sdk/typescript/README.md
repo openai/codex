@@ -33,7 +33,7 @@ const nextTurn = await thread.run("Implement the fix");
 
 ### Streaming responses
 
-`run()` buffers events until the turn finishes. To react to intermediate progress—tool calls, streaming responses, and file diffs—use `runStreamed()` instead, which returns an async generator of structured events.
+`run()` buffers events until the turn finishes. To react to intermediate progress—tool calls, streaming responses, and file change notifications—use `runStreamed()` instead, which returns an async generator of structured events.
 
 ```typescript
 const { events } = await thread.runStreamed("Diagnose the test failure and propose a fix");
