@@ -9,8 +9,69 @@ globs: *
 
 ## PROJECT DOCUMENTATION & CONTEXT SYSTEM
 
+- **MANDATORY**: Always create implementation logs in `_docs/` directory.
+- **MANDATORY**: Include worktree name in filename when in worktree mode.
+- **MANDATORY**: Use format: `yyyy-mm-dd_{worktree_name}_{機能名}.md`.
+- **MANDATORY**: Get current date using MCP server or system date.
+- **MANDATORY**: Log should include:
+    - Implementation date and time
+    - Worktree name/branch identifier
+    - Feature name and description
+    - Implementation details
+    - Files created/modified
+    - Design decisions
+    - Testing results (if applicable)
+- **MANDATORY**: Each implementation item MUST include progress tracking section:
+    - **実装状況**: [実装済み] / [未実装] / [部分実装]
+    - **動作確認**: [OK] / [要修正] / [未確認]
+    - **確認日時**: YYYY-MM-DD（該当する場合、動作確認がOK/要修正の場合は必須）
+    - **備考**: 簡潔なメモ（該当する場合）
+
 ## CODING STANDARDS
+
+- **NO EMOJIS**: Never use emojis in code, comments, or output.
+- Use plain text symbols instead: ✅ → [OK], ❌ → [NG], 🚀 → [START], etc.
+- This prevents Unicode encoding errors on Windows systems.
+- All console output must be ASCII-compatible.
+- Use descriptive text instead of emoji symbols.
 
 ## WORKFLOW & RELEASE RULES
 
+- When merging changes from the official repository ("upstream"), prioritize integrating vulnerability fixes, new features, and updated dependencies while maintaining our own unique features. Resolve conflicts by preferring our changes ("ours") whenever possible. This ensures that we stay aligned with the official codebase while keeping our customizations intact.
+- Always fetch the latest changes from the upstream repository before merging.
+- Use the `-X ours` strategy during merging to automatically resolve conflicts in favor of local changes.
+- After merging, thoroughly test the codebase to ensure that the integration was successful and that no regressions were introduced.
+- Push merged changes to the origin repository to share them with the team.
+- **Always prioritize local changes ("ours") when resolving merge conflicts with the upstream repository, especially concerning vulnerability fixes, new features, and dependency updates. This ensures that our unique features are preserved while maintaining consistency with the official codebase.**
+
 ## DEBUGGING
+
+## AUDIO NOTIFICATION RULES
+
+**CRITICAL**: At the end of every Agent task or Plan completion, ALWAYS play the audio file:
+- **Primary**: `C:\Users\downl\Desktop\SO8T\.cursor\marisa_owattaze.wav` (基本はこれを再生)
+- **Fallback**: ピープ音（音声ファイルが再生できない場合）
+- Trigger: Agent completion, Plan completion, Task completion
+- Purpose: Audio notification for user awareness
+
+**BASIC PRINCIPLE**: Always try to play `marisa_owattaze.wav` first. If it fails, play a beep sound as fallback.
+
+**ABSOLUTELY MANDATORY**: Audio MUST be played at the end of EVERY operation
+**NO EXCEPTIONS**: Even if audio fails, try multiple methods
+**ALWAYS VERIFY**: Check if audio actually played successfully
+
+1. **Agent Completion**: Play audio when any Agent task finishes
+2. **Plan Completion**: Play audio when any Plan phase completes
+3. **Task Completion**: Play audio when any major task finishes
+4. **Error Completion**: Play audio even when tasks complete with errors
+5. **Success Completion**: Play audio when tasks complete successfully
+6. **Test Completion**: Play audio after EVERY test execution
+7. **Ollama Test Completion**: Play audio after EVERY ollama test command
+8. **MANDATORY**: Audio file must be played at the end of EVERY operation
+9. **MANDATORY**: Use PowerShell command for audio playback
+10. **MANDATORY**: Check file existence before playing audio
+11. **MANDATORY**: Play audio on ALL Agent task completions (success or error)
+12. **MANDATORY**: Play audio on ALL Plan phase completions (success or error)
+13. **MANDATORY**: Play audio on ALL major task completions (success or error)
+14. **MANDATORY**: Play audio on ALL test completions (success or error)
+15. **MANDATORY**: Play audio on ALL Ollama command completions (success or error)
