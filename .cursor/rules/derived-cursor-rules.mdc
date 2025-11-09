@@ -75,3 +75,68 @@ globs: *
 13. **MANDATORY**: Play audio on ALL major task completions (success or error)
 14. **MANDATORY**: Play audio on ALL test completions (success or error)
 15. **MANDATORY**: Play audio on ALL Ollama command completions (success or error)
+
+### 📝 実装ログ作成ルール (CRITICAL)
+
+**実装ログを作成する際は、必ず現在日時を取得してから作成すること:**
+
+#### 日時取得方法（優先順位順）
+
+1. **MCPサーバー経由で取得**（推奨）
+    ```powershell
+    # MCPサーバーが利用可能な場合
+    # 現在日時をMCPサーバー経由で取得
+    ```
+
+2. **PowerShellで取得**（フォールバック）
+    ```powershell
+    # PowerShellで現在日時を取得
+    $currentDateTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    # または
+    $currentDate = Get-Date -Format "yyyy-MM-dd"
+    $currentTime = Get-Date -Format "HH:mm:ss"
+    ```
+
+#### 実装ログ作成手順
+
+1. **日時取得**
+    - MCPサーバーが利用可能な場合はMCP経由で取得
+    - 利用不可の場合はPowerShellで取得: `$currentDateTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"`
+
+2. **ファイル名の決定**
+    - 形式: `yyyy-mm-dd_機能名.md`
+    - 例: `2025-01-27_コードベースレビューとビルドインストール.md`
+
+3. **ログ作成**
+    - `_docs/` ディレクトリに保存
+    - 日時情報をログの先頭に記載: `**日時**: yyyy-MM-dd HH:mm:ss`
+
+#### 実装例
+
+```powershell
+# 1. 現在日時を取得
+$currentDateTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+$currentDate = Get-Date -Format "yyyy-MM-dd"
+
+# 2. 実装ログファイル名を決定
+$logFileName = "${currentDate}_機能名.md"
+$logPath = "_docs\$logFileName"
+
+# 3. 実装ログを作成
+@"
+# 機能名
+
+**日時**: $currentDateTime
+**タスク**: タスクの説明
+
+---
+"@ | Out-File -FilePath $logPath -Encoding UTF8
+```
+
+#### 注意事項
+
+- ⚠️ **日時取得を忘れないこと**: 実装ログ作成前に必ず現在日時を取得
+- ⚠️ **ファイル名に日時を含める**: `yyyy-mm-dd_機能名.md` 形式を厳守
+- ⚠️ **ログ本文にも日時を記載**: ログの先頭に `**日時**: yyyy-MM-dd HH:mm:ss` を記載
+- ✅ **MCPサーバー優先**: 可能な限りMCPサーバー経由で取得
+- ✅ **PowerShellフォールバック**: MCPサーバーが利用不可の場合はPowerShellで取得
