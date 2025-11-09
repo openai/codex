@@ -55,6 +55,8 @@ use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use rand::Rng;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Constraint;
+use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Stylize;
@@ -2748,6 +2750,16 @@ impl ChatWidget {
         self.bottom_pane.clear_gpu_stats();
     }
 
+    fn layout_areas(&self, area: Rect) -> [Rect; 3] {
+        use ratatui::layout::Constraint;
+        Layout::vertical([
+            Constraint::Min(0),
+            Constraint::Length(0),
+            Constraint::Length(self.bottom_pane.desired_height(area.width)),
+        ])
+        .split(area)
+    }
+
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let [_, _, bottom_pane_area] = self.layout_areas(area);
         self.bottom_pane.cursor_pos(bottom_pane_area)
@@ -2756,16 +2768,13 @@ impl ChatWidget {
 
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let [chat_area, _, bottom_pane_area] = self.layout_areas(area);
-        self.history.render(chat_area, buf);
+        let [_, _, bottom_pane_area] = self.layout_areas(area);
         self.bottom_pane.render(bottom_pane_area, buf);
         self.last_rendered_width.set(Some(area.width as usize));
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        let [chat_area, _, bottom_pane_area] = self.layout_areas(Rect::new(0, 0, width, 1000));
-        self.history.desired_height(chat_area.width)
-            + self.bottom_pane.desired_height(bottom_pane_area.width)
+        self.bottom_pane.desired_height(width)
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
