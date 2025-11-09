@@ -5508,3 +5508,16 @@ For more information about an error, try `rustc --explain E0308`.
 warning: `codex-tui` (lib) generated 8 warnings
 error: could not compile `codex-tui` (lib) due to 4 previous errors; 8 warnings emitted
 
+[2025-11-09 22:13:12] === Build started ===
+[2025-11-09 22:13:12] Workspace validated: C:\Users\downl\Desktop\codex-main\codex-main\codex-rs
+[2025-11-09 22:13:12] Running just fmt
+[2025-11-09 22:13:12] just : cargo fmt -- --config imports_granularity=Item
+発生場所 C:\Users\downl\Desktop\codex-main\codex-main\codex-rs\clean-build-install.ps1:124 文字:5
++     just fmt 2>&1 | Out-String | ForEach-Object { Log $_ }
++     ~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (cargo fmt -- --...ranularity=Item:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error: Recipe `fmt` could not be run because just could not find the shell: program not found
+
+[2025-11-09 22:13:12] Running cargo build --release -p codex-cli
