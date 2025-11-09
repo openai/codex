@@ -25,6 +25,7 @@ use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use color_eyre::eyre::Result;
+use std::process;
 use std::sync::Arc;
 use std::sync::RwLock;
 
@@ -222,9 +223,13 @@ impl KeyboardHandler for OnboardingScreen {
                 kind: KeyEventKind::Press,
                 ..
             } => {
-                if !self.is_auth_in_progress() {
-                    self.is_done = true;
+                if self.is_auth_in_progress() {
+                    // If the user cancels the auth menu, exit the app rather than
+                    // leave the user at a prompt in an unauthed state.
+                    let _ = crate::tui::restore();
+                    process::exit(0);
                 }
+                self.is_done = true;
             }
             _ => {
                 if let Some(Step::Welcome(widget)) = self
