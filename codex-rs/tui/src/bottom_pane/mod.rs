@@ -792,7 +792,7 @@ impl WidgetRef for &BottomPane {
                     width: top_area.width,
                     height,
                 };
-                status.render_ref(status_area, buf);
+                status.render(status_area, buf);
                 cursor_y = cursor_y.saturating_add(height);
                 remaining = remaining.saturating_sub(height);
             }
@@ -813,7 +813,7 @@ impl WidgetRef for &BottomPane {
                 self.queued_user_messages.render(queue_area, buf);
             }
 
-            self.composer.render_ref(content_area, buf);
+            self.composer.render(content_area, buf);
         }
     }
 }

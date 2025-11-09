@@ -62,6 +62,7 @@ use ratatui::style::Color;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
+use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
@@ -2751,13 +2752,13 @@ impl ChatWidget {
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
-        use ratatui::layout::Constraint;
-        Layout::vertical([
+        let areas = Layout::vertical([
             Constraint::Min(0),
             Constraint::Length(0),
             Constraint::Length(self.bottom_pane.desired_height(area.width)),
         ])
-        .split(area)
+        .split(area);
+        [areas[0], areas[1], areas[2]]
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -2769,7 +2770,7 @@ impl ChatWidget {
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let [_, _, bottom_pane_area] = self.layout_areas(area);
-        self.bottom_pane.render(bottom_pane_area, buf);
+        (&self.bottom_pane).render_ref(bottom_pane_area, buf);
         self.last_rendered_width.set(Some(area.width as usize));
     }
 
