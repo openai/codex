@@ -109,6 +109,9 @@ pub enum CodexErr {
     #[error("{0}")]
     ConnectionFailed(ConnectionFailedError),
 
+    #[error("Quota exceeded. Check your plan and billing details.")]
+    QuotaExceeded,
+
     #[error(
         "To use Codex with your ChatGPT plan, upgrade to Plus: https://openai.com/chatgpt/pricing."
     )]
@@ -134,6 +137,9 @@ pub enum CodexErr {
 
     #[error("unsupported operation: {0}")]
     UnsupportedOperation(String),
+
+    #[error("{0}")]
+    RefreshTokenFailed(RefreshTokenFailedError),
 
     #[error("Fatal error: {0}")]
     Fatal(String),
@@ -201,6 +207,30 @@ impl std::fmt::Display for ResponseStreamFailed {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{message}")]
+pub struct RefreshTokenFailedError {
+    pub reason: RefreshTokenFailedReason,
+    pub message: String,
+}
+
+impl RefreshTokenFailedError {
+    pub fn new(reason: RefreshTokenFailedReason, message: impl Into<String>) -> Self {
+        Self {
+            reason,
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshTokenFailedReason {
+    Expired,
+    Exhausted,
+    Revoked,
+    Other,
+}
+
 #[derive(Debug)]
 pub struct UnexpectedResponseError {
     pub status: StatusCode,
@@ -208,18 +238,44 @@ pub struct UnexpectedResponseError {
     pub request_id: Option<String>,
 }
 
+const CLOUDFLARE_BLOCKED_MESSAGE: &str =
+    "Access blocked by Cloudflare. This usually happens when connecting from a restricted region";
+
+impl UnexpectedResponseError {
+    fn friendly_message(&self) -> Option<String> {
+        if self.status != StatusCode::FORBIDDEN {
+            return None;
+        }
+
+        if !self.body.contains("Cloudflare") || !self.body.contains("blocked") {
+            return None;
+        }
+
+        let mut message = format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {})", self.status);
+        if let Some(id) = &self.request_id {
+            message.push_str(&format!(", request id: {id}"));
+        }
+
+        Some(message)
+    }
+}
+
 impl std::fmt::Display for UnexpectedResponseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "unexpected status {}: {}{}",
-            self.status,
-            self.body,
-            self.request_id
-                .as_ref()
-                .map(|id| format!(", request id: {id}"))
-                .unwrap_or_default()
-        )
+        if let Some(friendly) = self.friendly_message() {
+            write!(f, "{friendly}")
+        } else {
+            write!(
+                f,
+                "unexpected status {}: {}{}",
+                self.status,
+                self.body,
+                self.request_id
+                    .as_ref()
+                    .map(|id| format!(", request id: {id}"))
+                    .unwrap_or_default()
+            )
+        }
     }
 }
 
@@ -255,7 +311,7 @@ impl std::fmt::Display for UsageLimitReachedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let message = match self.plan_type.as_ref() {
             Some(PlanType::Known(KnownPlan::Plus)) => format!(
-                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), visit chatgpt.com/codex/settings/usage to purchase more credits{}",
+                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
                 retry_suffix_after_or(self.resets_at.as_ref())
             ),
             Some(PlanType::Known(KnownPlan::Team)) | Some(PlanType::Known(KnownPlan::Business)) => {
@@ -269,7 +325,7 @@ impl std::fmt::Display for UsageLimitReachedError {
                     .to_string()
             }
             Some(PlanType::Known(KnownPlan::Pro)) => format!(
-                "You've hit your usage limit. Visit chatgpt.com/codex/settings/usage to purchase more credits{}",
+                "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
                 retry_suffix_after_or(self.resets_at.as_ref())
             ),
             Some(PlanType::Known(KnownPlan::Enterprise))
@@ -460,7 +516,7 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), visit chatgpt.com/codex/settings/usage to purchase more credits or try again later."
+            "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later."
         );
     }
 
@@ -613,7 +669,7 @@ mod tests {
                 rate_limits: Some(rate_limit_snapshot()),
             };
             let expected = format!(
-                "You've hit your usage limit. Visit chatgpt.com/codex/settings/usage to purchase more credits or try again at {expected_time}."
+                "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {expected_time}."
             );
             assert_eq!(err.to_string(), expected);
         });
@@ -636,6 +692,35 @@ mod tests {
     }
 
     #[test]
+    fn unexpected_status_cloudflare_html_is_simplified() {
+        let err = UnexpectedResponseError {
+            status: StatusCode::FORBIDDEN,
+            body: "<html><body>Cloudflare error: Sorry, you have been blocked</body></html>"
+                .to_string(),
+            request_id: Some("ray-id".to_string()),
+        };
+        let status = StatusCode::FORBIDDEN.to_string();
+        assert_eq!(
+            err.to_string(),
+            format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {status}), request id: ray-id")
+        );
+    }
+
+    #[test]
+    fn unexpected_status_non_html_is_unchanged() {
+        let err = UnexpectedResponseError {
+            status: StatusCode::FORBIDDEN,
+            body: "plain text error".to_string(),
+            request_id: None,
+        };
+        let status = StatusCode::FORBIDDEN.to_string();
+        assert_eq!(
+            err.to_string(),
+            format!("unexpected status {status}: plain text error")
+        );
+    }
+
+    #[test]
     fn usage_limit_reached_includes_hours_and_minutes() {
         let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
         let resets_at = base + ChronoDuration::hours(3) + ChronoDuration::minutes(32);
@@ -647,7 +732,7 @@ mod tests {
                 rate_limits: Some(rate_limit_snapshot()),
             };
             let expected = format!(
-                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), visit chatgpt.com/codex/settings/usage to purchase more credits or try again at {expected_time}."
+                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {expected_time}."
             );
             assert_eq!(err.to_string(), expected);
         });
