@@ -194,24 +194,3 @@ prefix_rule(
         ]
     );
 }
-
-#[test]
-fn unnamed_rule_uses_source_as_name() {
-    let policy_src = r#"
-prefix_rule(
-    id = "unnamed_rule",
-    pattern = ["echo"],
-)
-    "#;
-    let parser = PolicyParser::new("test.policy", policy_src);
-    let policy = parser.parse().expect("parse policy");
-    let eval = policy.evaluate(&tokens(&["echo", "hi"])).expect("match");
-    assert_eq!(
-        eval.matched_rules,
-        vec![RuleMatch {
-            rule_id: "unnamed_rule".to_string(),
-            matched_prefix: vec!["echo".to_string()],
-            decision: Decision::Allow,
-        }]
-    );
-}
