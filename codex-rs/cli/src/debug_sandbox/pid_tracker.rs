@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
-/// Tracks the descendants of a process by using `kqueue` to watch for fork/exec events, and
+/// Tracks the (recursive) descendants of a process by using `kqueue` to watch for fork events, and
 /// `proc_listchildpids` to list the children of a process.
 pub(crate) struct PidTracker {
     stop: Arc<AtomicBool>,
@@ -40,6 +40,7 @@ unsafe extern "C" {
     ) -> libc::c_int;
 }
 
+/// Wrap proc_listchildpids.
 fn list_child_pids(parent: i32) -> Vec<i32> {
     unsafe {
         let mut capacity: usize = 16;
@@ -90,6 +91,7 @@ enum WatchPidError {
     Other(std::io::Error),
 }
 
+/// Add `pid` to the watch list in `kq`.
 fn watch_pid(kq: libc::c_int, pid: i32) -> Result<(), WatchPidError> {
     if pid <= 0 {
         return Err(WatchPidError::ProcessGone);
@@ -117,7 +119,7 @@ fn watch_pid(kq: libc::c_int, pid: i32) -> Result<(), WatchPidError> {
     }
 }
 
-fn ensure_children(
+fn watch_children(
     kq: libc::c_int,
     parent: i32,
     seen: &mut HashSet<i32>,
@@ -128,6 +130,7 @@ fn ensure_children(
     }
 }
 
+/// Watch `pid` and its children, updating `seen` and `active` sets.
 fn add_pid_watch(kq: libc::c_int, pid: i32, seen: &mut HashSet<i32>, active: &mut HashSet<i32>) {
     if pid <= 0 {
         return;
@@ -154,10 +157,11 @@ fn add_pid_watch(kq: libc::c_int, pid: i32, seen: &mut HashSet<i32>, active: &mu
     }
 
     if should_recurse {
-        ensure_children(kq, pid, seen, active);
+        watch_children(kq, pid, seen, active);
     }
 }
 
+/// Put all of the above together to track all the descendants of `root_pid`.
 fn track_descendants(root_pid: i32, stop: Arc<AtomicBool>) -> HashSet<i32> {
     use std::thread;
     use std::time::Duration;
@@ -229,7 +233,7 @@ fn track_descendants(root_pid: i32, stop: Arc<AtomicBool>) -> HashSet<i32> {
             }
 
             if (ev.fflags & libc::NOTE_FORK) != 0 {
-                ensure_children(kq, pid, &mut seen, &mut active);
+                watch_children(kq, pid, &mut seen, &mut active);
             }
 
             if (ev.fflags & libc::NOTE_EXIT) != 0 {
