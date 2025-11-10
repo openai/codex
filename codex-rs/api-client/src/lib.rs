@@ -7,6 +7,7 @@ pub mod error;
 pub mod model_provider;
 pub mod prompt;
 pub mod responses;
+pub mod routed_client;
 pub mod stream;
 
 pub use crate::aggregate::AggregateStreamExt;
@@ -28,6 +29,8 @@ pub use crate::prompt::Prompt;
 pub use crate::responses::ResponsesApiClient;
 pub use crate::responses::ResponsesApiClientConfig;
 pub use crate::responses::stream_from_fixture;
+pub use crate::routed_client::RoutedApiClient;
+pub use crate::routed_client::RoutedApiClientConfig;
 pub use crate::stream::EventStream;
 pub use crate::stream::Reasoning;
 pub use crate::stream::ResponseEvent;
