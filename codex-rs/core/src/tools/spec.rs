@@ -274,7 +274,12 @@ fn create_shell_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "shell".to_string(),
-        description: "Runs a shell command and returns its output.".to_string(),
+        description: concat!(
+            "Runs a shell command and returns its output.\n",
+            "- The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with [`bash`, `-lc`].\n",
+            "- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary.",
+        )
+        .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -1726,7 +1731,7 @@ mod tests {
         };
         assert_eq!(name, "shell");
 
-        let expected = "Runs a shell command and returns its output.";
+        let expected = "Runs a shell command and returns its output.\n- The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with [`bash`, `-lc`].\n- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary.";
         assert_eq!(description, expected);
     }
 
