@@ -24,14 +24,21 @@ use crate::api::ApiClient;
 use crate::common::apply_subagent_header;
 use crate::common::backoff;
 use crate::error::Error;
+use crate::error::Result;
 use crate::model_provider::ModelProviderInfo;
 use crate::prompt::Prompt;
 use crate::stream::ResponseEvent;
 use crate::stream::ResponseStream;
 
-pub type Result<T> = std::result::Result<T, Error>;
-
 #[derive(Clone)]
+/// Configuration for the Chat Completions client (OpenAI-compatible `/v1/chat/completions`).
+///
+/// - `http_client`: Reqwest client used for HTTP requests.
+/// - `provider`: Provider configuration (base URL, headers, retries, etc.).
+/// - `model`: Model identifier to use.
+/// - `otel_event_manager`: Telemetry event manager for request/stream instrumentation.
+/// - `session_source`: Session metadata, used to set subagent headers when applicable.
+/// - `aggregation_mode`: How to emit streaming output (raw deltas or aggregated).
 pub struct ChatCompletionsApiClientConfig {
     pub http_client: reqwest::Client,
     pub provider: ModelProviderInfo,
@@ -50,14 +57,14 @@ pub struct ChatCompletionsApiClient {
 impl ApiClient for ChatCompletionsApiClient {
     type Config = ChatCompletionsApiClientConfig;
 
-    async fn new(config: Self::Config) -> Result<Self> {
+    fn new(config: Self::Config) -> Result<Self> {
         Ok(Self { config })
     }
 
-    async fn stream(&self, prompt: Prompt) -> Result<ResponseStream> {
-        Self::validate_prompt(&prompt)?;
+    async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        Self::validate_prompt(prompt)?;
 
-        let payload = self.build_payload(&prompt)?;
+        let payload = self.build_payload(prompt)?;
         let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
 
         let mut attempt: i64 = 0;

@@ -128,7 +128,7 @@ impl ModelClient {
             .await
             .map_err(map_api_error)?;
 
-        let api_stream = client.stream(api_prompt).await.map_err(map_api_error)?;
+        let api_stream = client.stream(&api_prompt).await.map_err(map_api_error)?;
         Ok(wrap_stream(api_stream))
     }
 
@@ -269,11 +269,11 @@ impl AuthProvider for AuthManagerProvider {
         })
     }
 
-    async fn refresh_token(&self) -> std::result::Result<Option<String>, String> {
+    async fn refresh_token(&self) -> codex_api_client::Result<Option<String>> {
         self.manager
             .refresh_token()
             .await
-            .map_err(|err| err.to_string())
+            .map_err(|err| codex_api_client::Error::Auth(err.to_string()))
     }
 }
 

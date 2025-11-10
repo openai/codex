@@ -33,14 +33,21 @@ use crate::auth::AuthProvider;
 use crate::common::apply_subagent_header;
 use crate::common::backoff;
 use crate::error::Error;
+use crate::error::Result;
 use crate::model_provider::ModelProviderInfo;
 use crate::prompt::Prompt;
 use crate::stream::ResponseEvent;
 use crate::stream::ResponseStream;
 
-type Result<T> = std::result::Result<T, Error>;
-
 #[derive(Clone)]
+/// Configuration for the OpenAI Responses API client (`/v1/responses`).
+///
+/// - `http_client`: Reqwest client used for HTTP requests.
+/// - `provider`: Provider configuration (base URL, headers, retries, etc.).
+/// - `model`: Model identifier to use.
+/// - `conversation_id`: Used to set conversation/session headers and cache keys.
+/// - `auth_provider`: Optional provider of auth context (e.g., ChatGPT login token).
+/// - `otel_event_manager`: Telemetry event manager for request/stream instrumentation.
 pub struct ResponsesApiClientConfig {
     pub http_client: reqwest::Client,
     pub provider: ModelProviderInfo,
@@ -59,18 +66,18 @@ pub struct ResponsesApiClient {
 impl ApiClient for ResponsesApiClient {
     type Config = ResponsesApiClientConfig;
 
-    async fn new(config: Self::Config) -> Result<Self> {
+    fn new(config: Self::Config) -> Result<Self> {
         Ok(Self { config })
     }
 
-    async fn stream(&self, prompt: Prompt) -> Result<ResponseStream> {
+    async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
         if self.config.provider.wire_api != crate::model_provider::WireApi::Responses {
             return Err(Error::UnsupportedOperation(
                 "ResponsesApiClient requires a Responses provider".to_string(),
             ));
         }
 
-        let mut payload_json = self.build_payload(&prompt)?;
+        let mut payload_json = self.build_payload(prompt)?;
 
         if self.config.provider.is_azure_responses_endpoint()
             && let Some(input_value) = payload_json.get_mut("input")
@@ -82,7 +89,7 @@ impl ApiClient for ResponsesApiClient {
         let max_attempts = self.config.provider.request_max_retries();
         for attempt in 0..=max_attempts {
             match self
-                .attempt_stream_responses(attempt, &prompt, &payload_json)
+                .attempt_stream_responses(attempt, prompt, &payload_json)
                 .await
             {
                 Ok(stream) => return Ok(stream),

@@ -323,7 +323,7 @@ pub fn create_oss_provider_with_base_url(url: &str) -> ModelProviderInfo {
         base_url: Some(url.to_string()),
         env_key: Some("CODEX_OSS_PROVIDER_API_KEY".to_string()),
         env_key_instructions: Some(
-            "Set CODEx_OSS_PROVIDER_API_KEY to authenticate with this provider.".to_string(),
+            "Set CODEX_OSS_PROVIDER_API_KEY to authenticate with this provider.".to_string(),
         ),
         experimental_bearer_token: None,
         wire_api: WireApi::Chat,

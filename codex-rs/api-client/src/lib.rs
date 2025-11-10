@@ -26,6 +26,7 @@ pub use crate::model_provider::built_in_model_providers;
 pub use crate::model_provider::create_oss_provider;
 pub use crate::model_provider::create_oss_provider_with_base_url;
 pub use crate::prompt::Prompt;
+pub use crate::prompt::PromptBuilder;
 pub use crate::responses::ResponsesApiClient;
 pub use crate::responses::ResponsesApiClientConfig;
 pub use crate::responses::stream_from_fixture;

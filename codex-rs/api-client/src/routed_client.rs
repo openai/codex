@@ -43,14 +43,14 @@ impl RoutedApiClient {
         Self { config }
     }
 
-    pub async fn stream(&self, prompt: Prompt) -> Result<ResponseStream> {
+    pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
         match self.config.provider.wire_api {
             WireApi::Responses => self.stream_responses(prompt).await,
             WireApi::Chat => self.stream_chat(prompt).await,
         }
     }
 
-    async fn stream_responses(&self, prompt: Prompt) -> Result<ResponseStream> {
+    async fn stream_responses(&self, prompt: &Prompt) -> Result<ResponseStream> {
         if let Some(path) = &self.config.responses_fixture_path {
             return stream_from_fixture(
                 path,
@@ -68,11 +68,11 @@ impl RoutedApiClient {
             auth_provider: self.config.auth_provider.clone(),
             otel_event_manager: self.config.otel_event_manager.clone(),
         };
-        let client = ResponsesApiClient::new(cfg).await?;
+        let client = ResponsesApiClient::new(cfg)?;
         client.stream(prompt).await
     }
 
-    async fn stream_chat(&self, prompt: Prompt) -> Result<ResponseStream> {
+    async fn stream_chat(&self, prompt: &Prompt) -> Result<ResponseStream> {
         let cfg = ChatCompletionsApiClientConfig {
             http_client: self.config.http_client.clone(),
             provider: self.config.provider.clone(),
@@ -81,7 +81,20 @@ impl RoutedApiClient {
             session_source: self.config.session_source.clone(),
             aggregation_mode: self.config.chat_aggregation_mode,
         };
-        let client = ChatCompletionsApiClient::new(cfg).await?;
+        let client = ChatCompletionsApiClient::new(cfg)?;
         client.stream(prompt).await
+    }
+}
+
+#[async_trait::async_trait]
+impl ApiClient for RoutedApiClient {
+    type Config = RoutedApiClientConfig;
+
+    fn new(config: Self::Config) -> Result<Self> {
+        Ok(Self::new(config))
+    }
+
+    async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        RoutedApiClient::stream(self, prompt).await
     }
 }

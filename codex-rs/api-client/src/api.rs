@@ -8,6 +8,14 @@ use crate::stream::ResponseStream;
 pub trait ApiClient: Sized {
     type Config;
 
-    async fn new(config: Self::Config) -> Result<Self>;
-    async fn stream(&self, prompt: Prompt) -> Result<ResponseStream>;
+    /// Construct a new client instance from the provided configuration.
+    ///
+    /// This is synchronous to avoid forcing callers to `await` when no async
+    /// work is needed during construction. If an implementation needs async
+    /// initialization, prefer doing it inside `stream` or provide an explicit
+    /// async initializer on the concrete type.
+    fn new(config: Self::Config) -> Result<Self>;
+
+    /// Start a streaming request for the given prompt.
+    async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream>;
 }
