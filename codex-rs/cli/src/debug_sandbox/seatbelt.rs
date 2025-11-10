@@ -1,6 +1,7 @@
 use std::collections::HashSet;
-
+use tokio::io::AsyncBufReadExt;
 use tokio::process::Child;
+use tokio::task::JoinHandle;
 
 use super::pid_tracker::PidTracker;
 
@@ -12,13 +13,33 @@ pub struct SandboxDenial {
 pub struct DenialLogger {
     log_stream: Child,
     pid_tracker: Option<PidTracker>,
+    log_reader: Option<JoinHandle<Vec<u8>>>,
 }
 
 impl DenialLogger {
     pub(crate) fn new() -> Option<Self> {
+        let mut log_stream = start_log_stream()?;
+        let stdout = log_stream.stdout.take()?;
+        let log_reader = tokio::spawn(async move {
+            let mut reader = tokio::io::BufReader::new(stdout);
+            let mut logs = Vec::new();
+            let mut chunk = Vec::new();
+            loop {
+                match reader.read_until(b'\n', &mut chunk).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        logs.extend_from_slice(&chunk);
+                        chunk.clear();
+                    }
+                }
+            }
+            logs
+        });
+
         Some(Self {
-            log_stream: start_log_stream()?,
+            log_stream,
             pid_tracker: None,
+            log_reader: Some(log_reader),
         })
     }
 
@@ -39,10 +60,14 @@ impl DenialLogger {
         }
 
         let _ = self.log_stream.kill().await;
-        let Ok(output) = self.log_stream.wait_with_output().await else {
-            return Vec::new();
+        let _ = self.log_stream.wait().await;
+
+        let logs_bytes = match self.log_reader.take() {
+            Some(handle) => handle.await.unwrap_or_default(),
+            None => Vec::new(),
         };
-        let logs = String::from_utf8_lossy(&output.stdout);
+        let logs = String::from_utf8_lossy(&logs_bytes);
+
         let mut seen: HashSet<(String, String)> = HashSet::new();
         let mut denials: Vec<SandboxDenial> = Vec::new();
         for line in logs.lines() {
