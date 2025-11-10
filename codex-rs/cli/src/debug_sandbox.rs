@@ -87,6 +87,7 @@ pub async fn run_command_under_windows(
         config_overrides,
         codex_linux_sandbox_exe,
         SandboxType::Windows,
+        false,
     )
     .await
 }
