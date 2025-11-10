@@ -6,11 +6,7 @@ use anyhow::Result;
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -22,43 +18,10 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
-
-async fn submit_turn(
-    test: &TestCodex,
-    prompt: &str,
-    approval_policy: AskForApproval,
-    sandbox_policy: SandboxPolicy,
-) -> Result<()> {
-    let session_model = test.session_configured.model.clone();
-
-    test.codex
-        .submit(Op::UserTurn {
-            items: vec![UserInput::Text {
-                text: prompt.into(),
-            }],
-            final_output_json_schema: None,
-            cwd: test.cwd.path().to_path_buf(),
-            approval_policy,
-            sandbox_policy,
-            model: session_model,
-            effort: None,
-            summary: ReasoningSummary::Auto,
-        })
-        .await?;
-
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TaskComplete(_))
-    })
-    .await;
-
-    Ok(())
-}
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -106,8 +69,7 @@ async fn custom_tool_unknown_returns_custom_output_error() -> Result<()> {
     )
     .await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policies(
         "invoke custom tool",
         AskForApproval::Never,
         SandboxPolicy::DangerFullAccess,
@@ -185,8 +147,7 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
     )
     .await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policies(
         "run the shell command",
         AskForApproval::Never,
         SandboxPolicy::DangerFullAccess,
@@ -344,8 +305,7 @@ async fn collect_tools(use_unified_exec: bool) -> Result<Vec<String>> {
     });
     let test = builder.build(&server).await?;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policies(
         "list tools",
         AskForApproval::Never,
         SandboxPolicy::DangerFullAccess,
@@ -419,8 +379,7 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
     )
     .await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policies(
         "run a long command",
         AskForApproval::Never,
         SandboxPolicy::DangerFullAccess,
@@ -500,8 +459,7 @@ async fn shell_spawn_failure_truncates_exec_error() -> Result<()> {
     )
     .await;
 
-    submit_turn(
-        &test,
+    test.submit_turn_with_policies(
         "spawn a missing binary",
         AskForApproval::Never,
         SandboxPolicy::DangerFullAccess,

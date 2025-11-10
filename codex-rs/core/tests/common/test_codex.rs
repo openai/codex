@@ -134,13 +134,27 @@ impl TestCodex {
     }
 
     pub async fn submit_turn(&self, prompt: &str) -> Result<()> {
-        self.submit_turn_with_policy(prompt, SandboxPolicy::DangerFullAccess)
-            .await
+        self.submit_turn_with_policies(
+            prompt,
+            AskForApproval::Never,
+            SandboxPolicy::DangerFullAccess,
+        )
+        .await
     }
 
     pub async fn submit_turn_with_policy(
         &self,
         prompt: &str,
+        sandbox_policy: SandboxPolicy,
+    ) -> Result<()> {
+        self.submit_turn_with_policies(prompt, AskForApproval::Never, sandbox_policy)
+            .await
+    }
+
+    pub async fn submit_turn_with_policies(
+        &self,
+        prompt: &str,
+        approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
     ) -> Result<()> {
         let session_model = self.session_configured.model.clone();
@@ -151,7 +165,7 @@ impl TestCodex {
                 }],
                 final_output_json_schema: None,
                 cwd: self.cwd.path().to_path_buf(),
-                approval_policy: AskForApproval::Never,
+                approval_policy,
                 sandbox_policy,
                 model: session_model,
                 effort: None,
