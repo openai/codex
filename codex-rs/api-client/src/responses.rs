@@ -551,10 +551,6 @@ async fn handle_sse_payload(
         tx_event.send(Ok(ev)).await.ok();
     }
 
-    if let Some(_rate_limits) = payload.rate_limits {
-        // Rate limit snapshots are not emitted for this protocol shape in this build.
-    }
-
     if let Some(_response_content) = payload.response_content {
         // Not used currently
     }
@@ -725,10 +721,6 @@ fn try_parse_retry_after(err: &ErrorResponse) -> Option<Duration> {
     None
 }
 
-fn is_context_window_error(error: &ErrorResponse) -> bool {
-    error.error.code.as_deref() == Some("context_length_exceeded")
-}
-
 /// used in tests to stream from a text SSE file
 pub async fn stream_from_fixture(
     path: impl AsRef<Path>,
@@ -761,7 +753,7 @@ pub async fn stream_from_fixture(
     Ok(ResponseStream { rx_event })
 }
 
-fn attach_item_ids_array(json_array: &mut Vec<Value>, prompt_input: &[ResponseItem]) {
+fn attach_item_ids_array(json_array: &mut [Value], prompt_input: &[ResponseItem]) {
     for (json_item, item) in json_array.iter_mut().zip(prompt_input.iter()) {
         let Some(obj) = json_item.as_object_mut() else {
             continue;
@@ -874,11 +866,6 @@ struct TokenUsageInputDetails {
 struct TokenUsageOutputDetails {
     #[serde(default)]
     reasoning_tokens: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamResponsePayload {
-    event: StreamEvent,
 }
 
 async fn handle_stream_event(
@@ -1040,7 +1027,6 @@ async fn handle_stream_event(
 
 #[derive(Debug, Deserialize)]
 struct TextDelta {
-    role: String,
     delta: String,
 }
 
@@ -1060,7 +1046,6 @@ mod sse {
         pub response_output_item_done: Option<ResponseOutputItemDone>,
         pub response_output_reasoning_delta: Option<ResponseOutputReasoningDelta>,
         pub response_output_reasoning_summary_delta: Option<ResponseOutputReasoningSummaryDelta>,
-        pub rate_limits: Option<Vec<RateLimit>>,
     }
 
     #[derive(Debug, Deserialize)]
@@ -1087,8 +1072,6 @@ mod sse {
     #[derive(Debug, Deserialize)]
     pub struct ResponseMessageDelta {
         pub text: String,
-        pub role: String,
-        pub appended_content: Vec<codex_protocol::models::ContentItem>,
     }
 
     #[derive(Debug, Deserialize)]
@@ -1100,7 +1083,6 @@ mod sse {
     #[derive(Debug, Deserialize)]
     pub struct ResponseOutputItem {
         pub r#type: OutputItem,
-        pub item: Value,
     }
 
     #[derive(Debug, Deserialize)]
@@ -1115,21 +1097,11 @@ mod sse {
 
     #[derive(Debug, Deserialize)]
     pub struct ResponseOutputReasoningDelta {
-        pub content: Vec<codex_protocol::models::ReasoningItemContent>,
         pub text: String,
     }
 
     #[derive(Debug, Deserialize)]
     pub struct ResponseOutputReasoningSummaryDelta {
-        pub summary: Vec<codex_protocol::models::ReasoningItemReasoningSummary>,
         pub text: String,
-    }
-
-    #[derive(Debug, Deserialize)]
-    pub struct RateLimit {
-        pub window: String,
-        pub remaining_tokens: i64,
-        pub limit: i64,
-        pub reset_seconds: i64,
     }
 }

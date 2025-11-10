@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use crate::{AuthManager, ModelClient};
+use crate::AuthManager;
+use crate::ModelClient;
 use crate::client_common::REVIEW_PROMPT;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
