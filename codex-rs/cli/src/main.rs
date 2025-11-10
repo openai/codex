@@ -99,9 +99,9 @@ enum Subcommand {
     /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
     Resume(ResumeCommand),
 
-    /// Internal: generate TypeScript protocol bindings.
-    #[clap(hide = true)]
+    /// [experimental] Generate TypeScript bindings for the app server protocol.
     GenerateTs(GenerateTsCommand),
+
     /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
     #[clap(name = "cloud", alias = "cloud-tasks")]
     Cloud(CloudTasksCli),
@@ -528,7 +528,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 .await??;
         }
         Some(Subcommand::GenerateTs(gen_cli)) => {
-            codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
+            codex_app_server_protocol::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
