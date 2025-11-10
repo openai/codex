@@ -320,7 +320,7 @@ impl ExecCell {
         let title = if self.is_active() {
             "Running"
         } else if call.is_user_shell_command {
-            "You Ran"
+            "You ran"
         } else {
             "Ran"
         };
