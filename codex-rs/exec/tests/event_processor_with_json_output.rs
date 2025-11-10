@@ -548,7 +548,7 @@ fn warning_event_produces_error_item() {
     let out = ep.collect_thread_events(&event(
         "e1",
         EventMsg::Warning(WarningEvent {
-            message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start new a new conversation when possible to keep conversations small and targeted.".to_string(),
+            message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.".to_string(),
         }),
     ));
     assert_eq!(
@@ -557,7 +557,7 @@ fn warning_event_produces_error_item() {
             item: ThreadItem {
                 id: "item_0".to_string(),
                 details: ThreadItemDetails::Error(ErrorItem {
-                    message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start new a new conversation when possible to keep conversations small and targeted.".to_string(),
+                    message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.".to_string(),
                 }),
             },
         })]

@@ -26,10 +26,11 @@ use std::path::PathBuf;
 use supports_color::Stream;
 
 mod mcp_cmd;
+#[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
-use crate::wsl_paths::normalize_for_wsl;
+
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::features::is_known_feature_key;
@@ -269,14 +270,30 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 /// Run the update action and print the result.
 fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     println!();
-    let (cmd, args) = action.command_args();
     let cmd_str = action.command_str();
     println!("Updating Codex via `{cmd_str}`...");
-    let command_path = normalize_for_wsl(cmd);
-    let normalized_args: Vec<String> = args.iter().map(normalize_for_wsl).collect();
-    let status = std::process::Command::new(&command_path)
-        .args(&normalized_args)
-        .status()?;
+
+    let status = {
+        #[cfg(windows)]
+        {
+            // On Windows, run via cmd.exe so .CMD/.BAT are correctly resolved (PATHEXT semantics).
+            std::process::Command::new("cmd")
+                .args(["/C", &cmd_str])
+                .status()?
+        }
+        #[cfg(not(windows))]
+        {
+            let (cmd, args) = action.command_args();
+            let command_path = crate::wsl_paths::normalize_for_wsl(cmd);
+            let normalized_args: Vec<String> = args
+                .iter()
+                .map(crate::wsl_paths::normalize_for_wsl)
+                .collect();
+            std::process::Command::new(&command_path)
+                .args(&normalized_args)
+                .status()?
+        }
+    };
     if !status.success() {
         anyhow::bail!("`{cmd_str}` failed with status {status}");
     }

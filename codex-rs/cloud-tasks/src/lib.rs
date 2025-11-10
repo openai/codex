@@ -8,6 +8,7 @@ pub mod util;
 pub use cli::Cli;
 
 use anyhow::anyhow;
+use codex_login::AuthManager;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
@@ -56,20 +57,8 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
     };
     append_error_log(format!("startup: base_url={base_url} path_style={style}"));
 
-    let auth = match codex_core::config::find_codex_home()
-        .ok()
-        .map(|home| {
-            let store_mode = codex_core::config::Config::load_from_base_config_with_overrides(
-                codex_core::config::ConfigToml::default(),
-                codex_core::config::ConfigOverrides::default(),
-                home.clone(),
-            )
-            .map(|cfg| cfg.cli_auth_credentials_store_mode)
-            .unwrap_or_default();
-            codex_login::AuthManager::new(home, false, store_mode)
-        })
-        .and_then(|am| am.auth())
-    {
+    let auth_manager = util::load_auth_manager().await;
+    let auth = match auth_manager.as_ref().and_then(AuthManager::auth) {
         Some(auth) => auth,
         None => {
             eprintln!(
