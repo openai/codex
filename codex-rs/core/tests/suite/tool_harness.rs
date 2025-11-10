@@ -32,13 +32,21 @@ use serde_json::json;
 use wiremock::matchers::any;
 
 fn call_output(req: &ResponsesRequest, call_id: &str) -> (String, Option<bool>) {
-    let (content, success) = req
-        .function_call_output_content_and_success(call_id)
-        .expect("function_call_output present");
-    (
-        content.expect("function_call_output content present"),
-        success,
-    )
+    let raw = req.function_call_output(call_id);
+    assert_eq!(
+        raw.get("call_id").and_then(Value::as_str),
+        Some(call_id),
+        "mismatched call_id in function_call_output"
+    );
+    let (content_opt, success) = match req.function_call_output_content_and_success(call_id) {
+        Some(values) => values,
+        None => panic!("function_call_output present"),
+    };
+    let content = match content_opt {
+        Some(c) => c,
+        None => panic!("function_call_output content present"),
+    };
+    (content, success)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
