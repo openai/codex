@@ -386,7 +386,7 @@ fn ensure_no_inline_bearer_tokens(value: &TomlValue) -> std::io::Result<()> {
 pub(crate) fn set_project_trust_level_inner(
     doc: &mut DocumentMut,
     project_path: &Path,
-    trust_level: &TrustLevel,
+    trust_level: TrustLevel,
 ) -> anyhow::Result<()> {
     // Ensure we render a human-friendly structure:
     //
@@ -3174,7 +3174,7 @@ model_verbosity = "high"
         let project_dir = Path::new("/some/path");
         let mut doc = DocumentMut::new();
 
-        set_project_trust_level_inner(&mut doc, project_dir, &TrustLevel::Trusted)?;
+        set_project_trust_level_inner(&mut doc, project_dir, TrustLevel::Trusted)?;
 
         let contents = doc.to_string();
 
@@ -3214,7 +3214,7 @@ trust_level = "trusted"
         let mut doc = initial.parse::<DocumentMut>()?;
 
         // Run the function; it should convert to explicit tables and set trusted
-        set_project_trust_level_inner(&mut doc, project_dir, &TrustLevel::Trusted)?;
+        set_project_trust_level_inner(&mut doc, project_dir, TrustLevel::Trusted)?;
 
         let contents = doc.to_string();
 
@@ -3241,7 +3241,7 @@ model = "foo""#;
 
         // Approve a new directory
         let new_project = Path::new("/Users/mbolin/code/codex2");
-        set_project_trust_level_inner(&mut doc, new_project, &TrustLevel::Trusted)?;
+        set_project_trust_level_inner(&mut doc, new_project, TrustLevel::Trusted)?;
 
         let contents = doc.to_string();
 

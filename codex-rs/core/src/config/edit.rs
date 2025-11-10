@@ -258,7 +258,7 @@ impl ConfigDocument {
             ConfigEdit::SetProjectTrustLevel { path, level } => {
                 // Delegate to the existing, tested logic in config.rs to
                 // ensure tables are explicit and migration is preserved.
-                crate::config::set_project_trust_level_inner(&mut self.doc, path.as_path(), level)?;
+                crate::config::set_project_trust_level_inner(&mut self.doc, path.as_path(), *level)?;
                 Ok(true)
             }
         }
