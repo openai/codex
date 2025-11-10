@@ -54,7 +54,7 @@ const COMPACT_PROMPT_MARKER: &str =
 pub(super) const TEST_COMPACT_PROMPT: &str =
     "You are performing a CONTEXT CHECKPOINT COMPACTION for a tool.\nTest-only compact prompt.";
 
-pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start new a new conversation when possible to keep conversations small and targeted.";
+pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.";
 
 fn auto_summary(summary: &str) -> String {
     summary.to_string()

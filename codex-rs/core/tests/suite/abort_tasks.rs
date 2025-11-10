@@ -13,7 +13,7 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event_with_timeout;
+use core_test_support::wait_for_event;
 use regex_lite::Regex;
 use serde_json::json;
 
@@ -42,8 +42,6 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
 
     let codex = test_codex().build(&server).await.unwrap().codex;
 
-    let wait_timeout = Duration::from_secs(5);
-
     // Kick off a turn that triggers the function call.
     codex
         .submit(Op::UserInput {
@@ -55,22 +53,12 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
         .unwrap();
 
     // Wait until the exec begins to avoid a race, then interrupt.
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::ExecCommandBegin(_)),
-        wait_timeout,
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_))).await;
 
     codex.submit(Op::Interrupt).await.unwrap();
 
     // Expect TurnAborted soon after.
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TurnAborted(_)),
-        wait_timeout,
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
 }
 
 /// After an interrupt we expect the next request to the model to include both
@@ -107,8 +95,6 @@ async fn interrupt_tool_records_history_entries() {
     let fixture = test_codex().build(&server).await.unwrap();
     let codex = Arc::clone(&fixture.codex);
 
-    let wait_timeout = Duration::from_millis(100);
-
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -118,22 +104,12 @@ async fn interrupt_tool_records_history_entries() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::ExecCommandBegin(_)),
-        wait_timeout,
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_))).await;
 
     tokio::time::sleep(Duration::from_secs_f32(0.1)).await;
     codex.submit(Op::Interrupt).await.unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TurnAborted(_)),
-        wait_timeout,
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
 
     codex
         .submit(Op::UserInput {
@@ -144,12 +120,7 @@ async fn interrupt_tool_records_history_entries() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        wait_timeout,
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     let requests = response_mock.requests();
     assert!(

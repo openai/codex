@@ -4,6 +4,9 @@ use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use chrono::DateTime;
+use chrono::Utc;
+use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
@@ -20,6 +23,7 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
@@ -29,7 +33,9 @@ use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::FuzzyFileSearchParams;
 use codex_app_server_protocol::FuzzyFileSearchResponse;
+use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
+use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::GetConversationSummaryParams;
@@ -130,8 +136,10 @@ use codex_protocol::ConversationId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_utils_json_to_toml::json_to_toml;
@@ -270,12 +278,8 @@ impl CodexMessageProcessor {
             ClientRequest::CancelLoginAccount { request_id, params } => {
                 self.cancel_login_v2(request_id, params).await;
             }
-            ClientRequest::GetAccount {
-                request_id,
-                params: _,
-            } => {
-                self.send_unimplemented_error(request_id, "account/read")
-                    .await;
+            ClientRequest::GetAccount { request_id, params } => {
+                self.get_account(request_id, params).await;
             }
             ClientRequest::ResumeConversation { request_id, params } => {
                 self.handle_resume_conversation(request_id, params).await;
@@ -798,13 +802,17 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn refresh_token_if_requested(&self, do_refresh: bool) {
+        if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
+            tracing::warn!("failed to refresh token whilte getting account: {err}");
+        }
+    }
+
     async fn get_auth_status(&self, request_id: RequestId, params: GetAuthStatusParams) {
         let include_token = params.include_token.unwrap_or(false);
         let do_refresh = params.refresh_token.unwrap_or(false);
 
-        if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
-            tracing::warn!("failed to refresh token while getting auth status: {err}");
-        }
+        self.refresh_token_if_requested(do_refresh).await;
 
         // Determine whether auth is required based on the active model provider.
         // If a custom provider is configured with `requires_openai_auth == false`,
@@ -846,6 +854,56 @@ impl CodexMessageProcessor {
             }
         };
 
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn get_account(&self, request_id: RequestId, params: GetAccountParams) {
+        let do_refresh = params.refresh_token;
+
+        self.refresh_token_if_requested(do_refresh).await;
+
+        // Whether auth is required for the active model provider.
+        let requires_openai_auth = self.config.model_provider.requires_openai_auth;
+
+        if !requires_openai_auth {
+            let response = GetAccountResponse {
+                account: None,
+                requires_openai_auth,
+            };
+            self.outgoing.send_response(request_id, response).await;
+            return;
+        }
+
+        let account = match self.auth_manager.auth() {
+            Some(auth) => Some(match auth.mode {
+                AuthMode::ApiKey => Account::ApiKey {},
+                AuthMode::ChatGPT => {
+                    let email = auth.get_account_email();
+                    let plan_type = auth.account_plan_type();
+
+                    match (email, plan_type) {
+                        (Some(email), Some(plan_type)) => Account::Chatgpt { email, plan_type },
+                        _ => {
+                            let error = JSONRPCErrorError {
+                                code: INVALID_REQUEST_ERROR_CODE,
+                                message:
+                                    "email and plan type are required for chatgpt authentication"
+                                        .to_string(),
+                                data: None,
+                            };
+                            self.outgoing.send_error(request_id, error).await;
+                            return;
+                        }
+                    }
+                }
+            }),
+            None => None,
+        };
+
+        let response = GetAccountResponse {
+            account,
+            requires_openai_auth,
+        };
         self.outgoing.send_response(request_id, response).await;
     }
 
@@ -1146,8 +1204,31 @@ impl CodexMessageProcessor {
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(new_conv) => {
-                let thread = Thread {
-                    id: new_conv.conversation_id.to_string(),
+                let conversation_id = new_conv.conversation_id;
+                let rollout_path = new_conv.session_configured.rollout_path.clone();
+                let fallback_provider = self.config.model_provider_id.as_str();
+
+                // A bit hacky, but the summary contains a lot of useful information for the thread
+                // that unfortunately does not get returned from conversation_manager.new_conversation().
+                let thread = match read_summary_from_rollout(
+                    rollout_path.as_path(),
+                    fallback_provider,
+                )
+                .await
+                {
+                    Ok(summary) => summary_to_thread(summary),
+                    Err(err) => {
+                        warn!(
+                            "failed to load summary for new thread {}: {}",
+                            conversation_id, err
+                        );
+                        Thread {
+                            id: conversation_id.to_string(),
+                            preview: String::new(),
+                            model_provider: self.config.model_provider_id.clone(),
+                            created_at: chrono::Utc::now().timestamp(),
+                        }
+                    }
                 };
 
                 let response = ThreadStartResponse {
@@ -1157,12 +1238,12 @@ impl CodexMessageProcessor {
                 // Auto-attach a conversation listener when starting a thread.
                 // Use the same behavior as the v1 API with experimental_raw_events=false.
                 if let Err(err) = self
-                    .attach_conversation_listener(new_conv.conversation_id, false)
+                    .attach_conversation_listener(conversation_id, false)
                     .await
                 {
                     tracing::warn!(
                         "failed to attach listener for conversation {}: {}",
-                        new_conv.conversation_id,
+                        conversation_id,
                         err.message
                     );
                 }
@@ -1260,12 +1341,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        let data = summaries
-            .into_iter()
-            .map(|s| Thread {
-                id: s.conversation_id.to_string(),
-            })
-            .collect();
+        let data = summaries.into_iter().map(summary_to_thread).collect();
 
         let response = ThreadListResponse { data, next_cursor };
         self.outgoing.send_response(request_id, response).await;
@@ -1352,6 +1428,8 @@ impl CodexMessageProcessor {
             .await
         {
             Ok(_) => {
+                let thread = summary_to_thread(summary);
+
                 // Auto-attach a conversation listener when resuming a thread.
                 if let Err(err) = self
                     .attach_conversation_listener(conversation_id, false)
@@ -1364,11 +1442,7 @@ impl CodexMessageProcessor {
                     );
                 }
 
-                let response = ThreadResumeResponse {
-                    thread: Thread {
-                        id: conversation_id.to_string(),
-                    },
-                };
+                let response = ThreadResumeResponse { thread };
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
@@ -1510,7 +1584,18 @@ impl CodexMessageProcessor {
         let items = page
             .items
             .into_iter()
-            .filter_map(|it| extract_conversation_summary(it.path, &it.head, &fallback_provider))
+            .filter_map(|it| {
+                let session_meta_line = it.head.first().and_then(|first| {
+                    serde_json::from_value::<SessionMetaLine>(first.clone()).ok()
+                })?;
+                extract_conversation_summary(
+                    it.path,
+                    &it.head,
+                    &session_meta_line.meta,
+                    session_meta_line.git.as_ref(),
+                    fallback_provider.as_str(),
+                )
+            })
             .collect::<Vec<_>>();
 
         // Encode next_cursor as a plain string
@@ -2671,16 +2756,25 @@ async fn read_summary_from_rollout(
         )));
     };
 
-    let session_meta = serde_json::from_value::<SessionMeta>(first.clone()).map_err(|_| {
-        IoError::other(format!(
-            "rollout at {} does not start with session metadata",
-            path.display()
-        ))
-    })?;
+    let session_meta_line =
+        serde_json::from_value::<SessionMetaLine>(first.clone()).map_err(|_| {
+            IoError::other(format!(
+                "rollout at {} does not start with session metadata",
+                path.display()
+            ))
+        })?;
+    let SessionMetaLine {
+        meta: session_meta,
+        git,
+    } = session_meta_line;
 
-    if let Some(summary) =
-        extract_conversation_summary(path.to_path_buf(), &head, fallback_provider)
-    {
+    if let Some(summary) = extract_conversation_summary(
+        path.to_path_buf(),
+        &head,
+        &session_meta,
+        git.as_ref(),
+        fallback_provider,
+    ) {
         return Ok(summary);
     }
 
@@ -2691,7 +2785,9 @@ async fn read_summary_from_rollout(
     };
     let model_provider = session_meta
         .model_provider
+        .clone()
         .unwrap_or_else(|| fallback_provider.to_string());
+    let git_info = git.as_ref().map(map_git_info);
 
     Ok(ConversationSummary {
         conversation_id: session_meta.id,
@@ -2699,19 +2795,20 @@ async fn read_summary_from_rollout(
         path: path.to_path_buf(),
         preview: String::new(),
         model_provider,
+        cwd: session_meta.cwd,
+        cli_version: session_meta.cli_version,
+        source: session_meta.source,
+        git_info,
     })
 }
 
 fn extract_conversation_summary(
     path: PathBuf,
     head: &[serde_json::Value],
+    session_meta: &SessionMeta,
+    git: Option<&GitInfo>,
     fallback_provider: &str,
 ) -> Option<ConversationSummary> {
-    let session_meta = match head.first() {
-        Some(first_line) => serde_json::from_value::<SessionMeta>(first_line.clone()).ok()?,
-        None => return None,
-    };
-
     let preview = head
         .iter()
         .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
@@ -2733,7 +2830,9 @@ fn extract_conversation_summary(
     let conversation_id = session_meta.id;
     let model_provider = session_meta
         .model_provider
+        .clone()
         .unwrap_or_else(|| fallback_provider.to_string());
+    let git_info = git.map(map_git_info);
 
     Some(ConversationSummary {
         conversation_id,
@@ -2741,13 +2840,53 @@ fn extract_conversation_summary(
         path,
         preview: preview.to_string(),
         model_provider,
+        cwd: session_meta.cwd.clone(),
+        cli_version: session_meta.cli_version.clone(),
+        source: session_meta.source.clone(),
+        git_info,
     })
+}
+
+fn map_git_info(git_info: &GitInfo) -> ConversationGitInfo {
+    ConversationGitInfo {
+        sha: git_info.commit_hash.clone(),
+        branch: git_info.branch.clone(),
+        origin_url: git_info.repository_url.clone(),
+    }
+}
+
+fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
+    timestamp.and_then(|ts| {
+        chrono::DateTime::parse_from_rfc3339(ts)
+            .ok()
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+    })
+}
+
+fn summary_to_thread(summary: ConversationSummary) -> Thread {
+    let ConversationSummary {
+        conversation_id,
+        preview,
+        timestamp,
+        model_provider,
+        ..
+    } = summary;
+
+    let created_at = parse_datetime(timestamp.as_deref());
+
+    Thread {
+        id: conversation_id.to_string(),
+        preview,
+        model_provider,
+        created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use anyhow::Result;
+    use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::TempDir;
@@ -2786,8 +2925,11 @@ mod tests {
             }),
         ];
 
+        let session_meta = serde_json::from_value::<SessionMeta>(head[0].clone())?;
+
         let summary =
-            extract_conversation_summary(path.clone(), &head, "test-provider").expect("summary");
+            extract_conversation_summary(path.clone(), &head, &session_meta, None, "test-provider")
+                .expect("summary");
 
         let expected = ConversationSummary {
             conversation_id,
@@ -2795,6 +2937,10 @@ mod tests {
             path,
             preview: "Count to 5".to_string(),
             model_provider: "test-provider".to_string(),
+            cwd: PathBuf::from("/"),
+            cli_version: "0.0.0".to_string(),
+            source: SessionSource::VSCode,
+            git_info: None,
         };
 
         assert_eq!(summary, expected);
@@ -2839,6 +2985,10 @@ mod tests {
             path: path.clone(),
             preview: String::new(),
             model_provider: "fallback".to_string(),
+            cwd: PathBuf::new(),
+            cli_version: String::new(),
+            source: SessionSource::VSCode,
+            git_info: None,
         };
 
         assert_eq!(summary, expected);

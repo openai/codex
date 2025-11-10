@@ -70,6 +70,7 @@ pub(crate) struct ExecCommandRequest<'a> {
     pub login: bool,
     pub yield_time_ms: Option<u64>,
     pub max_output_tokens: Option<usize>,
+    pub workdir: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -199,6 +200,7 @@ mod tests {
                     login: true,
                     yield_time_ms,
                     max_output_tokens: None,
+                    workdir: None,
                 },
                 &context,
             )

@@ -1,3 +1,4 @@
+use crate::command_safety::is_dangerous_command::requires_initial_appoval;
 /*
 Runtime: unified exec
 
@@ -21,7 +22,9 @@ use crate::tools::sandboxing::with_cached_approval;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecSession;
 use crate::unified_exec::UnifiedExecSessionManager;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::SandboxPolicy;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -105,6 +108,15 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             })
             .await
         })
+    }
+
+    fn wants_initial_approval(
+        &self,
+        req: &UnifiedExecRequest,
+        policy: AskForApproval,
+        sandbox_policy: &SandboxPolicy,
+    ) -> bool {
+        requires_initial_appoval(policy, sandbox_policy, &req.command, false)
     }
 }
 

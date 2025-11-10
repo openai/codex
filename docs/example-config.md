@@ -159,6 +159,7 @@ windows_wsl_setup_acknowledged = false
 # In-product notices (mostly set automatically by Codex).
 [notice]
 # hide_full_access_warning = true
+# hide_rate_limit_model_nudge = true
 
 ################################################################################
 # Authentication & Login
@@ -220,9 +221,6 @@ enable_experimental_windows_sandbox = false
 ################################################################################
 # Experimental toggles (legacy; prefer [features])
 ################################################################################
-
-# Use experimental exec command tool (streamable shell). Default: false
-experimental_use_exec_command_tool = false
 
 # Use experimental unified exec tool. Default: false
 experimental_use_unified_exec_tool = false
@@ -328,7 +326,6 @@ mcp_oauth_credentials_store = "auto"
 # experimental_compact_prompt_file = "compact_prompt.txt"
 # include_apply_patch_tool = false
 # experimental_use_unified_exec_tool = false
-# experimental_use_exec_command_tool = false
 # experimental_use_rmcp_client = false
 # experimental_use_freeform_apply_patch = false
 # experimental_sandbox_command_assessment = false

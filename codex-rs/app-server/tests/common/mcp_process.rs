@@ -19,6 +19,7 @@ use codex_app_server_protocol::CancelLoginChatGptParams;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::FeedbackUploadParams;
+use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InterruptConversationParams;
@@ -247,6 +248,15 @@ impl McpProcess {
     /// Send an `account/rateLimits/read` JSON-RPC request.
     pub async fn send_get_account_rate_limits_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("account/rateLimits/read", None).await
+    }
+
+    /// Send an `account/read` JSON-RPC request.
+    pub async fn send_get_account_request(
+        &mut self,
+        params: GetAccountParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("account/read", params).await
     }
 
     /// Send a `feedback/upload` JSON-RPC request.
