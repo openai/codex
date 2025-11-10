@@ -8,8 +8,8 @@ pub enum Error {
     InvalidDecision(String),
     #[error("invalid pattern element: {0}")]
     InvalidPattern(String),
-    #[error("failed to tokenize example `{example}`: {reason}")]
-    TokenizationFailed { example: String, reason: String },
+    #[error("invalid example: {0}")]
+    InvalidExample(String),
     #[error("expected example to match rule `{rule_id}`: {example}")]
     ExampleDidNotMatch { rule_id: String, example: String },
     #[error("expected example to not match rule `{rule_id}`: {example}")]

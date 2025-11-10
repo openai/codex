@@ -17,6 +17,5 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-shlex = { workspace = true }
 starlark = { workspace = true }
 thiserror = { workspace = true }

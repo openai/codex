@@ -12,7 +12,6 @@ use starlark::values::list::ListRef;
 use starlark::values::list::UnpackList;
 use starlark::values::none::NoneType;
 
-use crate::command::tokenize_command;
 use crate::decision::Decision;
 use crate::error::Error;
 use crate::error::Result;
@@ -136,13 +135,36 @@ fn parse_pattern<'v>(pattern: UnpackList<Value<'v>>) -> Result<Vec<Vec<String>>>
     Ok(expand_pattern(&parts))
 }
 
+fn parse_examples<'v>(examples: UnpackList<Value<'v>>) -> Result<Vec<Vec<String>>> {
+    let mut parsed = Vec::new();
+    for example in examples.items {
+        let list = ListRef::from_value(example).ok_or_else(|| {
+            Error::InvalidExample("example must be a list of strings".to_string())
+        })?;
+        let mut tokens = Vec::new();
+        for value in list.content() {
+            let token = value.unpack_str().ok_or_else(|| {
+                Error::InvalidExample("example tokens must be strings".to_string())
+            })?;
+            tokens.push(token.to_string());
+        }
+        if tokens.is_empty() {
+            return Err(Error::InvalidExample(
+                "example cannot be an empty list".to_string(),
+            ));
+        }
+        parsed.push(tokens);
+    }
+    Ok(parsed)
+}
+
 #[starlark_module]
 fn policy_builtins(builder: &mut GlobalsBuilder) {
     fn prefix_rule<'v>(
         pattern: UnpackList<Value<'v>>,
         decision: Option<&'v str>,
-        r#match: Option<UnpackList<&'v str>>,
-        not_match: Option<UnpackList<&'v str>>,
+        r#match: Option<UnpackList<Value<'v>>>,
+        not_match: Option<UnpackList<Value<'v>>>,
         id: Option<&'v str>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<NoneType> {
@@ -153,24 +175,10 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
 
         let prefixes = parse_pattern(pattern)?;
 
-        let positive_examples: Vec<Vec<String>> = r#match
-            .map(|examples| {
-                examples
-                    .items
-                    .into_iter()
-                    .map(tokenize_command)
-                    .collect::<Result<Vec<_>>>()
-            })
-            .transpose()?
-            .unwrap_or_default();
+        let positive_examples: Vec<Vec<String>> =
+            r#match.map(parse_examples).transpose()?.unwrap_or_default();
         let negative_examples: Vec<Vec<String>> = not_match
-            .map(|examples| {
-                examples
-                    .items
-                    .into_iter()
-                    .map(tokenize_command)
-                    .collect::<Result<Vec<_>>>()
-            })
+            .map(parse_examples)
             .transpose()?
             .unwrap_or_default();
 

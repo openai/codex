@@ -2,12 +2,12 @@ prefix_rule(
     id = "git_status",
     pattern = ["git", "status"],
     match = [
-        "git status",
-        "git status -- path/to/file",
+        ["git", "status"],
+        ["git", "status", "--", "path/to/file"],
     ],
     not_match = [
-        "git statusx",
-        "git reset --hard",
+        ["git", "statusx"],
+        ["git", "reset", "--hard"],
     ],
 )
 
@@ -16,13 +16,13 @@ prefix_rule(
     pattern = ["npm", ["i", "install"]],
     decision = "prompt",
     match = [
-        "npm i",
-        "npm install",
-        "npm install lodash",
+        ["npm", "i"],
+        ["npm", "install"],
+        ["npm", "install", "lodash"],
     ],
     not_match = [
-        "npmx install",
-        "npm outdated",
+        ["npmx", "install"],
+        ["npm", "outdated"],
     ],
 )
 
@@ -31,6 +31,6 @@ prefix_rule(
     pattern = ["git", "reset", "--hard"],
     decision = "forbidden",
     match = [
-        "git reset --hard",
+        ["git", "reset", "--hard"],
     ],
 )

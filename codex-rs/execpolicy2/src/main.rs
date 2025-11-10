@@ -6,7 +6,6 @@ use anyhow::Result;
 use anyhow::bail;
 use codex_execpolicy2::PolicyParser;
 use codex_execpolicy2::load_default_policy;
-use codex_execpolicy2::tokenize_command;
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -45,17 +44,11 @@ fn run_subcommand(
 
 fn cmd_check(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
     if args.is_empty() {
-        bail!("usage: codex-execpolicy2 check <command tokens...|\"command string\">");
+        bail!("usage: codex-execpolicy2 check <command tokens...>");
     }
     let policy = load_policy(policy_path)?;
 
-    let tokens = if args.len() == 1 {
-        tokenize_command(&args[0])?
-    } else {
-        args
-    };
-
-    match policy.evaluate(&tokens) {
+    match policy.evaluate(&args) {
         Some(eval) => {
             let json = serde_json::to_string_pretty(&eval)?;
             println!("{json}");
@@ -80,6 +73,6 @@ fn load_policy(policy_path: Option<String>) -> Result<codex_execpolicy2::Policy>
 fn print_usage() {
     eprintln!(
         "usage:
-  codex-execpolicy2 [--policy path] check <command tokens...|\"command string\">"
+  codex-execpolicy2 [--policy path] check <command tokens...>"
     );
 }

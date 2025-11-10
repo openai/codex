@@ -1,12 +1,15 @@
 use codex_execpolicy2::Decision;
 use codex_execpolicy2::PolicyParser;
 use codex_execpolicy2::RuleMatch;
-use codex_execpolicy2::tokenize_command;
+
+fn tokens(cmd: &[&str]) -> Vec<String> {
+    cmd.iter().map(|token| token.to_string()).collect()
+}
 
 #[test]
 fn matches_default_git_status() {
     let policy = codex_execpolicy2::load_default_policy().expect("parse");
-    let cmd = tokenize_command("git status").expect("tokenize");
+    let cmd = tokens(&["git", "status"]);
     let eval = policy.evaluate(&cmd).expect("match");
     assert_eq!(eval.decision, Decision::Allow);
     assert_eq!(
@@ -30,14 +33,11 @@ prefix_rule(
     let parser = PolicyParser::new("test.policy", policy_src);
     let policy = parser.parse().expect("parse policy");
 
-    for cmd in ["npm i", "npm install"] {
-        let tokens = tokenize_command(cmd).expect("tokenize");
-        let eval = policy.evaluate(&tokens).expect("match");
-        let matched_prefix = if cmd.ends_with(" i") {
-            vec!["npm".to_string(), "i".to_string()]
-        } else {
-            vec!["npm".to_string(), "install".to_string()]
-        };
+    for (cmd, matched_prefix) in [
+        (tokens(&["npm", "i"]), tokens(&["npm", "i"])),
+        (tokens(&["npm", "install"]), tokens(&["npm", "install"])),
+    ] {
+        let eval = policy.evaluate(&cmd).expect("match");
         assert_eq!(
             eval.matched_rules,
             vec![RuleMatch {
@@ -48,7 +48,7 @@ prefix_rule(
         );
     }
 
-    let no_match = tokenize_command("npmx install").expect("tokenize");
+    let no_match = tokens(&["npmx", "install"]);
     assert!(policy.evaluate(&no_match).is_none());
 }
 
@@ -58,20 +58,16 @@ fn match_and_not_match_examples_are_enforced() {
 prefix_rule(
     id = "git_status",
     pattern = ["git", "status"],
-    match = ["git status"],
-    not_match = ["git reset --hard"],
+    match = [["git", "status"]],
+    not_match = [["git", "reset", "--hard"]],
 )
     "#;
     let parser = PolicyParser::new("test.policy", policy_src);
     let policy = parser.parse().expect("parse policy");
+    assert!(policy.evaluate(&tokens(&["git", "status"])).is_some());
     assert!(
         policy
-            .evaluate(&tokenize_command("git status").expect("tokenize"))
-            .is_some()
-    );
-    assert!(
-        policy
-            .evaluate(&tokenize_command("git reset --hard").expect("tokenize"))
+            .evaluate(&tokens(&["git", "reset", "--hard"]))
             .is_none()
     );
 }
@@ -98,7 +94,7 @@ prefix_rule(
     let parser = PolicyParser::new("test.policy", policy_src);
     let policy = parser.parse().expect("parse policy");
 
-    let status = tokenize_command("git status").expect("tokenize");
+    let status = tokens(&["git", "status"]);
     let status_eval = policy.evaluate(&status).expect("match");
     assert_eq!(status_eval.decision, Decision::Prompt);
     assert_eq!(
@@ -117,7 +113,7 @@ prefix_rule(
         ]
     );
 
-    let commit = tokenize_command("git commit -m hi").expect("tokenize");
+    let commit = tokens(&["git", "commit", "-m", "hi"]);
     let commit_eval = policy.evaluate(&commit).expect("match");
     assert_eq!(commit_eval.decision, Decision::Forbidden);
     assert_eq!(
@@ -147,9 +143,7 @@ prefix_rule(
     "#;
     let parser = PolicyParser::new("test.policy", policy_src);
     let policy = parser.parse().expect("parse policy");
-    let eval = policy
-        .evaluate(&tokenize_command("echo hi").expect("tokenize"))
-        .expect("match");
+    let eval = policy.evaluate(&tokens(&["echo", "hi"])).expect("match");
     assert_eq!(
         eval.matched_rules,
         vec![RuleMatch {
