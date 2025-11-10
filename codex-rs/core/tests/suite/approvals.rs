@@ -442,11 +442,7 @@ async fn submit_turn(
     Ok(())
 }
 
-fn parse_result(item: &Value) -> CommandResult {
-    let output_str = item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("shell output payload");
+fn parse_result(output_str: &str) -> CommandResult {
     match serde_json::from_str::<Value>(output_str) {
         Ok(parsed) => {
             let exit_code = parsed["metadata"]["exit_code"].as_i64();
@@ -1254,8 +1250,12 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
         }
     }
 
-    let output_item = results_mock.single_request().function_call_output(call_id);
-    let result = parse_result(&output_item);
+    let output_text = results_mock
+        .single_request()
+        .function_call_output_content_and_success(call_id)
+        .and_then(|(content, _)| content)
+        .expect("shell output payload");
+    let result = parse_result(&output_text);
     scenario.expectation.verify(&test, &result)?;
 
     Ok(())

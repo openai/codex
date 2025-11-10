@@ -159,24 +159,22 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
         "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}"
     );
 
-    let blocked_item = second_mock
+    let blocked_output = second_mock
         .single_request()
-        .function_call_output(call_id_blocked);
+        .function_call_output_content_and_success(call_id_blocked)
+        .and_then(|(content, _)| content)
+        .expect("blocked output string");
     assert_eq!(
-        blocked_item.get("output").and_then(Value::as_str),
-        Some(expected_message.as_str()),
+        blocked_output, expected_message,
         "unexpected rejection message"
     );
 
-    let success_item = third_mock
+    let success_output = third_mock
         .single_request()
-        .function_call_output(call_id_success);
-    let output_json: Value = serde_json::from_str(
-        success_item
-            .get("output")
-            .and_then(Value::as_str)
-            .expect("success output string"),
-    )?;
+        .function_call_output_content_and_success(call_id_success)
+        .and_then(|(content, _)| content)
+        .expect("success output string");
+    let output_json: Value = serde_json::from_str(&success_output)?;
     assert_eq!(
         output_json["metadata"]["exit_code"].as_i64(),
         Some(0),
