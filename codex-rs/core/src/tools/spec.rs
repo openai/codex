@@ -279,7 +279,7 @@ fn create_shell_tool() -> ToolSpec {
         name: "shell".to_string(),
         description: concat!(
             "Runs a shell command and returns its output.\n",
-            "- The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with [`bash`, `-lc`].\n",
+            "- The arguments to `command` will be passed to execvp(). Most terminal commands should be prefixed with [`bash`, `-lc`].\n",
             "- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary.",
         )
         .to_string(),
