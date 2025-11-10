@@ -4,10 +4,51 @@ use crate::error::Result;
 use serde::Deserialize;
 use serde::Serialize;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PatternToken {
+    Single(String),
+    Alts(Vec<String>),
+}
+
+impl PatternToken {
+    fn matches(&self, token: &str) -> bool {
+        match self {
+            Self::Single(expected) => expected == token,
+            Self::Alts(alternatives) => alternatives.iter().any(|alt| alt == token),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrefixPattern {
+    pub first: String,
+    pub tail: Vec<PatternToken>,
+}
+
+impl PrefixPattern {
+    pub fn len(&self) -> usize {
+        self.tail.len() + 1
+    }
+
+    pub fn matches_prefix(&self, cmd: &[String]) -> Option<Vec<String>> {
+        if cmd.len() < self.len() || cmd[0] != self.first {
+            return None;
+        }
+
+        for (pattern_token, cmd_token) in self.tail.iter().zip(&cmd[1..self.len()]) {
+            if !pattern_token.matches(cmd_token) {
+                return None;
+            }
+        }
+
+        Some(cmd[..self.len()].to_vec())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Rule {
     pub id: String,
-    pub prefixes: Vec<Vec<String>>,
+    pub pattern: PrefixPattern,
     pub decision: Decision,
 }
 
@@ -20,23 +61,13 @@ pub struct RuleMatch {
 
 impl Rule {
     pub fn matches(&self, cmd: &[String]) -> Option<RuleMatch> {
-        for prefix in &self.prefixes {
-            if prefix.len() > cmd.len() {
-                continue;
-            }
-            if cmd
-                .iter()
-                .zip(prefix)
-                .all(|(cmd_tok, prefix_tok)| cmd_tok == prefix_tok)
-            {
-                return Some(RuleMatch {
-                    rule_id: self.id.clone(),
-                    matched_prefix: prefix.clone(),
-                    decision: self.decision,
-                });
-            }
-        }
-        None
+        self.pattern
+            .matches_prefix(cmd)
+            .map(|matched_prefix| RuleMatch {
+                rule_id: self.id.clone(),
+                matched_prefix,
+                decision: self.decision,
+            })
     }
 
     pub fn validate_examples(
