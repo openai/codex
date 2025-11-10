@@ -2,35 +2,20 @@ use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecOutputStream;
 use codex_core::protocol::Op;
 use codex_core::protocol::TurnAbortReason;
+use core_test_support::assert_regex_match;
 use core_test_support::load_default_config_for_test;
+use core_test_support::responses;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
+use regex_lite::escape;
 use std::path::PathBuf;
-use std::process::Command;
-use std::process::Stdio;
 use tempfile::TempDir;
-
-fn detect_python_executable() -> Option<String> {
-    let candidates = ["python3", "python"];
-    candidates.iter().find_map(|candidate| {
-        Command::new(candidate)
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .ok()
-            .and_then(|status| status.success().then(|| (*candidate).to_string()))
-    })
-}
 
 #[tokio::test]
 async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
-    let Some(python) = detect_python_executable() else {
-        eprintln!("skipping test: python3 not found in PATH");
-        return;
-    };
-
     // Create a temporary working directory with a known file.
     let cwd = TempDir::new().unwrap();
     let file_name = "hello.txt";
@@ -55,10 +40,8 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
         .await
         .expect("create new conversation");
 
-    // 1) python should list the file
-    let list_cmd = format!(
-        "{python} -c \"import pathlib; print('\\n'.join(sorted(p.name for p in pathlib.Path('.').iterdir())))\""
-    );
+    // 1) shell command should list the file
+    let list_cmd = "ls".to_string();
     codex
         .submit(Op::RunUserShellCommand { command: list_cmd })
         .await
@@ -76,10 +59,8 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
         "ls output should include {file_name}, got: {stdout:?}"
     );
 
-    // 2) python should print the file contents verbatim
-    let cat_cmd = format!(
-        "{python} -c \"import pathlib; print(pathlib.Path('{file_name}').read_text(), end='')\""
-    );
+    // 2) shell command should print the file contents verbatim
+    let cat_cmd = format!("cat {file_name}");
     codex
         .submit(Op::RunUserShellCommand { command: cat_cmd })
         .await
@@ -95,7 +76,7 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
     };
     assert_eq!(exit_code, 0);
     if cfg!(windows) {
-        // Windows' Python writes CRLF line endings; normalize so the assertion remains portable.
+        // Windows shells emit CRLF line endings; normalize so the assertion remains portable.
         stdout = stdout.replace("\r\n", "\n");
     }
     assert_eq!(stdout, contents);
@@ -103,10 +84,6 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
 
 #[tokio::test]
 async fn user_shell_cmd_can_be_interrupted() {
-    let Some(python) = detect_python_executable() else {
-        eprintln!("skipping test: python3 not found in PATH");
-        return;
-    };
     // Set up isolated config and conversation.
     let codex_home = TempDir::new().unwrap();
     let config = load_default_config_for_test(&codex_home);
@@ -121,7 +98,7 @@ async fn user_shell_cmd_can_be_interrupted() {
         .expect("create new conversation");
 
     // Start a long-running command and then interrupt it.
-    let sleep_cmd = format!("{python} -c \"import time; time.sleep(5)\"");
+    let sleep_cmd = "sleep 5".to_string();
     codex
         .submit(Op::RunUserShellCommand { command: sleep_cmd })
         .await
@@ -137,4 +114,138 @@ async fn user_shell_cmd_can_be_interrupted() {
         unreachable!()
     };
     assert_eq!(ev.reason, TurnAbortReason::Interrupted);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let mut builder = core_test_support::test_codex::test_codex();
+    let test = builder.build(&server).await?;
+
+    #[cfg(windows)]
+    let command = r#"$val = $env:CODEX_SANDBOX; if ([string]::IsNullOrEmpty($val)) { $val = 'not-set' } ; [System.Console]::Write($val)"#.to_string();
+    #[cfg(not(windows))]
+    let command = r#"sh -c "printf '%s' \"${CODEX_SANDBOX:-not-set}\"""#.to_string();
+
+    test.codex
+        .submit(Op::RunUserShellCommand {
+            command: command.clone(),
+        })
+        .await?;
+
+    let begin_event = wait_for_event_match(&test.codex, |ev| match ev {
+        EventMsg::ExecCommandBegin(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(begin_event.is_user_shell_command);
+    let matches_last_arg = begin_event.command.last() == Some(&command);
+    let matches_split = shlex::split(&command).is_some_and(|split| split == begin_event.command);
+    assert!(
+        matches_last_arg || matches_split,
+        "user command begin event should include the original command; got: {:?}",
+        begin_event.command
+    );
+
+    let delta_event = wait_for_event_match(&test.codex, |ev| match ev {
+        EventMsg::ExecCommandOutputDelta(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(delta_event.stream, ExecOutputStream::Stdout);
+    let chunk_text =
+        String::from_utf8(delta_event.chunk.clone()).expect("user command chunk is valid utf-8");
+    assert_eq!(chunk_text.trim(), "not-set");
+
+    let end_event = wait_for_event_match(&test.codex, |ev| match ev {
+        EventMsg::ExecCommandEnd(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(end_event.exit_code, 0);
+    assert_eq!(end_event.stdout.trim(), "not-set");
+
+    let _ = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let responses = vec![responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "done"),
+        responses::ev_completed("resp-1"),
+    ])];
+    let mock = responses::mount_sse_sequence(&server, responses).await;
+
+    test.submit_turn("follow-up after shell command").await?;
+
+    let request = mock.single_request();
+
+    let command_message = request
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.contains("<user_shell_command>"))
+        .expect("command message recorded in request");
+    let command_message = command_message.replace("\r\n", "\n");
+    let escaped_command = escape(&command);
+    let expected_pattern = format!(
+        r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\nnot-set\n</result>\n</user_shell_command>\z"
+    );
+    assert_regex_match(&expected_pattern, &command_message);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let mut builder = core_test_support::test_codex::test_codex();
+    let test = builder.build(&server).await?;
+
+    #[cfg(windows)]
+    let command = r#"for ($i=1; $i -le 400; $i++) { Write-Output $i }"#.to_string();
+    #[cfg(not(windows))]
+    let command = "seq 1 400".to_string();
+
+    test.codex
+        .submit(Op::RunUserShellCommand {
+            command: command.clone(),
+        })
+        .await?;
+
+    let end_event = wait_for_event_match(&test.codex, |ev| match ev {
+        EventMsg::ExecCommandEnd(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(end_event.exit_code, 0);
+
+    let _ = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let responses = vec![responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "done"),
+        responses::ev_completed("resp-1"),
+    ])];
+    let mock = responses::mount_sse_sequence(&server, responses).await;
+
+    test.submit_turn("follow-up after shell command").await?;
+
+    let request = mock.single_request();
+    let command_message = request
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.contains("<user_shell_command>"))
+        .expect("command message recorded in request");
+    let command_message = command_message.replace("\r\n", "\n");
+
+    let head = (1..=128).map(|i| format!("{i}\n")).collect::<String>();
+    let tail = (273..=400).map(|i| format!("{i}\n")).collect::<String>();
+    let truncated_body =
+        format!("Total output lines: 400\n\n{head}\n[... omitted 144 of 400 lines ...]\n\n{tail}");
+    let escaped_command = escape(&command);
+    let escaped_truncated_body = escape(&truncated_body);
+    let expected_pattern = format!(
+        r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n{escaped_truncated_body}\n</result>\n</user_shell_command>\z"
+    );
+    assert_regex_match(&expected_pattern, &command_message);
+
+    Ok(())
 }

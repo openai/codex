@@ -32,7 +32,6 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_with_timeout;
 use futures::StreamExt;
 use serde_json::json;
 use std::io::Write;
@@ -1117,26 +1116,20 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         })
         .await?;
 
-    use std::time::Duration;
-
-    let token_event = wait_for_event_with_timeout(
-        &codex,
-        |event| {
-            matches!(
-                event,
-                EventMsg::TokenCount(payload)
-                    if payload.info.as_ref().is_some_and(|info| {
-                        info.model_context_window == Some(info.total_token_usage.total_tokens)
-                            && info.total_token_usage.total_tokens > 0
-                    })
-            )
-        },
-        Duration::from_secs(5),
-    )
+    let token_event = wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::TokenCount(payload)
+                if payload.info.as_ref().is_some_and(|info| {
+                    info.model_context_window == Some(info.total_token_usage.total_tokens)
+                        && info.total_token_usage.total_tokens > 0
+                })
+        )
+    })
     .await;
 
     let EventMsg::TokenCount(token_payload) = token_event else {
-        unreachable!("wait_for_event_with_timeout returned unexpected event");
+        unreachable!("wait_for_event returned unexpected event");
     };
 
     let info = token_payload
