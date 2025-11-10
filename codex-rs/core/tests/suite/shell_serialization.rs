@@ -12,10 +12,7 @@ use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::find_custom_tool_call_output;
-use core_test_support::responses::find_function_call_output;
 use core_test_support::responses::mount_sse_sequence;
-use core_test_support::responses::recorded_bodies;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -66,7 +63,7 @@ async fn shell_output_stays_json_without_freeform_apply_patch() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
         "run the json shell command",
@@ -74,8 +71,8 @@ async fn shell_output_stays_json_without_freeform_apply_patch() -> Result<()> {
     )
     .await?;
 
-    let bodies = recorded_bodies(&server).await?;
-    let output_item = find_function_call_output(&bodies, call_id).expect("shell output present");
+    let req = mock.last_request().expect("shell output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -130,7 +127,7 @@ async fn shell_output_is_structured_with_freeform_apply_patch() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
         "run the structured shell command",
@@ -138,9 +135,10 @@ async fn shell_output_is_structured_with_freeform_apply_patch() -> Result<()> {
     )
     .await?;
 
-    let bodies = recorded_bodies(&server).await?;
-    let output_item =
-        find_function_call_output(&bodies, call_id).expect("structured output present");
+    let req = mock
+        .last_request()
+        .expect("structured shell output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -192,7 +190,7 @@ async fn shell_output_preserves_fixture_json_without_serialization() -> Result<(
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
         "read the fixture JSON with sed",
@@ -200,8 +198,8 @@ async fn shell_output_preserves_fixture_json_without_serialization() -> Result<(
     )
     .await?;
 
-    let bodies = recorded_bodies(&server).await?;
-    let output_item = find_function_call_output(&bodies, call_id).expect("shell output present");
+    let req = mock.last_request().expect("shell output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -263,7 +261,7 @@ async fn shell_output_structures_fixture_with_serialization() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
         "read the fixture JSON with structured output",
@@ -271,9 +269,10 @@ async fn shell_output_structures_fixture_with_serialization() -> Result<()> {
     )
     .await?;
 
-    let bodies = recorded_bodies(&server).await?;
-    let output_item =
-        find_function_call_output(&bodies, call_id).expect("structured output present");
+    let req = mock
+        .last_request()
+        .expect("structured output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -333,7 +332,7 @@ async fn shell_output_for_freeform_tool_records_duration() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
         "run the structured shell command",
@@ -341,9 +340,10 @@ async fn shell_output_for_freeform_tool_records_duration() -> Result<()> {
     )
     .await?;
 
-    let bodies = recorded_bodies(&server).await?;
-    let output_item =
-        find_function_call_output(&bodies, call_id).expect("structured output present");
+    let req = mock
+        .last_request()
+        .expect("structured output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -398,7 +398,7 @@ async fn shell_output_reserializes_truncated_content() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
         "run the truncation shell command",
@@ -406,9 +406,10 @@ async fn shell_output_reserializes_truncated_content() -> Result<()> {
     )
     .await?;
 
-    let bodies = recorded_bodies(&server).await?;
-    let output_item =
-        find_function_call_output(&bodies, call_id).expect("truncated output present");
+    let req = mock
+        .last_request()
+        .expect("truncated output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -473,7 +474,7 @@ async fn apply_patch_custom_tool_output_is_structured() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
         "apply the patch via custom tool",
@@ -481,9 +482,10 @@ async fn apply_patch_custom_tool_output_is_structured() -> Result<()> {
     )
     .await?;
 
-    let bodies = recorded_bodies(&server).await?;
-    let output_item =
-        find_custom_tool_call_output(&bodies, call_id).expect("apply_patch output present");
+    let req = mock
+        .last_request()
+        .expect("apply_patch output request recorded");
+    let output_item = req.custom_tool_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -528,7 +530,7 @@ async fn apply_patch_custom_tool_call_creates_file() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
         "apply the patch via custom tool to create a file",
@@ -536,9 +538,10 @@ async fn apply_patch_custom_tool_call_creates_file() -> Result<()> {
     )
     .await?;
 
-    let bodies = recorded_bodies(&server).await?;
-    let output_item =
-        find_custom_tool_call_output(&bodies, call_id).expect("apply_patch output present");
+    let req = mock
+        .last_request()
+        .expect("apply_patch output request recorded");
+    let output_item = req.custom_tool_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -592,7 +595,7 @@ async fn apply_patch_custom_tool_call_updates_existing_file() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
         "apply the patch via custom tool to update a file",
@@ -600,9 +603,10 @@ async fn apply_patch_custom_tool_call_updates_existing_file() -> Result<()> {
     )
     .await?;
 
-    let bodies = recorded_bodies(&server).await?;
-    let output_item =
-        find_custom_tool_call_output(&bodies, call_id).expect("apply_patch output present");
+    let req = mock
+        .last_request()
+        .expect("apply_patch output request recorded");
+    let output_item = req.custom_tool_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -650,7 +654,7 @@ async fn apply_patch_custom_tool_call_reports_failure_output() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
         "attempt a failing apply_patch via custom tool",
@@ -658,9 +662,10 @@ async fn apply_patch_custom_tool_call_reports_failure_output() -> Result<()> {
     )
     .await?;
 
-    let bodies = recorded_bodies(&server).await?;
-    let output_item =
-        find_custom_tool_call_output(&bodies, call_id).expect("apply_patch output present");
+    let req = mock
+        .last_request()
+        .expect("apply_patch output request recorded");
+    let output_item = req.custom_tool_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -700,7 +705,7 @@ async fn apply_patch_function_call_output_is_structured() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
         "apply the patch via function-call apply_patch",
@@ -708,9 +713,10 @@ async fn apply_patch_function_call_output_is_structured() -> Result<()> {
     )
     .await?;
 
-    let bodies = recorded_bodies(&server).await?;
-    let output_item =
-        find_function_call_output(&bodies, call_id).expect("apply_patch function output present");
+    let req = mock
+        .last_request()
+        .expect("apply_patch function output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -758,7 +764,7 @@ async fn shell_output_is_structured_for_nonzero_exit() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
         "run the failing shell command",
@@ -766,8 +772,8 @@ async fn shell_output_is_structured_for_nonzero_exit() -> Result<()> {
     )
     .await?;
 
-    let bodies = recorded_bodies(&server).await?;
-    let output_item = find_function_call_output(&bodies, call_id).expect("shell output present");
+    let req = mock.last_request().expect("shell output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -807,7 +813,7 @@ async fn local_shell_call_output_is_structured() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
         "run the local shell command",
@@ -815,9 +821,10 @@ async fn local_shell_call_output_is_structured() -> Result<()> {
     )
     .await?;
 
-    let bodies = recorded_bodies(&server).await?;
-    let output_item =
-        find_function_call_output(&bodies, call_id).expect("local shell output present");
+    let req = mock
+        .last_request()
+        .expect("local shell output request recorded");
+    let output_item = req.function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)

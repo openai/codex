@@ -2,10 +2,7 @@
 
 use anyhow::Result;
 use codex_core::model_family::find_family_for_model;
-use core_test_support::responses::extract_content_and_success;
-use core_test_support::responses::find_function_call_output;
-use core_test_support::responses::mount_tool_sequence;
-use core_test_support::responses::recorded_bodies;
+use core_test_support::responses::mount_function_call_agent_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
@@ -58,18 +55,22 @@ async fn grep_files_tool_collects_matches() -> Result<()> {
     })
     .to_string();
 
-    mount_tool_sequence(&server, call_id, &arguments, "grep_files").await;
+    let mocks =
+        mount_function_call_agent_response(&server, call_id, &arguments, "grep_files").await;
     test.submit_turn("please find uses of needle").await?;
 
-    let bodies = recorded_bodies(&server).await?;
-    let tool_output = find_function_call_output(&bodies, call_id).expect("tool output present");
-    let payload = tool_output.get("output").expect("output field present");
-    let (content_opt, success_opt) = extract_content_and_success(payload);
+    let req = mocks.completion.single_request();
+    let (content_opt, success_opt) = req
+        .function_call_output_content_and_success(call_id)
+        .expect("tool output present");
     let content = content_opt.expect("content present");
     let success = success_opt.unwrap_or(true);
-    assert!(success, "expected success for matches, got {payload:?}");
+    assert!(
+        success,
+        "expected success for matches, got content={content}"
+    );
 
-    let entries = collect_file_names(content);
+    let entries = collect_file_names(&content);
     assert_eq!(entries.len(), 2, "content: {content}");
     assert!(
         entries.contains("alpha.rs"),
@@ -107,16 +108,17 @@ async fn grep_files_tool_reports_empty_results() -> Result<()> {
     })
     .to_string();
 
-    mount_tool_sequence(&server, call_id, &arguments, "grep_files").await;
+    let mocks =
+        mount_function_call_agent_response(&server, call_id, &arguments, "grep_files").await;
     test.submit_turn("search again").await?;
 
-    let bodies = recorded_bodies(&server).await?;
-    let tool_output = find_function_call_output(&bodies, call_id).expect("tool output present");
-    let payload = tool_output.get("output").expect("output field present");
-    let (content_opt, success_opt) = extract_content_and_success(payload);
+    let req = mocks.completion.single_request();
+    let (content_opt, success_opt) = req
+        .function_call_output_content_and_success(call_id)
+        .expect("tool output present");
     let content = content_opt.expect("content present");
     if let Some(success) = success_opt {
-        assert!(!success, "expected success=false payload: {payload:?}");
+        assert!(!success, "expected success=false content={content}");
     }
     assert_eq!(content, "No matches found.");
 

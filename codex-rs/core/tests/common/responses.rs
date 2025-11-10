@@ -38,6 +38,10 @@ impl ResponseMock {
         self.requests.lock().unwrap().clone()
     }
 
+    pub fn last_request(&self) -> Option<ResponsesRequest> {
+        self.requests.lock().unwrap().last().cloned()
+    }
+
     /// Returns true if any captured request contains a `function_call` with the
     /// provided `call_id`.
     pub fn saw_function_call(&self, call_id: &str) -> bool {
@@ -116,6 +120,42 @@ impl ResponsesRequest {
         item.get("output")
             .and_then(Value::as_str)
             .map(str::to_string)
+    }
+
+    pub fn function_call_output_content_and_success(
+        &self,
+        call_id: &str,
+    ) -> Option<(Option<String>, Option<bool>)> {
+        self.call_output_content_and_success(call_id, "function_call_output")
+    }
+
+    pub fn custom_tool_call_output_content_and_success(
+        &self,
+        call_id: &str,
+    ) -> Option<(Option<String>, Option<bool>)> {
+        self.call_output_content_and_success(call_id, "custom_tool_call_output")
+    }
+
+    fn call_output_content_and_success(
+        &self,
+        call_id: &str,
+        call_type: &str,
+    ) -> Option<(Option<String>, Option<bool>)> {
+        let output = self
+            .call_output(call_id, call_type)
+            .get("output")
+            .cloned()
+            .unwrap_or(Value::Null);
+        match output {
+            Value::String(text) => Some((Some(text), None)),
+            Value::Object(obj) => Some((
+                obj.get("content")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                obj.get("success").and_then(Value::as_bool),
+            )),
+            _ => Some((None, None)),
+        }
     }
 
     pub fn header(&self, name: &str) -> Option<String> {
@@ -450,17 +490,17 @@ pub async fn start_mock_server() -> MockServer {
 }
 
 #[derive(Clone)]
-pub struct ToolSequenceMocks {
+pub struct FunctionCallResponseMocks {
     pub function_call: ResponseMock,
     pub completion: ResponseMock,
 }
 
-pub async fn mount_tool_sequence(
+pub async fn mount_function_call_agent_response(
     server: &MockServer,
     call_id: &str,
     arguments: &str,
     tool_name: &str,
-) -> ToolSequenceMocks {
+) -> FunctionCallResponseMocks {
     let first_response = sse(vec![
         ev_response_created("resp-1"),
         ev_function_call(call_id, tool_name, arguments),
@@ -474,7 +514,7 @@ pub async fn mount_tool_sequence(
     ]);
     let completion = mount_sse_once_match(server, any(), second_response).await;
 
-    ToolSequenceMocks {
+    FunctionCallResponseMocks {
         function_call,
         completion,
     }
@@ -518,63 +558,6 @@ pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> Res
         .await;
 
     response_mock
-}
-
-pub async fn recorded_bodies(server: &MockServer) -> Result<Vec<Value>> {
-    let requests = server
-        .received_requests()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("failed to collect recorded requests"))?;
-    requests
-        .into_iter()
-        .map(|req| Ok(req.body_json::<Value>()?))
-        .collect()
-}
-
-fn find_call_output<'a>(requests: &'a [Value], call_id: &str, ty: &str) -> Option<&'a Value> {
-    requests.iter().find_map(|body| {
-        body.get("input")
-            .and_then(Value::as_array)
-            .and_then(|items| {
-                items.iter().find(|item| {
-                    item.get("type").and_then(Value::as_str) == Some(ty)
-                        && item.get("call_id").and_then(Value::as_str) == Some(call_id)
-                })
-            })
-    })
-}
-
-pub fn find_function_call_output<'a>(requests: &'a [Value], call_id: &str) -> Option<&'a Value> {
-    find_call_output(requests, call_id, "function_call_output")
-}
-
-pub fn find_custom_tool_call_output<'a>(requests: &'a [Value], call_id: &str) -> Option<&'a Value> {
-    find_call_output(requests, call_id, "custom_tool_call_output")
-}
-
-pub fn tool_output_text(item: &Value) -> Option<&str> {
-    item.get("output").and_then(|value| match value {
-        Value::String(text) => Some(text.as_str()),
-        Value::Object(obj) => obj.get("content").and_then(Value::as_str),
-        _ => None,
-    })
-}
-
-pub fn tool_output_content_and_success(item: &Value) -> (Option<&str>, Option<bool>) {
-    item.get("output")
-        .map(extract_content_and_success)
-        .unwrap_or((None, None))
-}
-
-pub fn extract_content_and_success(value: &Value) -> (Option<&str>, Option<bool>) {
-    match value {
-        Value::String(text) => (Some(text.as_str()), None),
-        Value::Object(obj) => (
-            obj.get("content").and_then(Value::as_str),
-            obj.get("success").and_then(Value::as_bool),
-        ),
-        _ => (None, None),
-    }
 }
 
 /// Validate invariants on the request body sent to `/v1/responses`.

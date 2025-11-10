@@ -1,11 +1,8 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Context;
-use core_test_support::responses::find_function_call_output;
-use core_test_support::responses::mount_tool_sequence;
-use core_test_support::responses::recorded_bodies;
+use core_test_support::responses::mount_function_call_agent_response;
 use core_test_support::responses::start_mock_server;
-use core_test_support::responses::tool_output_text;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
@@ -180,13 +177,13 @@ async fn collect_tool_output(
     arguments: &str,
     prompt: &str,
 ) -> anyhow::Result<String> {
-    mount_tool_sequence(server, call_id, arguments, "list_dir").await;
+    let mocks = mount_function_call_agent_response(server, call_id, arguments, "list_dir").await;
     test.submit_turn(prompt).await?;
 
-    let bodies = recorded_bodies(server).await?;
-    let tool_output_item = find_function_call_output(&bodies, call_id)
-        .unwrap_or_else(|| panic!("function_call_output item not found in requests: {bodies:#?}"));
-    let output_text =
-        tool_output_text(tool_output_item).context("output text present in tool output")?;
-    Ok(output_text.to_string())
+    let req = mocks.completion.single_request();
+    let (content_opt, _) = req
+        .function_call_output_content_and_success(call_id)
+        .context("function_call_output present")?;
+    let content = content_opt.context("output content present in tool output")?;
+    Ok(content)
 }

@@ -1,8 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 
-use core_test_support::responses::mount_tool_sequence;
+use core_test_support::responses::mount_function_call_agent_response;
 use core_test_support::responses::start_mock_server;
-use core_test_support::responses::tool_output_text;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
@@ -28,13 +27,15 @@ async fn read_file_tool_returns_requested_lines() -> anyhow::Result<()> {
     })
     .to_string();
 
-    let mocks = mount_tool_sequence(&server, call_id, &arguments, "read_file").await;
+    let mocks = mount_function_call_agent_response(&server, call_id, &arguments, "read_file").await;
 
     test.submit_turn("please inspect sample.txt").await?;
 
     let req = mocks.completion.single_request();
-    let tool_output_item = req.function_call_output(call_id);
-    let output_text = tool_output_text(&tool_output_item).expect("output text present");
+    let (output_text_opt, _) = req
+        .function_call_output_content_and_success(call_id)
+        .expect("output present");
+    let output_text = output_text_opt.expect("output text present");
     assert_eq!(output_text, "L2: second\nL3: third");
 
     Ok(())
