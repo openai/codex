@@ -41,7 +41,6 @@ impl UpdateAction {
     }
 }
 
-#[cfg(any(not(debug_assertions), test))]
 fn detect_update_action(
     is_macos: bool,
     current_exe: &std::path::Path,
@@ -49,17 +48,16 @@ fn detect_update_action(
     managed_by_bun: bool,
 ) -> Option<UpdateAction> {
     if managed_by_npm {
-        return Some(UpdateAction::NpmGlobalLatest);
-    }
-    if managed_by_bun {
-        return Some(UpdateAction::BunGlobalLatest);
-    }
-    if is_macos
+        Some(UpdateAction::NpmGlobalLatest)
+    } else if managed_by_bun {
+        Some(UpdateAction::BunGlobalLatest)
+    } else if is_macos
         && (current_exe.starts_with("/opt/homebrew") || current_exe.starts_with("/usr/local"))
     {
-        return Some(UpdateAction::BrewUpgrade);
+        Some(UpdateAction::BrewUpgrade)
+    } else {
+        None
     }
-    None
 }
 
 #[cfg(test)]
