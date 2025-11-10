@@ -228,44 +228,95 @@ fn create_write_stdin_tool() -> ToolSpec {
     })
 }
 
+struct ShellToolProperties {
+    command: String,
+    workdir: String,
+    timeout_ms: String,
+    with_escalated_permissions: String,
+    justification: String,
+    description: String,
+}
+
+#[cfg(not(windows))]
+fn get_shell_tool_properties() -> ShellToolProperties {
+    ShellToolProperties {
+        command: "The command to execute".to_string(),
+        workdir: "The working directory to execute the command in".to_string(),
+        timeout_ms: "The timeout for the command in milliseconds".to_string(),
+        with_escalated_permissions: "Whether to request escalated permissions. Set to true if command needs to be run without sandbox restrictions".to_string(),
+        justification: "Only set if with_escalated_permissions is true. 1-sentence explanation of why we want to run this command.".to_string(),
+        description: "Runs a shell command and returns its output.".to_string(),
+    }
+}
+
+#[cfg(windows)]
+fn get_shell_tool_properties() -> ShellToolProperties {
+    ShellToolProperties {
+        command: "The PowerShell command to execute (Windows)",
+        workdir: "The working directory to execute the command in",
+        timeout_ms: "The timeout for the command in milliseconds",
+        with_escalated_permissions: "Whether to request escalated permissions. Set to true if command needs to be run without sandbox restrictions",
+        justification: "Only set if with_escalated_permissions is true. 1-sentence explanation of why we want to run this command.",
+        description: r#"Runs a PowerShell command. Examples of valid command strings:
+
+- ls -a (show hidden): "Get-ChildItem -Force"
+- recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
+- recursive grep: "Select-String -Pattern TODO -Path C:\\myrepo -Recurse"
+- ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
+- setting an env var: "$env:FOO='bar'; echo $env:FOO"
+- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"
+- edit files using the apply_patch command: "@'\\n*** Begin Patch\\n*** Update File: test.txt\\n context\\n-old line\\n+new line\\n*** End Patch\\n'@ | apply_patch"
+"#.to_string(),
+    }
+}
+
 fn create_shell_tool() -> ToolSpec {
+    let ShellToolProperties {
+        command,
+        workdir,
+        timeout_ms,
+        with_escalated_permissions,
+        justification,
+        description,
+    } = get_shell_tool_properties();
+
     let mut properties = BTreeMap::new();
     properties.insert(
         "command".to_string(),
         JsonSchema::Array {
             items: Box::new(JsonSchema::String { description: None }),
-            description: Some("The command to execute".to_string()),
+            description: Some(command),
         },
     );
     properties.insert(
         "workdir".to_string(),
         JsonSchema::String {
-            description: Some("The working directory to execute the command in".to_string()),
+            description: Some(workdir),
         },
     );
     properties.insert(
         "timeout_ms".to_string(),
         JsonSchema::Number {
-            description: Some("The timeout for the command in milliseconds".to_string()),
+            description: Some(timeout_ms),
         },
     );
 
     properties.insert(
         "with_escalated_permissions".to_string(),
         JsonSchema::Boolean {
-            description: Some("Whether to request escalated permissions. Set to true if command needs to be run without sandbox restrictions".to_string()),
+            description: Some(with_escalated_permissions),
         },
     );
     properties.insert(
         "justification".to_string(),
         JsonSchema::String {
-            description: Some("Only set if with_escalated_permissions is true. 1-sentence explanation of why we want to run this command.".to_string()),
+            description: Some(justification),
         },
     );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "shell".to_string(),
-        description: "Runs a shell command and returns its output.".to_string(),
+        description,
         strict: false,
         parameters: JsonSchema::Object {
             properties,
