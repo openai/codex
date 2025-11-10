@@ -1,11 +1,9 @@
-pub mod command;
 pub mod decision;
 pub mod error;
 pub mod parser;
 pub mod policy;
 pub mod rule;
 
-pub use command::tokenize_command;
 pub use decision::Decision;
 pub use error::Error;
 pub use error::Result;
