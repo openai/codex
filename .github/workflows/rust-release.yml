@@ -10,7 +10,6 @@ on:
   push:
     tags:
       - "rust-v*.*.*"
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}
@@ -18,7 +17,6 @@ concurrency:
 
 jobs:
   tag-check:
-    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -48,7 +46,6 @@ jobs:
           echo "::endgroup::"
 
   build:
-    if: ${{ github.event_name == 'push' }}
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
@@ -374,7 +371,6 @@ jobs:
             codex-rs/dist/${{ matrix.target }}/*
 
   release:
-    if: ${{ github.event_name == 'push' }}
     needs: build
     name: release
     runs-on: ubuntu-latest
@@ -472,7 +468,7 @@ jobs:
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
     # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
-    if: ${{ needs.release.outputs.should_publish_npm == 'true' && github.event_name == 'push' }}
+    if: ${{ needs.release.outputs.should_publish_npm == 'true' }}
     name: publish-npm
     needs: release
     runs-on: ubuntu-latest
@@ -536,7 +532,6 @@ jobs:
           done
 
   update-branch:
-    if: ${{ github.event_name == 'push' }}
     name: Update latest-alpha-cli branch
     permissions:
       contents: write
@@ -554,85 +549,3 @@ jobs:
             -X PATCH \
             -f sha="${GITHUB_SHA}" \
             -F force=true
-
-  windows-artifact-test:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
-    name: Windows artifact test - ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: codex-rs
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: windows-latest
-            target: x86_64-pc-windows-msvc
-          - runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
-
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: dtolnay/rust-toolchain@1.90
-        with:
-          targets: ${{ matrix.target }}
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ${{ github.workspace }}/codex-rs/target/
-          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cargo build
-        run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
-
-      - name: Stage artifacts
-        shell: bash
-        run: |
-          dest="dist/${{ matrix.target }}"
-          mkdir -p "$dest"
-
-          cp target/${{ matrix.target }}/release/codex.exe "$dest/codex-${{ matrix.target }}.exe"
-          cp target/${{ matrix.target }}/release/codex-responses-api-proxy.exe "$dest/codex-responses-api-proxy-${{ matrix.target }}.exe"
-
-      - if: ${{ matrix.runner == 'windows-11-arm' }}
-        name: Install zstd
-        shell: powershell
-        run: choco install -y zstandard
-
-      - name: Compress artifacts
-        shell: bash
-        run: |
-          dest="dist/${{ matrix.target }}"
-
-          keep_originals=true
-
-          # Create .tar.gz, .zip, and .zst variants for each binary while
-          # preserving the original .exe for inspection.
-          for f in "$dest"/*; do
-            base="$(basename "$f")"
-            if [[ "$base" == *.tar.gz || "$base" == *.zip ]]; then
-              continue
-            fi
-
-            tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
-            (cd "$dest" && 7z a "${base}.zip" "$base")
-
-            zstd_args=(-T0 -19)
-            if [[ "${keep_originals}" == false ]]; then
-              zstd_args+=(--rm)
-            fi
-            zstd "${zstd_args[@]}" "$dest/$base"
-          done
-
-      - uses: actions/upload-artifact@v5
-        with:
-          name: windows-artifacts-${{ matrix.target }}
-          path: |
-            codex-rs/dist/${{ matrix.target }}/*
