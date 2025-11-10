@@ -297,9 +297,10 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
         .get(call_id)
         .expect("missing exec_command workdir output");
     let output_text = output.output.trim();
+    let output_canonical = std::fs::canonicalize(output_text)?;
+    let expected_canonical = std::fs::canonicalize(&workdir)?;
     assert_eq!(
-        output_text,
-        workdir.to_string_lossy(),
+        output_canonical, expected_canonical,
         "pwd should reflect the requested workdir override"
     );
 
