@@ -181,8 +181,11 @@ fn create_exec_command_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "exec_command".to_string(),
         description:
-            "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
-                .to_string(),
+            concat!(
+              "Runs a command in a PTY, returning output or a session ID for ongoing interaction.\n",
+              "- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."
+            )
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
