@@ -1,29 +1,23 @@
+use std::fmt;
 use std::io::IsTerminal;
-use std::io::Result;
 use std::io::Stdout;
 use std::io::stdout;
+use std::io::{self};
+use std::panic;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-#[cfg(unix)]
-use std::sync::atomic::AtomicU8;
-#[cfg(unix)]
-use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
-#[cfg(unix)]
-use crossterm::cursor::MoveTo;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
 use crossterm::event::Event;
-#[cfg(unix)]
-use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::PopKeyboardEnhancementFlags;
@@ -38,21 +32,20 @@ use ratatui::crossterm::terminal::disable_raw_mode;
 use ratatui::crossterm::terminal::enable_raw_mode;
 use ratatui::layout::Offset;
 use ratatui::text::Line;
+use tokio::select;
+use tokio_stream::Stream;
 
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
 #[cfg(unix)]
-use crate::key_hint;
-use tokio::select;
-use tokio_stream::Stream;
+use crate::tui::job_control::SUSPEND_KEY;
+#[cfg(unix)]
+use crate::tui::job_control::SuspendContext;
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
 
-#[cfg(unix)]
-const SUSPEND_KEY: key_hint::KeyBinding = key_hint::ctrl(KeyCode::Char('z'));
-
-pub fn set_modes() -> Result<()> {
+pub fn set_modes() -> io::Result<()> {
     execute!(stdout(), EnableBracketedPaste)?;
 
     enable_raw_mode()?;
@@ -79,13 +72,13 @@ pub fn set_modes() -> Result<()> {
 struct EnableAlternateScroll;
 
 impl Command for EnableAlternateScroll {
-    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
         write!(f, "\x1b[?1007h")
     }
 
     #[cfg(windows)]
-    fn execute_winapi(&self) -> std::io::Result<()> {
-        Err(std::io::Error::other(
+    fn execute_winapi(&self) -> io::Result<()> {
+        Err(io::Error::other(
             "tried to execute EnableAlternateScroll using WinAPI; use ANSI instead",
         ))
     }
@@ -100,13 +93,13 @@ impl Command for EnableAlternateScroll {
 struct DisableAlternateScroll;
 
 impl Command for DisableAlternateScroll {
-    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
         write!(f, "\x1b[?1007l")
     }
 
     #[cfg(windows)]
-    fn execute_winapi(&self) -> std::io::Result<()> {
-        Err(std::io::Error::other(
+    fn execute_winapi(&self) -> io::Result<()> {
+        Err(io::Error::other(
             "tried to execute DisableAlternateScroll using WinAPI; use ANSI instead",
         ))
     }
@@ -119,7 +112,7 @@ impl Command for DisableAlternateScroll {
 
 /// Restore the terminal to its original state.
 /// Inverse of `set_modes`.
-pub fn restore() -> Result<()> {
+pub fn restore() -> io::Result<()> {
     // Pop may fail on platforms that didn't support the push; ignore errors.
     let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
     execute!(stdout(), DisableBracketedPaste)?;
@@ -130,9 +123,9 @@ pub fn restore() -> Result<()> {
 }
 
 /// Initialize the terminal (inline viewport; history stays in normal scrollback)
-pub fn init() -> Result<Terminal> {
+pub fn init() -> io::Result<Terminal> {
     if !stdout().is_terminal() {
-        return Err(std::io::Error::other("stdout is not a terminal"));
+        return Err(io::Error::other("stdout is not a terminal"));
     }
     set_modes()?;
 
@@ -144,8 +137,8 @@ pub fn init() -> Result<Terminal> {
 }
 
 fn set_panic_hook() {
-    let hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info| {
+    let hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
         let _ = restore(); // ignore any errors as we are already failing
         hook(panic_info);
     }));
@@ -165,38 +158,12 @@ pub struct Tui {
     pending_history_lines: Vec<Line<'static>>,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
-    resume_pending: Arc<AtomicU8>, // Stores a ResumeAction
-    #[cfg(unix)]
-    suspend_cursor_y: Arc<AtomicU16>, // Bottom line of inline viewport
+    suspend_context: SuspendContext,
     // True when overlay alt-screen UI is active
     alt_screen_active: Arc<AtomicBool>,
     // True when terminal/tab is focused; updated internally from crossterm events
     terminal_focused: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
-}
-
-#[cfg(unix)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[repr(u8)]
-enum ResumeAction {
-    None = 0,
-    RealignInline = 1,
-    RestoreAlt = 2,
-}
-
-#[cfg(unix)]
-enum PreparedResumeAction {
-    RestoreAltScreen,
-    RealignViewport(ratatui::layout::Rect),
-}
-
-#[cfg(unix)]
-fn take_resume_action(pending: &AtomicU8) -> ResumeAction {
-    match pending.swap(ResumeAction::None as u8, Ordering::Relaxed) {
-        1 => ResumeAction::RealignInline,
-        2 => ResumeAction::RestoreAlt,
-        _ => ResumeAction::None,
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -244,9 +211,7 @@ impl Tui {
             pending_history_lines: vec![],
             alt_saved_viewport: None,
             #[cfg(unix)]
-            resume_pending: Arc::new(AtomicU8::new(0)),
-            #[cfg(unix)]
-            suspend_cursor_y: Arc::new(AtomicU16::new(0)),
+            suspend_context: SuspendContext::new(),
             alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
@@ -282,26 +247,9 @@ impl Tui {
 
         // State for tracking how we should resume from ^Z suspend.
         #[cfg(unix)]
-        let resume_pending = self.resume_pending.clone();
+        let suspend_context = self.suspend_context.clone();
         #[cfg(unix)]
         let alt_screen_active = self.alt_screen_active.clone();
-        #[cfg(unix)]
-        let suspend_cursor_y = self.suspend_cursor_y.clone();
-
-        #[cfg(unix)]
-        let suspend = move || {
-            if alt_screen_active.load(Ordering::Relaxed) {
-                // Disable alternate scroll when suspending from alt-screen
-                let _ = execute!(stdout(), DisableAlternateScroll);
-                let _ = execute!(stdout(), LeaveAlternateScreen);
-                resume_pending.store(ResumeAction::RestoreAlt as u8, Ordering::Relaxed);
-            } else {
-                resume_pending.store(ResumeAction::RealignInline as u8, Ordering::Relaxed);
-            }
-            let y = suspend_cursor_y.load(Ordering::Relaxed);
-            let _ = execute!(stdout(), MoveTo(0, y), crossterm::cursor::Show);
-            let _ = Tui::suspend();
-        };
 
         let terminal_focused = self.terminal_focused.clone();
         let event_stream = async_stream::stream! {
@@ -309,10 +257,10 @@ impl Tui {
                 select! {
                     Some(Ok(event)) = crossterm_events.next() => {
                         match event {
-                            crossterm::event::Event::Key(key_event) => {
+                            Event::Key(key_event) => {
                                 #[cfg(unix)]
                                 if SUSPEND_KEY.is_press(key_event) {
-                                    suspend();
+                                    let _ = suspend_context.suspend(&alt_screen_active);
                                     // We continue here after resume.
                                     yield TuiEvent::Draw;
                                     continue;
@@ -356,70 +304,9 @@ impl Tui {
         Box::pin(event_stream)
     }
 
-    #[cfg(unix)]
-    fn suspend() -> Result<()> {
-        restore()?;
-        unsafe { libc::kill(0, libc::SIGTSTP) };
-        set_modes()?;
-        Ok(())
-    }
-
-    /// When resuming from ^Z suspend, we want to put things back the way they were before suspend.
-    /// We capture the action in an object so we can pass it into the event stream, since the relevant
-    #[cfg(unix)]
-    fn prepare_resume_action(
-        &mut self,
-        action: ResumeAction,
-    ) -> Result<Option<PreparedResumeAction>> {
-        match action {
-            ResumeAction::RealignInline => {
-                let cursor_pos = self
-                    .terminal
-                    .get_cursor_position()
-                    .unwrap_or(self.terminal.last_known_cursor_pos);
-                Ok(Some(PreparedResumeAction::RealignViewport(
-                    ratatui::layout::Rect::new(0, cursor_pos.y, 0, 0),
-                )))
-            }
-            ResumeAction::RestoreAlt => {
-                if let Ok(ratatui::layout::Position { y, .. }) = self.terminal.get_cursor_position()
-                    && let Some(saved) = self.alt_saved_viewport.as_mut()
-                {
-                    saved.y = y;
-                }
-                Ok(Some(PreparedResumeAction::RestoreAltScreen))
-            }
-            ResumeAction::None => Ok(None),
-        }
-    }
-
-    #[cfg(unix)]
-    fn apply_prepared_resume_action(&mut self, prepared: PreparedResumeAction) -> Result<()> {
-        match prepared {
-            PreparedResumeAction::RealignViewport(area) => {
-                self.terminal.set_viewport_area(area);
-            }
-            PreparedResumeAction::RestoreAltScreen => {
-                execute!(self.terminal.backend_mut(), EnterAlternateScreen)?;
-                // Enable "alternate scroll" so terminals may translate wheel to arrows
-                execute!(self.terminal.backend_mut(), EnableAlternateScroll)?;
-                if let Ok(size) = self.terminal.size() {
-                    self.terminal.set_viewport_area(ratatui::layout::Rect::new(
-                        0,
-                        0,
-                        size.width,
-                        size.height,
-                    ));
-                    self.terminal.clear()?;
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Enter alternate screen and expand the viewport to full terminal size, saving the current
     /// inline viewport for restoration when leaving.
-    pub fn enter_alt_screen(&mut self) -> Result<()> {
+    pub fn enter_alt_screen(&mut self) -> io::Result<()> {
         let _ = execute!(self.terminal.backend_mut(), EnterAlternateScreen);
         // Enable "alternate scroll" so terminals may translate wheel to arrows
         let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
@@ -438,7 +325,7 @@ impl Tui {
     }
 
     /// Leave alternate screen and restore the previously saved inline viewport, if any.
-    pub fn leave_alt_screen(&mut self) -> Result<()> {
+    pub fn leave_alt_screen(&mut self) -> io::Result<()> {
         // Disable alternate scroll when leaving alt-screen
         let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
         let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
@@ -458,12 +345,13 @@ impl Tui {
         &mut self,
         height: u16,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
-    ) -> Result<()> {
+    ) -> io::Result<()> {
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
         // in the synchronized update.
         #[cfg(unix)]
-        let mut prepared_resume =
-            self.prepare_resume_action(take_resume_action(&self.resume_pending))?;
+        let mut prepared_resume = self
+            .suspend_context
+            .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
 
         // Precompute any viewport updates that need a cursor-position query before entering
         // the synchronized update, to avoid racing with the event reader.
@@ -490,12 +378,10 @@ impl Tui {
             }
         }
 
-        std::io::stdout().sync_update(|_| {
+        stdout().sync_update(|_| {
             #[cfg(unix)]
-            {
-                if let Some(prepared) = prepared_resume.take() {
-                    self.apply_prepared_resume_action(prepared)?;
-                }
+            if let Some(prepared) = prepared_resume.take() {
+                prepared.apply(&mut self.terminal)?;
             }
             let terminal = &mut self.terminal;
             if let Some(new_area) = pending_viewport_area.take() {
@@ -539,8 +425,7 @@ impl Tui {
                 } else {
                     area.bottom().saturating_sub(1)
                 };
-                self.suspend_cursor_y
-                    .store(inline_area_bottom, Ordering::Relaxed);
+                self.suspend_context.set_cursor_y(inline_area_bottom);
             }
 
             terminal.draw(|frame| {
@@ -600,13 +485,13 @@ fn spawn_frame_scheduler(
 pub struct PostNotification(pub String);
 
 impl Command for PostNotification {
-    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
         write!(f, "\x1b]9;{}\x07", self.0)
     }
 
     #[cfg(windows)]
-    fn execute_winapi(&self) -> std::io::Result<()> {
-        Err(std::io::Error::other(
+    fn execute_winapi(&self) -> io::Result<()> {
+        Err(io::Error::other(
             "tried to execute PostNotification using WinAPI; use ANSI instead",
         ))
     }
@@ -614,5 +499,191 @@ impl Command for PostNotification {
     #[cfg(windows)]
     fn is_ansi_code_supported(&self) -> bool {
         true
+    }
+}
+
+#[cfg(unix)]
+mod job_control {
+    use std::io;
+    use std::io::stdout;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::sync::PoisonError;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicU16;
+    use std::sync::atomic::Ordering;
+
+    use crossterm::cursor::MoveTo;
+    use crossterm::cursor::Show;
+    use crossterm::event::KeyCode;
+    use crossterm::terminal::EnterAlternateScreen;
+    use crossterm::terminal::LeaveAlternateScreen;
+    use ratatui::crossterm::execute;
+    use ratatui::layout::Position;
+    use ratatui::layout::Rect;
+
+    use crate::key_hint;
+
+    use super::DisableAlternateScroll;
+    use super::EnableAlternateScroll;
+    use super::Terminal;
+
+    pub(crate) const SUSPEND_KEY: key_hint::KeyBinding = key_hint::ctrl(KeyCode::Char('z'));
+
+    /// Coordinates suspend/resume handling so the TUI can restore terminal context after SIGTSTP.
+    ///
+    /// On suspend, it records which resume path to take (realign inline viewport vs. restore alt
+    /// screen) and caches the inline cursor row so the cursor can be placed meaningfully before
+    /// yielding.
+    ///
+    /// After resume, `prepare_resume_action` consumes the pending intent and returns a
+    /// `PreparedResumeAction` describing any viewport adjustments to apply inside the synchronized
+    /// draw.
+    ///
+    /// Callers keep `suspend_cursor_y` up to date during normal drawing so the suspend step always
+    /// has the latest cursor position.
+    ///
+    /// The type is `Clone`, using Arc/atomic internals so bookkeeping can be shared across tasks
+    /// and moved into the boxed `'static` event stream without borrowing `self`.
+    #[derive(Clone)]
+    pub(crate) struct SuspendContext {
+        /// Resume intent captured at suspend time; cleared once applied after resume.
+        resume_pending: Arc<Mutex<Option<ResumeAction>>>,
+        /// Inline viewport cursor row used to place the cursor before yielding during suspend.
+        suspend_cursor_y: Arc<AtomicU16>,
+    }
+
+    impl SuspendContext {
+        pub(crate) fn new() -> Self {
+            Self {
+                resume_pending: Arc::new(Mutex::new(None)),
+                suspend_cursor_y: Arc::new(AtomicU16::new(0)),
+            }
+        }
+
+        /// Capture how to resume, stash cursor position, and temporarily yield during SIGTSTP.
+        ///
+        /// - If the alt screen is active, exit alt-scroll/alt-screen and record `RestoreAlt`;
+        ///   otherwise record `RealignInline`.
+        /// - Update the cached inline cursor row so suspend can place the cursor meaningfully.
+        /// - Trigger SIGTSTP so the process can be resumed and continue drawing with the saved state.
+        pub(crate) fn suspend(&self, alt_screen_active: &Arc<AtomicBool>) -> io::Result<()> {
+            if alt_screen_active.load(Ordering::Relaxed) {
+                // Leave alt-screen so the terminal returns to the normal buffer while suspended; also turn off alt-scroll.
+                let _ = execute!(stdout(), DisableAlternateScroll);
+                let _ = execute!(stdout(), LeaveAlternateScreen);
+                self.set_resume_action(ResumeAction::RestoreAlt);
+            } else {
+                self.set_resume_action(ResumeAction::RealignInline);
+            }
+            let y = self.suspend_cursor_y.load(Ordering::Relaxed);
+            let _ = execute!(stdout(), MoveTo(0, y), Show);
+            suspend_process()
+        }
+
+        /// Consume the pending resume intent and precompute any viewport changes needed post-resume.
+        ///
+        /// Returns a `PreparedResumeAction` describing how to realign the viewport once drawing
+        /// resumes; returns `None` when there was no pending suspend intent.
+        pub(crate) fn prepare_resume_action(
+            &self,
+            terminal: &mut Terminal,
+            alt_saved_viewport: &mut Option<Rect>,
+        ) -> Option<PreparedResumeAction> {
+            let action = self.take_resume_action()?;
+            match action {
+                ResumeAction::RealignInline => {
+                    let cursor_pos = terminal
+                        .get_cursor_position()
+                        .unwrap_or(terminal.last_known_cursor_pos);
+                    let viewport = Rect::new(0, cursor_pos.y, 0, 0);
+                    Some(PreparedResumeAction::RealignViewport(viewport))
+                }
+                ResumeAction::RestoreAlt => {
+                    if let Ok(Position { y, .. }) = terminal.get_cursor_position()
+                        && let Some(saved) = alt_saved_viewport.as_mut()
+                    {
+                        saved.y = y;
+                    }
+                    Some(PreparedResumeAction::RestoreAltScreen)
+                }
+            }
+        }
+
+        /// Set the cached inline cursor row so suspend can place the cursor meaningfully.
+        ///
+        /// Call during normal drawing when the inline viewport moves so suspend has a fresh cursor
+        /// position to restore before yielding.
+        pub(crate) fn set_cursor_y(&self, value: u16) {
+            self.suspend_cursor_y.store(value, Ordering::Relaxed);
+        }
+
+        /// Record a pending resume action to apply after SIGTSTP returns control.
+        fn set_resume_action(&self, value: ResumeAction) {
+            *self
+                .resume_pending
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(value);
+        }
+
+        /// Take and clear any pending resume action captured at suspend time.
+        fn take_resume_action(&self) -> Option<ResumeAction> {
+            self.resume_pending
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take()
+        }
+    }
+
+    /// Captures what should happen when returning from suspend.
+    ///
+    /// Either realign the inline viewport to keep the cursor position, or re-enter the alt screen
+    /// to restore the overlay UI.
+    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+    pub(crate) enum ResumeAction {
+        /// Shift the inline viewport to keep the cursor anchored after resume.
+        RealignInline,
+        /// Re-enter the alt screen and restore the overlay UI.
+        RestoreAlt,
+    }
+
+    /// Describes the viewport change to apply when resuming from suspend during the synchronized draw.
+    ///
+    /// Either restore the alt screen (with viewport reset) or realign the inline viewport.
+    #[derive(Clone, Debug)]
+    pub(crate) enum PreparedResumeAction {
+        /// Re-enter the alt screen and reset the viewport to the terminal dimensions.
+        RestoreAltScreen,
+        /// Apply a viewport shift to keep the inline cursor position stable.
+        RealignViewport(Rect),
+    }
+
+    impl PreparedResumeAction {
+        pub(crate) fn apply(self, terminal: &mut Terminal) -> io::Result<()> {
+            match self {
+                PreparedResumeAction::RealignViewport(area) => {
+                    terminal.set_viewport_area(area);
+                }
+                PreparedResumeAction::RestoreAltScreen => {
+                    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                    // Enable "alternate scroll" so terminals may translate wheel to arrows
+                    execute!(terminal.backend_mut(), EnableAlternateScroll)?;
+                    if let Ok(size) = terminal.size() {
+                        terminal.set_viewport_area(Rect::new(0, 0, size.width, size.height));
+                        terminal.clear()?;
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    /// Deliver SIGTSTP after restoring terminal state, then re-applies terminal modes once resumed.
+    fn suspend_process() -> io::Result<()> {
+        super::restore()?;
+        unsafe { libc::kill(0, libc::SIGTSTP) };
+        // After the process resumes, reapply terminal modes so drawing can continue.
+        super::set_modes()?;
+        Ok(())
     }
 }
