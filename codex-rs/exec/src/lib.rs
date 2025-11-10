@@ -329,24 +329,25 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         .map(|path| UserInput::LocalImage { path })
         .collect();
     items.push(UserInput::Text { text: prompt });
-    let mut user_turn = Some(Op::UserTurn {
-        items,
-        cwd: default_cwd,
-        approval_policy: default_approval_policy,
-        sandbox_policy: default_sandbox_policy,
-        model: default_model,
-        effort: default_effort,
-        summary: default_summary,
-        final_output_json_schema: output_schema,
-    });
+    let initial_prompt_task_id = conversation
+        .submit(Op::UserTurn {
+            items,
+            cwd: default_cwd,
+            approval_policy: default_approval_policy,
+            sandbox_policy: default_sandbox_policy,
+            model: default_model,
+            effort: default_effort,
+            summary: default_summary,
+            final_output_json_schema: output_schema,
+        })
+        .await?;
+    info!("Sent prompt with event ID: {initial_prompt_task_id}");
+
+    // Run the loop until the task is complete.
+    // Track whether a fatal error was reported by the server so we can
+    // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
     while let Some(event) = rx.recv().await {
-        if matches!(event.msg, EventMsg::McpStartupComplete(_))
-            && let Some(user_turn) = user_turn.take()
-        {
-            let initial_prompt_task_id = conversation.submit(user_turn).await?;
-            info!("Sent prompt with event ID: {initial_prompt_task_id}");
-        }
         if matches!(event.msg, EventMsg::Error(_)) {
             error_seen = true;
         }

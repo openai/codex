@@ -1215,6 +1215,37 @@ impl Session {
             .parse_tool_name(tool_name)
     }
 
+    async fn wait_for_mcp_startup(&self, cancellation_token: CancellationToken) -> CodexResult<()> {
+        if cancellation_token.is_cancelled() {
+            return Err(CodexErr::Interrupted);
+        }
+
+        let readiness = {
+            let guard = self.services.mcp_startup.lock().await;
+            guard
+                .as_ref()
+                .map(super::mcp_connection_manager::McpStartupJobHandle::readiness)
+        };
+
+        if let Some(mut readiness) = readiness {
+            if *readiness.borrow() {
+                return Ok(());
+            }
+            loop {
+                tokio::select! {
+                    _ = cancellation_token.cancelled() => return Err(CodexErr::Interrupted),
+                    changed = readiness.changed() => {
+                        if changed.is_err() || *readiness.borrow() {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn interrupt_task(self: &Arc<Self>) {
         info!("interrupt received: abort current task, if any");
         let has_active_turn = { self.active_turn.lock().await.is_some() };
@@ -1868,6 +1899,8 @@ async fn run_turn(
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
+    sess.wait_for_mcp_startup(cancellation_token.child_token())
+        .await?;
     let mcp_tools = sess.services.mcp_connection_manager.list_all_tools().await;
     let router = Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,

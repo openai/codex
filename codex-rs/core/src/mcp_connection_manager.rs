@@ -42,6 +42,7 @@ use serde_json::json;
 use sha1::Digest;
 use sha1::Sha1;
 use tokio::sync::RwLock;
+use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -388,11 +389,16 @@ impl McpConnectionManager {
 
 pub struct McpStartupJobHandle {
     cancel_token: CancellationToken,
+    ready: watch::Receiver<bool>,
 }
 
 impl McpStartupJobHandle {
     pub fn cancel(&self) {
         self.cancel_token.cancel();
+    }
+
+    pub fn readiness(&self) -> watch::Receiver<bool> {
+        self.ready.clone()
     }
 }
 
@@ -449,6 +455,7 @@ pub fn spawn_startup_job(
     let mut join_set = build_startup_tasks(valid_servers, store_mode);
 
     let cancel_token = CancellationToken::new();
+    let (ready_tx, ready_rx) = watch::channel(false);
     let cancel_token_task = cancel_token.clone();
     let mut inflight: std::collections::HashSet<String> = starting_servers.into_iter().collect();
     tokio::spawn(async move {
@@ -531,9 +538,13 @@ pub fn spawn_startup_job(
                 msg: EventMsg::McpStartupComplete(summary),
             })
             .await;
+        let _ = ready_tx.send(true);
     });
 
-    Ok(McpStartupJobHandle { cancel_token })
+    Ok(McpStartupJobHandle {
+        cancel_token,
+        ready: ready_rx,
+    })
 }
 
 async fn emit_update(
