@@ -1,3 +1,4 @@
+use codex_protocol::protocol::RateLimitSnapshot;
 use reqwest::StatusCode;
 use thiserror::Error;
 
@@ -17,6 +18,12 @@ pub enum Error {
     },
     #[error("stream error: {0}")]
     Stream(String, Option<std::time::Duration>),
+    #[error("usage limit reached")]
+    UsageLimitReached {
+        plan_type: Option<String>,
+        resets_at: Option<i64>,
+        rate_limits: Option<RateLimitSnapshot>,
+    },
     #[error("unexpected status {status}: {body}")]
     UnexpectedStatus { status: StatusCode, body: String },
     #[error("retry limit reached {status:?} request_id={request_id:?}")]

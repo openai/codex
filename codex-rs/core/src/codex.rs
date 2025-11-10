@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use crate::AuthManager;
+use crate::{AuthManager, ModelClient};
 use crate::client_common::REVIEW_PROMPT;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
@@ -2041,7 +2041,11 @@ async fn try_run_turn(
         };
 
         match event {
-            ResponseEvent::Created => {}
+            ResponseEvent::Created => {
+                // Emit an initial TokenCount so UIs (and rollouts) have a
+                // marker even when providers omit rate-limit headers.
+                sess.send_token_count_event(&turn_context).await;
+            }
             ResponseEvent::OutputItemDone(item) => {
                 let previously_active_item = active_item.take();
                 match ToolRouter::build_tool_call(sess.as_ref(), item.clone()) {
@@ -3143,4 +3147,3 @@ mod tests {
         );
     }
 }
-use crate::ModelClient;

@@ -37,9 +37,12 @@ use crate::error::ResponseStreamFailed;
 use crate::error::Result;
 use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
+use crate::error::UsageLimitReachedError;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_family::ModelFamily;
 use crate::openai_model_info::get_model_info;
+use crate::token_data::KnownPlan;
+use crate::token_data::PlanType;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
 
@@ -182,7 +185,6 @@ impl ModelClient {
         let responses_fixture_path: Option<PathBuf> =
             CODEX_RS_SSE_FIXTURE.as_ref().map(PathBuf::from);
         let http_client = create_client().clone_inner();
-
         let config = RoutedApiClientConfig {
             http_client,
             provider: self.provider.clone(),
@@ -300,7 +302,30 @@ fn map_api_error(err: codex_api_client::Error) -> CodexErr {
         codex_api_client::Error::ResponseStreamFailed { source, request_id } => {
             CodexErr::ResponseStreamFailed(ResponseStreamFailed { source, request_id })
         }
-        codex_api_client::Error::Stream(message, delay) => CodexErr::Stream(message, delay),
+        codex_api_client::Error::Stream(message, delay) => {
+            let lower = message.to_lowercase();
+            if lower.contains("context window exceeded") {
+                CodexErr::ContextWindowExceeded
+            } else if lower.contains("quota exceeded") {
+                CodexErr::QuotaExceeded
+            } else {
+                CodexErr::Stream(message, delay)
+            }
+        }
+        codex_api_client::Error::UsageLimitReached {
+            plan_type,
+            resets_at,
+            rate_limits,
+        } => {
+            let plan_type = plan_type.map(normalize_plan_type);
+            let resets_at =
+                resets_at.and_then(|secs| chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0));
+            CodexErr::UsageLimitReached(UsageLimitReachedError {
+                plan_type,
+                resets_at,
+                rate_limits,
+            })
+        }
         codex_api_client::Error::UnexpectedStatus { status, body } => {
             CodexErr::UnexpectedStatus(UnexpectedResponseError {
                 status,
@@ -320,6 +345,19 @@ fn map_api_error(err: codex_api_client::Error) -> CodexErr {
         codex_api_client::Error::Auth(message) => CodexErr::Fatal(message),
         codex_api_client::Error::Json(err) => CodexErr::Json(err),
         codex_api_client::Error::Other(message) => CodexErr::Fatal(message),
+    }
+}
+
+fn normalize_plan_type(plan: String) -> PlanType {
+    match plan.to_lowercase().as_str() {
+        "free" => PlanType::Known(KnownPlan::Free),
+        "plus" => PlanType::Known(KnownPlan::Plus),
+        "pro" => PlanType::Known(KnownPlan::Pro),
+        "team" => PlanType::Known(KnownPlan::Team),
+        "business" => PlanType::Known(KnownPlan::Business),
+        "enterprise" => PlanType::Known(KnownPlan::Enterprise),
+        "edu" => PlanType::Known(KnownPlan::Edu),
+        other => PlanType::Unknown(other.to_string()),
     }
 }
 
