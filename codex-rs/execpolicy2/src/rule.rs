@@ -17,17 +17,24 @@ impl PatternToken {
             Self::Alts(alternatives) => alternatives.iter().any(|alt| alt == token),
         }
     }
+
+    pub fn alternatives(&self) -> Vec<String> {
+        match self {
+            Self::Single(expected) => vec![expected.clone()],
+            Self::Alts(alternatives) => alternatives.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PrefixPattern {
     pub first: String,
-    pub tail: Vec<PatternToken>,
+    pub rest: Vec<PatternToken>,
 }
 
 impl PrefixPattern {
     pub fn len(&self) -> usize {
-        self.tail.len() + 1
+        self.rest.len() + 1
     }
 
     pub fn matches_prefix(&self, cmd: &[String]) -> Option<Vec<String>> {
@@ -35,7 +42,7 @@ impl PrefixPattern {
             return None;
         }
 
-        for (pattern_token, cmd_token) in self.tail.iter().zip(&cmd[1..self.len()]) {
+        for (pattern_token, cmd_token) in self.rest.iter().zip(&cmd[1..self.len()]) {
             if !pattern_token.matches(cmd_token) {
                 return None;
             }

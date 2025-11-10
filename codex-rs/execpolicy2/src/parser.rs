@@ -84,40 +84,20 @@ impl PolicyBuilder {
     }
 }
 
-#[derive(Debug)]
-struct ParsedPattern {
-    heads: Vec<String>,
-    tail: Vec<PatternToken>,
-}
-
-fn parse_pattern<'v>(pattern: UnpackList<Value<'v>>) -> Result<ParsedPattern> {
-    let mut items = pattern.items.into_iter();
-    let first = items
-        .next()
-        .ok_or_else(|| Error::InvalidPattern("pattern cannot be empty".to_string()))?;
-    let heads = parse_first_token(first)?;
-    let mut tail = Vec::new();
-    for item in items {
-        tail.push(parse_tail_token(item)?);
+fn parse_pattern<'v>(pattern: UnpackList<Value<'v>>) -> Result<Vec<PatternToken>> {
+    let mut tokens = Vec::new();
+    for item in pattern.items {
+        tokens.push(parse_pattern_token(item)?);
     }
-    Ok(ParsedPattern { heads, tail })
-}
-
-fn parse_first_token<'v>(value: Value<'v>) -> Result<Vec<String>> {
-    parse_tokens(value)
-}
-
-fn parse_tail_token<'v>(value: Value<'v>) -> Result<PatternToken> {
-    let tokens = parse_tokens(value)?;
-    if tokens.len() == 1 {
-        return Ok(PatternToken::Single(tokens.into_iter().next().unwrap()));
+    if tokens.is_empty() {
+        return Err(Error::InvalidPattern("pattern cannot be empty".to_string()));
     }
-    Ok(PatternToken::Alts(tokens))
+    Ok(tokens)
 }
 
-fn parse_tokens<'v>(value: Value<'v>) -> Result<Vec<String>> {
+fn parse_pattern_token<'v>(value: Value<'v>) -> Result<PatternToken> {
     if let Some(s) = value.unpack_str() {
-        return Ok(vec![s.to_string()]);
+        return Ok(PatternToken::Single(s.to_string()));
     }
     if let Some(list) = ListRef::from_value(value) {
         let mut tokens = Vec::new();
@@ -132,7 +112,11 @@ fn parse_tokens<'v>(value: Value<'v>) -> Result<Vec<String>> {
                 "pattern alternatives cannot be empty".to_string(),
             ));
         }
-        return Ok(tokens);
+        return Ok(if tokens.len() == 1 {
+            PatternToken::Single(tokens.into_iter().next().unwrap())
+        } else {
+            PatternToken::Alts(tokens)
+        });
     }
     Err(Error::InvalidPattern(
         "pattern element must be a string or list of strings".to_string(),
@@ -177,7 +161,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
             None => Decision::Allow,
         };
 
-        let parsed_pattern = parse_pattern(pattern)?;
+        let pattern_tokens = parse_pattern(pattern)?;
 
         let positive_examples: Vec<Vec<String>> =
             r#match.map(parse_examples).transpose()?.unwrap_or_default();
@@ -197,6 +181,10 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
             builder.alloc_id()
         });
 
+        let (first_token, remaining_tokens) = pattern_tokens
+            .split_first()
+            .expect("pattern validated as non-empty");
+
         #[expect(clippy::unwrap_used)]
         let builder = eval
             .extra
@@ -205,12 +193,12 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
             .downcast_ref::<PolicyBuilder>()
             .unwrap();
 
-        for head in &parsed_pattern.heads {
+        for head in first_token.alternatives() {
             let rule = Rule {
                 id: id.clone(),
                 pattern: PrefixPattern {
-                    first: head.clone(),
-                    tail: parsed_pattern.tail.clone(),
+                    first: head,
+                    rest: remaining_tokens.to_vec(),
                 },
                 decision,
             };
