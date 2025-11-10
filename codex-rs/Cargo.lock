@@ -1002,7 +1002,6 @@ dependencies = [
  "codex-mcp-server",
  "codex-process-hardening",
  "codex-protocol",
- "codex-protocol-ts",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
  "codex-stdio-to-uds",
@@ -1385,16 +1384,6 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
-]
-
-[[package]]
-name = "codex-protocol-ts"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "clap",
- "codex-app-server-protocol",
- "ts-rs",
 ]
 
 [[package]]
