@@ -6,7 +6,6 @@ use codex_protocol::ConversationId;
 use codex_protocol::protocol::SessionSource;
 
 use crate::ApiClient;
-use crate::ChatAggregationMode;
 use crate::ChatCompletionsApiClient;
 use crate::ChatCompletionsApiClientConfig;
 use crate::Prompt;
@@ -29,7 +28,6 @@ pub struct RoutedApiClientConfig {
     pub auth_provider: Option<Arc<dyn AuthProvider>>,
     pub otel_event_manager: OtelEventManager,
     pub session_source: SessionSource,
-    pub chat_aggregation_mode: ChatAggregationMode,
     pub responses_fixture_path: Option<PathBuf>,
 }
 
@@ -79,7 +77,6 @@ impl RoutedApiClient {
             model: self.config.model.clone(),
             otel_event_manager: self.config.otel_event_manager.clone(),
             session_source: self.config.session_source.clone(),
-            aggregation_mode: self.config.chat_aggregation_mode,
         };
         let client = ChatCompletionsApiClient::new(cfg)?;
         client.stream(prompt).await

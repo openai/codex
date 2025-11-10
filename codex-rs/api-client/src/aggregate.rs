@@ -10,12 +10,6 @@ use futures::Stream;
 use crate::error::Result;
 use crate::stream::ResponseEvent;
 
-#[derive(Clone, Copy, Debug)]
-pub enum ChatAggregationMode {
-    AggregatedOnly,
-    Streaming,
-}
-
 pub trait AggregateStreamExt: Stream<Item = Result<ResponseEvent>> + Sized {
     fn aggregate(self) -> AggregatedChatStream<Self>
     where

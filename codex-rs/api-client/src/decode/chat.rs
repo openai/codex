@@ -6,12 +6,10 @@ use codex_protocol::models::ResponseItem;
 use tokio::sync::mpsc;
 use tracing::debug;
 
-use crate::aggregate::ChatAggregationMode;
 use crate::error::Result;
 use crate::stream::ResponseEvent;
 
 pub struct ChatSseDecoder {
-    aggregation_mode: ChatAggregationMode,
     fn_call_state: FunctionCallState,
     assistant_item: Option<ResponseItem>,
     reasoning_item: Option<ResponseItem>,
@@ -26,9 +24,8 @@ struct FunctionCallState {
 }
 
 impl ChatSseDecoder {
-    pub fn new(aggregation_mode: ChatAggregationMode) -> Self {
+    pub fn new() -> Self {
         Self {
-            aggregation_mode,
             fn_call_state: FunctionCallState::default(),
             assistant_item: None,
             reasoning_item: None,
@@ -63,11 +60,9 @@ impl crate::client::ResponseDecoder for ChatSseDecoder {
                         if let Some(text) = piece.get("text").and_then(|t| t.as_str()) {
                             append_assistant_text(tx, &mut self.assistant_item, text.to_string())
                                 .await;
-                            if matches!(self.aggregation_mode, ChatAggregationMode::Streaming) {
-                                let _ = tx
-                                    .send(Ok(ResponseEvent::OutputTextDelta(text.to_string())))
-                                    .await;
-                            }
+                            let _ = tx
+                                .send(Ok(ResponseEvent::OutputTextDelta(text.to_string())))
+                                .await;
                         }
                     }
                 }

@@ -6,7 +6,6 @@ use codex_protocol::protocol::SessionSource;
 use futures::TryStreamExt;
 use tokio::sync::mpsc;
 
-use crate::aggregate::ChatAggregationMode;
 use crate::api::ApiClient;
 use crate::client::PayloadBuilder;
 use crate::common::backoff;
@@ -25,14 +24,12 @@ use crate::stream::ResponseStream;
 /// - `model`: Model identifier to use.
 /// - `otel_event_manager`: Telemetry event manager for request/stream instrumentation.
 /// - `session_source`: Session metadata, used to set subagent headers when applicable.
-/// - `aggregation_mode`: How to emit streaming output (raw deltas or aggregated).
 pub struct ChatCompletionsApiClientConfig {
     pub http_client: reqwest::Client,
     pub provider: ModelProviderInfo,
     pub model: String,
     pub otel_event_manager: OtelEventManager,
     pub session_source: SessionSource,
-    pub aggregation_mode: ChatAggregationMode,
 }
 
 #[derive(Clone)]
@@ -91,14 +88,12 @@ impl ApiClient for ChatCompletionsApiClient {
                         });
                     let idle_timeout = self.config.provider.stream_idle_timeout();
                     let otel = self.config.otel_event_manager.clone();
-                    let mode = self.config.aggregation_mode;
-
                     tokio::spawn(crate::client::sse::process_sse(
                         stream,
                         tx_event.clone(),
                         idle_timeout,
                         otel,
-                        crate::decode::chat::ChatSseDecoder::new(mode),
+                        crate::decode::chat::ChatSseDecoder::new(),
                     ));
 
                     return Ok(ResponseStream { rx_event });

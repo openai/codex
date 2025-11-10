@@ -4,7 +4,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use codex_api_client::AuthContext;
 use codex_api_client::AuthProvider;
-use codex_api_client::ChatAggregationMode;
 use codex_api_client::ModelProviderInfo;
 use codex_api_client::Result as ApiClientResult;
 use codex_api_client::RoutedApiClient;
@@ -178,7 +177,6 @@ impl ModelClient {
     }
 
     async fn build_api_client(&self) -> ApiClientResult<RoutedApiClient> {
-        let show_reasoning = self.config.show_raw_agent_reasoning;
         let auth_provider = self.auth_manager.as_ref().map(|manager| {
             Arc::new(AuthManagerProvider::new(Arc::clone(manager))) as Arc<dyn AuthProvider>
         });
@@ -193,11 +191,6 @@ impl ModelClient {
             auth_provider,
             otel_event_manager: self.otel_event_manager.clone(),
             session_source: self.session_source.clone(),
-            chat_aggregation_mode: if show_reasoning {
-                ChatAggregationMode::Streaming
-            } else {
-                ChatAggregationMode::AggregatedOnly
-            },
             responses_fixture_path,
         };
 

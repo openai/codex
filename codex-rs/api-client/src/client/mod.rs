@@ -27,13 +27,3 @@ pub trait ResponseDecoder {
         otel: &OtelEventManager,
     ) -> Result<()>;
 }
-
-/// Optional trait to expose rate limit parsing where needed.
-pub trait RateLimitProvider {
-    fn parse(
-        &self,
-        _headers: &reqwest::header::HeaderMap,
-    ) -> Option<codex_protocol::protocol::RateLimitSnapshot> {
-        None
-    }
-}

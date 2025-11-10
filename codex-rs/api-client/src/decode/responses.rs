@@ -15,12 +15,6 @@ use crate::error::Result;
 use crate::stream::ResponseEvent;
 
 #[derive(Debug, Deserialize)]
-pub struct ResponseCompleted {
-    pub id: String,
-    pub usage: Option<TokenUsage>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct StreamResponseCompleted {
     pub id: String,
     pub usage: Option<TokenUsagePartial>,
@@ -231,8 +225,6 @@ pub struct TextDelta {
 pub async fn handle_stream_event(
     event: StreamEvent,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
-    _response_completed: &mut Option<ResponseCompleted>,
-    _response_error: &mut Option<Error>,
     otel_event_manager: &OtelEventManager,
 ) {
     trace!("response event: {}", event.r#type);
@@ -475,16 +467,7 @@ impl crate::client::ResponseDecoder for ResponsesSseDecoder {
     ) -> Result<()> {
         if let Ok(event) = serde_json::from_str::<StreamEvent>(json) {
             otel_event_manager.sse_event_kind(&event.r#type);
-            let mut completed: Option<ResponseCompleted> = None;
-            let mut error: Option<Error> = None;
-            handle_stream_event(
-                event,
-                tx.clone(),
-                &mut completed,
-                &mut error,
-                otel_event_manager,
-            )
-            .await;
+            handle_stream_event(event, tx.clone(), otel_event_manager).await;
             return Ok(());
         }
 

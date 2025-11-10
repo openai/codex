@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use codex_protocol::protocol::SessionSource;
-use reqwest::header::HeaderMap;
 
 use crate::auth::AuthContext;
 use crate::auth::AuthProvider;
@@ -32,12 +31,4 @@ pub async fn resolve_auth(auth_provider: &Option<Arc<dyn AuthProvider>>) -> Opti
     } else {
         None
     }
-}
-
-/// Extract a provider request id, when present, from headers.
-pub fn request_id_from_headers(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get("cf-ray")
-        .and_then(|v| v.to_str().ok())
-        .map(std::string::ToString::to_string)
 }
