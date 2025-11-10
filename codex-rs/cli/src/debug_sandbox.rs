@@ -23,6 +23,7 @@ use crate::exit_status::handle_exit_status;
 #[cfg(target_os = "macos")]
 use seatbelt::DenialLogger;
 
+#[cfg(target_os = "macos")]
 pub async fn run_command_under_seatbelt(
     command: SeatbeltCommand,
     codex_linux_sandbox_exe: Option<PathBuf>,
