@@ -1,0 +1,24 @@
+[package]
+name = "codex-execpolicy2"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Codex exec policy v2: prefix-based Starlark rules for command decisions."
+
+[lib]
+name = "codex_execpolicy2"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codex-execpolicy2"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+shlex = { workspace = true }
+starlark = { workspace = true }
+thiserror = { workspace = true }
+

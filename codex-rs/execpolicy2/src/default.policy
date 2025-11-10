@@ -1,0 +1,36 @@
+prefix_rule(
+    id = "git_status",
+    pattern = ["git", "status"],
+    match = [
+        "git status",
+        "git status -- path/to/file",
+    ],
+    not_match = [
+        "git statusx",
+        "git reset --hard",
+    ],
+)
+
+prefix_rule(
+    id = "npm_install",
+    pattern = ["npm", ["i", "install"]],
+    decision = "prompt",
+    match = [
+        "npm i",
+        "npm install",
+        "npm install lodash",
+    ],
+    not_match = [
+        "npmx install",
+        "npm outdated",
+    ],
+)
+
+prefix_rule(
+    id = "git_reset_hard",
+    pattern = ["git", "reset", "--hard"],
+    decision = "forbidden",
+    match = [
+        "git reset --hard",
+    ],
+)
