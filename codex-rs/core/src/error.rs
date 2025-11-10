@@ -238,18 +238,44 @@ pub struct UnexpectedResponseError {
     pub request_id: Option<String>,
 }
 
+const CLOUDFLARE_BLOCKED_MESSAGE: &str =
+    "Access blocked by Cloudflare. This usually happens when connecting from a restricted region";
+
+impl UnexpectedResponseError {
+    fn friendly_message(&self) -> Option<String> {
+        if self.status != StatusCode::FORBIDDEN {
+            return None;
+        }
+
+        if !self.body.contains("Cloudflare") || !self.body.contains("blocked") {
+            return None;
+        }
+
+        let mut message = format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {})", self.status);
+        if let Some(id) = &self.request_id {
+            message.push_str(&format!(", request id: {id}"));
+        }
+
+        Some(message)
+    }
+}
+
 impl std::fmt::Display for UnexpectedResponseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "unexpected status {}: {}{}",
-            self.status,
-            self.body,
-            self.request_id
-                .as_ref()
-                .map(|id| format!(", request id: {id}"))
-                .unwrap_or_default()
-        )
+        if let Some(friendly) = self.friendly_message() {
+            write!(f, "{friendly}")
+        } else {
+            write!(
+                f,
+                "unexpected status {}: {}{}",
+                self.status,
+                self.body,
+                self.request_id
+                    .as_ref()
+                    .map(|id| format!(", request id: {id}"))
+                    .unwrap_or_default()
+            )
+        }
     }
 }
 
@@ -663,6 +689,35 @@ mod tests {
             let expected = format!("You've hit your usage limit. Try again at {expected_time}.");
             assert_eq!(err.to_string(), expected);
         });
+    }
+
+    #[test]
+    fn unexpected_status_cloudflare_html_is_simplified() {
+        let err = UnexpectedResponseError {
+            status: StatusCode::FORBIDDEN,
+            body: "<html><body>Cloudflare error: Sorry, you have been blocked</body></html>"
+                .to_string(),
+            request_id: Some("ray-id".to_string()),
+        };
+        let status = StatusCode::FORBIDDEN.to_string();
+        assert_eq!(
+            err.to_string(),
+            format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {status}), request id: ray-id")
+        );
+    }
+
+    #[test]
+    fn unexpected_status_non_html_is_unchanged() {
+        let err = UnexpectedResponseError {
+            status: StatusCode::FORBIDDEN,
+            body: "plain text error".to_string(),
+            request_id: None,
+        };
+        let status = StatusCode::FORBIDDEN.to_string();
+        assert_eq!(
+            err.to_string(),
+            format!("unexpected status {status}: plain text error")
+        );
     }
 
     #[test]

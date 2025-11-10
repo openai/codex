@@ -136,6 +136,8 @@ async fn run_command_under_sandbox(
             let env_map = env.clone();
             let command_vec = command.clone();
             let base_dir = config.codex_home.clone();
+
+            // Preflight audit is invoked elsewhere at the appropriate times.
             let res = tokio::task::spawn_blocking(move || {
                 run_windows_sandbox_capture(
                     policy_str,

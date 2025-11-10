@@ -171,8 +171,9 @@ mod windows_impl {
     pub fn preflight_audit_everyone_writable(
         cwd: &Path,
         env_map: &HashMap<String, String>,
-    ) -> Result<()> {
-        audit::audit_everyone_writable(cwd, env_map)
+        logs_base_dir: Option<&Path>,
+    ) -> Result<Vec<PathBuf>> {
+        audit::audit_everyone_writable(cwd, env_map, logs_base_dir)
     }
 
     pub fn run_windows_sandbox_capture(
@@ -436,7 +437,8 @@ mod stub {
     pub fn preflight_audit_everyone_writable(
         _cwd: &Path,
         _env_map: &HashMap<String, String>,
-    ) -> Result<()> {
+        _logs_base_dir: Option<&Path>,
+    ) -> Result<Vec<std::path::PathBuf>> {
         bail!("Windows sandbox is only available on Windows")
     }
 

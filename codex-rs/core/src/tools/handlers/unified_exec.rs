@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use async_trait::async_trait;
 use serde::Deserialize;
 
@@ -24,6 +26,8 @@ pub struct UnifiedExecHandler;
 #[derive(Debug, Deserialize)]
 struct ExecCommandArgs {
     cmd: String,
+    #[serde(default)]
+    workdir: Option<String>,
     #[serde(default = "default_shell")]
     shell: String,
     #[serde(default = "default_login")]
@@ -96,6 +100,12 @@ impl ToolHandler for UnifiedExecHandler {
                         "failed to parse exec_command arguments: {err:?}"
                     ))
                 })?;
+                let workdir = args
+                    .workdir
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .map(PathBuf::from);
+                let cwd = workdir.clone().unwrap_or_else(|| context.turn.cwd.clone());
 
                 let event_ctx = ToolEventCtx::new(
                     context.session.as_ref(),
@@ -103,8 +113,7 @@ impl ToolHandler for UnifiedExecHandler {
                     &context.call_id,
                     None,
                 );
-                let emitter =
-                    ToolEmitter::unified_exec(args.cmd.clone(), context.turn.cwd.clone(), true);
+                let emitter = ToolEmitter::unified_exec(args.cmd.clone(), cwd.clone(), true);
                 emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
                 manager
@@ -115,6 +124,7 @@ impl ToolHandler for UnifiedExecHandler {
                             login: args.login,
                             yield_time_ms: args.yield_time_ms,
                             max_output_tokens: args.max_output_tokens,
+                            workdir,
                         },
                         &context,
                     )

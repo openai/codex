@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
+use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::AskForApproval;
@@ -24,6 +25,7 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
 use std::env;
@@ -70,6 +72,9 @@ enum ActionKind {
     },
     RunCommand {
         command: &'static [&'static str],
+    },
+    RunUnifiedExecCommand {
+        command: &'static str,
     },
     ApplyPatchFunction {
         target: TargetPath,
@@ -134,6 +139,17 @@ impl ActionKind {
                 let event = shell_event(call_id, &command, 1_000, with_escalated_permissions)?;
                 Ok((event, Some(command)))
             }
+            ActionKind::RunUnifiedExecCommand { command } => {
+                let event = exec_command_event(call_id, command, Some(1000))?;
+                Ok((
+                    event,
+                    Some(vec![
+                        "/bin/bash".to_string(),
+                        "-lc".to_string(),
+                        command.to_string(),
+                    ]),
+                ))
+            }
             ActionKind::ApplyPatchFunction { target, content } => {
                 let (path, patch_path) = target.resolve_for_patch(test);
                 let _ = fs::remove_file(&path);
@@ -183,6 +199,17 @@ fn shell_event(
     Ok(ev_function_call(call_id, "shell", &args_str))
 }
 
+fn exec_command_event(call_id: &str, cmd: &str, yield_time_ms: Option<u64>) -> Result<Value> {
+    let mut args = json!({
+        "cmd": cmd.to_string(),
+    });
+    if let Some(yield_time_ms) = yield_time_ms {
+        args["yield_time_ms"] = json!(yield_time_ms);
+    }
+    let args_str = serde_json::to_string(&args)?;
+    Ok(ev_function_call(call_id, "exec_command", &args_str))
+}
+
 #[derive(Clone)]
 enum Expectation {
     FileCreated {
@@ -205,6 +232,9 @@ enum Expectation {
     },
     CommandSuccess {
         stdout_contains: &'static str,
+    },
+    CommandFailure {
+        output_contains: &'static str,
     },
 }
 
@@ -337,6 +367,19 @@ impl Expectation {
                     result.stdout
                 );
             }
+            Expectation::CommandFailure { output_contains } => {
+                assert_ne!(
+                    result.exit_code,
+                    Some(0),
+                    "expected non-zero exit for command failure: {}",
+                    result.stdout
+                );
+                assert!(
+                    result.stdout.contains(output_contains),
+                    "command failure stderr missing {output_contains:?}: {}",
+                    result.stdout
+                );
+            }
         }
         Ok(())
     }
@@ -362,7 +405,7 @@ struct ScenarioSpec {
     sandbox_policy: SandboxPolicy,
     action: ActionKind,
     with_escalated_permissions: bool,
-    requires_apply_patch_tool: bool,
+    features: Vec<Feature>,
     model_override: Option<&'static str>,
     outcome: Outcome,
     expectation: Expectation,
@@ -410,10 +453,24 @@ fn parse_result(item: &Value) -> CommandResult {
             let stdout = parsed["output"].as_str().unwrap_or_default().to_string();
             CommandResult { exit_code, stdout }
         }
-        Err(_) => CommandResult {
-            exit_code: None,
-            stdout: output_str.to_string(),
-        },
+        Err(_) => {
+            let regex =
+                Regex::new(r"(?s)^.*?Process exited with code (\d+)\n.*?Output:\n(.*)$").unwrap();
+            // parse freeform output
+            if let Some(captures) = regex.captures(output_str) {
+                let exit_code = captures.get(1).unwrap().as_str().parse::<i64>().unwrap();
+                let output = captures.get(2).unwrap().as_str();
+                CommandResult {
+                    exit_code: Some(exit_code),
+                    stdout: output.to_string(),
+                }
+            } else {
+                CommandResult {
+                    exit_code: None,
+                    stdout: output_str.to_string(),
+                }
+            }
+        }
     }
 }
 
@@ -506,7 +563,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "danger-on-request",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::Auto,
             expectation: Expectation::FileCreated {
@@ -523,7 +580,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 response_body: "danger-network-ok",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::Auto,
             expectation: Expectation::NetworkSuccess {
@@ -538,7 +595,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 command: &["echo", "trusted-unless"],
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::Auto,
             expectation: Expectation::CommandSuccess {
@@ -554,7 +611,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "danger-on-failure",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::Auto,
             expectation: Expectation::FileCreated {
@@ -571,7 +628,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "danger-unless-trusted",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::ExecApproval {
                 decision: ReviewDecision::Approved,
@@ -591,7 +648,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "danger-never",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::Auto,
             expectation: Expectation::FileCreated {
@@ -608,7 +665,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "read-only-approval",
             },
             with_escalated_permissions: true,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::ExecApproval {
                 decision: ReviewDecision::Approved,
@@ -627,7 +684,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 command: &["echo", "trusted-read-only"],
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::Auto,
             expectation: Expectation::CommandSuccess {
@@ -643,7 +700,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 response_body: "should-not-see",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::Auto,
             expectation: Expectation::NetworkFailure { expect_tag: "ERR:" },
@@ -657,7 +714,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "should-not-write",
             },
             with_escalated_permissions: true,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::ExecApproval {
                 decision: ReviewDecision::Denied,
@@ -678,7 +735,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "read-only-on-failure",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::ExecApproval {
                 decision: ReviewDecision::Approved,
@@ -698,7 +755,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 response_body: "read-only-network-ok",
             },
             with_escalated_permissions: true,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::ExecApproval {
                 decision: ReviewDecision::Approved,
@@ -717,7 +774,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "shell-apply-patch",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: true,
+            features: vec![],
             model_override: None,
             outcome: Outcome::PatchApproval {
                 decision: ReviewDecision::Approved,
@@ -737,7 +794,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "function-apply-patch",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: true,
+            features: vec![],
             model_override: Some("gpt-5-codex"),
             outcome: Outcome::Auto,
             expectation: Expectation::PatchApplied {
@@ -754,7 +811,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "function-patch-danger",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: true,
+            features: vec![Feature::ApplyPatchFreeform],
             model_override: Some("gpt-5-codex"),
             outcome: Outcome::Auto,
             expectation: Expectation::PatchApplied {
@@ -771,7 +828,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "function-patch-outside",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: true,
+            features: vec![],
             model_override: Some("gpt-5-codex"),
             outcome: Outcome::PatchApproval {
                 decision: ReviewDecision::Approved,
@@ -791,7 +848,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "function-patch-outside-denied",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: true,
+            features: vec![],
             model_override: Some("gpt-5-codex"),
             outcome: Outcome::PatchApproval {
                 decision: ReviewDecision::Denied,
@@ -811,7 +868,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "shell-patch-outside",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: true,
+            features: vec![],
             model_override: None,
             outcome: Outcome::PatchApproval {
                 decision: ReviewDecision::Approved,
@@ -831,7 +888,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "function-patch-unless-trusted",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: true,
+            features: vec![],
             model_override: Some("gpt-5-codex"),
             outcome: Outcome::PatchApproval {
                 decision: ReviewDecision::Approved,
@@ -851,7 +908,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "function-patch-never",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: true,
+            features: vec![],
             model_override: Some("gpt-5-codex"),
             outcome: Outcome::Auto,
             expectation: Expectation::FileNotCreated {
@@ -870,7 +927,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "read-only-unless-trusted",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::ExecApproval {
                 decision: ReviewDecision::Approved,
@@ -890,7 +947,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "read-only-never",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::Auto,
             expectation: Expectation::FileNotCreated {
@@ -910,7 +967,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 command: &["echo", "trusted-never"],
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::Auto,
             expectation: Expectation::CommandSuccess {
@@ -926,7 +983,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "workspace-on-request",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::Auto,
             expectation: Expectation::FileCreated {
@@ -943,7 +1000,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 response_body: "workspace-network-blocked",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::Auto,
             expectation: Expectation::NetworkFailure { expect_tag: "ERR:" },
@@ -957,7 +1014,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "workspace-on-request-outside",
             },
             with_escalated_permissions: true,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::ExecApproval {
                 decision: ReviewDecision::Approved,
@@ -977,7 +1034,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 response_body: "workspace-network-ok",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::Auto,
             expectation: Expectation::NetworkSuccess {
@@ -994,7 +1051,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "workspace-on-failure",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::ExecApproval {
                 decision: ReviewDecision::Approved,
@@ -1014,7 +1071,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "workspace-unless-trusted",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::ExecApproval {
                 decision: ReviewDecision::Approved,
@@ -1034,7 +1091,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "workspace-never",
             },
             with_escalated_permissions: false,
-            requires_apply_patch_tool: false,
+            features: vec![],
             model_override: None,
             outcome: Outcome::Auto,
             expectation: Expectation::FileNotCreated {
@@ -1044,6 +1101,39 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 } else {
                     &["Permission denied|Operation not permitted|Read-only file system"]
                 },
+            },
+        },
+        ScenarioSpec {
+            name: "unified exec on request no approval for safe command",
+            approval_policy: OnRequest,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            action: ActionKind::RunUnifiedExecCommand {
+                command: "echo \"hello unified exec\"",
+            },
+            with_escalated_permissions: false,
+            features: vec![Feature::UnifiedExec],
+            model_override: None,
+            outcome: Outcome::Auto,
+            expectation: Expectation::CommandSuccess {
+                stdout_contains: "hello unified exec",
+            },
+        },
+        ScenarioSpec {
+            name: "unified exec on request requires approval unless trusted",
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            action: ActionKind::RunUnifiedExecCommand {
+                command: "git reset --hard",
+            },
+            with_escalated_permissions: false,
+            features: vec![Feature::UnifiedExec],
+            model_override: None,
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::Denied,
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected by user",
             },
         },
     ]
@@ -1065,7 +1155,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = scenario.approval_policy;
     let sandbox_policy = scenario.sandbox_policy.clone();
-    let requires_apply_patch_tool = scenario.requires_apply_patch_tool;
+    let features = scenario.features.clone();
     let model_override = scenario.model_override;
 
     let mut builder = test_codex().with_config(move |config| {
@@ -1075,8 +1165,8 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
         config.model = model.to_string();
         config.model_family =
             find_family_for_model(model).expect("model should map to a known family");
-        if requires_apply_patch_tool {
-            config.include_apply_patch_tool = true;
+        for feature in features {
+            config.features.enable(feature);
         }
     });
     let test = builder.build(&server).await?;
