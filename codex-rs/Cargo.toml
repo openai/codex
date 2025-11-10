@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "api-client",
     "backend-client",
     "ansi-escape",
     "async-utils",
@@ -54,6 +55,7 @@ edition = "2024"
 # Internal
 app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
+codex-api-client = { path = "api-client" }
 codex-app-server = { path = "app-server" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-apply-patch = { path = "apply-patch" }

@@ -830,6 +830,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-api-client"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "codex-app-server-protocol",
+ "codex-otel",
+ "codex-protocol",
+ "eventsource-stream",
+ "futures",
+ "maplit",
+ "regex-lite",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "codex-app-server"
 version = "0.0.0"
 dependencies = [
@@ -1062,6 +1085,7 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "codex-api-client",
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-async-utils",

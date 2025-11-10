@@ -1,0 +1,29 @@
+[package]
+name = "codex-api-client"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+bytes = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+codex-otel = { workspace = true }
+codex-protocol = { path = "../protocol" }
+eventsource-stream = { workspace = true }
+futures = { workspace = true, default-features = false, features = ["std"] }
+maplit = "1.0.2"
+regex-lite = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread", "macros", "io-util"] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+maplit = "1.0.2"
+toml = { workspace = true }
+
+[lints]
+workspace = true
