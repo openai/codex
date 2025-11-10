@@ -297,7 +297,8 @@ jobs:
 
           # We want to ship the raw Windows executables in the GitHub Release
           # in addition to the compressed archives. Keep the originals for
-          # Windows targets; remove them elsewhere to keep artifacts small.
+          # Windows targets; remove them elsewhere to limit the number of
+          # artifacts that end up in the GitHub Release.
           keep_originals=false
           if [[ "${{ matrix.runner }}" == windows* ]]; then
             keep_originals=true
