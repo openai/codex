@@ -1,6 +1,5 @@
 #![cfg(not(target_os = "windows"))]
 
-use anyhow::Context;
 use core_test_support::responses::mount_function_call_agent_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -32,8 +31,7 @@ async fn list_dir_tool_returns_entries() -> anyhow::Result<()> {
     })
     .to_string();
 
-    let mocks =
-        mount_function_call_agent_response(&server, call_id, &arguments, "list_dir").await;
+    let mocks = mount_function_call_agent_response(&server, call_id, &arguments, "list_dir").await;
     test.submit_turn("list directory contents").await?;
     let req = mocks.completion.single_request();
     let (content_opt, _) = req
@@ -69,9 +67,9 @@ async fn list_dir_tool_depth_one_omits_children() -> anyhow::Result<()> {
     })
     .to_string();
 
-    let mocks =
-        mount_function_call_agent_response(&server, call_id, &arguments, "list_dir").await;
-    test.submit_turn("list directory contents depth one").await?;
+    let mocks = mount_function_call_agent_response(&server, call_id, &arguments, "list_dir").await;
+    test.submit_turn("list directory contents depth one")
+        .await?;
     let req = mocks.completion.single_request();
     let (content_opt, _) = req
         .function_call_output_content_and_success(call_id)
@@ -110,9 +108,9 @@ async fn list_dir_tool_depth_two_includes_children_only() -> anyhow::Result<()> 
     })
     .to_string();
 
-    let mocks =
-        mount_function_call_agent_response(&server, call_id, &arguments, "list_dir").await;
-    test.submit_turn("list directory contents depth two").await?;
+    let mocks = mount_function_call_agent_response(&server, call_id, &arguments, "list_dir").await;
+    test.submit_turn("list directory contents depth two")
+        .await?;
     let req = mocks.completion.single_request();
     let (content_opt, _) = req
         .function_call_output_content_and_success(call_id)
@@ -154,9 +152,9 @@ async fn list_dir_tool_depth_three_includes_grandchildren() -> anyhow::Result<()
     })
     .to_string();
 
-    let mocks =
-        mount_function_call_agent_response(&server, call_id, &arguments, "list_dir").await;
-    test.submit_turn("list directory contents depth three").await?;
+    let mocks = mount_function_call_agent_response(&server, call_id, &arguments, "list_dir").await;
+    test.submit_turn("list directory contents depth three")
+        .await?;
     let req = mocks.completion.single_request();
     let (content_opt, _) = req
         .function_call_output_content_and_success(call_id)
