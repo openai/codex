@@ -1,27 +1,21 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
-use eventsource_stream::Eventsource;
-use futures::Stream;
-use futures::StreamExt;
 use futures::TryStreamExt;
 use serde_json::Value;
 use serde_json::json;
 use tokio::sync::mpsc;
-use tokio::time::timeout;
-use tracing::debug;
 use tracing::trace;
 
 use crate::aggregate::ChatAggregationMode;
 use crate::api::ApiClient;
-use crate::common::apply_subagent_header;
+use crate::client::PayloadBuilder;
 use crate::common::backoff;
 use crate::error::Error;
 use crate::error::Result;
@@ -64,7 +58,8 @@ impl ApiClient for ChatCompletionsApiClient {
     async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
         Self::validate_prompt(prompt)?;
 
-        let payload = self.build_payload(prompt)?;
+        let payload = crate::payload::chat::ChatPayloadBuilder::new(self.config.model.clone())
+            .build(prompt)?;
         let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
 
         let mut attempt: i64 = 0;
@@ -73,12 +68,14 @@ impl ApiClient for ChatCompletionsApiClient {
         loop {
             attempt += 1;
 
-            let req_builder = self
-                .config
-                .provider
-                .create_request_builder(&self.config.http_client, &None)
-                .await
-                .map(|builder| apply_subagent_header(builder, Some(&self.config.session_source)))?;
+            let req_builder = crate::client::http::build_request(
+                &self.config.http_client,
+                &self.config.provider,
+                &None,
+                Some(&self.config.session_source),
+                &[],
+            )
+            .await?;
 
             let res = self
                 .config
@@ -103,12 +100,12 @@ impl ApiClient for ChatCompletionsApiClient {
                     let otel = self.config.otel_event_manager.clone();
                     let mode = self.config.aggregation_mode;
 
-                    tokio::spawn(process_chat_sse(
+                    tokio::spawn(crate::client::sse::process_sse(
                         stream,
                         tx_event.clone(),
                         idle_timeout,
                         otel,
-                        mode,
+                        crate::decode::chat::ChatSseDecoder::new(mode),
                     ));
 
                     return Ok(ResponseStream { rx_event });
@@ -151,457 +148,6 @@ impl ChatCompletionsApiClient {
         }
         Ok(())
     }
-
-    fn build_payload(&self, prompt: &Prompt) -> Result<serde_json::Value> {
-        let mut messages = Vec::<serde_json::Value>::new();
-        messages.push(json!({ "role": "system", "content": prompt.instructions }));
-
-        let mut reasoning_by_anchor_index: std::collections::HashMap<usize, String> =
-            std::collections::HashMap::new();
-
-        let mut last_emitted_role: Option<&str> = None;
-        for item in &prompt.input {
-            match item {
-                ResponseItem::Message { role, .. } => last_emitted_role = Some(role.as_str()),
-                ResponseItem::FunctionCall { .. } | ResponseItem::LocalShellCall { .. } => {
-                    last_emitted_role = Some("assistant");
-                }
-                ResponseItem::FunctionCallOutput { .. } => last_emitted_role = Some("tool"),
-                ResponseItem::Reasoning { .. }
-                | ResponseItem::Other
-                | ResponseItem::CustomToolCall { .. }
-                | ResponseItem::CustomToolCallOutput { .. }
-                | ResponseItem::WebSearchCall { .. }
-                | ResponseItem::GhostSnapshot { .. } => {}
-            }
-        }
-
-        let mut last_user_index: Option<usize> = None;
-        for (idx, item) in prompt.input.iter().enumerate() {
-            if let ResponseItem::Message { role, .. } = item
-                && role == "user"
-            {
-                last_user_index = Some(idx);
-            }
-        }
-
-        if !matches!(last_emitted_role, Some("user")) {
-            for (idx, item) in prompt.input.iter().enumerate() {
-                if let Some(u_idx) = last_user_index
-                    && idx <= u_idx
-                {
-                    continue;
-                }
-
-                if let ResponseItem::Reasoning {
-                    content: Some(items),
-                    ..
-                } = item
-                {
-                    let mut text = String::new();
-                    for entry in items {
-                        match entry {
-                            ReasoningItemContent::ReasoningText { text: segment }
-                            | ReasoningItemContent::Text { text: segment } => {
-                                text.push_str(segment);
-                            }
-                        }
-                    }
-                    if text.trim().is_empty() {
-                        continue;
-                    }
-
-                    let mut attached = false;
-                    if idx > 0
-                        && let ResponseItem::Message { role, .. } = &prompt.input[idx - 1]
-                        && role == "assistant"
-                    {
-                        reasoning_by_anchor_index
-                            .entry(idx - 1)
-                            .and_modify(|val| val.push_str(&text))
-                            .or_insert(text.clone());
-                        attached = true;
-                    }
-
-                    if !attached && idx + 1 < prompt.input.len() {
-                        match &prompt.input[idx + 1] {
-                            ResponseItem::FunctionCall { .. }
-                            | ResponseItem::LocalShellCall { .. } => {
-                                reasoning_by_anchor_index
-                                    .entry(idx + 1)
-                                    .and_modify(|val| val.push_str(&text))
-                                    .or_insert(text.clone());
-                            }
-                            ResponseItem::Message { role, .. } if role == "assistant" => {
-                                reasoning_by_anchor_index
-                                    .entry(idx + 1)
-                                    .and_modify(|val| val.push_str(&text))
-                                    .or_insert(text.clone());
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut last_assistant_text: Option<String> = None;
-
-        for (idx, item) in prompt.input.iter().enumerate() {
-            match item {
-                ResponseItem::Message { role, content, .. } => {
-                    let mut text = String::new();
-                    let mut items: Vec<serde_json::Value> = Vec::new();
-                    let mut saw_image = false;
-
-                    for c in content {
-                        match c {
-                            ContentItem::InputText { text: t }
-                            | ContentItem::OutputText { text: t } => {
-                                text.push_str(t);
-                                items.push(json!({"type":"text","text": t}));
-                            }
-                            ContentItem::InputImage { image_url } => {
-                                saw_image = true;
-                                items.push(
-                                    json!({"type":"image_url","image_url": {"url": image_url}}),
-                                );
-                            }
-                        }
-                    }
-
-                    if role == "assistant" {
-                        if let Some(prev) = &last_assistant_text
-                            && prev == &text
-                        {
-                            continue;
-                        }
-                        last_assistant_text = Some(text.clone());
-                    }
-
-                    let content_value = if role == "assistant" {
-                        json!(text)
-                    } else if saw_image {
-                        json!(items)
-                    } else {
-                        json!(text)
-                    };
-
-                    let mut message = json!({
-                        "role": role,
-                        "content": content_value,
-                    });
-
-                    if let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
-                        && let Some(obj) = message.as_object_mut()
-                    {
-                        obj.insert("reasoning".to_string(), json!({"text": reasoning}));
-                    }
-
-                    messages.push(message);
-                }
-                ResponseItem::FunctionCall {
-                    name,
-                    arguments,
-                    call_id,
-                    ..
-                } => {
-                    messages.push(json!({
-                        "role": "assistant",
-                        "tool_calls": [{
-                            "id": call_id,
-                            "type": "function",
-                            "function": {
-                                "name": name,
-                                "arguments": arguments,
-                            },
-                        }],
-                    }));
-                }
-                ResponseItem::FunctionCallOutput { call_id, output } => {
-                    let content_value = if let Some(items) = &output.content_items {
-                        let mapped: Vec<serde_json::Value> = items
-                            .iter()
-                            .map(|item| match item {
-                                FunctionCallOutputContentItem::InputText { text } => {
-                                    json!({"type":"text","text": text})
-                                }
-                                FunctionCallOutputContentItem::InputImage { image_url } => {
-                                    json!({"type":"image_url","image_url": {"url": image_url}})
-                                }
-                            })
-                            .collect();
-                        json!(mapped)
-                    } else {
-                        json!(output.content)
-                    };
-
-                    messages.push(json!({
-                        "role": "tool",
-                        "tool_call_id": call_id,
-                        "content": content_value,
-                    }));
-                }
-                ResponseItem::LocalShellCall {
-                    id,
-                    call_id,
-                    action,
-                    ..
-                } => {
-                    let tool_id = call_id
-                        .clone()
-                        .filter(|value| !value.is_empty())
-                        .or_else(|| id.clone())
-                        .unwrap_or_default();
-                    messages.push(json!({
-                        "role": "assistant",
-                        "tool_calls": [{
-                            "id": tool_id,
-                            "type": "function",
-                            "function": {
-                                "name": "shell",
-                                "arguments": serde_json::to_string(action).unwrap_or_default(),
-                            },
-                        }],
-                    }));
-                }
-                ResponseItem::CustomToolCall {
-                    call_id,
-                    name,
-                    input,
-                    ..
-                } => {
-                    messages.push(json!({
-                        "role": "assistant",
-                        "tool_calls": [{
-                            "id": call_id.clone(),
-                            "type": "function",
-                            "function": {
-                                "name": name,
-                                "arguments": input,
-                            },
-                        }],
-                    }));
-                }
-                ResponseItem::CustomToolCallOutput { call_id, output } => {
-                    messages.push(json!({
-                        "role": "tool",
-                        "tool_call_id": call_id,
-                        "content": output,
-                    }));
-                }
-                ResponseItem::WebSearchCall { .. }
-                | ResponseItem::Reasoning { .. }
-                | ResponseItem::Other
-                | ResponseItem::GhostSnapshot { .. } => {}
-            }
-        }
-
-        let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
-        let payload = json!({
-            "model": self.config.model,
-            "messages": messages,
-            "stream": true,
-            "tools": tools_json,
-        });
-
-        trace!("chat completions payload: {}", payload);
-        Ok(payload)
-    }
-}
-
-/// Lightweight SSE processor for Chat Completions streaming, mapped to ResponseEvent.
-async fn process_chat_sse<S>(
-    stream: S,
-    tx_event: mpsc::Sender<Result<ResponseEvent>>,
-    idle_timeout: Duration,
-    _otel_event_manager: OtelEventManager,
-    aggregation_mode: ChatAggregationMode,
-) where
-    S: Stream<Item = Result<Bytes>> + Unpin,
-{
-    let mut stream = stream.eventsource();
-
-    #[derive(Default)]
-    struct FunctionCallState {
-        name: Option<String>,
-        arguments: String,
-        call_id: Option<String>,
-        active: bool,
-    }
-
-    let mut fn_call_state = FunctionCallState::default();
-    let mut assistant_item: Option<ResponseItem> = None;
-    let mut reasoning_item: Option<ResponseItem> = None;
-
-    loop {
-        let response = timeout(idle_timeout, stream.next()).await;
-        let sse = match response {
-            Ok(Some(Ok(ev))) => ev,
-            Ok(Some(Err(err))) => {
-                let _ = tx_event
-                    .send(Err(Error::Stream(err.to_string(), None)))
-                    .await;
-                return;
-            }
-            Ok(None) => {
-                let _ = tx_event
-                    .send(Ok(ResponseEvent::Completed {
-                        response_id: String::new(),
-                        token_usage: None,
-                    }))
-                    .await;
-                return;
-            }
-            Err(_) => {
-                let _ = tx_event
-                    .send(Err(Error::Stream(
-                        "idle timeout waiting for SSE".into(),
-                        None,
-                    )))
-                    .await;
-                return;
-            }
-        };
-
-        if sse.data.trim() == "[DONE]" {
-            if let Some(item) = assistant_item {
-                let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
-            }
-            if let Some(item) = reasoning_item {
-                let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
-            }
-            let _ = tx_event
-                .send(Ok(ResponseEvent::Completed {
-                    response_id: String::new(),
-                    token_usage: None,
-                }))
-                .await;
-            return;
-        }
-
-        let Ok(parsed_chunk) = serde_json::from_str::<serde_json::Value>(&sse.data) else {
-            debug!("failed to parse SSE data into JSON: {}", sse.data);
-            continue;
-        };
-
-        let choices = parsed_chunk
-            .get("choices")
-            .and_then(|choices| choices.as_array())
-            .cloned()
-            .unwrap_or_default();
-
-        for choice in choices {
-            if let Some(delta) = choice.get("delta") {
-                if let Some(content) = delta.get("content").and_then(|c| c.as_array()) {
-                    for piece in content {
-                        if let Some(text) = piece.get("text").and_then(|t| t.as_str()) {
-                            append_assistant_text(&tx_event, &mut assistant_item, text.to_string())
-                                .await;
-                            if matches!(aggregation_mode, ChatAggregationMode::Streaming) {
-                                let _ = tx_event
-                                    .send(Ok(ResponseEvent::OutputTextDelta(text.to_string())))
-                                    .await;
-                            }
-                        }
-                    }
-                }
-
-                if let Some(tool_calls) = delta.get("tool_calls").and_then(|c| c.as_array()) {
-                    for call in tool_calls {
-                        if let Some(id_val) = call.get("id").and_then(|id| id.as_str()) {
-                            fn_call_state.call_id = Some(id_val.to_string());
-                        }
-                        if let Some(function) = call.get("function") {
-                            if let Some(name) = function.get("name").and_then(|n| n.as_str()) {
-                                fn_call_state.name = Some(name.to_string());
-                                fn_call_state.active = true;
-                            }
-                            if let Some(args) = function.get("arguments").and_then(|a| a.as_str()) {
-                                fn_call_state.arguments.push_str(args);
-                            }
-                        }
-                    }
-                }
-
-                if let Some(reasoning) = delta.get("reasoning_content").and_then(|c| c.as_array()) {
-                    for entry in reasoning {
-                        if let Some(text) = entry.get("text").and_then(|t| t.as_str()) {
-                            append_reasoning_text(&tx_event, &mut reasoning_item, text.to_string())
-                                .await;
-                        }
-                    }
-                }
-            }
-
-            if let Some(finish_reason) = choice.get("finish_reason").and_then(|f| f.as_str())
-                && finish_reason == "tool_calls"
-                && fn_call_state.active
-            {
-                let function_name = fn_call_state.name.take().unwrap_or_default();
-                let call_id = fn_call_state.call_id.take().unwrap_or_default();
-                let arguments = fn_call_state.arguments.clone();
-                fn_call_state = FunctionCallState::default();
-
-                let item = ResponseItem::FunctionCall {
-                    id: Some(call_id.clone()),
-                    call_id,
-                    name: function_name,
-                    arguments,
-                };
-                let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
-            }
-        }
-    }
-}
-
-async fn append_assistant_text(
-    tx_event: &mpsc::Sender<Result<ResponseEvent>>,
-    assistant_item: &mut Option<ResponseItem>,
-    text: String,
-) {
-    if assistant_item.is_none() {
-        let item = ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![],
-        };
-        *assistant_item = Some(item.clone());
-        let _ = tx_event
-            .send(Ok(ResponseEvent::OutputItemAdded(item)))
-            .await;
-    }
-
-    if let Some(ResponseItem::Message { content, .. }) = assistant_item {
-        content.push(ContentItem::OutputText { text });
-    }
-}
-
-async fn append_reasoning_text(
-    tx_event: &mpsc::Sender<Result<ResponseEvent>>,
-    reasoning_item: &mut Option<ResponseItem>,
-    text: String,
-) {
-    if reasoning_item.is_none() {
-        let item = ResponseItem::Reasoning {
-            id: String::new(),
-            summary: Vec::new(),
-            content: Some(vec![]),
-            encrypted_content: None,
-        };
-        *reasoning_item = Some(item.clone());
-        let _ = tx_event
-            .send(Ok(ResponseEvent::OutputItemAdded(item)))
-            .await;
-    }
-
-    if let Some(ResponseItem::Reasoning {
-        content: Some(content),
-        ..
-    }) = reasoning_item
-    {
-        content.push(ReasoningItemContent::ReasoningText { text });
-    }
 }
 
 fn create_tools_json_for_chat_completions_api(
@@ -632,5 +178,3 @@ fn create_tools_json_for_chat_completions_api(
         .collect::<Vec<serde_json::Value>>();
     Ok(tools_json)
 }
-
-// aggregation types and adapters moved to crate::aggregate

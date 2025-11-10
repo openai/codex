@@ -1,0 +1,43 @@
+use std::sync::Arc;
+
+use codex_protocol::protocol::SessionSource;
+use reqwest::header::HeaderMap;
+
+use crate::auth::AuthContext;
+use crate::auth::AuthProvider;
+use crate::common::apply_subagent_header;
+use crate::error::Result;
+use crate::model_provider::ModelProviderInfo;
+
+/// Build a request builder with provider/auth/session headers applied.
+pub async fn build_request(
+    http_client: &reqwest::Client,
+    provider: &ModelProviderInfo,
+    auth: &Option<AuthContext>,
+    session_source: Option<&SessionSource>,
+    extra_headers: &[(&str, String)],
+) -> Result<reqwest::RequestBuilder> {
+    let mut builder = provider.create_request_builder(http_client, auth).await?;
+    builder = apply_subagent_header(builder, session_source);
+    for (name, value) in extra_headers {
+        builder = builder.header(*name, value);
+    }
+    Ok(builder)
+}
+
+/// Resolve auth context from an optional provider.
+pub async fn resolve_auth(auth_provider: &Option<Arc<dyn AuthProvider>>) -> Option<AuthContext> {
+    if let Some(p) = auth_provider {
+        p.auth_context().await
+    } else {
+        None
+    }
+}
+
+/// Extract a provider request id, when present, from headers.
+pub fn request_id_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("cf-ray")
+        .and_then(|v| v.to_str().ok())
+        .map(std::string::ToString::to_string)
+}

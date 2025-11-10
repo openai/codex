@@ -16,8 +16,8 @@ use crate::ResponsesApiClientConfig;
 use crate::Result;
 use crate::WireApi;
 use crate::auth::AuthProvider;
+use crate::client::fixtures::stream_from_fixture;
 use crate::model_provider::ModelProviderInfo;
-use crate::responses::stream_from_fixture;
 
 /// Dispatches to the appropriate API client implementation based on the provider wire API.
 #[derive(Clone)]
