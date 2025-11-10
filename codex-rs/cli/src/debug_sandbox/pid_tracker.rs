@@ -1,15 +1,11 @@
 use std::collections::HashSet;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-
 use tokio::task::JoinHandle;
 use tracing::warn;
 
 /// Tracks the (recursive) descendants of a process by using `kqueue` to watch for fork events, and
 /// `proc_listchildpids` to list the children of a process.
 pub(crate) struct PidTracker {
-    stop: Arc<AtomicBool>,
+    kq: libc::c_int,
     handle: JoinHandle<HashSet<i32>>,
 }
 
@@ -19,15 +15,14 @@ impl PidTracker {
             return None;
         }
 
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_clone = stop.clone();
-        let handle = tokio::task::spawn_blocking(move || track_descendants(root_pid, stop_clone));
+        let kq = unsafe { libc::kqueue() };
+        let handle = tokio::task::spawn_blocking(move || track_descendants(kq, root_pid));
 
-        Some(Self { stop, handle })
+        Some(Self { kq, handle })
     }
 
     pub(crate) async fn stop(self) -> HashSet<i32> {
-        self.stop.store(true, Ordering::SeqCst);
+        trigger_stop_event(self.kq);
         self.handle.await.unwrap_or_default()
     }
 }
@@ -160,16 +155,51 @@ fn add_pid_watch(kq: libc::c_int, pid: i32, seen: &mut HashSet<i32>, active: &mu
         watch_children(kq, pid, seen, active);
     }
 }
+const STOP_IDENT: libc::uintptr_t = 1;
+
+fn register_stop_event(kq: libc::c_int) -> bool {
+    let kev = libc::kevent {
+        ident: STOP_IDENT,
+        filter: libc::EVFILT_USER,
+        flags: libc::EV_ADD | libc::EV_CLEAR,
+        fflags: 0,
+        data: 0,
+        udata: std::ptr::null_mut(),
+    };
+
+    let res = unsafe { libc::kevent(kq, &kev, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
+    res >= 0
+}
+
+fn trigger_stop_event(kq: libc::c_int) {
+    if kq < 0 {
+        return;
+    }
+
+    let kev = libc::kevent {
+        ident: STOP_IDENT,
+        filter: libc::EVFILT_USER,
+        flags: 0,
+        fflags: libc::NOTE_TRIGGER,
+        data: 0,
+        udata: std::ptr::null_mut(),
+    };
+
+    let _ = unsafe { libc::kevent(kq, &kev, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
+}
 
 /// Put all of the above together to track all the descendants of `root_pid`.
-fn track_descendants(root_pid: i32, stop: Arc<AtomicBool>) -> HashSet<i32> {
-    use std::thread;
-    use std::time::Duration;
-
-    let kq = unsafe { libc::kqueue() };
+fn track_descendants(kq: libc::c_int, root_pid: i32) -> HashSet<i32> {
     if kq < 0 {
         let mut seen = HashSet::new();
         seen.insert(root_pid);
+        return seen;
+    }
+
+    if !register_stop_event(kq) {
+        let mut seen = HashSet::new();
+        seen.insert(root_pid);
+        let _ = unsafe { libc::close(kq) };
         return seen;
     }
 
@@ -182,22 +212,17 @@ fn track_descendants(root_pid: i32, stop: Arc<AtomicBool>) -> HashSet<i32> {
     let mut events: [libc::kevent; EVENTS_CAP] =
         unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
 
-    while !stop.load(Ordering::Relaxed) {
+    let mut stop_requested = false;
+    loop {
         if active.is_empty() {
             if !pid_is_alive(root_pid) {
                 break;
             }
             add_pid_watch(kq, root_pid, &mut seen, &mut active);
             if active.is_empty() {
-                thread::sleep(Duration::from_millis(10));
                 continue;
             }
         }
-
-        let timeout = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 50_000_000,
-        };
 
         let nev = unsafe {
             libc::kevent(
@@ -206,7 +231,7 @@ fn track_descendants(root_pid: i32, stop: Arc<AtomicBool>) -> HashSet<i32> {
                 0,
                 events.as_mut_ptr(),
                 EVENTS_CAP as libc::c_int,
-                &timeout,
+                std::ptr::null(),
             )
         };
 
@@ -225,6 +250,11 @@ fn track_descendants(root_pid: i32, stop: Arc<AtomicBool>) -> HashSet<i32> {
         for ev in events.iter().take(nev as usize) {
             let pid = ev.ident as i32;
 
+            if ev.filter == libc::EVFILT_USER && ev.ident == STOP_IDENT {
+                stop_requested = true;
+                break;
+            }
+
             if (ev.flags & libc::EV_ERROR) != 0 {
                 if ev.data == libc::ESRCH as isize {
                     active.remove(&pid);
@@ -239,6 +269,10 @@ fn track_descendants(root_pid: i32, stop: Arc<AtomicBool>) -> HashSet<i32> {
             if (ev.fflags & libc::NOTE_EXIT) != 0 {
                 active.remove(&pid);
             }
+        }
+
+        if stop_requested {
+            break;
         }
     }
 
