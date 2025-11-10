@@ -19,3 +19,4 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 starlark = { workspace = true }
 thiserror = { workspace = true }
+multimap = { workspace = true }

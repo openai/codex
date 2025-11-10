@@ -1,6 +1,7 @@
 use codex_execpolicy2::Decision;
 use codex_execpolicy2::PolicyParser;
 use codex_execpolicy2::RuleMatch;
+use codex_execpolicy2::rule::PatternToken;
 
 fn tokens(cmd: &[&str]) -> Vec<String> {
     cmd.iter().map(|token| token.to_string()).collect()
@@ -50,6 +51,67 @@ prefix_rule(
 
     let no_match = tokens(&["npmx", "install"]);
     assert!(policy.evaluate(&no_match).is_none());
+}
+
+#[test]
+fn only_first_token_alias_expands_to_multiple_rules() {
+    let policy_src = r#"
+prefix_rule(
+    id = "shell",
+    pattern = [["bash", "sh"], ["-c", "-l"]],
+)
+    "#;
+    let parser = PolicyParser::new("test.policy", policy_src);
+    let policy = parser.parse().expect("parse policy");
+
+    let bash_rules = policy.rules().get_vec("bash").expect("bash rules");
+    let sh_rules = policy.rules().get_vec("sh").expect("sh rules");
+    assert_eq!(bash_rules.len(), 1);
+    assert_eq!(sh_rules.len(), 1);
+
+    for (cmd, prefix) in [
+        (
+            tokens(&["bash", "-c", "echo", "hi"]),
+            tokens(&["bash", "-c"]),
+        ),
+        (tokens(&["sh", "-l", "echo", "hi"]), tokens(&["sh", "-l"])),
+    ] {
+        let eval = policy.evaluate(&cmd).expect("match");
+        assert_eq!(eval.matched_rules[0].matched_prefix, prefix);
+    }
+}
+
+#[test]
+fn tail_aliases_are_not_cartesian_expanded() {
+    let policy_src = r#"
+prefix_rule(
+    id = "npm_install_variants",
+    pattern = ["npm", ["i", "install"], ["--legacy-peer-deps", "--no-save"]],
+)
+    "#;
+    let parser = PolicyParser::new("test.policy", policy_src);
+    let policy = parser.parse().expect("parse policy");
+
+    let rules = policy.rules().get_vec("npm").expect("npm rules");
+    assert_eq!(rules.len(), 1);
+    let rule = &rules[0];
+    assert_eq!(
+        rule.pattern.tail,
+        vec![
+            PatternToken::Alts(vec!["i".to_string(), "install".to_string()]),
+            PatternToken::Alts(vec![
+                "--legacy-peer-deps".to_string(),
+                "--no-save".to_string()
+            ]),
+        ],
+    );
+
+    for cmd in [
+        tokens(&["npm", "i", "--legacy-peer-deps"]),
+        tokens(&["npm", "install", "--no-save", "leftpad"]),
+    ] {
+        assert!(policy.evaluate(&cmd).is_some());
+    }
 }
 
 #[test]
