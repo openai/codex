@@ -28,7 +28,6 @@ type CommitID = String;
 
 /// Details of a ghost commit created from a repository state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(optional_fields = nullable)]
 pub struct GhostCommit {
     id: CommitID,
     parent: Option<CommitID>,

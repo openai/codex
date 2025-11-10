@@ -46,6 +46,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::UndoCompleted(_)
         | EventMsg::TurnAborted(_) => true,
         EventMsg::Error(_)
+        | EventMsg::Warning(_)
         | EventMsg::TaskStarted(_)
         | EventMsg::TaskComplete(_)
         | EventMsg::AgentMessageDelta(_)

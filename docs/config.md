@@ -4,6 +4,7 @@ Codex configuration gives you fine-grained control over the model, execution env
 
 ## Quick navigation
 
+- [Feature flags](#feature-flags)
 - [Model selection](#model-selection)
 - [Execution environment](#execution-environment)
 - [MCP integration](#mcp-integration)
@@ -25,6 +26,36 @@ Codex supports several mechanisms for setting config values:
 - The `$CODEX_HOME/config.toml` configuration file where the `CODEX_HOME` environment value defaults to `~/.codex`. (Note `CODEX_HOME` will also be where logs and other Codex-related information are stored.)
 
 Both the `--config` flag and the `config.toml` file support the following options:
+
+## Feature flags
+
+Optional and experimental capabilities are toggled via the `[features]` table in `$CODEX_HOME/config.toml`. If you see a deprecation notice mentioning a legacy key (for example `experimental_use_exec_command_tool`), move the setting into `[features]` or pass `--enable <feature>`.
+
+```toml
+[features]
+streamable_shell = true          # enable the streamable exec tool
+web_search_request = true        # allow the model to request web searches
+# view_image_tool defaults to true; omit to keep defaults
+```
+
+Supported features:
+
+| Key                                       | Default | Stage        | Description                                          |
+| ----------------------------------------- | :-----: | ------------ | ---------------------------------------------------- |
+| `unified_exec`                            |  false  | Experimental | Use the unified PTY-backed exec tool                 |
+| `streamable_shell`                        |  false  | Experimental | Use the streamable exec-command/write-stdin pair     |
+| `rmcp_client`                             |  false  | Experimental | Enable oauth support for streamable HTTP MCP servers |
+| `apply_patch_freeform`                    |  false  | Beta         | Include the freeform `apply_patch` tool              |
+| `view_image_tool`                         |  true   | Stable       | Include the `view_image` tool                        |
+| `web_search_request`                      |  false  | Stable       | Allow the model to issue web searches                |
+| `experimental_sandbox_command_assessment` |  false  | Experimental | Enable model-based sandbox risk assessment           |
+| `ghost_commit`                            |  false  | Experimental | Create a ghost commit each turn                      |
+| `enable_experimental_windows_sandbox`     |  false  | Experimental | Use the Windows restricted-token sandbox             |
+
+Notes:
+
+- Omit a key to accept its default.
+- Legacy booleans such as `experimental_use_exec_command_tool`, `experimental_use_unified_exec_tool`, `include_apply_patch_tool`, and similar `experimental_use_*` keys are deprecated; setting the corresponding `[features].<key>` avoids repeated warnings.
 
 ## Model selection
 
@@ -312,15 +343,17 @@ Though using this option may also be necessary if you try to use Codex in enviro
 
 ### tools.\*
 
-Use the optional `[tools]` table to toggle built-in tools that the agent may call. Both keys default to `false` (tools stay disabled) unless you opt in:
+Use the optional `[tools]` table to toggle built-in tools that the agent may call. `web_search` stays off unless you opt in, while `view_image` is now enabled by default:
 
 ```toml
 [tools]
-web_search = true   # allow Codex to issue first-party web searches without prompting you
-view_image = true   # let Codex attach local images (paths in your workspace) to the model request
+web_search = true   # allow Codex to issue first-party web searches without prompting you (deprecated)
+view_image = false  # disable image uploads (they're enabled by default)
 ```
 
-`web_search` is also recognized under the legacy name `web_search_request`. The `view_image` toggle is useful when you want to include screenshots or diagrams from your repo without pasting them manually. Codex still respects sandboxing: it can only attach files inside the workspace roots you allow.
+`web_search` is deprecated; use the `web_search_request` feature flag instead.
+
+The `view_image` toggle is useful when you want to include screenshots or diagrams from your repo without pasting them manually. Codex still respects sandboxing: it can only attach files inside the workspace roots you allow.
 
 ### approval_presets
 
@@ -415,7 +448,7 @@ cwd = "/Users/<user>/code/my-server"
 
 ```toml
 [mcp_servers.figma]
-url = "https://mcp.linear.app/mcp"
+url = "https://mcp.figma.com/mcp"
 # Optional environment variable containing a bearer token to use for auth
 bearer_token_env_var = "ENV_VAR"
 # Optional map of headers with hard-coded values.
@@ -886,6 +919,7 @@ Valid values:
 | `sandbox_workspace_write.exclude_slash_tmp`      | boolean                                                           | Exclude `/tmp` from writable roots (default: false).                                                                       |
 | `notify`                                         | array<string>                                                     | External program for notifications.                                                                                        |
 | `instructions`                                   | string                                                            | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`.                                                    |
+| `features.<feature-flag>`                        | boolean                                                           | See [feature flags](#feature-flags) for details                                                                            |
 | `mcp_servers.<id>.command`                       | string                                                            | MCP server launcher command (stdio servers only).                                                                          |
 | `mcp_servers.<id>.args`                          | array<string>                                                     | MCP server args (stdio servers only).                                                                                      |
 | `mcp_servers.<id>.env`                           | map<string,string>                                                | MCP server env vars (stdio servers only).                                                                                  |
@@ -925,8 +959,8 @@ Valid values:
 | `experimental_instructions_file`                 | string (path)                                                     | Replace built‑in instructions (experimental).                                                                              |
 | `experimental_use_exec_command_tool`             | boolean                                                           | Use experimental exec command tool.                                                                                        |
 | `projects.<path>.trust_level`                    | string                                                            | Mark project/worktree as trusted (only `"trusted"` is recognized).                                                         |
-| `tools.web_search`                               | boolean                                                           | Enable web search tool (alias: `web_search_request`) (default: false).                                                     |
+| `tools.web_search`                               | boolean                                                           | Enable web search tool (deprecated) (default: false).                                                                      |
+| `tools.view_image`                               | boolean                                                           | Enable or disable the `view_image` tool so Codex can attach local image files from the workspace (default: true).          |
 | `forced_login_method`                            | `chatgpt` \| `api`                                                | Only allow Codex to be used with ChatGPT or API keys.                                                                      |
 | `forced_chatgpt_workspace_id`                    | string (uuid)                                                     | Only allow Codex to be used with the specified ChatGPT workspace.                                                          |
 | `cli_auth_credentials_store`                     | `file` \| `keyring` \| `auto`                                     | Where to store CLI login credentials (default: `file`).                                                                    |
-| `tools.view_image`                               | boolean                                                           | Enable the `view_image` tool so Codex can attach local image files from the workspace (default: false).                    |

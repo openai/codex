@@ -25,7 +25,6 @@ members = [
     "ollama",
     "process-hardening",
     "protocol",
-    "protocol-ts",
     "rmcp-client",
     "responses-api-proxy",
     "stdio-to-uds",
@@ -75,7 +74,6 @@ codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
-codex-protocol-ts = { path = "protocol-ts" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
@@ -87,6 +85,7 @@ codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-string = { path = "utils/string" }
 codex-utils-tokenizer = { path = "utils/tokenizer" }
+codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
@@ -96,7 +95,7 @@ allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 anyhow = "1"
 arboard = "3"
-askama = "0.12"
+askama = "0.14"
 assert_cmd = "2"
 assert_matches = "1.5.0"
 async-channel = "2.3.1"
@@ -127,7 +126,7 @@ icu_provider = { version = "2.1", features = ["sync"] }
 icu_locale_core = "2.1"
 ignore = "0.4.23"
 image = { version = "^0.25.8", default-features = false }
-indexmap = "2.6.0"
+indexmap = "2.12.0"
 insta = "1.43.2"
 itertools = "0.14.0"
 keyring = "3.6"
@@ -161,7 +160,7 @@ ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
 regex-lite = "0.1.7"
 reqwest = "0.12"
-rmcp = { version = "0.8.3", default-features = false }
+rmcp = { version = "0.8.5", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 sentry = "0.34.0"
@@ -181,7 +180,7 @@ sys-locale = "0.3.2"
 tempfile = "3.23.0"
 test-log = "0.2.18"
 textwrap = "0.16.2"
-thiserror = "2.0.16"
+thiserror = "2.0.17"
 time = "0.3"
 tiny_http = "0.12"
 tokio = "1"
@@ -210,8 +209,9 @@ walkdir = "2.5.0"
 webbrowser = "1.0"
 which = "6"
 wildmatch = "2.5.0"
+
 wiremock = "0.6"
-zeroize = "1.8.1"
+zeroize = "1.8.2"
 
 [workspace.lints]
 rust = {}
@@ -254,7 +254,12 @@ unwrap_used = "deny"
 # cargo-shear cannot see the platform-specific openssl-sys usage, so we
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
-ignored = ["icu_provider", "openssl-sys", "codex-utils-readiness", "codex-utils-tokenizer"]
+ignored = [
+    "icu_provider",
+    "openssl-sys",
+    "codex-utils-readiness",
+    "codex-utils-tokenizer",
+]
 
 [profile.release]
 lto = "fat"
@@ -274,6 +279,7 @@ opt-level = 0
 # Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
+crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
 
 # Uncomment to debug local changes.
 # rmcp = { path = "../../rust-sdk/crates/rmcp" }

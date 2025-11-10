@@ -128,6 +128,9 @@ pub struct Config {
     /// Base instructions override.
     pub base_instructions: Option<String>,
 
+    /// Developer instructions override injected as a separate message.
+    pub developer_instructions: Option<String>,
+
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
@@ -238,17 +241,12 @@ pub struct Config {
     /// When `true`, run a model-based assessment for commands denied by the sandbox.
     pub experimental_sandbox_command_assessment: bool,
 
-    pub use_experimental_streamable_shell_tool: bool,
-
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
     /// If set to `true`, use the experimental official Rust MCP client.
     /// https://github.com/modelcontextprotocol/rust-sdk
     pub use_experimental_use_rmcp_client: bool,
-
-    /// Include the `view_image` tool that lets the agent attach a local image path to context.
-    pub include_view_image_tool: bool,
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
@@ -543,6 +541,11 @@ pub struct ConfigToml {
 
     /// System instructions.
     pub instructions: Option<String>,
+
+    /// Developer instructions inserted as a `developer` role message.
+    #[serde(default)]
+    pub developer_instructions: Option<String>,
+
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
 
@@ -650,7 +653,6 @@ pub struct ConfigToml {
     /// Legacy, now use features
     pub experimental_instructions_file: Option<PathBuf>,
     pub experimental_compact_prompt_file: Option<PathBuf>,
-    pub experimental_use_exec_command_tool: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
@@ -764,6 +766,8 @@ impl ConfigToml {
         let mut forced_auto_mode_downgraded_on_windows = false;
         if cfg!(target_os = "windows")
             && matches!(resolved_sandbox_mode, SandboxMode::WorkspaceWrite)
+            // If the experimental Windows sandbox is enabled, do not force a downgrade.
+            && crate::safety::get_platform_sandbox().is_none()
         {
             sandbox_policy = SandboxPolicy::new_read_only_policy();
             forced_auto_mode_downgraded_on_windows = true;
@@ -830,9 +834,9 @@ pub struct ConfigOverrides {
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
+    pub developer_instructions: Option<String>,
     pub compact_prompt: Option<String>,
     pub include_apply_patch_tool: Option<bool>,
-    pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub experimental_sandbox_command_assessment: Option<bool>,
@@ -861,9 +865,9 @@ impl Config {
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
             base_instructions,
+            developer_instructions,
             compact_prompt,
             include_apply_patch_tool: include_apply_patch_tool_override,
-            include_view_image_tool: include_view_image_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             experimental_sandbox_command_assessment: sandbox_command_assessment_override,
@@ -890,12 +894,15 @@ impl Config {
 
         let feature_overrides = FeatureOverrides {
             include_apply_patch_tool: include_apply_patch_tool_override,
-            include_view_image_tool: include_view_image_tool_override,
             web_search_request: override_tools_web_search_request,
             experimental_sandbox_command_assessment: sandbox_command_assessment_override,
         };
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
+        #[cfg(target_os = "windows")]
+        {
+            crate::safety::set_windows_sandbox_enabled(features.enabled(Feature::WindowsSandbox));
+        }
 
         let resolved_cwd = {
             use std::env;
@@ -988,9 +995,7 @@ impl Config {
         let history = cfg.history.unwrap_or_default();
 
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
-        let include_view_image_tool_flag = features.enabled(Feature::ViewImageTool);
         let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
-        let use_experimental_streamable_shell_tool = features.enabled(Feature::StreamableShell);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
         let use_experimental_use_rmcp_client = features.enabled(Feature::RmcpClient);
         let experimental_sandbox_command_assessment =
@@ -1060,6 +1065,7 @@ impl Config {
             "experimental instructions file",
         )?;
         let base_instructions = base_instructions.or(file_base_instructions);
+        let developer_instructions = developer_instructions.or(cfg.developer_instructions);
 
         let experimental_compact_prompt_path = config_profile
             .experimental_compact_prompt_file
@@ -1095,6 +1101,7 @@ impl Config {
             notify: cfg.notify,
             user_instructions,
             base_instructions,
+            developer_instructions,
             compact_prompt,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
@@ -1145,10 +1152,8 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_flag,
             tools_web_search_request,
             experimental_sandbox_command_assessment,
-            use_experimental_streamable_shell_tool,
             use_experimental_unified_exec_tool,
             use_experimental_use_rmcp_client,
-            include_view_image_tool: include_view_image_tool_flag,
             features,
             active_profile: active_profile_name,
             active_project,
@@ -1583,7 +1588,7 @@ trust_level = "trusted"
         profiles.insert(
             "work".to_string(),
             ConfigProfile {
-                include_view_image_tool: Some(false),
+                tools_view_image: Some(false),
                 ..Default::default()
             },
         );
@@ -1600,7 +1605,6 @@ trust_level = "trusted"
         )?;
 
         assert!(!config.features.enabled(Feature::ViewImageTool));
-        assert!(!config.include_view_image_tool);
 
         Ok(())
     }
@@ -1706,7 +1710,6 @@ trust_level = "trusted"
     fn legacy_toggles_map_to_features() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml {
-            experimental_use_exec_command_tool: Some(true),
             experimental_use_unified_exec_tool: Some(true),
             experimental_use_rmcp_client: Some(true),
             experimental_use_freeform_apply_patch: Some(true),
@@ -1720,12 +1723,11 @@ trust_level = "trusted"
         )?;
 
         assert!(config.features.enabled(Feature::ApplyPatchFreeform));
-        assert!(config.features.enabled(Feature::StreamableShell));
         assert!(config.features.enabled(Feature::UnifiedExec));
         assert!(config.features.enabled(Feature::RmcpClient));
 
         assert!(config.include_apply_patch_tool);
-        assert!(config.use_experimental_streamable_shell_tool);
+
         assert!(config.use_experimental_unified_exec_tool);
         assert!(config.use_experimental_use_rmcp_client);
 
@@ -2886,16 +2888,15 @@ model_verbosity = "high"
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
+                developer_instructions: None,
                 compact_prompt: None,
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
                 experimental_sandbox_command_assessment: false,
-                use_experimental_streamable_shell_tool: false,
                 use_experimental_unified_exec_tool: false,
                 use_experimental_use_rmcp_client: false,
-                include_view_image_tool: true,
                 features: Features::with_defaults(),
                 active_profile: Some("o3".to_string()),
                 active_project: ProjectConfig { trust_level: None },
@@ -2958,16 +2959,15 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            developer_instructions: None,
             compact_prompt: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             experimental_sandbox_command_assessment: false,
-            use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
-            include_view_image_tool: true,
             features: Features::with_defaults(),
             active_profile: Some("gpt3".to_string()),
             active_project: ProjectConfig { trust_level: None },
@@ -3045,16 +3045,15 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            developer_instructions: None,
             compact_prompt: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             experimental_sandbox_command_assessment: false,
-            use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
-            include_view_image_tool: true,
             features: Features::with_defaults(),
             active_profile: Some("zdr".to_string()),
             active_project: ProjectConfig { trust_level: None },
@@ -3118,16 +3117,15 @@ model_verbosity = "high"
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            developer_instructions: None,
             compact_prompt: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             experimental_sandbox_command_assessment: false,
-            use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
-            include_view_image_tool: true,
             features: Features::with_defaults(),
             active_profile: Some("gpt5".to_string()),
             active_project: ProjectConfig { trust_level: None },

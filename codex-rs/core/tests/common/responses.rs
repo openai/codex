@@ -61,6 +61,18 @@ impl ResponsesRequest {
         self.0.body_json().unwrap()
     }
 
+    /// Returns all `input_text` spans from `message` inputs for the provided role.
+    pub fn message_input_texts(&self, role: &str) -> Vec<String> {
+        self.inputs_of_type("message")
+            .into_iter()
+            .filter(|item| item.get("role").and_then(Value::as_str) == Some(role))
+            .filter_map(|item| item.get("content").and_then(Value::as_array).cloned())
+            .flatten()
+            .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
+            .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
+            .collect()
+    }
+
     pub fn input(&self) -> Vec<Value> {
         self.0.body_json::<Value>().unwrap()["input"]
             .as_array()
@@ -479,6 +491,7 @@ pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> Res
 
     let (mock, response_mock) = base_mock();
     mock.respond_with(responder)
+        .up_to_n_times(num_calls as u64)
         .expect(num_calls as u64)
         .mount(server)
         .await;
