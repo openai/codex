@@ -140,3 +140,144 @@ $logPath = "_docs\$logFileName"
 - ⚠️ **ログ本文にも日時を記載**: ログの先頭に `**日時**: yyyy-MM-dd HH:mm:ss` を記載
 - ✅ **MCPサーバー優先**: 可能な限りMCPサーバー経由で取得
 - ✅ **PowerShellフォールバック**: MCPサーバーが利用不可の場合はPowerShellで取得
+
+---
+
+## 🔴🔴🔴 最重要事項：魔理沙の声（完了通知）🔴🔴🔴
+
+### ⚠️⚠️⚠️ 絶対に忘れてはいけない最重要ルール ⚠️⚠️⚠️
+
+**EVERY SINGLE TASKの最後に、必ず魔理沙の声（完了通知音声）を再生すること！**
+
+**これは最も重要なルールです。他のすべてのルールより優先されます。**
+
+### 実行方法（優先順位順）
+
+1. **第一優先**: `C:\Users\downl\Desktop\SO8T\.cursor\marisa_owattaze.wav` を再生
+2. **第二優先**: `C:\Users\downl\Desktop\新しいフォルダー (4)\marisa_owattaze.wav` を再生
+3. **フォールバック**: ピープ音を再生
+
+### PowerShellコマンド（必ず実行すること）
+
+```powershell
+# 第一優先パス（同期的に再生して確実に聞こえるようにする）
+if (Test-Path "C:\Users\downl\Desktop\SO8T\.cursor\marisa_owattaze.wav") {
+    Add-Type -AssemblyName System.Media
+    $player = New-Object System.Media.SoundPlayer "C:\Users\downl\Desktop\SO8T\.cursor\marisa_owattaze.wav"
+    $player.Load()
+    $player.PlaySync()  # PlaySync()で同期的に再生（確実に聞こえる）
+    Write-Host "完了通知を再生しました: 終わったぜ！" -ForegroundColor Green
+} elseif (Test-Path "C:\Users\downl\Desktop\新しいフォルダー (4)\marisa_owattaze.wav") {
+    Add-Type -AssemblyName System.Media
+    $player = New-Object System.Media.SoundPlayer "C:\Users\downl\Desktop\新しいフォルダー (4)\marisa_owattaze.wav"
+    $player.Load()
+    $player.PlaySync()  # PlaySync()で同期的に再生（確実に聞こえる）
+    Write-Host "完了通知を再生しました: 終わったぜ！" -ForegroundColor Green
+} else {
+    # フォールバック: ピープ音を5回再生（確実に聞こえるように）
+    for ($i = 1; $i -le 5; $i++) {
+        [Console]::Beep(500, 300)
+        Start-Sleep -Milliseconds 200
+    }
+    Write-Host "ピープ音を5回再生しました" -ForegroundColor Yellow
+}
+```
+
+**重要**: `PlaySync()`メソッドを使用することで、音声が完全に再生されるまで待機します。これにより確実に音声が聞こえます。
+
+### 実行タイミング
+
+**EVERY TASKの最後に実行:**
+- ✅ コード修正完了時
+- ✅ ファイル作成完了時
+- ✅ ビルド完了時
+- ✅ テスト完了時
+- ✅ リファクタリング完了時
+- ✅ コードレビュー完了時
+- ✅ 実装ログ作成完了時
+- ✅ **ALL TASKS完了時**
+
+### 重要度
+
+**🔴 最重要 🔴**
+- このルールを守らないと、ユーザーがタスク完了を認識できません
+- 音声が聞こえない = タスクが完了していないと判断されます
+- **絶対に忘れないこと！**
+
+---
+
+## 🔔 Cursor Agent 音声通知 (CRITICAL - 最重要事項)
+
+### ⚠️⚠️⚠️ MANDATORY COMPLETION NOTIFICATION - 絶対に必須 ⚠️⚠️⚠️
+
+**🔴 最重要ルール: 魔理沙の声を聞こえるようにすること 🔴**
+
+**ALWAYS execute this command at the END of EVERY task completion:**
+
+1. Finish all your work
+2. **IMMEDIATELY execute the sound notification command** (DO NOT skip!)
+3. Use the `run_terminal_cmd` tool to execute the command directly
+
+**This is NON-NEGOTIABLE. Do NOT skip this step. EVER.**
+
+### 実行コマンド（必ず実行すること）
+
+```powershell
+# 第一優先: SO8Tフォルダ（PlaySync()で同期的に再生）
+if (Test-Path "C:\Users\downl\Desktop\SO8T\.cursor\marisa_owattaze.wav") {
+    Add-Type -AssemblyName System.Media
+    $player = New-Object System.Media.SoundPlayer "C:\Users\downl\Desktop\SO8T\.cursor\marisa_owattaze.wav"
+    $player.Load()
+    $player.PlaySync()  # 同期的に再生（確実に聞こえる）
+    Write-Host "完了通知を再生しました: 終わったぜ！" -ForegroundColor Green
+} elseif (Test-Path "C:\Users\downl\Desktop\新しいフォルダー (4)\marisa_owattaze.wav") {
+    Add-Type -AssemblyName System.Media
+    $player = New-Object System.Media.SoundPlayer "C:\Users\downl\Desktop\新しいフォルダー (4)\marisa_owattaze.wav"
+    $player.Load()
+    $player.PlaySync()  # 同期的に再生（確実に聞こえる）
+    Write-Host "完了通知を再生しました: 終わったぜ！" -ForegroundColor Green
+} else {
+    # フォールバック: ピープ音を5回再生（確実に聞こえるように）
+    for ($i = 1; $i -le 5; $i++) {
+        [Console]::Beep(500, 300)
+        Start-Sleep -Milliseconds 200
+    }
+    Write-Host "ピープ音を5回再生しました" -ForegroundColor Yellow
+}
+```
+
+**重要**: `PlaySync()`メソッドを使用することで、音声が完全に再生されるまで待機します。`Play()`メソッドは非同期のため、音声が聞こえない場合があります。`PlaySync()`を使用することで確実に音声が聞こえます。
+
+### When to Execute (ALL scenarios - すべてのシナリオで実行):
+
+- ✅ **EVERY Agent/Composer task completion**
+- ✅ **EVERY Plan phase completion**
+- ✅ **EVERY file creation/modification completion**
+- ✅ **EVERY research/analysis completion**
+- ✅ **EVERY single task completion**
+
+### Example Flow:
+
+```
+User: "Create a new React component"
+Agent: [Creates component]
+Agent: [MUST execute] PowerShell sound notification command
+→ Sound plays: "終わったぜ！" (Marisa)
+→ User hears the sound and knows task is complete
+```
+
+### Sound File Info:
+- File: `marisa_owattaze.wav`
+- Primary Location: `C:\Users\downl\Desktop\SO8T\.cursor\marisa_owattaze.wav`
+- Secondary Location: `C:\Users\downl\Desktop\新しいフォルダー (4)\marisa_owattaze.wav`
+- Purpose: Notify user of task completion (魔理沙の声で「終わったぜ！」)
+
+### 🔴 重要度: 最高優先度 🔴
+
+**このルールは他のすべてのルールより優先されます。**
+**音声が聞こえない = タスクが完了していないと判断されます。**
+**絶対に忘れないこと！必ず実行すること！**
+
+**REMEMBER: This is the FINAL STEP of every task. NEVER forget it. ALWAYS execute it.**
+
+---
