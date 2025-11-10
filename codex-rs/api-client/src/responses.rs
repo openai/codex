@@ -409,39 +409,60 @@ async fn emit_response_completed(
 }
 
 fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
-    fn parse_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
-        headers.get(name)?.to_str().ok()?.parse::<f64>().ok()
-    }
-    fn parse_i64(headers: &HeaderMap, name: &str) -> Option<i64> {
-        headers.get(name)?.to_str().ok()?.parse::<i64>().ok()
-    }
+    let primary = parse_rate_limit_window(
+        headers,
+        "x-codex-primary-used-percent",
+        "x-codex-primary-window-minutes",
+        "x-codex-primary-reset-at",
+    );
 
-    let primary_used = parse_f64(headers, "x-codex-primary-used-percent");
-    let primary_window = parse_i64(headers, "x-codex-primary-window-minutes");
-    let primary_resets = parse_i64(headers, "x-codex-primary-resets-at")
-        .or_else(|| parse_i64(headers, "x-codex-primary-reset-at"));
+    let secondary = parse_rate_limit_window(
+        headers,
+        "x-codex-secondary-used-percent",
+        "x-codex-secondary-window-minutes",
+        "x-codex-secondary-reset-at",
+    );
 
-    let secondary_used = parse_f64(headers, "x-codex-secondary-used-percent");
-    let secondary_window = parse_i64(headers, "x-codex-secondary-window-minutes");
-    let secondary_resets = parse_i64(headers, "x-codex-secondary-resets-at")
-        .or_else(|| parse_i64(headers, "x-codex-secondary-reset-at"));
+    Some(RateLimitSnapshot { primary, secondary })
+}
 
-    let primary = primary_used.map(|used_percent| RateLimitWindow {
-        used_percent,
-        window_minutes: primary_window,
-        resets_at: primary_resets,
-    });
-    let secondary = secondary_used.map(|used_percent| RateLimitWindow {
-        used_percent,
-        window_minutes: secondary_window,
-        resets_at: secondary_resets,
-    });
+fn parse_rate_limit_window(
+    headers: &HeaderMap,
+    used_percent_header: &str,
+    window_minutes_header: &str,
+    resets_at_header: &str,
+) -> Option<RateLimitWindow> {
+    let used_percent: Option<f64> = parse_header_f64(headers, used_percent_header);
 
-    if primary.is_some() || secondary.is_some() {
-        Some(RateLimitSnapshot { primary, secondary })
-    } else {
-        None
-    }
+    used_percent.and_then(|used_percent| {
+        let window_minutes = parse_header_i64(headers, window_minutes_header);
+        let resets_at = parse_header_i64(headers, resets_at_header);
+
+        let has_data = used_percent != 0.0
+            || window_minutes.is_some_and(|minutes| minutes != 0)
+            || resets_at.is_some();
+
+        has_data.then_some(RateLimitWindow {
+            used_percent,
+            window_minutes,
+            resets_at,
+        })
+    })
+}
+
+fn parse_header_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
+    parse_header_str(headers, name)?
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
+}
+
+fn parse_header_i64(headers: &HeaderMap, name: &str) -> Option<i64> {
+    parse_header_str(headers, name)?.parse::<i64>().ok()
+}
+
+fn parse_header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name)?.to_str().ok()
 }
 
 async fn process_sse_chunk(
@@ -688,11 +709,11 @@ impl StreamAttemptError {
 
 // backoff moved to crate::common
 
-fn rate_limit_regex() -> Option<&'static Regex> {
-    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+fn rate_limit_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
 
-    RE.get_or_init(|| Regex::new(r"Please try again in (\d+(?:\.\d+)?)(s|ms)").ok())
-        .as_ref()
+    #[expect(clippy::unwrap_used)]
+    RE.get_or_init(|| Regex::new(r"(?i)try again in\s*(\d+(?:\.\d+)?)\s*(s|ms|seconds?)").unwrap())
 }
 
 fn try_parse_retry_after(err: &ErrorResponse) -> Option<Duration> {
@@ -700,8 +721,8 @@ fn try_parse_retry_after(err: &ErrorResponse) -> Option<Duration> {
         return None;
     }
 
-    if let Some(re) = rate_limit_regex()
-        && let Some(message) = &err.error.message
+    let re = rate_limit_regex();
+    if let Some(message) = &err.error.message
         && let Some(captures) = re.captures(message)
     {
         let seconds = captures.get(1);
@@ -709,9 +730,9 @@ fn try_parse_retry_after(err: &ErrorResponse) -> Option<Duration> {
 
         if let (Some(value), Some(unit)) = (seconds, unit) {
             let value = value.as_str().parse::<f64>().ok()?;
-            let unit = unit.as_str();
+            let unit = unit.as_str().to_ascii_lowercase();
 
-            if unit == "s" {
+            if unit == "s" || unit.starts_with("second") {
                 return Some(Duration::from_secs_f64(value));
             } else if unit == "ms" {
                 return Some(Duration::from_millis(value as u64));
