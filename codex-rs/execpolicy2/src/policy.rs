@@ -1,6 +1,5 @@
 use crate::decision::Decision;
 use crate::rule::Rule;
-use crate::rule::RuleMatch;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -11,21 +10,8 @@ pub struct Policy {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Evaluation {
-    pub rule_id: String,
     pub decision: Decision,
-    pub matched_prefix: Vec<String>,
-    pub remainder: Vec<String>,
-}
-
-impl From<RuleMatch> for Evaluation {
-    fn from(value: RuleMatch) -> Self {
-        Self {
-            rule_id: value.rule_id,
-            decision: value.decision,
-            matched_prefix: value.matched_prefix,
-            remainder: value.remainder,
-        }
-    }
+    pub matched_rules: Vec<crate::rule::RuleMatch>,
 }
 
 impl Policy {
@@ -38,22 +24,27 @@ impl Policy {
     }
 
     pub fn evaluate(&self, cmd: &[String]) -> Option<Evaluation> {
-        let mut best: Option<Evaluation> = None;
+        let mut matched_rules: Vec<crate::rule::RuleMatch> = Vec::new();
+        let mut best_decision: Option<Decision> = None;
         for rule in &self.rules {
             if let Some(matched) = rule.matches(cmd) {
-                let eval = Evaluation::from(matched);
-                best = match best {
-                    None => Some(eval),
+                let decision = match best_decision {
+                    None => matched.decision,
                     Some(current) => {
-                        if eval.decision.is_stricter_than(current.decision) {
-                            Some(eval)
+                        if matched.decision.is_stricter_than(current) {
+                            matched.decision
                         } else {
-                            Some(current)
+                            current
                         }
                     }
                 };
+                best_decision = Some(decision);
+                matched_rules.push(matched);
             }
         }
-        best
+        best_decision.map(|decision| Evaluation {
+            decision,
+            matched_rules,
+        })
     }
 }
