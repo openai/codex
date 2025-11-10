@@ -9,6 +9,24 @@ pub enum UpdateAction {
     BrewUpgrade,
 }
 
+impl UpdateAction {
+    /// Returns the list of command-line arguments for invoking the update.
+    pub fn command_args(self) -> (&'static str, &'static [&'static str]) {
+        match self {
+            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex"]),
+            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex"]),
+            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "codex"]),
+        }
+    }
+
+    /// Returns string representation of the command-line arguments for invoking the update.
+    pub fn command_str(self) -> String {
+        let (command, args) = self.command_args();
+        shlex::try_join(std::iter::once(command).chain(args.iter().copied()))
+            .unwrap_or_else(|_| format!("{command} {}", args.join(" ")))
+    }
+}
+
 #[cfg(not(debug_assertions))]
 pub(crate) fn get_update_action() -> Option<UpdateAction> {
     let exe = std::env::current_exe().unwrap_or_default();
@@ -23,24 +41,7 @@ pub(crate) fn get_update_action() -> Option<UpdateAction> {
     )
 }
 
-impl UpdateAction {
-    /// Returns the list of command-line arguments for invoking the update.
-    pub fn command_args(self) -> (&'static str, &'static [&'static str]) {
-        match self {
-            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex@latest"]),
-            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex@latest"]),
-            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "codex"]),
-        }
-    }
-
-    /// Returns string representation of the command-line arguments for invoking the update.
-    pub fn command_str(self) -> String {
-        let (command, args) = self.command_args();
-        shlex::try_join(std::iter::once(command).chain(args.iter().copied()))
-            .unwrap_or_else(|_| format!("{command} {}", args.join(" ")))
-    }
-}
-
+#[cfg(any(not(debug_assertions), test))]
 fn detect_update_action(
     is_macos: bool,
     current_exe: &std::path::Path,
