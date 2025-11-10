@@ -1,6 +1,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::LocalShellAction;
+use codex_protocol::models::LocalShellExecAction;
+use codex_protocol::models::LocalShellStatus;
+use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::user_input::UserInput;
 use tokio::sync::Mutex;
@@ -79,13 +85,14 @@ impl SessionTask for UserShellCommandTask {
         };
 
         let params = ShellToolCallParams {
-            command: shell_invocation,
+            command: shell_invocation.clone(),
             workdir: None,
             timeout_ms: None,
             with_escalated_permissions: None,
             justification: None,
         };
 
+        let params_timeout_ms = params.timeout_ms.clone();
         let tool_call = ToolCall {
             tool_name: USER_SHELL_TOOL_NAME.to_string(),
             call_id: Uuid::new_v4().to_string(),
@@ -101,11 +108,78 @@ impl SessionTask for UserShellCommandTask {
             Arc::clone(&tracker),
         );
 
-        if let Err(err) = runtime
+        let call_id = tool_call.call_id.clone();
+        match runtime
             .handle_tool_call(tool_call, cancellation_token)
             .await
         {
-            error!("user shell command failed: {err:?}");
+            Ok(resp) => {
+                let mut status = LocalShellStatus::Completed;
+
+                // Special-case 'aborted' commands to mark failure.
+                let mut output_item: ResponseItem = resp.clone().into();
+                if let ResponseInputItem::FunctionCallOutput { output, .. } = &resp {
+                    if output.content == "aborted" {
+                        status = LocalShellStatus::Incomplete;
+                        output_item = ResponseItem::FunctionCallOutput {
+                            call_id: call_id.clone(),
+                            output: FunctionCallOutputPayload {
+                                content: "aborted".to_string(),
+                                success: Some(false),
+                                ..Default::default()
+                            },
+                        };
+                    }
+                }
+
+                let local_call = ResponseItem::LocalShellCall {
+                    id: None,
+                    call_id: Some(call_id.clone()),
+                    status,
+                    action: LocalShellAction::Exec(LocalShellExecAction {
+                        command: shell_invocation.clone(),
+                        timeout_ms: params_timeout_ms,
+                        working_directory: Some(turn_context.cwd.to_string_lossy().into_owned()),
+                        // The Responses API expects `env` to be an object with string keys/values.
+                        // Sending `null` here yields an `invalid_type` error, so we send `{}`.
+                        env: Some(std::collections::HashMap::new()),
+                        user: None,
+                    }),
+                };
+
+                session
+                    .record_conversation_items(turn_context.as_ref(), &[local_call, output_item])
+                    .await;
+            }
+            Err(err) => {
+                error!("user shell command failed: {err:?}");
+
+                let local_call = ResponseItem::LocalShellCall {
+                    id: None,
+                    call_id: Some(call_id.clone()),
+                    status: LocalShellStatus::Incomplete,
+                    action: LocalShellAction::Exec(LocalShellExecAction {
+                        // Clone because the original invocation was moved into `params` above.
+                        command: shell_invocation.clone(),
+                        timeout_ms: params_timeout_ms,
+                        working_directory: Some(turn_context.cwd.to_string_lossy().into_owned()),
+                        // Match success path: ensure an empty object instead of `null`.
+                        env: Some(std::collections::HashMap::new()),
+                        user: None,
+                    }),
+                };
+                let output_item = ResponseItem::FunctionCallOutput {
+                    call_id: call_id.clone(),
+                    output: FunctionCallOutputPayload {
+                        content: err.to_string(),
+                        success: Some(false),
+                        ..Default::default()
+                    },
+                };
+                session
+                    .record_conversation_items(turn_context.as_ref(), &[local_call, output_item])
+                    .await;
+            }
         }
         None
     }
