@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
+use crate::compact;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::parse_command::parse_command;
@@ -55,7 +56,7 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
 use crate::config::types::ShellEnvironmentPolicy;
-use crate::conversation_history::ConversationHistory;
+use crate::context_manager::ContextManager;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -63,6 +64,8 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 // Removed: legacy executor wiring replaced by ToolOrchestrator flows.
 // legacy normalize_exec_result no longer used after orchestrator migration
+use crate::compact::build_compacted_history;
+use crate::compact::collect_user_messages;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::spawn_startup_job;
@@ -126,10 +129,6 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
-
-pub mod compact;
-use self::compact::build_compacted_history;
-use self::compact::collect_user_messages;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -925,7 +924,7 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> Vec<ResponseItem> {
-        let mut history = ConversationHistory::new();
+        let mut history = ContextManager::new();
         for item in rollout_items {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
@@ -948,7 +947,7 @@ impl Session {
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
-    async fn record_into_history(&self, items: &[ResponseItem]) {
+    pub(crate) async fn record_into_history(&self, items: &[ResponseItem]) {
         let mut state = self.state.lock().await;
         state.record_items(items.iter());
     }
@@ -1000,7 +999,7 @@ impl Session {
         items
     }
 
-    async fn persist_rollout_items(&self, items: &[RolloutItem]) {
+    pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
         let recorder = {
             let guard = self.services.rollout.lock().await;
             guard.clone()
@@ -1012,12 +1011,12 @@ impl Session {
         }
     }
 
-    pub(crate) async fn clone_history(&self) -> ConversationHistory {
+    pub(crate) async fn clone_history(&self) -> ContextManager {
         let state = self.state.lock().await;
         state.clone_history()
     }
 
-    async fn update_token_usage_info(
+    pub(crate) async fn update_token_usage_info(
         &self,
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
@@ -1034,7 +1033,7 @@ impl Session {
         self.send_token_count_event(turn_context).await;
     }
 
-    async fn update_rate_limits(
+    pub(crate) async fn update_rate_limits(
         &self,
         turn_context: &TurnContext,
         new_rate_limits: RateLimitSnapshot,
@@ -1055,7 +1054,7 @@ impl Session {
         self.send_event(turn_context, event).await;
     }
 
-    async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
+    pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
         let context_window = turn_context.client.get_model_context_window();
         if let Some(context_window) = context_window {
             {
@@ -1098,7 +1097,11 @@ impl Session {
         self.send_event(turn_context, event).await;
     }
 
-    async fn notify_stream_error(&self, turn_context: &TurnContext, message: impl Into<String>) {
+    pub(crate) async fn notify_stream_error(
+        &self,
+        turn_context: &TurnContext,
+        message: impl Into<String>,
+    ) {
         let event = EventMsg::StreamError(StreamErrorEvent {
             message: message.into(),
         });
@@ -1668,8 +1671,7 @@ async fn spawn_review_thread(
     let mut review_features = config.features.clone();
     review_features
         .disable(crate::features::Feature::WebSearchRequest)
-        .disable(crate::features::Feature::ViewImageTool)
-        .disable(crate::features::Feature::StreamableShell);
+        .disable(crate::features::Feature::ViewImageTool);
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_family: &review_model_family,
         features: &review_features,
@@ -1955,6 +1957,8 @@ async fn run_turn(
                 return Err(CodexErr::UsageLimitReached(e));
             }
             Err(CodexErr::UsageNotIncluded) => return Err(CodexErr::UsageNotIncluded),
+            Err(e @ CodexErr::QuotaExceeded) => return Err(e),
+            Err(e @ CodexErr::RefreshTokenFailed(_)) => return Err(e),
             Err(e) => {
                 // Use the configured provider-specific stream retry budget.
                 let max_retries = turn_context.client.get_provider().stream_max_retries();
@@ -1973,7 +1977,7 @@ async fn run_turn(
                     // at a seemingly frozen screen.
                     sess.notify_stream_error(
                         &turn_context,
-                        format!("Re-connecting... {retries}/{max_retries}"),
+                        format!("Reconnecting... {retries}/{max_retries}"),
                     )
                     .await;
 
@@ -2812,7 +2816,7 @@ mod tests {
         turn_context: &TurnContext,
     ) -> (Vec<RolloutItem>, Vec<ResponseItem>) {
         let mut rollout_items = Vec::new();
-        let mut live_history = ConversationHistory::new();
+        let mut live_history = ContextManager::new();
 
         let initial_context = session.build_initial_context(turn_context);
         for item in &initial_context {

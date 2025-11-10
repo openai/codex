@@ -54,7 +54,7 @@ const COMPACT_PROMPT_MARKER: &str =
 pub(super) const TEST_COMPACT_PROMPT: &str =
     "You are performing a CONTEXT CHECKPOINT COMPACTION for a tool.\nTest-only compact prompt.";
 
-pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start new a new conversation when possible to keep conversations small and targeted.";
+pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.";
 
 fn auto_summary(summary: &str) -> String {
     summary.to_string()
@@ -108,19 +108,19 @@ async fn summarize_context_three_requests_and_instructions() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"hello world\"") && !body.contains(COMPACT_PROMPT_MARKER)
     };
-    mount_sse_once_match(&server, first_matcher, sse1).await;
+    let first_request_mock = mount_sse_once_match(&server, first_matcher, sse1).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(COMPACT_PROMPT_MARKER)
     };
-    mount_sse_once_match(&server, second_matcher, sse2).await;
+    let second_request_mock = mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(&format!("\"text\":\"{THIRD_USER_MSG}\""))
     };
-    mount_sse_once_match(&server, third_matcher, sse3).await;
+    let third_request_mock = mount_sse_once_match(&server, third_matcher, sse3).await;
 
     // Build config pointing to the mock server and spawn Codex.
     let model_provider = ModelProviderInfo {
@@ -172,16 +172,13 @@ async fn summarize_context_three_requests_and_instructions() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // Inspect the three captured requests.
-    let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 3, "expected exactly three requests");
+    let req1 = first_request_mock.single_request();
+    let req2 = second_request_mock.single_request();
+    let req3 = third_request_mock.single_request();
 
-    let req1 = &requests[0];
-    let req2 = &requests[1];
-    let req3 = &requests[2];
-
-    let body1 = req1.body_json::<serde_json::Value>().unwrap();
-    let body2 = req2.body_json::<serde_json::Value>().unwrap();
-    let body3 = req3.body_json::<serde_json::Value>().unwrap();
+    let body1 = req1.body_json();
+    let body2 = req2.body_json();
+    let body3 = req3.body_json();
 
     // Manual compact should keep the baseline developer instructions.
     let instr1 = body1.get("instructions").and_then(|v| v.as_str()).unwrap();
