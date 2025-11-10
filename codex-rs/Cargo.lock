@@ -1522,7 +1522,6 @@ dependencies = [
  "anyhow",
  "portable-pty",
  "tokio",
- "tracing",
 ]
 
 [[package]]
