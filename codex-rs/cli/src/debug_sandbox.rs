@@ -99,7 +99,6 @@ enum SandboxType {
     Windows,
 }
 
-#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
 async fn run_command_under_sandbox(
     full_auto: bool,
     command: Vec<String>,

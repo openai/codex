@@ -46,14 +46,7 @@ fn list_child_pids(parent: i32) -> Vec<i32> {
                 buf.as_mut_ptr() as *mut libc::c_void,
                 (buf.len() * std::mem::size_of::<i32>()) as libc::c_int,
             );
-            if count < 0 {
-                let err = std::io::Error::last_os_error().raw_os_error();
-                if err == Some(libc::ESRCH) {
-                    return Vec::new();
-                }
-                return Vec::new();
-            }
-            if count == 0 {
+            if count <= 0 {
                 return Vec::new();
             }
             let returned = count as usize;
