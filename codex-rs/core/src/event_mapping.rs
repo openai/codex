@@ -198,7 +198,14 @@ mod tests {
                     text: "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>".to_string(),
                 }],
             },
-        ];
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "<user_shell_command>echo 42</user_shell_command>".to_string(),
+            }],
+        },
+    ];
 
         for item in items {
             let turn_item = parse_turn_item(&item);
