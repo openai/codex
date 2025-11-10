@@ -869,99 +869,12 @@ fn is_mcp_client_startup_timeout_error(error: &anyhow::Error) -> bool {
 }
 
 #[cfg(test)]
-mod mcp_init_error_display_tests {
-    use super::*;
-    use codex_protocol::protocol::McpAuthStatus;
-
-    #[test]
-    fn mcp_init_error_display_prompts_for_github_pat() {
-        let server_name = "github";
-        let entry = McpAuthStatusEntry {
-            config: McpServerConfig {
-                transport: McpServerTransportConfig::StreamableHttp {
-                    url: "https://api.githubcopilot.com/mcp/".to_string(),
-                    bearer_token_env_var: None,
-                    http_headers: None,
-                    env_http_headers: None,
-                },
-                enabled: true,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                enabled_tools: None,
-                disabled_tools: None,
-            },
-            auth_status: McpAuthStatus::Unsupported,
-        };
-        let err = anyhow::anyhow!("OAuth is unsupported");
-
-        let display = mcp_init_error_display(server_name, Some(&entry), &err);
-
-        let expected = format!(
-            "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
-        );
-
-        assert_eq!(expected, display);
-    }
-
-    #[test]
-    fn mcp_init_error_display_prompts_for_login_when_auth_required() {
-        let server_name = "example";
-        let err = anyhow::anyhow!("Auth required for server");
-
-        let display = mcp_init_error_display(server_name, None, &err);
-
-        let expected = format!(
-            "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
-        );
-
-        assert_eq!(expected, display);
-    }
-
-    #[test]
-    fn mcp_init_error_display_reports_generic_errors() {
-        let server_name = "custom";
-        let entry = McpAuthStatusEntry {
-            config: McpServerConfig {
-                transport: McpServerTransportConfig::StreamableHttp {
-                    url: "https://example.com".to_string(),
-                    bearer_token_env_var: Some("TOKEN".to_string()),
-                    http_headers: None,
-                    env_http_headers: None,
-                },
-                enabled: true,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                enabled_tools: None,
-                disabled_tools: None,
-            },
-            auth_status: McpAuthStatus::Unsupported,
-        };
-        let err = anyhow::anyhow!("boom");
-
-        let display = mcp_init_error_display(server_name, Some(&entry), &err);
-
-        let expected = format!("MCP client for `{server_name}` failed to start: {err:#}");
-
-        assert_eq!(expected, display);
-    }
-
-    #[test]
-    fn mcp_init_error_display_includes_startup_timeout_hint() {
-        let server_name = "slow";
-        let err = anyhow::anyhow!("request timed out");
-
-        let display = mcp_init_error_display(server_name, None, &err);
-
-        assert_eq!(
-            "MCP client for `slow` timed out after 10 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",
-            display
-        );
-    }
-}
+mod mcp_init_error_display_tests {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::protocol::McpAuthStatus;
     use mcp_types::ToolInputSchema;
     use std::collections::HashSet;
 
@@ -1116,5 +1029,90 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].server_name, "server1");
         assert_eq!(filtered[0].tool_name, "tool_a");
+    }
+
+    #[test]
+    fn mcp_init_error_display_prompts_for_github_pat() {
+        let server_name = "github";
+        let entry = McpAuthStatusEntry {
+            config: McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "https://api.githubcopilot.com/mcp/".to_string(),
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+            auth_status: McpAuthStatus::Unsupported,
+        };
+        let err = anyhow::anyhow!("OAuth is unsupported");
+
+        let display = mcp_init_error_display(server_name, Some(&entry), &err);
+
+        let expected = format!(
+            "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
+        );
+
+        assert_eq!(expected, display);
+    }
+
+    #[test]
+    fn mcp_init_error_display_prompts_for_login_when_auth_required() {
+        let server_name = "example";
+        let err = anyhow::anyhow!("Auth required for server");
+
+        let display = mcp_init_error_display(server_name, None, &err);
+
+        let expected = format!(
+            "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
+        );
+
+        assert_eq!(expected, display);
+    }
+
+    #[test]
+    fn mcp_init_error_display_reports_generic_errors() {
+        let server_name = "custom";
+        let entry = McpAuthStatusEntry {
+            config: McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "https://example.com".to_string(),
+                    bearer_token_env_var: Some("TOKEN".to_string()),
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+            auth_status: McpAuthStatus::Unsupported,
+        };
+        let err = anyhow::anyhow!("boom");
+
+        let display = mcp_init_error_display(server_name, Some(&entry), &err);
+
+        let expected = format!("MCP client for `{server_name}` failed to start: {err:#}");
+
+        assert_eq!(expected, display);
+    }
+
+    #[test]
+    fn mcp_init_error_display_includes_startup_timeout_hint() {
+        let server_name = "slow";
+        let err = anyhow::anyhow!("request timed out");
+
+        let display = mcp_init_error_display(server_name, None, &err);
+
+        assert_eq!(
+            "MCP client for `slow` timed out after 10 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",
+            display
+        );
     }
 }
