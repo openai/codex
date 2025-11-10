@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use super::Session;
-use super::TurnContext;
-use super::get_last_assistant_message_from_turn;
 use crate::Prompt;
 use crate::client_common::ResponseEvent;
+use crate::codex::Session;
+use crate::codex::TurnContext;
+use crate::codex::get_last_assistant_message_from_turn;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::protocol::AgentMessageEvent;
@@ -25,7 +25,7 @@ use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
 use tracing::error;
 
-pub const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
+pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
 pub(crate) async fn run_inline_auto_compact_task(
