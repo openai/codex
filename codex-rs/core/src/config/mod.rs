@@ -38,6 +38,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use dirs::home_dir;
@@ -385,7 +386,7 @@ fn ensure_no_inline_bearer_tokens(value: &TomlValue) -> std::io::Result<()> {
 pub(crate) fn set_project_trust_level_inner(
     doc: &mut DocumentMut,
     project_path: &Path,
-    trust_level: &str,
+    trust_level: &TrustLevel,
 ) -> anyhow::Result<()> {
     // Ensure we render a human-friendly structure:
     //
@@ -447,27 +448,21 @@ pub(crate) fn set_project_trust_level_inner(
         return Err(anyhow::anyhow!("project table missing for {project_key}"));
     };
     proj_tbl.set_implicit(false);
-    proj_tbl["trust_level"] = toml_edit::value(trust_level);
+    proj_tbl["trust_level"] = toml_edit::value(trust_level.to_string());
     Ok(())
 }
 
-/// Patch `CODEX_HOME/config.toml` project state to mark project as trusted.
+/// Patch `CODEX_HOME/config.toml` project state to set trust level.
 /// Use with caution.
-pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Result<()> {
+pub fn set_project_trust_level(
+    codex_home: &Path,
+    project_path: &Path,
+    trust_level: TrustLevel,
+) -> anyhow::Result<()> {
     use crate::config::edit::ConfigEditsBuilder;
 
     ConfigEditsBuilder::new(codex_home)
-        .set_project_trusted(project_path)
-        .apply_blocking()
-}
-
-/// Patch `CODEX_HOME/config.toml` project state to mark project as untrusted.
-/// Use with caution.
-pub fn set_project_untrusted(codex_home: &Path, project_path: &Path) -> anyhow::Result<()> {
-    use crate::config::edit::ConfigEditsBuilder;
-
-    ConfigEditsBuilder::new(codex_home)
-        .set_project_untrusted(project_path)
+        .set_project_trust_level(project_path, trust_level)
         .apply_blocking()
 }
 
@@ -697,22 +692,16 @@ impl From<ConfigToml> for UserSavedConfig {
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
-    pub trust_level: Option<String>,
+    pub trust_level: Option<TrustLevel>,
 }
 
 impl ProjectConfig {
     pub fn is_trusted(&self) -> bool {
-        match &self.trust_level {
-            Some(trust_level) => trust_level == "trusted",
-            None => false,
-        }
+        matches!(self.trust_level, Some(TrustLevel::Trusted))
     }
 
     pub fn is_untrusted(&self) -> bool {
-        match &self.trust_level {
-            Some(trust_level) => trust_level == "untrusted",
-            None => false,
-        }
+        matches!(self.trust_level, Some(TrustLevel::Untrusted))
     }
 }
 
@@ -3185,7 +3174,7 @@ model_verbosity = "high"
         let project_dir = Path::new("/some/path");
         let mut doc = DocumentMut::new();
 
-        set_project_trust_level_inner(&mut doc, project_dir, "trusted")?;
+        set_project_trust_level_inner(&mut doc, project_dir, &TrustLevel::Trusted)?;
 
         let contents = doc.to_string();
 
@@ -3225,7 +3214,7 @@ trust_level = "trusted"
         let mut doc = initial.parse::<DocumentMut>()?;
 
         // Run the function; it should convert to explicit tables and set trusted
-        set_project_trust_level_inner(&mut doc, project_dir, "trusted")?;
+        set_project_trust_level_inner(&mut doc, project_dir, &TrustLevel::Trusted)?;
 
         let contents = doc.to_string();
 
@@ -3252,7 +3241,7 @@ model = "foo""#;
 
         // Approve a new directory
         let new_project = Path::new("/Users/mbolin/code/codex2");
-        set_project_trust_level_inner(&mut doc, new_project, "trusted")?;
+        set_project_trust_level_inner(&mut doc, new_project, &TrustLevel::Trusted)?;
 
         let contents = doc.to_string();
 
@@ -3316,7 +3305,7 @@ trust_level = "untrusted"
         projects.insert(
             test_path.to_string_lossy().to_string(),
             ProjectConfig {
-                trust_level: Some("untrusted".to_string()),
+                trust_level: Some(TrustLevel::Untrusted),
             },
         );
 

@@ -3,6 +3,7 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
 use anyhow::Context;
 use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::config_types::TrustLevel;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -31,7 +32,7 @@ pub enum ConfigEdit {
     ReplaceMcpServers(BTreeMap<String, McpServerConfig>),
     /// Set trust_level under `[projects."<path>"]`,
     /// migrating inline tables to explicit tables.
-    SetProjectTrustLevel { path: PathBuf, level: String },
+    SetProjectTrustLevel { path: PathBuf, level: TrustLevel },
     /// Set the value stored at the exact dotted path.
     SetPath {
         segments: Vec<String>,
@@ -501,21 +502,13 @@ impl ConfigEditsBuilder {
     pub fn set_project_trust_level<P: Into<PathBuf>>(
         mut self,
         project_path: P,
-        trust_level: &str,
+        trust_level: TrustLevel,
     ) -> Self {
         self.edits.push(ConfigEdit::SetProjectTrustLevel {
             path: project_path.into(),
-            level: trust_level.to_string(),
+            level: trust_level,
         });
         self
-    }
-
-    pub fn set_project_trusted<P: Into<PathBuf>>(self, project_path: P) -> Self {
-        self.set_project_trust_level(project_path, "trusted")
-    }
-
-    pub fn set_project_untrusted<P: Into<PathBuf>>(self, project_path: P) -> Self {
-        self.set_project_trust_level(project_path, "untrusted")
     }
 
     /// Apply edits on a blocking thread.
