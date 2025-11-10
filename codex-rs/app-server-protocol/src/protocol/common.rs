@@ -101,6 +101,11 @@ macro_rules! client_request_definitions {
 }
 
 client_request_definitions! {
+    Initialize {
+        params: v1::InitializeParams,
+        response: v1::InitializeResponse,
+    },
+
     /// NEW APIs
     // Thread lifecycle
     #[serde(rename = "thread/start")]
@@ -196,10 +201,6 @@ client_request_definitions! {
     },
 
     /// DEPRECATED APIs below
-    Initialize {
-        params: v1::InitializeParams,
-        response: v1::InitializeResponse,
-    },
     NewConversation {
         params: v1::NewConversationParams,
         response: v1::NewConversationResponse,
