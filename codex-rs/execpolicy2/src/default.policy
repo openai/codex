@@ -12,25 +12,120 @@ prefix_rule(
 )
 
 prefix_rule(
-    id = "npm_install",
-    pattern = ["npm", ["i", "install"]],
-    decision = "prompt",
-    match = [
-        ["npm", "i"],
-        ["npm", "install"],
-        ["npm", "install", "lodash"],
-    ],
-    not_match = [
-        ["npmx", "install"],
-        ["npm", "outdated"],
-    ],
-)
-
-prefix_rule(
     id = "git_reset_hard",
     pattern = ["git", "reset", "--hard"],
     decision = "forbidden",
     match = [
         ["git", "reset", "--hard"],
+    ],
+)
+
+prefix_rule(
+    id = "ls",
+    pattern = ["ls"],
+    match = [
+        ["ls"],
+        ["ls", "-l"],
+        ["ls", "-a", "."],
+    ],
+    not_match = [
+        ["lsl"],
+    ],
+)
+
+prefix_rule(
+    id = "cat",
+    pattern = ["cat"],
+    match = [
+        ["cat", "file.txt"],
+        ["cat", "-n", "README.md"],
+    ],
+    not_match = [
+        ["catx"],
+    ],
+)
+
+prefix_rule(
+    id = "cp_prompt",
+    pattern = ["cp"],
+    decision = "prompt",
+    match = [
+        ["cp", "foo", "bar"],
+        ["cp", "-r", "src", "dest"],
+    ],
+    not_match = [
+        ["cpp"],
+    ],
+)
+
+prefix_rule(
+    id = "head",
+    pattern = ["head"],
+    match = [
+        ["head", "README.md"],
+        ["head", "-n", "5", "CHANGELOG.md"],
+    ],
+    not_match = [
+        ["headx"],
+    ],
+)
+
+prefix_rule(
+    id = "printenv",
+    pattern = ["printenv"],
+    match = [
+        ["printenv"],
+        ["printenv", "PATH"],
+    ],
+    not_match = [
+        ["printenvx"],
+    ],
+)
+
+prefix_rule(
+    id = "pwd",
+    pattern = ["pwd"],
+    match = [
+        ["pwd"],
+    ],
+    not_match = [
+        ["pwdx"],
+    ],
+)
+
+prefix_rule(
+    id = "rg",
+    pattern = ["rg"],
+    match = [
+        ["rg", "-n", "init"],
+        ["rg", "--files", "--max-depth", "2", "."],
+    ],
+    not_match = [
+        ["rgx"],
+    ],
+)
+
+prefix_rule(
+    id = "sed_prompt",
+    pattern = ["sed"],
+    decision = "prompt",
+    match = [
+        ["sed", "-n", "s/a/b/", "file.txt"],
+        ["sed", "s/foo/bar/g", "file.txt"],
+    ],
+    not_match = [
+        ["sedx"],
+    ],
+)
+
+prefix_rule(
+    id = "which",
+    pattern = ["which"],
+    match = [
+        ["which", "python3"],
+        ["which", "-a", "python3"],
+    ],
+    not_match = [
+        ["whichx"],
     ],
 )
