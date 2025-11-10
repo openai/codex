@@ -7,6 +7,7 @@ use tempfile::TempDir;
 // This code runs before any other tests are run.
 // It allows the test binary to behave like codex and dispatch to apply_patch and codex-linux-sandbox
 // based on the arg0.
+// NOTE: this doesn't work on ARM
 #[ctor]
 pub static CODEX_ALIASES_TEMP_DIR: TempDir = unsafe {
     let mut should_exit = true;
