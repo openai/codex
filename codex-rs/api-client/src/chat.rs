@@ -2,16 +2,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use codex_otel::otel_event_manager::OtelEventManager;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use futures::TryStreamExt;
-use serde_json::Value;
-use serde_json::json;
 use tokio::sync::mpsc;
-use tracing::trace;
 
 use crate::aggregate::ChatAggregationMode;
 use crate::api::ApiClient;
@@ -148,33 +141,4 @@ impl ChatCompletionsApiClient {
         }
         Ok(())
     }
-}
-
-fn create_tools_json_for_chat_completions_api(
-    tools: &[serde_json::Value],
-) -> Result<Vec<serde_json::Value>> {
-    let tools_json = tools
-        .iter()
-        .filter_map(|tool| {
-            if tool.get("type") != Some(&serde_json::Value::String("function".to_string())) {
-                return None;
-            }
-
-            let function_value = if let Some(function) = tool.get("function") {
-                function.clone()
-            } else if let Some(map) = tool.as_object() {
-                let mut function = map.clone();
-                function.remove("type");
-                Value::Object(function)
-            } else {
-                return None;
-            };
-
-            Some(json!({
-                "type": "function",
-                "function": function_value,
-            }))
-        })
-        .collect::<Vec<serde_json::Value>>();
-    Ok(tools_json)
 }
