@@ -79,7 +79,7 @@ where
     // Retain the TempDir so it exists for the lifetime of the invocation of
     // this executable. Admittedly, we could invoke `keep()` on it, but it
     // would be nice to avoid leaving temporary directories behind, if possible.
-    let _path_entry = match prepend_path_entry_for_apply_patch() {
+    let _path_entry = match prepend_path_entry_for_codex_aliases() {
         Ok(path_entry) => Some(path_entry),
         Err(err) => {
             // It is possible that Codex will proceed successfully even if
@@ -144,11 +144,15 @@ where
 ///
 /// IMPORTANT: This function modifies the PATH environment variable, so it MUST
 /// be called before multiple threads are spawned.
-fn prepend_path_entry_for_apply_patch() -> std::io::Result<TempDir> {
+pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
     let temp_dir = TempDir::new()?;
     let path = temp_dir.path();
 
-    for filename in &[APPLY_PATCH_ARG0, MISSPELLED_APPLY_PATCH_ARG0] {
+    for filename in &[
+        APPLY_PATCH_ARG0,
+        MISSPELLED_APPLY_PATCH_ARG0,
+        LINUX_SANDBOX_ARG0,
+    ] {
         let exe = std::env::current_exe()?;
 
         #[cfg(unix)]
