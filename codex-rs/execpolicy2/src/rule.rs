@@ -1,6 +1,8 @@
 use crate::decision::Decision;
 use crate::error::Error;
 use crate::error::Result;
+use serde::Deserialize;
+use serde::Serialize;
 
 #[derive(Clone, Debug)]
 pub struct Rule {
@@ -9,11 +11,10 @@ pub struct Rule {
     pub decision: Decision,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RuleMatch {
     pub rule_id: String,
     pub matched_prefix: Vec<String>,
-    pub remainder: Vec<String>,
     pub decision: Decision,
 }
 
@@ -28,11 +29,9 @@ impl Rule {
                 .zip(prefix)
                 .all(|(cmd_tok, prefix_tok)| cmd_tok == prefix_tok)
             {
-                let remainder = cmd[prefix.len()..].to_vec();
                 return Some(RuleMatch {
                     rule_id: self.id.clone(),
                     matched_prefix: prefix.clone(),
-                    remainder,
                     decision: self.decision,
                 });
             }
