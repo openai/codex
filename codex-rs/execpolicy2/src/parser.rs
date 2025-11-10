@@ -104,47 +104,35 @@ fn parse_pattern<'v>(pattern: UnpackList<Value<'v>>) -> Result<ParsedPattern> {
 }
 
 fn parse_first_token<'v>(value: Value<'v>) -> Result<Vec<String>> {
+    parse_tokens(value)
+}
+
+fn parse_tail_token<'v>(value: Value<'v>) -> Result<PatternToken> {
+    let tokens = parse_tokens(value)?;
+    if tokens.len() == 1 {
+        return Ok(PatternToken::Single(tokens.into_iter().next().unwrap()));
+    }
+    Ok(PatternToken::Alts(tokens))
+}
+
+fn parse_tokens<'v>(value: Value<'v>) -> Result<Vec<String>> {
     if let Some(s) = value.unpack_str() {
         return Ok(vec![s.to_string()]);
     }
     if let Some(list) = ListRef::from_value(value) {
-        let mut alts = Vec::new();
+        let mut tokens = Vec::new();
         for value in list.content() {
             let s = value.unpack_str().ok_or_else(|| {
                 Error::InvalidPattern("pattern alternative must be a string".to_string())
             })?;
-            alts.push(s.to_string());
+            tokens.push(s.to_string());
         }
-        if alts.is_empty() {
+        if tokens.is_empty() {
             return Err(Error::InvalidPattern(
                 "pattern alternatives cannot be empty".to_string(),
             ));
         }
-        return Ok(alts);
-    }
-    Err(Error::InvalidPattern(
-        "pattern element must be a string or list of strings".to_string(),
-    ))
-}
-
-fn parse_tail_token<'v>(value: Value<'v>) -> Result<PatternToken> {
-    if let Some(s) = value.unpack_str() {
-        return Ok(PatternToken::Single(s.to_string()));
-    }
-    if let Some(list) = ListRef::from_value(value) {
-        let mut alts = Vec::new();
-        for value in list.content() {
-            let s = value.unpack_str().ok_or_else(|| {
-                Error::InvalidPattern("pattern alternative must be a string".to_string())
-            })?;
-            alts.push(s.to_string());
-        }
-        if alts.is_empty() {
-            return Err(Error::InvalidPattern(
-                "pattern alternatives cannot be empty".to_string(),
-            ));
-        }
-        return Ok(PatternToken::Alts(alts));
+        return Ok(tokens);
     }
     Err(Error::InvalidPattern(
         "pattern element must be a string or list of strings".to_string(),
