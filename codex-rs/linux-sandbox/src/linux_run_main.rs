@@ -15,7 +15,7 @@ pub struct LandlockCommand {
     pub sandbox_policy: codex_core::protocol::SandboxPolicy,
 
     /// Full command args to run under landlock.
-    #[arg(trailing_var_arg = true)]
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 1..)]
     pub command: Vec<String>,
 }
 
