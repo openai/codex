@@ -1157,7 +1157,6 @@ impl ChatWidget {
                         self.add_to_history(history_cell::new_error_event(format!(
                             "Failed to paste image: {err}",
                         )));
-                        self.request_redraw();
                     }
                 }
                 return;
