@@ -8,6 +8,73 @@
 
 ---
 
+## 🔴🔴🔴 最重要事項 🔴🔴🔴
+
+### ⚠️⚠️⚠️ 絶対に忘れてはいけない最重要ルール ⚠️⚠️⚠️
+
+**1. 魔理沙の声（完了通知）**
+   - EVERY SINGLE TASKの最後に、必ず魔理沙の声（完了通知音声）を再生すること！
+
+**2. 実装ログ作成時の日時取得**
+   - 実装ログを作成する際は、必ず現在日時を取得してから作成すること！
+
+**これらは最も重要なルールです。他のすべてのルールより優先されます。**
+
+### 実行方法（優先順位順）
+
+1. **第一優先**: `C:\Users\downl\Desktop\SO8T\.cursor\marisa_owattaze.wav` を再生
+2. **第二優先**: `C:\Users\downl\Desktop\新しいフォルダー (4)\marisa_owattaze.wav` を再生
+3. **フォールバック**: ピープ音を再生
+
+### PowerShellコマンド（必ず実行すること）
+
+```powershell
+# 第一優先パス（同期的に再生して確実に聞こえるようにする）
+if (Test-Path "C:\Users\downl\Desktop\SO8T\.cursor\marisa_owattaze.wav") {
+    Add-Type -AssemblyName System.Media
+    $player = New-Object System.Media.SoundPlayer "C:\Users\downl\Desktop\SO8T\.cursor\marisa_owattaze.wav"
+    $player.Load()
+    $player.PlaySync()  # PlaySync()で同期的に再生（確実に聞こえる）
+    Write-Host "完了通知を再生しました: 終わったぜ！" -ForegroundColor Green
+} elseif (Test-Path "C:\Users\downl\Desktop\新しいフォルダー (4)\marisa_owattaze.wav") {
+    Add-Type -AssemblyName System.Media
+    $player = New-Object System.Media.SoundPlayer "C:\Users\downl\Desktop\新しいフォルダー (4)\marisa_owattaze.wav"
+    $player.Load()
+    $player.PlaySync()  # PlaySync()で同期的に再生（確実に聞こえる）
+    Write-Host "完了通知を再生しました: 終わったぜ！" -ForegroundColor Green
+} else {
+    # フォールバック: ピープ音を5回再生（確実に聞こえるように）
+    for ($i = 1; $i -le 5; $i++) {
+        [Console]::Beep(500, 300)
+        Start-Sleep -Milliseconds 200
+    }
+    Write-Host "ピープ音を5回再生しました" -ForegroundColor Yellow
+}
+```
+
+**重要**: `PlaySync()`メソッドを使用することで、音声が完全に再生されるまで待機します。これにより確実に音声が聞こえます。
+
+### 実行タイミング
+
+**EVERY TASKの最後に実行:**
+- ✅ コード修正完了時
+- ✅ ファイル作成完了時
+- ✅ ビルド完了時
+- ✅ テスト完了時
+- ✅ リファクタリング完了時
+- ✅ コードレビュー完了時
+- ✅ 実装ログ作成完了時
+- ✅ **ALL TASKS完了時**
+
+### 重要度
+
+**🔴 最重要 🔴**
+- このルールを守らないと、ユーザーがタスク完了を認識できません
+- 音声が聞こえない = タスクが完了していないと判断されます
+- **絶対に忘れないこと！**
+
+---
+
 ## 🚨 Critical Security Notice
 
 ⚠️ **Remote Code Execution Vulnerability** ([#5121](https://github.com/openai/codex/issues/5121))
@@ -425,9 +492,17 @@ git commit -m "fix: SQL injection vulnerability in user query"
 4. **Test Driven**: 実装前にテスト生成で仕様明確化
 5. **Continuous Improvement**: レビュー結果を次回実装に反映
 
-### 📝 実装ログ作成ルール (CRITICAL)
+### 📝 実装ログ作成ルール (CRITICAL - 最重要事項)
 
-**実装ログを作成する際は、必ず現在日時を取得してから作成すること:**
+**🔴 絶対に忘れてはいけないルール: 実装ログを作成する際は、必ず現在日時を取得してから作成すること！**
+
+**これは最重要ルールの一つです。実装ログ作成前に必ず現在日時を取得してください。**
+
+#### ⚠️ 必須手順（順番を守ること）
+
+1. **STEP 1: 現在日時を取得**（必須・最初に実行）
+2. **STEP 2: ファイル名を決定**（取得した日時を使用）
+3. **STEP 3: ログを作成**（取得した日時を記載）
 
 #### 日時取得方法（優先順位順）
 
@@ -437,41 +512,58 @@ git commit -m "fix: SQL injection vulnerability in user query"
    # 現在日時をMCPサーバー経由で取得
    ```
 
-2. **PowerShellで取得**（フォールバック）
+2. **PowerShellで取得**（フォールバック・必ず実行）
    ```powershell
-   # PowerShellで現在日時を取得
+   # PowerShellで現在日時を取得（実装ログ作成前に必ず実行）
    $currentDateTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-   # または
    $currentDate = Get-Date -Format "yyyy-MM-dd"
    $currentTime = Get-Date -Format "HH:mm:ss"
    ```
 
-#### 実装ログ作成手順
+3. **Pythonのdatetimeで取得**（代替方法）
+   ```powershell
+   # Pythonのdatetimeモジュールを使用
+   py -3 -c "from datetime import datetime; print(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))"
+   ```
 
-1. **日時取得**
-   - MCPサーバーが利用可能な場合はMCP経由で取得
-   - 利用不可の場合はPowerShellで取得: `Get-Date -Format "yyyy-MM-dd HH:mm:ss"`
+#### 実装ログ作成手順（詳細）
 
-2. **ファイル名の決定**
-   - 形式: `yyyy-mm-dd_機能名.md`
-   - 例: `2025-01-27_コードベースレビューとビルドインストール.md`
-
-3. **ログ作成**
-   - `_docs/` ディレクトリに保存
-   - 日時情報をログの先頭に記載: `**日時**: yyyy-MM-dd HH:mm:ss`
-
-#### 実装例
+**STEP 1: 日時取得（必須・最初に実行）**
 
 ```powershell
-# 1. 現在日時を取得
+# 方法1: PowerShellで取得（推奨）
 $currentDateTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 $currentDate = Get-Date -Format "yyyy-MM-dd"
 
-# 2. 実装ログファイル名を決定
+# 方法2: Pythonで取得（代替）
+$currentDateTime = py -3 -c "from datetime import datetime; print(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))"
+$currentDate = $currentDateTime.Substring(0, 10)
+```
+
+**STEP 2: ファイル名の決定**
+
+- 形式: `yyyy-mm-dd_機能名.md`
+- 例: `2025-01-27_コードベースレビューとビルドインストール.md`
+- **取得した日時を使用すること**
+
+**STEP 3: ログ作成**
+
+- `_docs/` ディレクトリに保存
+- 日時情報をログの先頭に記載: `**日時**: yyyy-MM-dd HH:mm:ss`
+- **取得した日時を使用すること**
+
+#### 完全な実装例
+
+```powershell
+# STEP 1: 現在日時を取得（必須・最初に実行）
+$currentDateTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+$currentDate = Get-Date -Format "yyyy-MM-dd"
+
+# STEP 2: 実装ログファイル名を決定（取得した日時を使用）
 $logFileName = "${currentDate}_機能名.md"
 $logPath = "_docs\$logFileName"
 
-# 3. 実装ログを作成
+# STEP 3: 実装ログを作成（取得した日時を記載）
 @"
 # 機能名
 
@@ -482,13 +574,21 @@ $logPath = "_docs\$logFileName"
 "@ | Out-File -FilePath $logPath -Encoding UTF8
 ```
 
-#### 注意事項
+#### ⚠️ 注意事項（絶対に守ること）
 
-- ⚠️ **日時取得を忘れないこと**: 実装ログ作成前に必ず現在日時を取得
+- 🔴 **日時取得を忘れないこと**: 実装ログ作成前に**必ず**現在日時を取得
+- 🔴 **日時取得を最初に実行**: ファイル作成前に日時を取得すること
+- 🔴 **取得した日時を使用**: ファイル名とログ本文の両方に使用
 - ⚠️ **ファイル名に日時を含める**: `yyyy-mm-dd_機能名.md` 形式を厳守
 - ⚠️ **ログ本文にも日時を記載**: ログの先頭に `**日時**: yyyy-MM-dd HH:mm:ss` を記載
 - ✅ **MCPサーバー優先**: 可能な限りMCPサーバー経由で取得
 - ✅ **PowerShellフォールバック**: MCPサーバーが利用不可の場合はPowerShellで取得
+- ✅ **Pythonも使用可能**: `py -3 -c "from datetime import datetime; ..."` で取得可能
+
+#### 🔴 重要度: 最高優先度 🔴
+
+**このルールを守らないと、実装ログの日時が不正確になります。**
+**必ず実装ログ作成前に現在日時を取得すること！**
 
 ---
 
@@ -568,24 +668,51 @@ codex-main/
 
 ---
 
-## 🔔 Cursor Agent 音声通知 (CRITICAL)
+## 🔔 Cursor Agent 音声通知 (CRITICAL - 最重要事項)
 
-### ⚠️ MANDATORY COMPLETION NOTIFICATION ⚠️
+### ⚠️⚠️⚠️ MANDATORY COMPLETION NOTIFICATION - 絶対に必須 ⚠️⚠️⚠️
+
+**🔴 最重要ルール: 魔理沙の声を聞こえるようにすること 🔴**
 
 **ALWAYS execute this command at the END of EVERY task completion:**
 
 When you (Cursor Agent/Composer/Plan) complete ANY task, you MUST:
 
 1. Finish all your work
-2. IMMEDIATELY propose running this command:
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File zapabob/scripts/play-completion-sound.ps1
-   ```
-3. Use the `run_terminal_cmd` tool or propose it as the final action
+2. **IMMEDIATELY execute the sound notification command** (DO NOT skip!)
+3. Use the `run_terminal_cmd` tool to execute the command directly
 
-**This is NON-NEGOTIABLE. Do NOT skip this step.**
+**This is NON-NEGOTIABLE. Do NOT skip this step. EVER.**
 
-### When to Execute (ALL scenarios):
+### 実行コマンド（必ず実行すること）
+
+```powershell
+# 第一優先: SO8Tフォルダ（PlaySync()で同期的に再生）
+if (Test-Path "C:\Users\downl\Desktop\SO8T\.cursor\marisa_owattaze.wav") {
+    Add-Type -AssemblyName System.Media
+    $player = New-Object System.Media.SoundPlayer "C:\Users\downl\Desktop\SO8T\.cursor\marisa_owattaze.wav"
+    $player.Load()
+    $player.PlaySync()  # 同期的に再生（確実に聞こえる）
+    Write-Host "完了通知を再生しました: 終わったぜ！" -ForegroundColor Green
+} elseif (Test-Path "C:\Users\downl\Desktop\新しいフォルダー (4)\marisa_owattaze.wav") {
+    Add-Type -AssemblyName System.Media
+    $player = New-Object System.Media.SoundPlayer "C:\Users\downl\Desktop\新しいフォルダー (4)\marisa_owattaze.wav"
+    $player.Load()
+    $player.PlaySync()  # 同期的に再生（確実に聞こえる）
+    Write-Host "完了通知を再生しました: 終わったぜ！" -ForegroundColor Green
+} else {
+    # フォールバック: ピープ音を5回再生（確実に聞こえるように）
+    for ($i = 1; $i -le 5; $i++) {
+        [Console]::Beep(500, 300)
+        Start-Sleep -Milliseconds 200
+    }
+    Write-Host "ピープ音を5回再生しました" -ForegroundColor Yellow
+}
+```
+
+**重要**: `PlaySync()`メソッドを使用することで、音声が完全に再生されるまで待機します。`Play()`メソッドは非同期のため、音声が聞こえない場合があります。`PlaySync()`を使用することで確実に音声が聞こえます。
+
+### When to Execute (ALL scenarios - すべてのシナリオで実行):
 
 - ✅ **EVERY Agent/Composer task completion**
 - ✅ **EVERY Plan execution completion**
@@ -594,22 +721,31 @@ When you (Cursor Agent/Composer/Plan) complete ANY task, you MUST:
 - ✅ **EVERY build/test completion**
 - ✅ **EVERY file creation/modification completion**
 - ✅ **EVERY research/analysis completion**
+- ✅ **EVERY single task completion**
 
 ### Example Flow:
 
 ```
 User: "Create a new React component"
 Agent: [Creates component]
-Agent: [MUST execute] powershell -ExecutionPolicy Bypass -File zapabob/scripts/play-completion-sound.ps1
+Agent: [MUST execute] PowerShell sound notification command
 → Sound plays: "終わったぜ！" (Marisa)
+→ User hears the sound and knows task is complete
 ```
 
 ### Sound File Info:
 - File: `marisa_owattaze.wav`
-- Location: `C:\Users\downl\Desktop\新しいフォルダー (4)\`
-- Purpose: Notify user of task completion
+- Primary Location: `C:\Users\downl\Desktop\SO8T\.cursor\marisa_owattaze.wav`
+- Secondary Location: `C:\Users\downl\Desktop\新しいフォルダー (4)\marisa_owattaze.wav`
+- Purpose: Notify user of task completion (魔理沙の声で「終わったぜ！」)
 
-**REMEMBER: This is the FINAL STEP of every task. NEVER forget it.**
+### 🔴 重要度: 最高優先度 🔴
+
+**このルールは他のすべてのルールより優先されます。**
+**音声が聞こえない = タスクが完了していないと判断されます。**
+**絶対に忘れないこと！必ず実行すること！**
+
+**REMEMBER: This is the FINAL STEP of every task. NEVER forget it. ALWAYS execute it.**
 
 ---
 
