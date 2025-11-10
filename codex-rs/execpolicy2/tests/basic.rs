@@ -10,11 +10,11 @@ fn tokens(cmd: &[&str]) -> Vec<String> {
 #[test]
 fn basic_match() {
     let policy_src = r#"
-    prefix_rule(
-        id = "git_status",
-        pattern = ["git", "status"],
-    )
-        "#;
+prefix_rule(
+    id = "git_status",
+    pattern = ["git", "status"],
+)
+    "#;
     let policy = PolicyParser::new("test.policy", policy_src)
         .parse()
         .expect("parse policy");
