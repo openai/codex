@@ -96,7 +96,7 @@ prefix_rule(
     assert_eq!(rules.len(), 1);
     let rule = &rules[0];
     assert_eq!(
-        rule.pattern.tail,
+        rule.pattern.rest,
         vec![
             PatternToken::Alts(vec!["i".to_string(), "install".to_string()]),
             PatternToken::Alts(vec![
