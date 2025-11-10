@@ -20,6 +20,7 @@ pub enum ConfigShellToolType {
     Default,
     Local,
     UnifiedExec,
+    Disabled,
 }
 
 #[derive(Debug, Clone)]
@@ -46,7 +47,9 @@ impl ToolsConfig {
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
 
-        let shell_type = if features.enabled(Feature::UnifiedExec) {
+        let shell_type = if !features.enabled(Feature::ShellTool) {
+            ConfigShellToolType::Disabled
+        } else if features.enabled(Feature::UnifiedExec) {
             ConfigShellToolType::UnifiedExec
         } else {
             model_family.shell_type.clone()
@@ -902,6 +905,9 @@ pub(crate) fn build_specs(
             builder.register_handler("exec_command", unified_exec_handler.clone());
             builder.register_handler("write_stdin", unified_exec_handler);
         }
+        ConfigShellToolType::Disabled => {
+            // Do nothing.
+        }
     }
 
     // Always register shell aliases so older prompts remain compatible.
@@ -1043,6 +1049,7 @@ mod tests {
             ConfigShellToolType::Default => Some("shell"),
             ConfigShellToolType::Local => Some("local_shell"),
             ConfigShellToolType::UnifiedExec => None,
+            ConfigShellToolType::Disabled => None,
         }
     }
 
