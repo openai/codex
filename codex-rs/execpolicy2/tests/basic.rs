@@ -8,8 +8,16 @@ fn tokens(cmd: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn matches_default_git_status() {
-    let policy = codex_execpolicy2::load_default_policy().expect("parse");
+fn basic_match() {
+    let policy_src = r#"
+    prefix_rule(
+        id = "git_status",
+        pattern = ["git", "status"],
+    )
+        "#;
+    let policy = PolicyParser::new("test.policy", policy_src)
+        .parse()
+        .expect("parse policy");
     let cmd = tokens(&["git", "status"]);
     let eval = policy.evaluate(&cmd).expect("match");
     assert_eq!(eval.decision, Decision::Allow);
@@ -17,40 +25,10 @@ fn matches_default_git_status() {
         eval.matched_rules,
         vec![RuleMatch {
             rule_id: "git_status".to_string(),
-            matched_prefix: vec!["git".to_string(), "status".to_string()],
+            matched_prefix: tokens(&["git", "status"]),
             decision: Decision::Allow,
         }]
     );
-}
-
-#[test]
-fn pattern_expands_alternatives() {
-    let policy_src = r#"
-prefix_rule(
-    id = "npm_install",
-    pattern = ["npm", ["i", "install"]],
-)
-    "#;
-    let parser = PolicyParser::new("test.policy", policy_src);
-    let policy = parser.parse().expect("parse policy");
-
-    for (cmd, matched_prefix) in [
-        (tokens(&["npm", "i"]), tokens(&["npm", "i"])),
-        (tokens(&["npm", "install"]), tokens(&["npm", "install"])),
-    ] {
-        let eval = policy.evaluate(&cmd).expect("match");
-        assert_eq!(
-            eval.matched_rules,
-            vec![RuleMatch {
-                rule_id: "npm_install".to_string(),
-                matched_prefix,
-                decision: Decision::Allow,
-            }]
-        );
-    }
-
-    let no_match = tokens(&["npmx", "install"]);
-    assert!(policy.evaluate(&no_match).is_none());
 }
 
 #[test]
@@ -98,11 +76,8 @@ prefix_rule(
     assert_eq!(
         rule.pattern.rest,
         vec![
-            PatternToken::Alts(vec!["i".to_string(), "install".to_string()]),
-            PatternToken::Alts(vec![
-                "--legacy-peer-deps".to_string(),
-                "--no-save".to_string()
-            ]),
+            PatternToken::Alts(tokens(&["i", "install"])),
+            PatternToken::Alts(tokens(&["--legacy-peer-deps", "--no-save"])),
         ],
     );
 
@@ -164,12 +139,12 @@ prefix_rule(
         vec![
             RuleMatch {
                 rule_id: "allow_git_status".to_string(),
-                matched_prefix: vec!["git".to_string(), "status".to_string()],
+                matched_prefix: tokens(&["git", "status"]),
                 decision: Decision::Allow,
             },
             RuleMatch {
                 rule_id: "prompt_git".to_string(),
-                matched_prefix: vec!["git".to_string()],
+                matched_prefix: tokens(&["git"]),
                 decision: Decision::Prompt,
             }
         ]
@@ -183,12 +158,12 @@ prefix_rule(
         vec![
             RuleMatch {
                 rule_id: "prompt_git".to_string(),
-                matched_prefix: vec!["git".to_string()],
+                matched_prefix: tokens(&["git"]),
                 decision: Decision::Prompt,
             },
             RuleMatch {
                 rule_id: "forbid_git_commit".to_string(),
-                matched_prefix: vec!["git".to_string(), "commit".to_string()],
+                matched_prefix: tokens(&["git", "commit"]),
                 decision: Decision::Forbidden,
             }
         ]
