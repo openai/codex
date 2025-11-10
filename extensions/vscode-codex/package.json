@@ -91,6 +91,14 @@
       {
         "command": "codex.blueprint.deepResearch",
         "title": "Codex: Deep Research (Blueprint)"
+      },
+      {
+        "command": "codex.generateMCPConfig",
+        "title": "Codex: Generate MCP Config for Cursor"
+      },
+      {
+        "command": "codex.openMCPConfig",
+        "title": "Codex: Open MCP Config File"
       }
     ],
     "viewsContainers": {

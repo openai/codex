@@ -12,13 +12,28 @@ import { ResearchProvider } from './views/researchProvider';
 import { randomUUID } from 'crypto';
 import { MCPProvider } from './views/mcpProvider';
 import { CodexStatusBar } from './ui/statusBar';
+import { MCPConfigManager } from './cursor/mcpConfig';
 
 let orchestratorManager: OrchestratorManager;
 let orchestratorClient: OrchestratorClient;
 let statusBar: CodexStatusBar;
+let mcpConfigManager: MCPConfigManager;
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('🚀 Activating Codex AI Assistant...');
+    
+    // Initialize MCP config manager for Cursor integration
+    mcpConfigManager = new MCPConfigManager(context);
+    
+    // Auto-generate MCP config if running in Cursor
+    if (mcpConfigManager.isCursorEnvironment()) {
+        try {
+            await mcpConfigManager.generateConfig();
+            console.log('✅ Cursor MCP configuration generated');
+        } catch (error) {
+            console.error('Failed to generate MCP config:', error);
+        }
+    }
     
     // Initialize status bar
     statusBar = new CodexStatusBar();
@@ -262,6 +277,25 @@ export async function activate(context: vscode.ExtensionContext) {
             const port = config.get('gui.port', 3000);
             const url = `http://localhost:${port}`;
             vscode.env.openExternal(vscode.Uri.parse(url));
+        }),
+        
+        vscode.commands.registerCommand('codex.generateMCPConfig', async () => {
+            try {
+                await mcpConfigManager.generateConfig();
+                vscode.window.showInformationMessage('✅ MCP configuration generated');
+            } catch (error) {
+                vscode.window.showErrorMessage(`❌ Failed to generate MCP config: ${error}`);
+            }
+        }),
+        
+        vscode.commands.registerCommand('codex.openMCPConfig', async () => {
+            const configPath = mcpConfigManager.getConfigPath();
+            if (mcpConfigManager.configExists()) {
+                const doc = await vscode.workspace.openTextDocument(configPath);
+                await vscode.window.showTextDocument(doc);
+            } else {
+                vscode.window.showWarningMessage('MCP config file does not exist. Generate it first.');
+            }
         })
     );
     
