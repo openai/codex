@@ -32,14 +32,14 @@ async fn list_dir_tool_returns_entries() -> anyhow::Result<()> {
     })
     .to_string();
 
-    let output = collect_tool_output(
-        &test,
-        &server,
-        call_id,
-        &arguments,
-        "list directory contents",
-    )
-    .await?;
+    let mocks =
+        mount_function_call_agent_response(&server, call_id, &arguments, "list_dir").await;
+    test.submit_turn("list directory contents").await?;
+    let req = mocks.completion.single_request();
+    let (content_opt, _) = req
+        .function_call_output_content_and_success(call_id)
+        .expect("function_call_output present");
+    let output = content_opt.expect("output content present in tool output");
     assert_eq!(output, "E1: [file] alpha.txt\nE2: [dir] nested");
 
     Ok(())
@@ -69,14 +69,14 @@ async fn list_dir_tool_depth_one_omits_children() -> anyhow::Result<()> {
     })
     .to_string();
 
-    let output = collect_tool_output(
-        &test,
-        &server,
-        call_id,
-        &arguments,
-        "list directory contents depth one",
-    )
-    .await?;
+    let mocks =
+        mount_function_call_agent_response(&server, call_id, &arguments, "list_dir").await;
+    test.submit_turn("list directory contents depth one").await?;
+    let req = mocks.completion.single_request();
+    let (content_opt, _) = req
+        .function_call_output_content_and_success(call_id)
+        .expect("function_call_output present");
+    let output = content_opt.expect("output content present in tool output");
     assert_eq!(output, "E1: [file] alpha.txt\nE2: [dir] nested");
 
     Ok(())
@@ -110,14 +110,14 @@ async fn list_dir_tool_depth_two_includes_children_only() -> anyhow::Result<()> 
     })
     .to_string();
 
-    let output = collect_tool_output(
-        &test,
-        &server,
-        call_id,
-        &arguments,
-        "list directory contents depth two",
-    )
-    .await?;
+    let mocks =
+        mount_function_call_agent_response(&server, call_id, &arguments, "list_dir").await;
+    test.submit_turn("list directory contents depth two").await?;
+    let req = mocks.completion.single_request();
+    let (content_opt, _) = req
+        .function_call_output_content_and_success(call_id)
+        .expect("function_call_output present");
+    let output = content_opt.expect("output content present in tool output");
     assert_eq!(
         output,
         "E1: [file] alpha.txt\nE2: [dir] nested\nE3: [file] nested/beta.txt\nE4: [dir] nested/grand"
@@ -154,36 +154,18 @@ async fn list_dir_tool_depth_three_includes_grandchildren() -> anyhow::Result<()
     })
     .to_string();
 
-    let output = collect_tool_output(
-        &test,
-        &server,
-        call_id,
-        &arguments,
-        "list directory contents depth three",
-    )
-    .await?;
+    let mocks =
+        mount_function_call_agent_response(&server, call_id, &arguments, "list_dir").await;
+    test.submit_turn("list directory contents depth three").await?;
+    let req = mocks.completion.single_request();
+    let (content_opt, _) = req
+        .function_call_output_content_and_success(call_id)
+        .expect("function_call_output present");
+    let output = content_opt.expect("output content present in tool output");
     assert_eq!(
         output,
         "E1: [file] alpha.txt\nE2: [dir] nested\nE3: [file] nested/beta.txt\nE4: [dir] nested/grand\nE5: [file] nested/grand/gamma.txt"
     );
 
     Ok(())
-}
-
-async fn collect_tool_output(
-    test: &TestCodex,
-    server: &MockServer,
-    call_id: &str,
-    arguments: &str,
-    prompt: &str,
-) -> anyhow::Result<String> {
-    let mocks = mount_function_call_agent_response(server, call_id, arguments, "list_dir").await;
-    test.submit_turn(prompt).await?;
-
-    let req = mocks.completion.single_request();
-    let (content_opt, _) = req
-        .function_call_output_content_and_success(call_id)
-        .context("function_call_output present")?;
-    let content = content_opt.context("output content present in tool output")?;
-    Ok(content)
 }
