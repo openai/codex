@@ -8,11 +8,11 @@ Similar to [MCP](https://modelcontextprotocol.io/), `codex app-server` supports 
 
 ## Message Schema
 
-Currently, you can dump a TypeScript version of the schema using `codex generate-ts`, or a JSON Schema bundle via `codex generate-json-schema`. Each output is specific to the version of Codex you used to run the command, so the generated artifacts are guaranteed to match that version.
+Currently, you can dump a TypeScript version of the schema using `codex app-server generate-ts`, or a JSON Schema bundle via `codex app-server generate-json-schema`. Each output is specific to the version of Codex you used to run the command, so the generated artifacts are guaranteed to match that version.
 
 ```
-codex generate-ts --out DIR
-codex generate-json-schema --out DIR
+codex app-server generate-ts --out DIR
+codex app-server generate-json-schema --out DIR
 ```
 
 ## Initialization
@@ -255,6 +255,6 @@ Field notes:
 
 ### Dev notes
 
-- `codex generate-ts --out <dir>` emits v2 types under `v2/`.
-- `codex generate-json-schema --out <dir>` outputs `codex_app_server_protocol.schemas.json`.
+- `codex app-server generate-ts --out <dir>` emits v2 types under `v2/`.
+- `codex app-server generate-json-schema --out <dir>` outputs `codex_app_server_protocol.schemas.json`.
 - See [“Authentication and authorization” in the config docs](../../docs/config.md#authentication-and-authorization) for configuration knobs.
