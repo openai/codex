@@ -92,6 +92,7 @@ fn parse_pattern<'v>(pattern: UnpackList<Value<'v>>) -> Result<Vec<PatternToken>
     if tokens.is_empty() {
         return Err(Error::InvalidPattern("pattern cannot be empty".to_string()));
     }
+
     Ok(tokens)
 }
 
@@ -99,6 +100,7 @@ fn parse_pattern_token<'v>(value: Value<'v>) -> Result<PatternToken> {
     if let Some(s) = value.unpack_str() {
         return Ok(PatternToken::Single(s.to_string()));
     }
+
     if let Some(list) = ListRef::from_value(value) {
         let mut tokens = Vec::new();
         for value in list.content() {
@@ -139,6 +141,7 @@ fn parse_examples<'v>(examples: UnpackList<Value<'v>>) -> Result<Vec<Vec<String>
                 "example cannot be an empty list".to_string(),
             ));
         }
+
         parsed.push(tokens);
     }
     Ok(parsed)

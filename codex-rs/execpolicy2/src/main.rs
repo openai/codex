@@ -50,5 +50,6 @@ fn load_policy(policy_path: Option<String>) -> Result<codex_execpolicy2::Policy>
         let parser = PolicyParser::new(&path, &content);
         return Ok(parser.parse()?);
     }
+
     Ok(load_default_policy()?)
 }
