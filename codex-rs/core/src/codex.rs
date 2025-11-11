@@ -2323,6 +2323,7 @@ mod tests {
     use crate::tools::context::ToolOutput;
     use crate::tools::context::ToolPayload;
     use crate::tools::handlers::ShellHandler;
+    use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::registry::ToolHandler;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_app_server_protocol::AuthMode;
@@ -3060,6 +3061,48 @@ mod tests {
 
         pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
         assert!(exec_output.output.contains("hi"));
+    }
+
+    #[tokio::test]
+    async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request() {
+        use crate::protocol::AskForApproval;
+        use crate::turn_diff_tracker::TurnDiffTracker;
+
+        let (session, mut turn_context_raw) = make_session_and_context();
+        turn_context_raw.approval_policy = AskForApproval::OnFailure;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context_raw);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+
+        let handler = UnifiedExecHandler;
+        let resp = handler
+            .handle(ToolInvocation {
+                session: Arc::clone(&session),
+                turn: Arc::clone(&turn_context),
+                tracker: Arc::clone(&tracker),
+                call_id: "exec-call".to_string(),
+                tool_name: "exec_command".to_string(),
+                payload: ToolPayload::Function {
+                    arguments: serde_json::json!({
+                        "cmd": "echo hi",
+                        "with_escalated_permissions": true,
+                        "justification": "need unsandboxed execution",
+                    })
+                    .to_string(),
+                },
+            })
+            .await;
+
+        let Err(FunctionCallError::RespondToModel(output)) = resp else {
+            panic!("expected error result");
+        };
+
+        let expected = format!(
+            "approval policy is {policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {policy:?}",
+            policy = turn_context.approval_policy
+        );
+
+        pretty_assertions::assert_eq!(output, expected);
     }
 
     #[test]

@@ -177,6 +177,24 @@ fn create_exec_command_tool() -> ToolSpec {
             ),
         },
     );
+    properties.insert(
+        "with_escalated_permissions".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Whether to request escalated permissions. Set to true if command needs to be run without sandbox restrictions"
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "justification".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Only set if with_escalated_permissions is true. 1-sentence explanation of why we want to run this command."
+                    .to_string(),
+            ),
+        },
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "exec_command".to_string(),

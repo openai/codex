@@ -51,7 +51,13 @@ impl UnifiedExecSessionManager {
         ];
 
         let session = self
-            .open_session_with_sandbox(command, cwd.clone(), context)
+            .open_session_with_sandbox(
+                command,
+                cwd.clone(),
+                request.with_escalated_permissions,
+                request.justification,
+                context,
+            )
             .await?;
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
@@ -300,10 +306,16 @@ impl UnifiedExecSessionManager {
             .command
             .split_first()
             .ok_or(UnifiedExecError::MissingCommandLine)?;
-        let spawned =
-            codex_utils_pty::spawn_pty_process(program, args, env.cwd.as_path(), &env.env)
-                .await
-                .map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
+
+        let spawned = codex_utils_pty::spawn_pty_process(
+            program,
+            args,
+            env.cwd.as_path(),
+            &env.env,
+            &env.arg0,
+        )
+        .await
+        .map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
         UnifiedExecSession::from_spawned(spawned, env.sandbox).await
     }
 
@@ -311,6 +323,8 @@ impl UnifiedExecSessionManager {
         &self,
         command: Vec<String>,
         cwd: PathBuf,
+        with_escalated_permissions: Option<bool>,
+        justification: Option<String>,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
         let mut orchestrator = ToolOrchestrator::new();
@@ -319,6 +333,8 @@ impl UnifiedExecSessionManager {
             command,
             cwd,
             create_env(&context.turn.shell_environment_policy),
+            with_escalated_permissions,
+            justification,
         );
         let tool_ctx = ToolCtx {
             session: context.session.as_ref(),

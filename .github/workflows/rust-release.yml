@@ -295,6 +295,15 @@ jobs:
           # ${{ matrix.target }}
           dest="dist/${{ matrix.target }}"
 
+          # We want to ship the raw Windows executables in the GitHub Release
+          # in addition to the compressed archives. Keep the originals for
+          # Windows targets; remove them elsewhere to limit the number of
+          # artifacts that end up in the GitHub Release.
+          keep_originals=false
+          if [[ "${{ matrix.runner }}" == windows* ]]; then
+            keep_originals=true
+          fi
+
           # For compatibility with environments that lack the `zstd` tool we
           # additionally create a `.tar.gz` for all platforms and `.zip` for
           # Windows alongside every single binary that we publish. The end result is:
@@ -324,7 +333,11 @@ jobs:
 
             # Also create .zst (existing behaviour) *and* remove the original
             # uncompressed binary to keep the directory small.
-            zstd -T0 -19 --rm "$dest/$base"
+            zstd_args=(-T0 -19)
+            if [[ "${keep_originals}" == false ]]; then
+              zstd_args+=(--rm)
+            fi
+            zstd "${zstd_args[@]}" "$dest/$base"
           done
 
       - name: Remove signing keychain

@@ -198,6 +198,30 @@ enum ApiVersion {
 }
 
 impl CodexMessageProcessor {
+    async fn conversation_from_thread_id(
+        &self,
+        thread_id: &str,
+    ) -> Result<(ConversationId, Arc<CodexConversation>), JSONRPCErrorError> {
+        // Resolve conversation id from v2 thread id string.
+        let conversation_id =
+            ConversationId::from_string(thread_id).map_err(|err| JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("invalid thread id: {err}"),
+                data: None,
+            })?;
+
+        let conversation = self
+            .conversation_manager
+            .get_conversation(conversation_id)
+            .await
+            .map_err(|_| JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("conversation not found: {conversation_id}"),
+                data: None,
+            })?;
+
+        Ok((conversation_id, conversation))
+    }
     pub fn new(
         auth_manager: Arc<AuthManager>,
         conversation_manager: Arc<ConversationManager>,
@@ -2145,32 +2169,12 @@ impl CodexMessageProcessor {
     }
 
     async fn turn_start(&self, request_id: RequestId, params: TurnStartParams) {
-        // Resolve conversation id from v2 thread id string.
-        let conversation_id = match ConversationId::from_string(&params.thread_id) {
-            Ok(id) => id,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("invalid thread id: {err}"),
-                    data: None,
-                };
+        let (_, conversation) = match self.conversation_from_thread_id(&params.thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
-        };
-
-        let Ok(conversation) = self
-            .conversation_manager
-            .get_conversation(conversation_id)
-            .await
-        else {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("conversation not found: {conversation_id}"),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
         };
 
         // Keep a copy of v2 inputs for the notification payload.
@@ -2246,33 +2250,14 @@ impl CodexMessageProcessor {
     async fn turn_interrupt(&mut self, request_id: RequestId, params: TurnInterruptParams) {
         let TurnInterruptParams { thread_id, .. } = params;
 
-        // Resolve conversation id from v2 thread id string.
-        let conversation_id = match ConversationId::from_string(&thread_id) {
-            Ok(id) => id,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("invalid thread id: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
-        let Ok(conversation) = self
-            .conversation_manager
-            .get_conversation(conversation_id)
-            .await
-        else {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("conversation not found: {conversation_id}"),
-                data: None,
+        let (conversation_id, conversation) =
+            match self.conversation_from_thread_id(&thread_id).await {
+                Ok(v) => v,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
             };
-            self.outgoing.send_error(request_id, error).await;
-            return;
-        };
 
         // Record the pending interrupt so we can reply when TurnAborted arrives.
         {

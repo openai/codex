@@ -46,7 +46,7 @@ macro_rules! client_request_definitions {
     (
         $(
             $(#[$variant_meta:meta])*
-            $variant:ident {
+            $variant:ident $(=> $wire:literal)? {
                 params: $(#[$params_meta:meta])* $params:ty,
                 response: $response:ty,
             }
@@ -58,6 +58,7 @@ macro_rules! client_request_definitions {
         pub enum ClientRequest {
             $(
                 $(#[$variant_meta])*
+                $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
                 $variant {
                     #[serde(rename = "id")]
                     request_id: RequestId,
@@ -108,94 +109,66 @@ client_request_definitions! {
 
     /// NEW APIs
     // Thread lifecycle
-    #[serde(rename = "thread/start")]
-    #[ts(rename = "thread/start")]
-    ThreadStart {
+    ThreadStart => "thread/start" {
         params: v2::ThreadStartParams,
         response: v2::ThreadStartResponse,
     },
-    #[serde(rename = "thread/resume")]
-    #[ts(rename = "thread/resume")]
-    ThreadResume {
+    ThreadResume => "thread/resume" {
         params: v2::ThreadResumeParams,
         response: v2::ThreadResumeResponse,
     },
-    #[serde(rename = "thread/archive")]
-    #[ts(rename = "thread/archive")]
-    ThreadArchive {
+    ThreadArchive => "thread/archive" {
         params: v2::ThreadArchiveParams,
         response: v2::ThreadArchiveResponse,
     },
-    #[serde(rename = "thread/list")]
-    #[ts(rename = "thread/list")]
-    ThreadList {
+    ThreadList => "thread/list" {
         params: v2::ThreadListParams,
         response: v2::ThreadListResponse,
     },
-    #[serde(rename = "thread/compact")]
-    #[ts(rename = "thread/compact")]
-    ThreadCompact {
+    ThreadCompact => "thread/compact" {
         params: v2::ThreadCompactParams,
         response: v2::ThreadCompactResponse,
     },
-    #[serde(rename = "turn/start")]
-    #[ts(rename = "turn/start")]
-    TurnStart {
+    TurnStart => "turn/start" {
         params: v2::TurnStartParams,
         response: v2::TurnStartResponse,
     },
-    #[serde(rename = "turn/interrupt")]
-    #[ts(rename = "turn/interrupt")]
-    TurnInterrupt {
+    TurnInterrupt => "turn/interrupt" {
         params: v2::TurnInterruptParams,
         response: v2::TurnInterruptResponse,
     },
 
-    #[serde(rename = "model/list")]
-    #[ts(rename = "model/list")]
-    ModelList {
+    ModelList => "model/list" {
         params: v2::ModelListParams,
         response: v2::ModelListResponse,
     },
 
-    #[serde(rename = "account/login/start")]
-    #[ts(rename = "account/login/start")]
-    LoginAccount {
+    LoginAccount => "account/login/start" {
         params: v2::LoginAccountParams,
         response: v2::LoginAccountResponse,
     },
 
-    #[serde(rename = "account/login/cancel")]
-    #[ts(rename = "account/login/cancel")]
-    CancelLoginAccount {
+    CancelLoginAccount => "account/login/cancel" {
         params: v2::CancelLoginAccountParams,
         response: v2::CancelLoginAccountResponse,
     },
 
-    #[serde(rename = "account/logout")]
-    #[ts(rename = "account/logout")]
-    LogoutAccount {
+    LogoutAccount => "account/logout" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v2::LogoutAccountResponse,
     },
 
-    #[serde(rename = "account/rateLimits/read")]
-    #[ts(rename = "account/rateLimits/read")]
-    GetAccountRateLimits {
+    GetAccountRateLimits => "account/rateLimits/read" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v2::GetAccountRateLimitsResponse,
     },
 
-    #[serde(rename = "feedback/upload")]
-    #[ts(rename = "feedback/upload")]
-    FeedbackUpload {
+    FeedbackUpload => "feedback/upload" {
         params: v2::FeedbackUploadParams,
         response: v2::FeedbackUploadResponse,
     },
 
-    #[serde(rename = "account/read")]
-    #[ts(rename = "account/read")]
-    GetAccount {
+    GetAccount => "account/read" {
         params: v2::GetAccountParams,
         response: v2::GetAccountResponse,
     },
