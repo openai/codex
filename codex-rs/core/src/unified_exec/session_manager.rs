@@ -82,15 +82,18 @@ impl UnifiedExecSessionManager {
         let text = String::from_utf8_lossy(&collected).to_string();
         let (output, original_token_count) = truncate_output_to_tokens(&text, max_tokens);
         let chunk_id = generate_chunk_id();
-        let exit_code = session.exit_code();
-        let session_id = if session.has_exited() {
-            None
-        } else {
-            Some(
-                self.store_session(session, context, request.command, cwd.clone(), start)
-                    .await,
-            )
-        };
+        let has_exited = session.has_exited();
+        let stored_id = self
+            .store_session(session, context, request.command, cwd.clone(), start)
+            .await;
+        let exit_code = self
+            .sessions
+            .lock()
+            .await
+            .get(&stored_id)
+            .map(|entry| entry.session.exit_code());
+        // Only include a session_id in the response if the process is still alive.
+        let session_id = if has_exited { None } else { Some(stored_id) };
 
         let response = UnifiedExecResponse {
             event_call_id: context.call_id.clone(),
@@ -98,7 +101,7 @@ impl UnifiedExecSessionManager {
             wall_time,
             output,
             session_id,
-            exit_code,
+            exit_code: exit_code.flatten(),
             original_token_count,
             session_command: Some(request.command.to_string()),
         };

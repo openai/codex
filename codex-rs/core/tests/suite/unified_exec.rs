@@ -684,9 +684,9 @@ async fn unified_exec_emits_begin_event_for_write_stdin_requests() -> Result<()>
 
     let poll_call_id = "uexec-poll-empty";
     let poll_args = json!({
-        "input": Vec::<String>::new(),
+        "chars": "",
         "session_id": 0,
-        "timeout_ms": 150,
+        "yield_time_ms": 150,
     });
 
     let responses = vec![
