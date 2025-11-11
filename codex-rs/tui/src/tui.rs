@@ -1,29 +1,23 @@
+use std::fmt;
 use std::io::IsTerminal;
 use std::io::Result;
 use std::io::Stdout;
 use std::io::stdout;
+use std::panic;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-#[cfg(unix)]
-use std::sync::atomic::AtomicU8;
-#[cfg(unix)]
-use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
-#[cfg(unix)]
-use crossterm::cursor::MoveTo;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
 use crossterm::event::Event;
-#[cfg(unix)]
-use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::PopKeyboardEnhancementFlags;
@@ -38,19 +32,21 @@ use ratatui::crossterm::terminal::disable_raw_mode;
 use ratatui::crossterm::terminal::enable_raw_mode;
 use ratatui::layout::Offset;
 use ratatui::text::Line;
+use tokio::select;
+use tokio_stream::Stream;
 
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
 #[cfg(unix)]
-use crate::key_hint;
-use tokio::select;
-use tokio_stream::Stream;
+use crate::tui::job_control::SUSPEND_KEY;
+#[cfg(unix)]
+use crate::tui::job_control::SuspendContext;
+
+#[cfg(unix)]
+mod job_control;
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
-
-#[cfg(unix)]
-const SUSPEND_KEY: key_hint::KeyBinding = key_hint::ctrl(KeyCode::Char('z'));
 
 pub fn set_modes() -> Result<()> {
     execute!(stdout(), EnableBracketedPaste)?;
@@ -79,12 +75,12 @@ pub fn set_modes() -> Result<()> {
 struct EnableAlternateScroll;
 
 impl Command for EnableAlternateScroll {
-    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
         write!(f, "\x1b[?1007h")
     }
 
     #[cfg(windows)]
-    fn execute_winapi(&self) -> std::io::Result<()> {
+    fn execute_winapi(&self) -> Result<()> {
         Err(std::io::Error::other(
             "tried to execute EnableAlternateScroll using WinAPI; use ANSI instead",
         ))
@@ -100,12 +96,12 @@ impl Command for EnableAlternateScroll {
 struct DisableAlternateScroll;
 
 impl Command for DisableAlternateScroll {
-    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
         write!(f, "\x1b[?1007l")
     }
 
     #[cfg(windows)]
-    fn execute_winapi(&self) -> std::io::Result<()> {
+    fn execute_winapi(&self) -> Result<()> {
         Err(std::io::Error::other(
             "tried to execute DisableAlternateScroll using WinAPI; use ANSI instead",
         ))
@@ -144,8 +140,8 @@ pub fn init() -> Result<Terminal> {
 }
 
 fn set_panic_hook() {
-    let hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info| {
+    let hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
         let _ = restore(); // ignore any errors as we are already failing
         hook(panic_info);
     }));
@@ -165,38 +161,12 @@ pub struct Tui {
     pending_history_lines: Vec<Line<'static>>,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
-    resume_pending: Arc<AtomicU8>, // Stores a ResumeAction
-    #[cfg(unix)]
-    suspend_cursor_y: Arc<AtomicU16>, // Bottom line of inline viewport
+    suspend_context: SuspendContext,
     // True when overlay alt-screen UI is active
     alt_screen_active: Arc<AtomicBool>,
     // True when terminal/tab is focused; updated internally from crossterm events
     terminal_focused: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
-}
-
-#[cfg(unix)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[repr(u8)]
-enum ResumeAction {
-    None = 0,
-    RealignInline = 1,
-    RestoreAlt = 2,
-}
-
-#[cfg(unix)]
-enum PreparedResumeAction {
-    RestoreAltScreen,
-    RealignViewport(ratatui::layout::Rect),
-}
-
-#[cfg(unix)]
-fn take_resume_action(pending: &AtomicU8) -> ResumeAction {
-    match pending.swap(ResumeAction::None as u8, Ordering::Relaxed) {
-        1 => ResumeAction::RealignInline,
-        2 => ResumeAction::RestoreAlt,
-        _ => ResumeAction::None,
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -244,9 +214,7 @@ impl Tui {
             pending_history_lines: vec![],
             alt_saved_viewport: None,
             #[cfg(unix)]
-            resume_pending: Arc::new(AtomicU8::new(0)),
-            #[cfg(unix)]
-            suspend_cursor_y: Arc::new(AtomicU16::new(0)),
+            suspend_context: SuspendContext::new(),
             alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
@@ -282,26 +250,9 @@ impl Tui {
 
         // State for tracking how we should resume from ^Z suspend.
         #[cfg(unix)]
-        let resume_pending = self.resume_pending.clone();
+        let suspend_context = self.suspend_context.clone();
         #[cfg(unix)]
         let alt_screen_active = self.alt_screen_active.clone();
-        #[cfg(unix)]
-        let suspend_cursor_y = self.suspend_cursor_y.clone();
-
-        #[cfg(unix)]
-        let suspend = move || {
-            if alt_screen_active.load(Ordering::Relaxed) {
-                // Disable alternate scroll when suspending from alt-screen
-                let _ = execute!(stdout(), DisableAlternateScroll);
-                let _ = execute!(stdout(), LeaveAlternateScreen);
-                resume_pending.store(ResumeAction::RestoreAlt as u8, Ordering::Relaxed);
-            } else {
-                resume_pending.store(ResumeAction::RealignInline as u8, Ordering::Relaxed);
-            }
-            let y = suspend_cursor_y.load(Ordering::Relaxed);
-            let _ = execute!(stdout(), MoveTo(0, y), crossterm::cursor::Show);
-            let _ = Tui::suspend();
-        };
 
         let terminal_focused = self.terminal_focused.clone();
         let event_stream = async_stream::stream! {
@@ -309,10 +260,10 @@ impl Tui {
                 select! {
                     Some(Ok(event)) = crossterm_events.next() => {
                         match event {
-                            crossterm::event::Event::Key(key_event) => {
+                            Event::Key(key_event) => {
                                 #[cfg(unix)]
                                 if SUSPEND_KEY.is_press(key_event) {
-                                    suspend();
+                                    let _ = suspend_context.suspend(&alt_screen_active);
                                     // We continue here after resume.
                                     yield TuiEvent::Draw;
                                     continue;
@@ -354,67 +305,6 @@ impl Tui {
             }
         };
         Box::pin(event_stream)
-    }
-
-    #[cfg(unix)]
-    fn suspend() -> Result<()> {
-        restore()?;
-        unsafe { libc::kill(0, libc::SIGTSTP) };
-        set_modes()?;
-        Ok(())
-    }
-
-    /// When resuming from ^Z suspend, we want to put things back the way they were before suspend.
-    /// We capture the action in an object so we can pass it into the event stream, since the relevant
-    #[cfg(unix)]
-    fn prepare_resume_action(
-        &mut self,
-        action: ResumeAction,
-    ) -> Result<Option<PreparedResumeAction>> {
-        match action {
-            ResumeAction::RealignInline => {
-                let cursor_pos = self
-                    .terminal
-                    .get_cursor_position()
-                    .unwrap_or(self.terminal.last_known_cursor_pos);
-                Ok(Some(PreparedResumeAction::RealignViewport(
-                    ratatui::layout::Rect::new(0, cursor_pos.y, 0, 0),
-                )))
-            }
-            ResumeAction::RestoreAlt => {
-                if let Ok(ratatui::layout::Position { y, .. }) = self.terminal.get_cursor_position()
-                    && let Some(saved) = self.alt_saved_viewport.as_mut()
-                {
-                    saved.y = y;
-                }
-                Ok(Some(PreparedResumeAction::RestoreAltScreen))
-            }
-            ResumeAction::None => Ok(None),
-        }
-    }
-
-    #[cfg(unix)]
-    fn apply_prepared_resume_action(&mut self, prepared: PreparedResumeAction) -> Result<()> {
-        match prepared {
-            PreparedResumeAction::RealignViewport(area) => {
-                self.terminal.set_viewport_area(area);
-            }
-            PreparedResumeAction::RestoreAltScreen => {
-                execute!(self.terminal.backend_mut(), EnterAlternateScreen)?;
-                // Enable "alternate scroll" so terminals may translate wheel to arrows
-                execute!(self.terminal.backend_mut(), EnableAlternateScroll)?;
-                if let Ok(size) = self.terminal.size() {
-                    self.terminal.set_viewport_area(ratatui::layout::Rect::new(
-                        0,
-                        0,
-                        size.width,
-                        size.height,
-                    ));
-                    self.terminal.clear()?;
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Enter alternate screen and expand the viewport to full terminal size, saving the current
@@ -462,8 +352,9 @@ impl Tui {
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
         // in the synchronized update.
         #[cfg(unix)]
-        let mut prepared_resume =
-            self.prepare_resume_action(take_resume_action(&self.resume_pending))?;
+        let mut prepared_resume = self
+            .suspend_context
+            .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
 
         // Precompute any viewport updates that need a cursor-position query before entering
         // the synchronized update, to avoid racing with the event reader.
@@ -490,12 +381,10 @@ impl Tui {
             }
         }
 
-        std::io::stdout().sync_update(|_| {
+        stdout().sync_update(|_| {
             #[cfg(unix)]
-            {
-                if let Some(prepared) = prepared_resume.take() {
-                    self.apply_prepared_resume_action(prepared)?;
-                }
+            if let Some(prepared) = prepared_resume.take() {
+                prepared.apply(&mut self.terminal)?;
             }
             let terminal = &mut self.terminal;
             if let Some(new_area) = pending_viewport_area.take() {
@@ -539,8 +428,7 @@ impl Tui {
                 } else {
                     area.bottom().saturating_sub(1)
                 };
-                self.suspend_cursor_y
-                    .store(inline_area_bottom, Ordering::Relaxed);
+                self.suspend_context.set_cursor_y(inline_area_bottom);
             }
 
             terminal.draw(|frame| {
@@ -600,12 +488,12 @@ fn spawn_frame_scheduler(
 pub struct PostNotification(pub String);
 
 impl Command for PostNotification {
-    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
         write!(f, "\x1b]9;{}\x07", self.0)
     }
 
     #[cfg(windows)]
-    fn execute_winapi(&self) -> std::io::Result<()> {
+    fn execute_winapi(&self) -> Result<()> {
         Err(std::io::Error::other(
             "tried to execute PostNotification using WinAPI; use ANSI instead",
         ))

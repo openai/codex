@@ -1,3 +1,4 @@
+use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
@@ -20,7 +21,7 @@ use codex_exec::Cli as ExecCli;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
-use codex_tui::updates::UpdateAction;
+use codex_tui::update_action::UpdateAction;
 use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use supports_color::Stream;
@@ -82,8 +83,8 @@ enum Subcommand {
     /// [experimental] Run the Codex MCP server (stdio transport).
     McpServer,
 
-    /// [experimental] Run the app server.
-    AppServer,
+    /// [experimental] Run the app server or related tooling.
+    AppServer(AppServerCommand),
 
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
@@ -98,9 +99,6 @@ enum Subcommand {
 
     /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
     Resume(ResumeCommand),
-
-    /// [experimental] Generate TypeScript bindings for the app server protocol.
-    GenerateTs(GenerateTsCommand),
 
     /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
     #[clap(name = "cloud", alias = "cloud-tasks")]
@@ -208,6 +206,22 @@ struct LogoutCommand {
 }
 
 #[derive(Debug, Parser)]
+struct AppServerCommand {
+    /// Omit to run the app server; specify a subcommand for tooling.
+    #[command(subcommand)]
+    subcommand: Option<AppServerSubcommand>,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum AppServerSubcommand {
+    /// [experimental] Generate TypeScript bindings for the app server protocol.
+    GenerateTs(GenerateTsCommand),
+
+    /// [experimental] Generate JSON Schema for the app server protocol.
+    GenerateJsonSchema(GenerateJsonSchemaCommand),
+}
+
+#[derive(Debug, Args)]
 struct GenerateTsCommand {
     /// Output directory where .ts files will be written
     #[arg(short = 'o', long = "out", value_name = "DIR")]
@@ -216,6 +230,13 @@ struct GenerateTsCommand {
     /// Optional path to the Prettier executable to format generated files
     #[arg(short = 'p', long = "prettier", value_name = "PRETTIER_BIN")]
     prettier: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct GenerateJsonSchemaCommand {
+    /// Output directory where the schema bundle will be written
+    #[arg(short = 'o', long = "out", value_name = "DIR")]
+    out_dir: PathBuf,
 }
 
 #[derive(Debug, Parser)]
@@ -410,9 +431,20 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
             mcp_cli.run().await?;
         }
-        Some(Subcommand::AppServer) => {
-            codex_app_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;
-        }
+        Some(Subcommand::AppServer(app_server_cli)) => match app_server_cli.subcommand {
+            None => {
+                codex_app_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;
+            }
+            Some(AppServerSubcommand::GenerateTs(gen_cli)) => {
+                codex_app_server_protocol::generate_ts(
+                    &gen_cli.out_dir,
+                    gen_cli.prettier.as_deref(),
+                )?;
+            }
+            Some(AppServerSubcommand::GenerateJsonSchema(gen_cli)) => {
+                codex_app_server_protocol::generate_json(&gen_cli.out_dir)?;
+            }
+        },
         Some(Subcommand::Resume(ResumeCommand {
             session_id,
             last,
@@ -526,9 +558,6 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             let socket_path = cmd.socket_path;
             tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
-        }
-        Some(Subcommand::GenerateTs(gen_cli)) => {
-            codex_app_server_protocol::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {

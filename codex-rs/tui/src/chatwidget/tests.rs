@@ -449,6 +449,22 @@ fn rate_limit_switch_prompt_shows_once_per_session() {
 }
 
 #[test]
+fn rate_limit_switch_prompt_respects_hidden_notice() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let (mut chat, _, _) = make_chatwidget_manual();
+    chat.config.model = "gpt-5".to_string();
+    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+    chat.config.notices.hide_rate_limit_model_nudge = Some(true);
+
+    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
+
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+}
+
+#[test]
 fn rate_limit_switch_prompt_defers_until_task_complete() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual();

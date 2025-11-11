@@ -79,6 +79,7 @@ mod function_tool;
 mod state;
 mod tasks;
 mod user_notification;
+mod user_shell_command;
 pub mod util;
 
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;

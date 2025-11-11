@@ -1,3 +1,4 @@
+use codex_core::features::Feature;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -101,6 +102,7 @@ async fn process_sse_emits_failed_event_on_parse_error() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
+            config.features.disable(Feature::GhostCommit);
             config.model_provider.request_max_retries = Some(0);
             config.model_provider.stream_max_retries = Some(0);
         })
@@ -141,6 +143,7 @@ async fn process_sse_records_failed_event_when_stream_closes_without_completed()
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
+            config.features.disable(Feature::GhostCommit);
             config.model_provider.request_max_retries = Some(0);
             config.model_provider.stream_max_retries = Some(0);
         })
@@ -193,6 +196,7 @@ async fn process_sse_failed_event_records_response_error_message() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
+            config.features.disable(Feature::GhostCommit);
             config.model_provider.request_max_retries = Some(0);
             config.model_provider.stream_max_retries = Some(0);
         })
@@ -243,6 +247,7 @@ async fn process_sse_failed_event_logs_parse_error() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
+            config.features.disable(Feature::GhostCommit);
             config.model_provider.request_max_retries = Some(0);
             config.model_provider.stream_max_retries = Some(0);
         })
@@ -288,6 +293,7 @@ async fn process_sse_failed_event_logs_missing_error() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
+            config.features.disable(Feature::GhostCommit);
             config.model_provider.request_max_retries = Some(0);
             config.model_provider.stream_max_retries = Some(0);
         })
@@ -333,6 +339,7 @@ async fn process_sse_failed_event_logs_response_completed_parse_error() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
+            config.features.disable(Feature::GhostCommit);
             config.model_provider.request_max_retries = Some(0);
             config.model_provider.stream_max_retries = Some(0);
         })
@@ -438,6 +445,7 @@ async fn handle_response_item_records_tool_result_for_custom_tool_call() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
+            config.features.disable(Feature::GhostCommit);
             config.model_provider.request_max_retries = Some(0);
             config.model_provider.stream_max_retries = Some(0);
         })
@@ -497,6 +505,7 @@ async fn handle_response_item_records_tool_result_for_function_call() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
+            config.features.disable(Feature::GhostCommit);
             config.model_provider.request_max_retries = Some(0);
             config.model_provider.stream_max_retries = Some(0);
         })
@@ -566,6 +575,7 @@ async fn handle_response_item_records_tool_result_for_local_shell_missing_ids() 
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
+            config.features.disable(Feature::GhostCommit);
             config.model_provider.request_max_retries = Some(0);
             config.model_provider.stream_max_retries = Some(0);
         })
@@ -619,6 +629,7 @@ async fn handle_response_item_records_tool_result_for_local_shell_call() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
+            config.features.disable(Feature::GhostCommit);
             config.model_provider.request_max_retries = Some(0);
             config.model_provider.stream_max_retries = Some(0);
         })
