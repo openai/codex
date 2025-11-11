@@ -16,6 +16,7 @@ members = [
     "core",
     "exec",
     "execpolicy",
+    "execpolicy2",
     "keyring-store",
     "file-search",
     "linux-sandbox",
@@ -38,7 +39,6 @@ members = [
     "utils/readiness",
     "utils/string",
     "utils/tokenizer",
-    "execpolicy2",
 ]
 resolver = "2"
 
