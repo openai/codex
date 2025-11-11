@@ -32,13 +32,21 @@ Example:
 ## Core primitives
 
 We have 3 top level primitives:
-- Thread - a conversation between the Codex agent and a user. Each thread contains multiple turns.
-- Turn - one turn of the conversation, typically starting with a user message and finishing with an agent message. Each turn contains multiple items.
-- Item - represents user inputs and agent outputs as part of the turn, persisted and used as the context for future conversations.
+- **Thread** - a conversation between the Codex agent and a user. Each thread contains multiple turns.
+- **Turn** - one turn of the conversation, typically starting with a user message and finishing with an agent message. Each turn contains multiple items.
+- **Item** - represents user inputs and agent outputs as part of the turn, persisted and used as the context for future conversations.
 
 ## Thread & turn endpoints
 
 The JSON-RPC API exposes dedicated methods for managing Codex conversations. Threads store long-lived conversation metadata, and turns store the per-message exchange (input → Codex output, including streamed items). Use the thread APIs to create, list, or archive sessions, then drive the conversation with turn APIs and notifications.
+
+### Lifecycle overview
+- **Initialize once**: Immediately after launching the `codex app-server` process, send an `initialize` request with your client metadata (this should identify your application; this is important for telemetry!). Any other request before this handshake gets rejected.
+- **Start (or resume) a thread**: Call `thread/start` to start a fresh conversation. The response returns the thread object and you’ll also get a `thread/started` notification. If you’re continuing an existing conversation, call `thread/resume` with its ID instead.
+- **Begin a turn**: To send user input, call `turn/start` with the target threadId with the user's input. Optional fields let you override model, cwd, sandbox policy, etc. This immediately returns the new turn object and triggers a `turn/started` notification.
+- **Stream events**: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning summaries).
+  - NOTE: There are a lot of raw `codex/event/*` events that are currently emitted, but we're currently working on stabilizing the event definitions. Consider all `codex/event/*` to be unstable and to be deprecated soon.
+- **Finish the turn**: When the model is done (or the turn is interrupted via making the `turn/interrupt` call, the server sends a `turn/completed` notification with the final turn state and token usage.
 
 ### Quick reference
 - `thread/start` — create a new thread; emits `thread/started` and auto-subscribes you to turn/item events for that thread.
