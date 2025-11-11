@@ -3,21 +3,22 @@ use codex_otel::otel_event_manager::OtelEventManager;
 use tokio::sync::mpsc;
 
 use crate::error::Result;
-use crate::stream::ResponseEvent;
+use crate::stream::WireEvent;
 
 pub mod fixtures;
 pub mod http;
 pub mod rate_limits;
 pub mod sse;
 
-/// Decodes framed SSE JSON into ResponseEvent(s).
-/// Implementations may keep state across frames (e.g., Chat function-call state).
+// Legacy ResponseEvent-based decoder removed
+
+/// Decodes framed SSE JSON into WireEvent(s).
 #[async_trait]
-pub trait ResponseDecoder {
+pub trait WireResponseDecoder {
     async fn on_frame(
         &mut self,
         json: &str,
-        tx: &mpsc::Sender<Result<ResponseEvent>>,
+        tx: &mpsc::Sender<Result<WireEvent>>,
         otel: &OtelEventManager,
     ) -> Result<()>;
 }

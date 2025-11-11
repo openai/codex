@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
-use codex_protocol::protocol::SessionSource;
-
 use crate::auth::AuthContext;
 use crate::auth::AuthProvider;
-use crate::common::apply_subagent_header;
 use crate::error::Result;
 use codex_provider_config::ModelProviderInfo;
 
@@ -13,7 +10,6 @@ pub async fn build_request(
     http_client: &reqwest::Client,
     provider: &ModelProviderInfo,
     auth: &Option<AuthContext>,
-    session_source: Option<&SessionSource>,
     extra_headers: &[(&str, String)],
 ) -> Result<reqwest::RequestBuilder> {
     let mut builder = provider
@@ -36,7 +32,6 @@ pub async fn build_request(
                 } => instructions.clone(),
             },
         })?;
-    builder = apply_subagent_header(builder, session_source);
     for (name, value) in extra_headers {
         builder = builder.header(*name, value);
     }

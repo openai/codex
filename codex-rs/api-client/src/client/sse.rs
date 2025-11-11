@@ -7,22 +7,24 @@ use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
-use crate::client::ResponseDecoder;
 use crate::error::Error;
 use crate::error::Result;
-use crate::stream::ResponseEvent;
+// Legacy ResponseEvent-based SSE framer removed
+use crate::stream::WireEvent;
 
-/// Generic SSE framer: turns a Byte stream into framed JSON and delegates to a ResponseDecoder.
+// Legacy ResponseEvent-based SSE framer removed
+
+/// Generic SSE framer for wire events: Byte stream -> framed JSON -> WireResponseDecoder.
 #[allow(clippy::too_many_arguments)]
-pub async fn process_sse<S, D>(
+pub async fn process_sse_wire<S, D>(
     stream: S,
-    tx_event: mpsc::Sender<Result<ResponseEvent>>,
+    tx_event: mpsc::Sender<Result<WireEvent>>,
     max_idle_duration: Duration,
     otel_event_manager: OtelEventManager,
     mut decoder: D,
 ) where
     S: Stream<Item = Result<Bytes>> + Send + 'static + Unpin,
-    D: ResponseDecoder + Send,
+    D: crate::client::WireResponseDecoder + Send,
 {
     let mut stream = stream;
     let mut data_buffer = String::new();
@@ -60,20 +62,18 @@ pub async fn process_sse<S, D>(
                     if let Some(tail) = line.strip_prefix("data:") {
                         data_buffer.push_str(tail.trim_start());
                     } else if !line.is_empty() && !data_buffer.is_empty() {
-                        // Continuation of a long data: line split across chunks; append raw.
                         data_buffer.push_str(line);
                     }
 
                     if line.is_empty() && !data_buffer.is_empty() {
-                        // One full JSON frame ready – delegate to decoder
-                        if let Err(err) = decoder
-                            .on_frame(&data_buffer, &tx_event, &otel_event_manager)
+                        let json = std::mem::take(&mut data_buffer);
+                        if let Err(e) = decoder
+                            .on_frame(&json, &tx_event, &otel_event_manager)
                             .await
                         {
-                            let _ = tx_event.send(Err(err)).await;
+                            let _ = tx_event.send(Err(e)).await;
                             return;
                         }
-                        data_buffer.clear();
                     }
                 }
             }

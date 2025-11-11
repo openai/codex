@@ -1,48 +1,43 @@
 use async_trait::async_trait;
 use codex_otel::otel_event_manager::OtelEventManager;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::models::ResponseItem;
+use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::debug;
 
+use crate::client::WireResponseDecoder;
 use crate::error::Result;
-use crate::stream::ResponseEvent;
-
-pub struct ChatSseDecoder {
-    fn_call_state: FunctionCallState,
-    assistant_item: Option<ResponseItem>,
-    reasoning_item: Option<ResponseItem>,
-}
+use crate::stream::WireEvent;
 
 #[derive(Default)]
 struct FunctionCallState {
+    active: bool,
+    call_id: Option<String>,
     name: Option<String>,
     arguments: String,
-    call_id: Option<String>,
-    active: bool,
 }
 
-impl ChatSseDecoder {
+pub struct WireChatSseDecoder {
+    fn_call_state: FunctionCallState,
+}
+
+impl WireChatSseDecoder {
     pub fn new() -> Self {
         Self {
             fn_call_state: FunctionCallState::default(),
-            assistant_item: None,
-            reasoning_item: None,
         }
     }
 }
 
 #[async_trait]
-impl crate::client::ResponseDecoder for ChatSseDecoder {
+impl WireResponseDecoder for WireChatSseDecoder {
     async fn on_frame(
         &mut self,
         json: &str,
-        tx: &mpsc::Sender<Result<ResponseEvent>>,
+        tx: &mpsc::Sender<crate::error::Result<WireEvent>>,
         _otel: &OtelEventManager,
     ) -> Result<()> {
-        // Chat sends a terminal "[DONE]" frame; we ignore it here. Caller should handle end-of-stream.
-        let Ok(parsed_chunk) = serde_json::from_str::<serde_json::Value>(json) else {
+        // Chat sends a terminal "[DONE]" frame; ignore it.
+        let Ok(parsed_chunk) = serde_json::from_str::<Value>(json) else {
             debug!("failed to parse Chat SSE JSON: {}", json);
             return Ok(());
         };
@@ -58,10 +53,8 @@ impl crate::client::ResponseDecoder for ChatSseDecoder {
                 if let Some(content) = delta.get("content").and_then(|c| c.as_array()) {
                     for piece in content {
                         if let Some(text) = piece.get("text").and_then(|t| t.as_str()) {
-                            append_assistant_text(tx, &mut self.assistant_item, text.to_string())
-                                .await;
                             let _ = tx
-                                .send(Ok(ResponseEvent::OutputTextDelta(text.to_string())))
+                                .send(Ok(WireEvent::OutputTextDelta(text.to_string())))
                                 .await;
                         }
                     }
@@ -87,7 +80,8 @@ impl crate::client::ResponseDecoder for ChatSseDecoder {
                 if let Some(reasoning) = delta.get("reasoning_content").and_then(|c| c.as_array()) {
                     for entry in reasoning {
                         if let Some(text) = entry.get("text").and_then(|t| t.as_str()) {
-                            append_reasoning_text(tx, &mut self.reasoning_item, text.to_string())
+                            let _ = tx
+                                .send(Ok(WireEvent::ReasoningContentDelta(text.to_string())))
                                 .await;
                         }
                     }
@@ -103,65 +97,17 @@ impl crate::client::ResponseDecoder for ChatSseDecoder {
                 let arguments = self.fn_call_state.arguments.clone();
                 self.fn_call_state = FunctionCallState::default();
 
-                let item = ResponseItem::FunctionCall {
-                    id: Some(call_id.clone()),
-                    call_id,
-                    name: function_name,
-                    arguments,
-                };
-                let _ = tx.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+                let item = serde_json::json!({
+                    "type": "function_call",
+                    "id": call_id,
+                    "call_id": call_id,
+                    "name": function_name,
+                    "arguments": arguments,
+                });
+                let _ = tx.send(Ok(WireEvent::OutputItemDone(item))).await;
             }
         }
 
         Ok(())
-    }
-}
-
-async fn append_assistant_text(
-    tx_event: &mpsc::Sender<Result<ResponseEvent>>,
-    assistant_item: &mut Option<ResponseItem>,
-    text: String,
-) {
-    if assistant_item.is_none() {
-        let item = ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![],
-        };
-        *assistant_item = Some(item.clone());
-        let _ = tx_event
-            .send(Ok(ResponseEvent::OutputItemAdded(item)))
-            .await;
-    }
-
-    if let Some(ResponseItem::Message { content, .. }) = assistant_item {
-        content.push(ContentItem::OutputText { text });
-    }
-}
-
-async fn append_reasoning_text(
-    tx_event: &mpsc::Sender<Result<ResponseEvent>>,
-    reasoning_item: &mut Option<ResponseItem>,
-    text: String,
-) {
-    if reasoning_item.is_none() {
-        let item = ResponseItem::Reasoning {
-            id: String::new(),
-            summary: Vec::new(),
-            content: Some(vec![]),
-            encrypted_content: None,
-        };
-        *reasoning_item = Some(item.clone());
-        let _ = tx_event
-            .send(Ok(ResponseEvent::OutputItemAdded(item)))
-            .await;
-    }
-
-    if let Some(ResponseItem::Reasoning {
-        content: Some(content),
-        ..
-    }) = reasoning_item
-    {
-        content.push(ReasoningItemContent::ReasoningText { text });
     }
 }

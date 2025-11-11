@@ -177,6 +177,18 @@ impl ModelClient {
         let responses_fixture_path: Option<PathBuf> =
             CODEX_RS_SSE_FIXTURE.as_ref().map(PathBuf::from);
         let http_client = create_client().clone_inner();
+        // Compose extra headers (conversation/session + subagent)
+        let mut extra_headers: Vec<(String, String)> = vec![
+            (
+                "conversation_id".to_string(),
+                self.conversation_id.to_string(),
+            ),
+            ("session_id".to_string(), self.conversation_id.to_string()),
+        ];
+        if let Some((name, value)) = build_subagent_header(&self.session_source) {
+            extra_headers.push((name, value));
+        }
+
         let config = RoutedApiClientConfig {
             http_client,
             provider: self.provider.clone(),
@@ -184,8 +196,8 @@ impl ModelClient {
             conversation_id: self.conversation_id,
             auth_provider,
             otel_event_manager: self.otel_event_manager.clone(),
-            session_source: self.session_source.clone(),
             responses_fixture_path,
+            extra_headers,
         };
 
         Ok(RoutedApiClient::new(config))
@@ -221,6 +233,22 @@ impl ModelClient {
 
     pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.auth_manager.clone()
+    }
+}
+
+fn build_subagent_header(session_source: &SessionSource) -> Option<(String, String)> {
+    use codex_protocol::protocol::SubAgentSource;
+    if let SessionSource::SubAgent(sub) = session_source {
+        let value = match sub {
+            SubAgentSource::Other(label) => label.clone(),
+            _ => serde_json::to_value(sub)
+                .ok()
+                .and_then(|v| v.as_str().map(std::string::ToString::to_string))
+                .unwrap_or_else(|| "other".to_string()),
+        };
+        Some(("x-openai-subagent".to_string(), value))
+    } else {
+        None
     }
 }
 

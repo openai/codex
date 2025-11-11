@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use codex_app_server_protocol::AuthMode;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
@@ -10,12 +9,9 @@ use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::trace;
 
-use crate::api::PayloadClient;
 use crate::auth::AuthProvider;
 use crate::error::Error;
 use crate::error::Result;
-use crate::stream::ResponseEvent;
-use crate::stream::ResponseStream;
 use crate::stream::WireResponseStream;
 use codex_provider_config::ModelProviderInfo;
 
@@ -43,19 +39,18 @@ pub struct ResponsesApiClient {
     config: ResponsesApiClientConfig,
 }
 
-#[async_trait]
-impl PayloadClient for ResponsesApiClient {
-    type Config = ResponsesApiClientConfig;
-
-    fn new(config: Self::Config) -> Result<Self> {
+impl ResponsesApiClient {
+    pub fn new(config: ResponsesApiClientConfig) -> Result<Self> {
         Ok(Self { config })
     }
+}
 
-    async fn stream_payload(
+impl ResponsesApiClient {
+    pub async fn stream_payload_wire(
         &self,
         payload_json: &Value,
-        session_source: Option<&codex_protocol::protocol::SessionSource>,
-    ) -> Result<ResponseStream> {
+        _session_source: Option<&codex_protocol::protocol::SessionSource>,
+    ) -> Result<WireResponseStream> {
         if self.config.provider.wire_api != codex_provider_config::WireApi::Responses {
             return Err(Error::UnsupportedOperation(
                 "ResponsesApiClient requires a Responses provider".to_string(),
@@ -98,7 +93,6 @@ impl PayloadClient for ResponsesApiClient {
             &self.config.http_client,
             &self.config.provider,
             &auth,
-            session_source,
             &extra_headers,
         )
         .await?;
@@ -124,10 +118,27 @@ impl PayloadClient for ResponsesApiClient {
                 request_id: None,
             })?;
 
-        let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
+        let (tx_event, rx_event) = mpsc::channel::<Result<crate::stream::WireEvent>>(1600);
         if let Some(snapshot) = crate::client::rate_limits::parse_rate_limit_snapshot(res.headers())
             && tx_event
-                .send(Ok(ResponseEvent::RateLimits(snapshot)))
+                .send(Ok(crate::stream::WireEvent::RateLimits(
+                    crate::stream::WireRateLimitSnapshot {
+                        primary: snapshot
+                            .primary
+                            .map(|w| crate::stream::WireRateLimitWindow {
+                                used_percent: Some(w.used_percent),
+                                window_minutes: w.window_minutes,
+                                resets_at: w.resets_at,
+                            }),
+                        secondary: snapshot
+                            .secondary
+                            .map(|w| crate::stream::WireRateLimitWindow {
+                                used_percent: Some(w.used_percent),
+                                window_minutes: w.window_minutes,
+                                resets_at: w.resets_at,
+                            }),
+                    },
+                )))
                 .await
                 .is_err()
         {
@@ -142,36 +153,14 @@ impl PayloadClient for ResponsesApiClient {
             });
         let idle_timeout = self.config.provider.stream_idle_timeout();
         let otel = self.config.otel_event_manager.clone();
-        tokio::spawn(crate::client::sse::process_sse(
+        tokio::spawn(crate::client::sse::process_sse_wire(
             stream,
             tx_event,
             idle_timeout,
             otel,
-            crate::decode::responses::ResponsesSseDecoder,
+            crate::decode_wire::responses::WireResponsesSseDecoder,
         ));
 
         Ok(crate::stream::EventStream::from_receiver(rx_event))
-    }
-}
-
-impl ResponsesApiClient {
-    pub async fn stream_payload_wire(
-        &self,
-        payload_json: &Value,
-        session_source: Option<&codex_protocol::protocol::SessionSource>,
-    ) -> Result<WireResponseStream> {
-        use futures::StreamExt;
-        let legacy = self.stream_payload(payload_json, session_source).await?;
-        let (tx, rx) = tokio::sync::mpsc::channel(1600);
-        tokio::spawn(async move {
-            futures::pin_mut!(legacy);
-            while let Some(item) = legacy.next().await {
-                let converted = item.and_then(|ev| crate::wire::map_response_event_to_wire(ev));
-                if tx.send(converted).await.is_err() {
-                    break;
-                }
-            }
-        });
-        Ok(crate::stream::EventStream::from_receiver(rx))
     }
 }

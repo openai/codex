@@ -1,21 +1,18 @@
-pub mod api;
 pub mod auth;
 pub mod chat;
 mod client;
-mod common;
-mod decode;
+// Legacy payload decoding has been removed; wire decoding lives in decode_wire
+mod decode_wire;
 pub mod error;
 // payload building lives in codex-core now
 pub mod responses;
 pub mod routed_client;
 pub mod stream;
-mod wire;
 
 pub use crate::auth::AuthContext;
 pub use crate::auth::AuthProvider;
 pub use crate::chat::ChatCompletionsApiClient;
 pub use crate::chat::ChatCompletionsApiClientConfig;
-pub use crate::client::fixtures::stream_from_fixture;
 pub use crate::error::Error;
 pub use crate::error::Result;
 pub use crate::responses::ResponsesApiClient;
