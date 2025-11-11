@@ -1,0 +1,17 @@
+PackageIdentifier: OpenAI.Codex
+PackageVersion: {{VERSION}}
+InstallerType: portable
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/openai/codex/releases/download/rust-v{{VERSION}}/codex-x86_64-pc-windows-msvc.exe
+    InstallerSha256: {{X64_SHA256}}
+    Commands:
+      - codex
+  - Architecture: arm64
+    InstallerUrl: https://github.com/openai/codex/releases/download/rust-v{{VERSION}}/codex-aarch64-pc-windows-msvc.exe
+    InstallerSha256: {{ARM64_SHA256}}
+    Commands:
+      - codex
+ManifestType: installer
+ManifestVersion: 1.6.0
+

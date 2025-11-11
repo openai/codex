@@ -1,0 +1,66 @@
+﻿name: Winget Submit (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Release version (e.g., 0.57.0)"
+        required: true
+        type: string
+      x64_sha256:
+        description: "Precomputed SHA256 for x64 EXE"
+        required: true
+        type: string
+      arm64_sha256:
+        description: "Precomputed SHA256 for arm64 EXE"
+        required: true
+        type: string
+    # secrets:
+    #   WINGET_PUBLISH_PAT:
+    #     required: true
+
+jobs:
+  submit-winget:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      REPO: ${{ github.repository }}
+      VERSION: ${{ inputs.version }}
+      X64_SHA: ${{ inputs.x64_sha256 }}
+      ARM_SHA: ${{ inputs.arm64_sha256 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Assumes inputs.x64_sha256 and inputs.arm64_sha256 are provided
+
+      - name: Build manifest directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          v="$VERSION"
+          root="manifests/o/OpenAI/Codex/$v"
+          tpl="cli/packaging/winget/template"
+          mkdir -p "$root"
+          for f in OpenAI.Codex.yaml OpenAI.Codex.locale.en-US.yaml OpenAI.Codex.installer.yaml; do
+            sed -e "s/{{VERSION}}/$v/g" \
+                -e "s/{{X64_SHA256}}/$X64_SHA/g" \
+                -e "s/{{ARM64_SHA256}}/$ARM_SHA/g" \
+                "$tpl/$f" > "$root/$f"
+          done
+          echo "Manifest staged at $root"
+
+      - name: Install WinGet Create
+        shell: bash
+        run: winget install --id Microsoft.WingetCreate -e --accept-package-agreements --accept-source-agreements
+
+      - name: Validate manifests
+        shell: bash
+        run: wingetcreate validate "manifests/o/OpenAI/Codex/${{ inputs.version }}"
+
+      # - name: Submit PR to winget-pkgs
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.WINGET_PUBLISH_PAT }}
+      #   shell: bash
+      #   run: wingetcreate submit "manifests/o/OpenAI/Codex/${{ inputs.version }}"
