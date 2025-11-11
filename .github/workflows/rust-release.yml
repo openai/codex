@@ -10,6 +10,20 @@ on:
   push:
     tags:
       - "rust-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g., 0.57.0)"
+        required: true
+        type: string
+      x64_sha256:
+        description: "SHA256 for codex-x86_64-pc-windows-msvc.exe"
+        required: true
+        type: string
+      arm64_sha256:
+        description: "SHA256 for codex-aarch64-pc-windows-msvc.exe"
+        required: true
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}
@@ -573,3 +587,43 @@ jobs:
     secrets:
       WINGET_PUBLISH_PAT: ${{ secrets.WINGET_PUBLISH_PAT }}
     continue-on-error: true
+
+  winget-manual:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: hash-manual
+    uses: ./.github/workflows/winget-submit.yml
+    with:
+      version: 0.58.0-alpha.3
+      x64_sha256: ${{ needs.hash-manual.outputs.x64_sha256 }}
+      arm64_sha256: ${{ needs.hash-manual.outputs.arm64_sha256 }}
+    continue-on-error: true
+
+  hash-manual:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      x64_sha256: ${{ steps.hash.outputs.x64_sha256 }}
+      arm64_sha256: ${{ steps.hash.outputs.arm64_sha256 }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+      - name: Download Windows EXEs from release rust-v0.58.0-alpha.3
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="rust-v0.58.0-alpha.3"
+          mkdir -p dist
+          gh release download "$tag" --repo "${GITHUB_REPOSITORY}" --pattern "codex-x86_64-pc-windows-msvc.exe" --dir dist
+          gh release download "$tag" --repo "${GITHUB_REPOSITORY}" --pattern "codex-aarch64-pc-windows-msvc.exe" --dir dist
+          ls -l dist
+      - name: Compute SHA256
+        id: hash
+        run: |
+          set -euo pipefail
+          x64_sha=$(sha256sum "dist/codex-x86_64-pc-windows-msvc.exe" | awk '{print $1}')
+          arm_sha=$(sha256sum "dist/codex-aarch64-pc-windows-msvc.exe" | awk '{print $1}')
+          echo "x64_sha256=${x64_sha}" >> "$GITHUB_OUTPUT"
+          echo "arm64_sha256=${arm_sha}" >> "$GITHUB_OUTPUT"
