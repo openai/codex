@@ -50,6 +50,8 @@ impl ToolsConfig {
 
         let shell_type = if features.enabled(Feature::UnifiedExec) {
             ConfigShellToolType::UnifiedExec
+        } else if features.enabled(Feature::ShellCommandTool) {
+            ConfigShellToolType::ShellCommand
         } else {
             model_family.shell_type.clone()
         };
