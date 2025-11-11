@@ -1,4 +1,4 @@
-﻿name: Winget Submit (Reusable)
+﻿name: Winget Submit
 
 on:
   workflow_call:
@@ -32,20 +32,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      # Assumes inputs.x64_sha256 and inputs.arm64_sha256 are provided
-
       - name: Build manifest directory
         shell: bash
         continue-on-error: true
         run: |
           set -euo pipefail
-          v="$VERSION"
-          root="manifests/o/OpenAI/Codex/$v"
+          root="manifests/o/OpenAI/Codex/$VERSION"
           tpl="codex-rs/cli/packaging/winget/template"
           mkdir -p "$root"
           for f in OpenAI.Codex.yaml OpenAI.Codex.locale.en-US.yaml OpenAI.Codex.installer.yaml; do
-            sed -e "s/{{VERSION}}/$v/g" \
+            sed -e "s/{{VERSION}}/$VERSION/g" \
                 -e "s/{{X64_SHA256}}/$X64_SHA/g" \
                 -e "s/{{ARM64_SHA256}}/$ARM_SHA/g" \
                 "$tpl/$f" > "$root/$f"
