@@ -37,18 +37,18 @@ impl Policy {
             None => return Evaluation::NoMatch,
         };
         let mut matched_rules: Vec<RuleMatch> = Vec::new();
-        let mut best_decision: Option<Decision> = None;
+        let mut strictest_decision: Option<Decision> = None;
         for rule in rules {
             if let Some(matched) = rule.matches(cmd) {
-                let decision = match best_decision {
+                let decision = match strictest_decision {
                     None => matched.decision,
                     Some(current) => std::cmp::max(matched.decision, current),
                 };
-                best_decision = Some(decision);
+                strictest_decision = Some(decision);
                 matched_rules.push(matched);
             }
         }
-        match best_decision {
+        match strictest_decision {
             Some(decision) => Evaluation::Match {
                 decision,
                 matched_rules,
