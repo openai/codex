@@ -4,7 +4,6 @@ use std::path::Path;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
-use codex_execpolicy2::Evaluation;
 use codex_execpolicy2::PolicyParser;
 use codex_execpolicy2::load_default_policy;
 
@@ -49,15 +48,9 @@ fn cmd_check(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
     }
     let policy = load_policy(policy_path)?;
 
-    match policy.evaluate(&args) {
-        eval @ Evaluation::Match { .. } => {
-            let json = serde_json::to_string_pretty(&eval)?;
-            println!("{json}");
-        }
-        Evaluation::NoMatch => {
-            println!("no match");
-        }
-    };
+    let eval = policy.evaluate(&args);
+    let json = serde_json::to_string_pretty(&eval)?;
+    println!("{json}");
     Ok(())
 }
 
