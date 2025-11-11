@@ -986,14 +986,17 @@ dependencies = [
  "codex-tui",
  "codex-windows-sandbox",
  "ctor 0.5.0",
+ "libc",
  "owo-colors",
  "predicates",
  "pretty_assertions",
+ "regex-lite",
  "serde_json",
  "supports-color",
  "tempfile",
  "tokio",
  "toml",
+ "tracing",
 ]
 
 [[package]]
@@ -1064,6 +1067,7 @@ dependencies = [
  "chrono",
  "codex-app-server-protocol",
  "codex-apply-patch",
+ "codex-arg0",
  "codex-async-utils",
  "codex-file-search",
  "codex-git",
@@ -1078,6 +1082,7 @@ dependencies = [
  "codex-windows-sandbox",
  "core-foundation 0.9.4",
  "core_test_support",
+ "ctor 0.5.0",
  "dirs",
  "dunce",
  "env-flags",
