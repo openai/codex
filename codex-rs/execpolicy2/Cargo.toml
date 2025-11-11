@@ -2,7 +2,6 @@
 name = "codex-execpolicy2"
 version = "0.0.0"
 edition = "2024"
-license = "Apache-2.0"
 description = "Codex exec policy v2: prefix-based Starlark rules for command decisions."
 
 [lib]
