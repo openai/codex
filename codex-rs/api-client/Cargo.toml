@@ -9,9 +9,8 @@ bytes = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { path = "../protocol" }
-eventsource-stream = { workspace = true }
 futures = { workspace = true, default-features = false, features = ["std"] }
-maplit = "1.0.2"
+maplit = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
 serde = { workspace = true, features = ["derive"] }
@@ -22,8 +21,7 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-maplit = "1.0.2"
-toml = { workspace = true }
+maplit = { workspace = true }
 
 [lints]
 workspace = true
