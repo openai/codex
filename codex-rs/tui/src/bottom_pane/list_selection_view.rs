@@ -52,6 +52,7 @@ pub(crate) struct SelectionViewParams {
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
     pub header: Box<dyn Renderable>,
+    pub initial_selection: Option<usize>,
 }
 
 impl Default for SelectionViewParams {
@@ -64,6 +65,7 @@ impl Default for SelectionViewParams {
             is_searchable: false,
             search_placeholder: None,
             header: Box::new(()),
+            initial_selection: None,
         }
     }
 }
@@ -80,6 +82,7 @@ pub(crate) struct ListSelectionView {
     filtered_indices: Vec<usize>,
     last_selected_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
+    initial_selection: Option<usize>,
 }
 
 impl ListSelectionView {
@@ -110,6 +113,7 @@ impl ListSelectionView {
             filtered_indices: Vec::new(),
             last_selected_actual_idx: None,
             header,
+            initial_selection: params.initial_selection,
         };
         s.apply_filter();
         s
@@ -150,6 +154,11 @@ impl ListSelectionView {
         }
 
         let len = self.filtered_indices.len();
+        let initial_selected = self.initial_selection.take().and_then(|idx| {
+            self.filtered_indices
+                .iter()
+                .position(|current| *current == idx)
+        });
         self.state.selected_idx = self
             .state
             .selected_idx
@@ -165,6 +174,7 @@ impl ListSelectionView {
                         .position(|idx| *idx == actual_idx)
                 })
             })
+            .or(initial_selected)
             .or_else(|| (len > 0).then_some(0));
 
         let visible = Self::max_visible_rows(len);

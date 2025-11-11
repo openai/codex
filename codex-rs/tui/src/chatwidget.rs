@@ -1916,7 +1916,8 @@ impl ChatWidget {
             default_choice
         };
         let mut items: Vec<SelectionItem> = Vec::new();
-        for choice in choices.iter() {
+        let mut initial_selection: Option<usize> = None;
+        for (index, choice) in choices.iter().enumerate() {
             let effort = choice.display;
             let mut effort_label = effort.to_string();
             if let Some(first) = effort_label.get_mut(0..1) {
@@ -1980,6 +1981,10 @@ impl ChatWidget {
                 dismiss_on_select: true,
                 ..Default::default()
             });
+
+            if initial_selection.is_none() && choice.stored == highlight_choice {
+                initial_selection = Some(index);
+            }
         }
 
         let mut header = ColumnRenderable::new();
@@ -1991,6 +1996,7 @@ impl ChatWidget {
             header: Box::new(header),
             footer_hint: Some(standard_popup_hint_line()),
             items,
+            initial_selection,
             ..Default::default()
         });
     }
