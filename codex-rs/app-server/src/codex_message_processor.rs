@@ -46,6 +46,7 @@ use codex_app_server_protocol::GitDiffToRemoteResponse;
 use codex_app_server_protocol::InputItem as WireInputItem;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::InterruptConversationResponse;
+use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::ListConversationsResponse;
@@ -134,6 +135,7 @@ use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::GitInfo;
@@ -141,6 +143,7 @@ use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use codex_protocol::user_input::UserInput as CoreUserInput;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_utils_json_to_toml::json_to_toml;
 use std::collections::HashMap;
@@ -2609,6 +2612,13 @@ async fn apply_bespoke_event_handling(
                     .await;
             }
         }
+        EventMsg::ItemStarted(item_started_event) => {
+            let item = to_v2_thread_item(&item_started_event.item);
+            let notification = ItemStartedNotification { item };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {
             let pending = {
@@ -2635,6 +2645,54 @@ async fn apply_bespoke_event_handling(
 
         _ => {}
     }
+}
+
+fn to_v2_thread_item(item: &TurnItem) -> ThreadItem {
+    match item {
+        TurnItem::UserMessage(user) => ThreadItem::UserMessage {
+            id: user.id.clone(),
+            content: user.content.iter().map(to_v2_user_input).collect(),
+        },
+        TurnItem::AgentMessage(agent) => ThreadItem::AgentMessage {
+            id: agent.id.clone(),
+            text: agent_message_text(&agent.content),
+        },
+        TurnItem::Reasoning(reasoning) => {
+            let text = if !reasoning.summary_text.is_empty() {
+                reasoning.summary_text.join("\n")
+            } else {
+                reasoning.raw_content.join("\n")
+            };
+            ThreadItem::Reasoning {
+                id: reasoning.id.clone(),
+                text,
+            }
+        }
+        TurnItem::WebSearch(search) => ThreadItem::WebSearch {
+            id: search.id.clone(),
+            query: search.query.clone(),
+        },
+    }
+}
+
+fn to_v2_user_input(input: &CoreUserInput) -> V2UserInput {
+    match input {
+        CoreUserInput::Text { text } => V2UserInput::Text { text: text.clone() },
+        CoreUserInput::Image { image_url } => V2UserInput::Image {
+            url: image_url.clone(),
+        },
+        CoreUserInput::LocalImage { path } => V2UserInput::LocalImage { path: path.clone() },
+        _ => unreachable!("unsupported user input variant"),
+    }
+}
+
+fn agent_message_text(content: &[AgentMessageContent]) -> String {
+    content
+        .iter()
+        .map(|entry| match entry {
+            AgentMessageContent::Text { text } => text.as_str(),
+        })
+        .collect()
 }
 
 async fn derive_config_from_params(
