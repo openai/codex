@@ -54,11 +54,12 @@ fn escape_stdin_for_log(input: &str) -> String {
 }
 
 fn render_stdin_events(events: &[StdinEvent]) -> String {
-    events
-        .iter()
-        .map(|event| event.input.clone())
-        .collect::<Vec<String>>()
-        .join("\n")
+    let mut lines = Vec::new();
+    for event in events {
+        lines.push(event.input.clone());
+        lines.push(format!("> {}", event.output));
+    }
+    lines.join("\n")
 }
 
 impl UnifiedExecSessionManager {

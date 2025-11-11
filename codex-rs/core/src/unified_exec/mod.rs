@@ -110,7 +110,6 @@ pub(crate) struct UnifiedExecSessionManager {
 #[derive(Clone, Debug)]
 pub(crate) struct StdinEvent {
     pub input: String,
-    #[allow(dead_code)]
     pub output: String,
 }
 
