@@ -42,13 +42,7 @@ impl Policy {
             if let Some(matched) = rule.matches(cmd) {
                 let decision = match best_decision {
                     None => matched.decision,
-                    Some(current) => {
-                        if matched.decision.is_stricter_than(current) {
-                            matched.decision
-                        } else {
-                            current
-                        }
-                    }
+                    Some(current) => std::cmp::max(matched.decision, current),
                 };
                 best_decision = Some(decision);
                 matched_rules.push(matched);
