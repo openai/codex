@@ -507,7 +507,7 @@ mod tests {
         ];
 
         let rendered = render_stdin_events(&events);
-        assert_eq!(rendered, "first\nsecond");
+        assert_eq!(rendered, "first\n> [no output]\nsecond\n> out");
     }
 
     #[test]
