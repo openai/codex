@@ -84,10 +84,11 @@ impl PolicyBuilder {
 }
 
 fn parse_pattern<'v>(pattern: UnpackList<Value<'v>>) -> Result<Vec<PatternToken>> {
-    let mut tokens = Vec::new();
-    for item in pattern.items {
-        tokens.push(parse_pattern_token(item)?);
-    }
+    let tokens: Vec<PatternToken> = pattern
+        .items
+        .into_iter()
+        .map(parse_pattern_token)
+        .collect::<Result<_>>()?;
     if tokens.is_empty() {
         return Err(Error::InvalidPattern("pattern cannot be empty".to_string()));
     }
