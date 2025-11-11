@@ -109,5 +109,5 @@ impl Rule {
 
 fn join_command(command: &[String]) -> String {
     try_join(command.iter().map(String::as_str))
-        .expect("failed to render command with shlex::try_join")
+        .unwrap_or_else(|_| "unable to render example".to_string())
 }
