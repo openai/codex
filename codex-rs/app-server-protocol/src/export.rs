@@ -666,6 +666,8 @@ fn ts_files_in_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+/// Generate an index.ts file that re-exports all generated types.
+/// This allows consumers to import all types from a single file.
 fn generate_index_ts(out_dir: &Path) -> Result<PathBuf> {
     let mut entries: Vec<String> = Vec::new();
     let mut stems: Vec<String> = ts_files_in(out_dir)?
