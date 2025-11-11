@@ -1,3 +1,8 @@
+#[cfg(target_os = "macos")]
+mod pid_tracker;
+#[cfg(target_os = "macos")]
+mod seatbelt;
+
 use std::path::PathBuf;
 
 use codex_common::CliConfigOverrides;
@@ -16,12 +21,16 @@ use crate::WindowsCommand;
 use crate::exit_status::handle_exit_status;
 
 #[cfg(target_os = "macos")]
+use seatbelt::DenialLogger;
+
+#[cfg(target_os = "macos")]
 pub async fn run_command_under_seatbelt(
     command: SeatbeltCommand,
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     let SeatbeltCommand {
         full_auto,
+        log_denials,
         config_overrides,
         command,
     } = command;
@@ -31,6 +40,7 @@ pub async fn run_command_under_seatbelt(
         config_overrides,
         codex_linux_sandbox_exe,
         SandboxType::Seatbelt,
+        log_denials,
     )
     .await
 }
@@ -58,6 +68,7 @@ pub async fn run_command_under_landlock(
         config_overrides,
         codex_linux_sandbox_exe,
         SandboxType::Landlock,
+        false,
     )
     .await
 }
@@ -77,6 +88,7 @@ pub async fn run_command_under_windows(
         config_overrides,
         codex_linux_sandbox_exe,
         SandboxType::Windows,
+        false,
     )
     .await
 }
@@ -94,6 +106,7 @@ async fn run_command_under_sandbox(
     config_overrides: CliConfigOverrides,
     codex_linux_sandbox_exe: Option<PathBuf>,
     sandbox_type: SandboxType,
+    log_denials: bool,
 ) -> anyhow::Result<()> {
     let sandbox_mode = create_sandbox_mode(full_auto);
     let config = Config::load_with_cli_overrides(
@@ -136,6 +149,8 @@ async fn run_command_under_sandbox(
             let env_map = env.clone();
             let command_vec = command.clone();
             let base_dir = config.codex_home.clone();
+
+            // Preflight audit is invoked elsewhere at the appropriate times.
             let res = tokio::task::spawn_blocking(move || {
                 run_windows_sandbox_capture(
                     policy_str,
@@ -178,6 +193,11 @@ async fn run_command_under_sandbox(
         }
     }
 
+    #[cfg(target_os = "macos")]
+    let mut denial_logger = log_denials.then(DenialLogger::new).flatten();
+    #[cfg(not(target_os = "macos"))]
+    let _ = log_denials;
+
     let mut child = match sandbox_type {
         #[cfg(target_os = "macos")]
         SandboxType::Seatbelt => {
@@ -211,7 +231,26 @@ async fn run_command_under_sandbox(
             unreachable!("Windows sandbox should have been handled above");
         }
     };
+
+    #[cfg(target_os = "macos")]
+    if let Some(denial_logger) = &mut denial_logger {
+        denial_logger.on_child_spawn(&child);
+    }
+
     let status = child.wait().await?;
+
+    #[cfg(target_os = "macos")]
+    if let Some(denial_logger) = denial_logger {
+        let denials = denial_logger.finish().await;
+        eprintln!("\n=== Sandbox denials ===");
+        if denials.is_empty() {
+            eprintln!("None found.");
+        } else {
+            for seatbelt::SandboxDenial { name, capability } in denials {
+                eprintln!("({name}) {capability}");
+            }
+        }
+    }
 
     handle_exit_status(status);
 }

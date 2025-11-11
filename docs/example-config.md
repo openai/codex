@@ -159,6 +159,7 @@ windows_wsl_setup_acknowledged = false
 # In-product notices (mostly set automatically by Codex).
 [notice]
 # hide_full_access_warning = true
+# hide_rate_limit_model_nudge = true
 
 ################################################################################
 # Authentication & Login

@@ -21,7 +21,8 @@ At a glance:
   - `getUserSavedConfig`, `setDefaultModel`, `getUserAgent`, `userInfo`
   - `model/list` → enumerate available models and reasoning options
 - Auth
-  - `loginApiKey`, `loginChatGpt`, `cancelLoginChatGpt`, `logoutChatGpt`, `getAuthStatus`
+  - `account/read`, `account/login/start`, `account/login/cancel`, `account/logout`, `account/rateLimits/read`
+  - notifications: `account/login/completed`, `account/updated`, `account/rateLimits/updated`
 - Utilities
   - `gitDiffToRemote`, `execOneOffCommand`
 - Approvals (server → client requests)
@@ -113,11 +114,7 @@ The client must reply with `{ decision: "allow" | "deny" }` for each request.
 
 ## Auth helpers
 
-For ChatGPT or API‑key based auth flows, the server exposes helpers:
-
-- `loginApiKey { apiKey }`
-- `loginChatGpt` → returns `{ loginId, authUrl }`; browser completes flow; then `loginChatGptComplete` notification follows
-- `cancelLoginChatGpt { loginId }`, `logoutChatGpt`, `getAuthStatus { includeToken?, refreshToken? }`
+For the complete request/response shapes and flow examples, see the [“Auth endpoints (v2)” section in the app‑server README](../app-server/README.md#auth-endpoints-v2).
 
 ## Example: start and send a message
 

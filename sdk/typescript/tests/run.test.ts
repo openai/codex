@@ -254,6 +254,99 @@ describe("Codex", () => {
     }
   });
 
+  it("passes networkAccessEnabled to exec", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Network access enabled", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread({
+        networkAccessEnabled: true,
+      });
+      await thread.run("test network access");
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      expectPair(commandArgs, ["--config", "sandbox_workspace_write.network_access=true"]);
+    } finally {
+      restore();
+      await close();
+    }
+  });
+
+  it("passes webSearchEnabled to exec", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Web search enabled", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread({
+        webSearchEnabled: true,
+      });
+      await thread.run("test web search");
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      expectPair(commandArgs, ["--config", "features.web_search_request=true"]);
+    } finally {
+      restore();
+      await close();
+    }
+  });
+
+  it("passes approvalPolicy to exec", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Approval policy set", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread({
+        approvalPolicy: "on-request",
+      });
+      await thread.run("test approval policy");
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      expectPair(commandArgs, ["--config", 'approval_policy="on-request"']);
+    } finally {
+      restore();
+      await close();
+    }
+  });
+
   it("writes output schema to a temporary file and forwards it", async () => {
     const { url, close, requests } = await startResponsesTestProxy({
       statusCode: 200,
