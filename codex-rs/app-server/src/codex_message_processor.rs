@@ -1533,20 +1533,6 @@ impl CodexMessageProcessor {
                 session_configured,
                 ..
             }) => {
-                self.outgoing
-                    .send_server_notification(ServerNotification::SessionConfigured(
-                        SessionConfiguredNotification {
-                            session_id: session_configured.session_id,
-                            model: session_configured.model.clone(),
-                            reasoning_effort: session_configured.reasoning_effort,
-                            history_log_id: session_configured.history_log_id,
-                            history_entry_count: session_configured.history_entry_count,
-                            initial_messages: session_configured.initial_messages.clone(),
-                            rollout_path: session_configured.rollout_path.clone(),
-                        },
-                    ))
-                    .await;
-
                 // Auto-attach a conversation listener when resuming a thread.
                 if let Err(err) = self
                     .attach_conversation_listener(conversation_id, false)
