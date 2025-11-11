@@ -123,9 +123,10 @@ fn parse_pattern_token<'v>(value: Value<'v>) -> Result<PatternToken> {
             _ => Ok(PatternToken::Alts(tokens)),
         }
     } else {
-        Err(Error::InvalidPattern(
-            "pattern element must be a string or list of strings".to_string(),
-        ))
+        Err(Error::InvalidPattern(format!(
+            "pattern element must be a string or list of strings (got {})",
+            value.get_type()
+        )))
     }
 }
 
