@@ -36,6 +36,7 @@ impl Policy {
             },
             None => return Evaluation::NoMatch,
         };
+
         let mut matched_rules: Vec<RuleMatch> = Vec::new();
         let mut strictest_decision: Option<Decision> = None;
         for rule in rules {
