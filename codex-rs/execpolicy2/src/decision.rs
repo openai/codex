@@ -5,7 +5,7 @@ use crate::error::Error;
 use crate::error::Result;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "camelCase")]
 pub enum Decision {
     Allow,
     Prompt,
