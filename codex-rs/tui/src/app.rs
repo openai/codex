@@ -268,6 +268,34 @@ impl App {
                         },
                     )?;
                 }
+                TuiEvent::Resize(size) => {
+                    // This code change addresses visual artifacts that can occur during terminal
+                    // resize events by completely redrawing the scrollback history instead of
+                    // attempting to incrementally adjust it. This approach helps ensure that the
+                    // display remains consistent and free of glitches as the terminal dimensions
+                    // change.
+                    //
+                    // TODO (joshka). This can cause flicker during resize, so we likely need to
+                    // investigate debouncing resize events or optimizing the redraw.
+                    //
+                    // TODO (joshka). I'm unsure whether this also needs to post notifications like
+                    // in the normal Draw case above.
+                    //
+                    // TODO (joshka). `size` is the size that comes from the event, which may differ
+                    // from the terminal's actual size. Some parts of the draw path use the terminal
+                    // size directly. We should standardize on one or the other so that there's no
+                    // mismatch, but debouncing first seems more important.
+                    tui.clear_scrollback()?;
+                    for cell in &self.transcript_cells {
+                        tui.insert_history_lines(cell.display_lines(size.width));
+                    }
+                    tui.draw(self.chat_widget.desired_height(size.width), |frame| {
+                        self.chat_widget.render(frame.area(), frame.buffer);
+                        if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                            frame.set_cursor_position((x, y));
+                        }
+                    })?;
+                }
             }
         }
         Ok(true)
