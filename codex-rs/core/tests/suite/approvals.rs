@@ -1143,10 +1143,12 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 stdout_contains: "hello unified exec",
             },
         },
+        #[cfg(not(target_arch = "aarch64"))]
+        // Linux sandbox arg0 test workaround doesn't work on ARM
         ScenarioSpec {
             name: "unified exec on request escalated requires approval",
             approval_policy: OnRequest,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            sandbox_policy: SandboxPolicy::ReadOnly,
             action: ActionKind::RunUnifiedExecCommand {
                 command: "echo \"escalated unified exec\"",
                 justification: Some(DEFAULT_UNIFIED_EXEC_JUSTIFICATION),
