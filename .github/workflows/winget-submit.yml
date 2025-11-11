@@ -42,7 +42,7 @@ jobs:
           set -euo pipefail
           v="$VERSION"
           root="manifests/o/OpenAI/Codex/$v"
-          tpl="cli/packaging/winget/template"
+          tpl="codex-rs/cli/packaging/winget/template"
           mkdir -p "$root"
           for f in OpenAI.Codex.yaml OpenAI.Codex.locale.en-US.yaml OpenAI.Codex.installer.yaml; do
             sed -e "s/{{VERSION}}/$v/g" \
