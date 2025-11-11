@@ -1238,16 +1238,15 @@ impl CodexMessageProcessor {
                 {
                     Ok(summary) => summary_to_thread(summary),
                     Err(err) => {
-                        warn!(
-                            "failed to load summary for new thread {}: {}",
-                            conversation_id, err
-                        );
-                        Thread {
-                            id: conversation_id.to_string(),
-                            preview: String::new(),
-                            model_provider: self.config.model_provider_id.clone(),
-                            created_at: chrono::Utc::now().timestamp(),
-                        }
+                        self.send_internal_error(
+                            request_id,
+                            format!(
+                                "failed to load rollout `{}` for conversation {conversation_id}: {err}",
+                                rollout_path.display()
+                            ),
+                        )
+                        .await;
+                        return;
                     }
                 };
 
@@ -1292,7 +1291,7 @@ impl CodexMessageProcessor {
         model_provider: Option<String>,
         cwd: Option<String>,
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
-        sandbox: Option<codex_app_server_protocol::SandboxMode>,
+        sandbox: Option<SandboxMode>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
     ) -> ConfigOverrides {
@@ -1302,7 +1301,7 @@ impl CodexMessageProcessor {
             cwd: cwd.map(PathBuf::from),
             approval_policy: approval_policy
                 .map(codex_app_server_protocol::AskForApproval::to_core),
-            sandbox_mode: sandbox.map(codex_app_server_protocol::SandboxMode::to_core),
+            sandbox_mode: sandbox.map(SandboxMode::to_core),
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             base_instructions,
             developer_instructions,
@@ -1504,6 +1503,8 @@ impl CodexMessageProcessor {
             }
         };
 
+        let fallback_model_provider = config.model_provider_id.clone();
+
         match self
             .conversation_manager
             .resume_conversation_with_history(
@@ -1544,7 +1545,25 @@ impl CodexMessageProcessor {
                     );
                 }
 
-                let thread = summary_to_thread(summary);
+                let thread = match read_summary_from_rollout(
+                    session_configured.rollout_path.as_path(),
+                    fallback_model_provider.as_str(),
+                )
+                .await
+                {
+                    Ok(summary) => summary_to_thread(summary),
+                    Err(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!(
+                                "failed to load rollout `{}` for conversation {conversation_id}: {err}",
+                                session_configured.rollout_path.display()
+                            ),
+                        )
+                        .await;
+                        return;
+                    }
+                };
                 let response = ThreadResumeResponse { thread };
                 self.outgoing.send_response(request_id, response).await;
             }
@@ -1949,6 +1968,15 @@ impl CodexMessageProcessor {
     async fn send_invalid_request_error(&self, request_id: RequestId, message: String) {
         let error = JSONRPCErrorError {
             code: INVALID_REQUEST_ERROR_CODE,
+            message,
+            data: None,
+        };
+        self.outgoing.send_error(request_id, error).await;
+    }
+
+    async fn send_internal_error(&self, request_id: RequestId, message: String) {
+        let error = JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
             message,
             data: None,
         };

@@ -62,7 +62,7 @@ async fn thread_resume_emits_session_configured_notification() -> Result<()> {
     )
     .await??;
     let session_configured: ServerNotification = notification.try_into()?;
-    let ServerNotification::SessionConfigured(SessionConfiguredNotification { session_id, .. }) =
+    let ServerNotification::SessionConfigured(SessionConfiguredNotification { .. }) =
         session_configured
     else {
         unreachable!("expected sessionConfigured notification");
@@ -141,7 +141,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
         unreachable!("expected sessionConfigured notification");
     };
     assert_eq!(model, "mock-model");
-    assert!(initial_messages.as_ref().map_or(true, Vec::is_empty));
+    assert!(initial_messages.as_ref().is_none_or(Vec::is_empty));
 
     let resume_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
