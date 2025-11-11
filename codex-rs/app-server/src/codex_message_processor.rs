@@ -46,6 +46,7 @@ use codex_app_server_protocol::GitDiffToRemoteResponse;
 use codex_app_server_protocol::InputItem as WireInputItem;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::InterruptConversationResponse;
+use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListConversationsParams;
@@ -2617,6 +2618,13 @@ async fn apply_bespoke_event_handling(
             let notification = ItemStartedNotification { item };
             outgoing
                 .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
+        EventMsg::ItemCompleted(item_completed_event) => {
+            let item = to_v2_thread_item(&item_completed_event.item);
+            let notification = ItemCompletedNotification { item };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
         }
         // If this is a TurnAborted, reply to any pending interrupt requests.
