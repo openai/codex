@@ -24,3 +24,4 @@ thiserror = { workspace = true }
 multimap = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 parking_lot = { workspace = true }
+shlex = { workspace = true }

@@ -3,6 +3,7 @@ use crate::error::Error;
 use crate::error::Result;
 use serde::Deserialize;
 use serde::Serialize;
+use shlex::try_join;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PatternToken {
@@ -90,7 +91,7 @@ impl Rule {
             if self.matches(example).is_none() {
                 return Err(Error::ExampleDidNotMatch {
                     rule_id: self.id.clone(),
-                    example: example.join(" "),
+                    example: join_command(example),
                 });
             }
         }
@@ -98,10 +99,15 @@ impl Rule {
             if self.matches(example).is_some() {
                 return Err(Error::ExampleDidMatch {
                     rule_id: self.id.clone(),
-                    example: example.join(" "),
+                    example: join_command(example),
                 });
             }
         }
         Ok(())
     }
+}
+
+fn join_command(command: &[String]) -> String {
+    try_join(command.iter().map(String::as_str))
+        .expect("failed to render command with shlex::try_join")
 }
