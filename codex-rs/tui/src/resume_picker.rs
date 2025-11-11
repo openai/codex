@@ -320,8 +320,7 @@ impl PinnedConversations {
         paths.sort();
 
         let payload = PinnedConversationsFile { paths };
-        let data = serde_json::to_vec_pretty(&payload)
-            .map_err(|err| std::io::Error::new(ErrorKind::Other, err))?;
+        let data = serde_json::to_vec_pretty(&payload).map_err(std::io::Error::other)?;
         fs::write(path, data).await
     }
 }
@@ -894,7 +893,7 @@ fn render_list(
         let marker = if is_sel { "> ".bold() } else { "  ".into() };
         let marker_width = 2usize;
         let pin_span = if state.is_row_pinned(row) {
-            "★ ".yellow()
+            "★ ".cyan()
         } else {
             "  ".dim()
         };
@@ -936,7 +935,7 @@ fn render_list(
             spans.push("  ".into());
         }
         let preview_span = if state.is_row_pinned(row) {
-            Span::from(preview).yellow()
+            Span::from(preview).cyan()
         } else {
             Span::from(preview)
         };
