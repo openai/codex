@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use shlex::try_join;
 
-/// Token that can match a single command argument or one of several alternatives.
+/// Matches a single command token, either a fixed string or one of several allowed alternatives.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PatternToken {
     Single(String),
