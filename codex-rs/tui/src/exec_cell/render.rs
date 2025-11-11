@@ -23,7 +23,7 @@ use textwrap::WordSplitter;
 use unicode_width::UnicodeWidthStr;
 
 pub(crate) const TOOL_CALL_MAX_LINES: usize = 5;
-const USER_SHELL_TOOL_CALL_MAX_LINES: usize = 50;
+const USER_SHELL_TOOL_CALL_MAX_LINES: usize = usize::MAX;
 
 pub(crate) struct OutputLinesParams {
     pub(crate) line_limit: usize,
@@ -522,6 +522,44 @@ struct ExecDisplayLayout {
     command_continuation_max_lines: usize,
     output_block: PrefixedBlock,
     output_max_lines: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn user_shell_output_shows_all_lines() {
+        let aggregated_output = (0..12)
+            .map(|idx| format!("line {idx}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let command_output = CommandOutput {
+            exit_code: 0,
+            aggregated_output,
+            formatted_output: String::new(),
+        };
+
+        let output = output_lines(
+            Some(&command_output),
+            OutputLinesParams {
+                line_limit: USER_SHELL_TOOL_CALL_MAX_LINES,
+                only_err: false,
+                include_angle_pipe: true,
+                include_prefix: true,
+            },
+        );
+
+        assert_eq!(output.lines.len(), 12);
+        assert!(output.omitted.is_none());
+        assert!(
+            output
+                .lines
+                .iter()
+                .all(|line| line.spans.iter().all(|span| !span.content.contains('…')))
+        );
+    }
 }
 
 impl ExecDisplayLayout {

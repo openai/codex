@@ -20,6 +20,7 @@ use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecResponse;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::unified_exec::WriteStdinRequest;
+use crate::unified_exec::build_shell_command;
 
 pub struct UnifiedExecHandler;
 
@@ -113,7 +114,9 @@ impl ToolHandler for UnifiedExecHandler {
                     &context.call_id,
                     None,
                 );
-                let emitter = ToolEmitter::unified_exec(args.cmd.clone(), cwd.clone(), true);
+                let display_command = build_shell_command(&args.shell, args.login, &args.cmd);
+                let emitter =
+                    ToolEmitter::unified_exec(args.cmd.clone(), display_command, cwd.clone(), true);
                 emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
                 manager

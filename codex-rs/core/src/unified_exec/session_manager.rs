@@ -21,17 +21,46 @@ use crate::tools::sandboxing::ToolCtx;
 use super::ExecCommandRequest;
 use super::MIN_YIELD_TIME_MS;
 use super::SessionEntry;
+use super::StdinEvent;
 use super::UnifiedExecContext;
 use super::UnifiedExecError;
 use super::UnifiedExecResponse;
 use super::UnifiedExecSessionManager;
 use super::WriteStdinRequest;
+use super::build_shell_command;
 use super::clamp_yield_time;
 use super::generate_chunk_id;
 use super::resolve_max_tokens;
 use super::session::OutputBuffer;
 use super::session::UnifiedExecSession;
 use super::truncate_output_to_tokens;
+
+fn escape_stdin_for_log(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            '\x1b' => escaped.push_str("\\u001b"),
+            ctrl if ctrl.is_control() => {
+                let code = u32::from(ctrl);
+                escaped.push_str(&format!("\\u{code:04x}"));
+            }
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
+fn render_stdin_events(events: &[StdinEvent]) -> String {
+    let mut lines = Vec::new();
+    for event in events {
+        lines.push(event.input.clone());
+        lines.push(format!("> {}", event.output));
+    }
+    lines.join("\n")
+}
 
 impl UnifiedExecSessionManager {
     pub(crate) async fn exec_command(
@@ -43,15 +72,11 @@ impl UnifiedExecSessionManager {
             .workdir
             .clone()
             .unwrap_or_else(|| context.turn.cwd.clone());
-        let shell_flag = if request.login { "-lc" } else { "-c" };
-        let command = vec![
-            request.shell.to_string(),
-            shell_flag.to_string(),
-            request.command.to_string(),
-        ];
+        let command_argv = build_shell_command(request.shell, request.login, request.command);
+        let command_line = request.command.to_string();
 
         let session = self
-            .open_session_with_sandbox(command, cwd.clone(), context)
+            .open_session_with_sandbox(command_argv.clone(), cwd.clone(), context)
             .await?;
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
@@ -73,7 +98,7 @@ impl UnifiedExecSessionManager {
             None
         } else {
             Some(
-                self.store_session(session, context, request.command, cwd.clone(), start)
+                self.store_session(session, context, &command_line, cwd.clone(), start)
                     .await,
             )
         };
@@ -93,7 +118,7 @@ impl UnifiedExecSessionManager {
             let exit = response.exit_code.unwrap_or(-1);
             Self::emit_exec_end_from_context(
                 context,
-                request.command.to_string(),
+                command_line,
                 cwd,
                 response.output.clone(),
                 exit,
@@ -114,6 +139,12 @@ impl UnifiedExecSessionManager {
         let (writer_tx, output_buffer, output_notify) =
             self.prepare_session_handles(session_id).await?;
 
+        let logged_input = if request.input.is_empty() {
+            None
+        } else {
+            Some(escape_stdin_for_log(request.input))
+        };
+
         if !request.input.is_empty() {
             Self::send_input(&writer_tx, request.input.as_bytes()).await?;
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -128,11 +159,36 @@ impl UnifiedExecSessionManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let (output, original_token_count) = truncate_output_to_tokens(&text, max_tokens);
+        let escaped_output = escape_stdin_for_log(&text);
+        let output_for_event = if escaped_output.is_empty()
+            || logged_input.as_ref().is_some_and(|input| {
+                input.trim_end_matches("\\n") == escaped_output.trim_end_matches("\\n")
+            }) {
+            "[no output]".to_string()
+        } else {
+            escaped_output.clone()
+        };
+
+        let stdin_events = if let Some(input) = logged_input {
+            self.append_stdin_event(
+                session_id,
+                StdinEvent {
+                    input,
+                    output: output_for_event,
+                },
+            )
+            .await?
+        } else {
+            self.clone_stdin_events(session_id).await?
+        };
+
+        let aggregated_text = render_stdin_events(&stdin_events);
+        let (output, original_token_count) =
+            truncate_output_to_tokens(&aggregated_text, max_tokens);
         let chunk_id = generate_chunk_id();
 
         let status = self.refresh_session_state(session_id).await;
-        let (session_id, exit_code, completion_entry, event_call_id) = match status {
+        let (session_id, exit_code, mut completion_entry, event_call_id) = match status {
             SessionStatus::Alive { exit_code, call_id } => {
                 (Some(session_id), exit_code, None, call_id)
             }
@@ -155,7 +211,7 @@ impl UnifiedExecSessionManager {
             original_token_count,
         };
 
-        if let (Some(exit), Some(entry)) = (response.exit_code, completion_entry) {
+        if let (Some(exit), Some(entry)) = (response.exit_code, completion_entry.take()) {
             let total_duration = Instant::now().saturating_duration_since(entry.started_at);
             Self::emit_exec_end_from_entry(entry, response.output.clone(), exit, total_duration)
                 .await;
@@ -214,6 +270,30 @@ impl UnifiedExecSessionManager {
             .map_err(|_| UnifiedExecError::WriteToStdin)
     }
 
+    async fn append_stdin_event(
+        &self,
+        session_id: i32,
+        event: StdinEvent,
+    ) -> Result<Vec<StdinEvent>, UnifiedExecError> {
+        let mut sessions = self.sessions.lock().await;
+        let Some(entry) = sessions.get_mut(&session_id) else {
+            return Err(UnifiedExecError::UnknownSessionId { session_id });
+        };
+        entry.stdin_events.push(event);
+        Ok(entry.stdin_events.clone())
+    }
+
+    async fn clone_stdin_events(
+        &self,
+        session_id: i32,
+    ) -> Result<Vec<StdinEvent>, UnifiedExecError> {
+        let sessions = self.sessions.lock().await;
+        let Some(entry) = sessions.get(&session_id) else {
+            return Err(UnifiedExecError::UnknownSessionId { session_id });
+        };
+        Ok(entry.stdin_events.clone())
+    }
+
     async fn store_session(
         &self,
         session: UnifiedExecSession,
@@ -231,6 +311,7 @@ impl UnifiedExecSessionManager {
             turn_ref: Arc::clone(&context.turn),
             call_id: context.call_id.clone(),
             command: command.to_string(),
+            stdin_events: Vec::new(),
             cwd,
             started_at,
         };
@@ -258,7 +339,8 @@ impl UnifiedExecSessionManager {
             &entry.call_id,
             None,
         );
-        let emitter = ToolEmitter::unified_exec(entry.command, entry.cwd, true);
+        let emitter =
+            ToolEmitter::unified_exec(entry.command.clone(), vec![entry.command], entry.cwd, true);
         emitter
             .emit(event_ctx, ToolEventStage::Success(output))
             .await;
@@ -286,7 +368,7 @@ impl UnifiedExecSessionManager {
             &context.call_id,
             None,
         );
-        let emitter = ToolEmitter::unified_exec(command, cwd, true);
+        let emitter = ToolEmitter::unified_exec(command.clone(), vec![command], cwd, true);
         emitter
             .emit(event_ctx, ToolEventStage::Success(output))
             .await;
@@ -399,4 +481,45 @@ enum SessionStatus {
         entry: Box<SessionEntry>,
     },
     Unknown,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn escape_stdin_for_log_escapes_control_chars() {
+        assert_eq!(escape_stdin_for_log("a\n\t\x1b"), "a\\n\\t\\u001b");
+    }
+
+    #[test]
+    fn render_stdin_events_keeps_order() {
+        let events = vec![
+            StdinEvent {
+                input: "first".to_string(),
+                output: "[no output]".to_string(),
+            },
+            StdinEvent {
+                input: "second".to_string(),
+                output: "out".to_string(),
+            },
+        ];
+
+        let rendered = render_stdin_events(&events);
+        assert_eq!(rendered, "first\n> [no output]\nsecond\n> out");
+    }
+
+    #[test]
+    fn transcript_is_truncated_after_merge() {
+        let rendered = render_stdin_events(&[StdinEvent {
+            input: "abcde".to_string(),
+            output: "output".to_string(),
+        }]);
+        let expected_prefix: String = rendered.chars().take(6).collect();
+        let (truncated, original_len) = truncate_output_to_tokens(&rendered, 6);
+
+        assert_eq!(truncated, expected_prefix);
+        assert_eq!(original_len, Some(rendered.chars().count()));
+    }
 }

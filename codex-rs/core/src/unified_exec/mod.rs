@@ -92,10 +92,25 @@ pub(crate) struct UnifiedExecResponse {
     pub original_token_count: Option<usize>,
 }
 
+pub(crate) fn build_shell_command(shell: &str, login: bool, command: &str) -> Vec<String> {
+    let shell_flag = if login { "-lc" } else { "-c" };
+    vec![
+        shell.to_string(),
+        shell_flag.to_string(),
+        command.to_string(),
+    ]
+}
+
 #[derive(Default)]
 pub(crate) struct UnifiedExecSessionManager {
     next_session_id: AtomicI32,
     sessions: Mutex<HashMap<i32, SessionEntry>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct StdinEvent {
+    pub input: String,
+    pub output: String,
 }
 
 struct SessionEntry {
@@ -104,6 +119,7 @@ struct SessionEntry {
     turn_ref: Arc<TurnContext>,
     call_id: String,
     command: String,
+    stdin_events: Vec<StdinEvent>,
     cwd: PathBuf,
     started_at: tokio::time::Instant,
 }
