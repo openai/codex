@@ -1,12 +1,10 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use codex_app_server_protocol::AuthMode;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use futures::TryStreamExt;
-use reqwest::StatusCode;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::debug;
@@ -14,8 +12,6 @@ use tracing::trace;
 
 use crate::api::PayloadClient;
 use crate::auth::AuthProvider;
-use crate::common::backoff;
-use crate::decode::responses::ErrorResponse;
 use crate::error::Error;
 use crate::error::Result;
 use crate::stream::ResponseEvent;
@@ -44,7 +40,6 @@ pub struct ResponsesApiClientConfig {
 pub struct ResponsesApiClient {
     config: ResponsesApiClientConfig,
 }
-
 
 #[async_trait]
 impl PayloadClient for ResponsesApiClient {
@@ -145,4 +140,3 @@ impl PayloadClient for ResponsesApiClient {
         Ok(crate::stream::EventStream::from_receiver(rx_event))
     }
 }
-

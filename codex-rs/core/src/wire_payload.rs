@@ -108,11 +108,11 @@ fn attach_item_ids_array(json_array: &mut [Value], prompt_input: &[ResponseItem]
 }
 
 pub fn build_chat_payload(prompt: &Prompt, model: &str, instructions: String) -> Value {
+    use crate::tools::spec::create_tools_json_for_chat_completions_api;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_protocol::models::ReasoningItemContent;
     use std::collections::HashMap;
-    use crate::tools::spec::create_tools_json_for_chat_completions_api;
 
     let mut messages = Vec::<Value>::new();
     messages.push(json!({ "role": "system", "content": instructions }));
@@ -153,7 +153,11 @@ pub fn build_chat_payload(prompt: &Prompt, model: &str, instructions: String) ->
                 continue;
             }
 
-            if let ResponseItem::Reasoning { content: Some(items), .. } = item {
+            if let ResponseItem::Reasoning {
+                content: Some(items),
+                ..
+            } = item
+            {
                 let mut text = String::new();
                 for entry in items {
                     match entry {
@@ -210,7 +214,8 @@ pub fn build_chat_payload(prompt: &Prompt, model: &str, instructions: String) ->
 
                 for c in content {
                     match c {
-                        ContentItem::InputText { text: t } | ContentItem::OutputText { text: t } => {
+                        ContentItem::InputText { text: t }
+                        | ContentItem::OutputText { text: t } => {
                             text.push_str(t);
                             items.push(json!({"type":"text","text": t}));
                         }
@@ -246,7 +251,12 @@ pub fn build_chat_payload(prompt: &Prompt, model: &str, instructions: String) ->
                 }
                 messages.push(message);
             }
-            ResponseItem::FunctionCall { name, arguments, call_id, .. } => {
+            ResponseItem::FunctionCall {
+                name,
+                arguments,
+                call_id,
+                ..
+            } => {
                 messages.push(json!({
                     "role": "assistant",
                     "tool_calls": [{
@@ -261,17 +271,28 @@ pub fn build_chat_payload(prompt: &Prompt, model: &str, instructions: String) ->
                     let mapped: Vec<Value> = items
                         .iter()
                         .map(|item| match item {
-                            FunctionCallOutputContentItem::InputText { text } => json!({"type":"text","text": text}),
-                            FunctionCallOutputContentItem::InputImage { image_url } => json!({"type":"image_url","image_url": {"url": image_url}}),
+                            FunctionCallOutputContentItem::InputText { text } => {
+                                json!({"type":"text","text": text})
+                            }
+                            FunctionCallOutputContentItem::InputImage { image_url } => {
+                                json!({"type":"image_url","image_url": {"url": image_url}})
+                            }
                         })
                         .collect();
                     json!(mapped)
                 } else {
                     json!(output.content)
                 };
-                messages.push(json!({ "role": "tool", "tool_call_id": call_id, "content": content_value }));
+                messages.push(
+                    json!({ "role": "tool", "tool_call_id": call_id, "content": content_value }),
+                );
             }
-            ResponseItem::LocalShellCall { id, call_id, action, .. } => {
+            ResponseItem::LocalShellCall {
+                id,
+                call_id,
+                action,
+                ..
+            } => {
                 let tool_id = call_id
                     .clone()
                     .filter(|value| !value.is_empty())
@@ -289,7 +310,12 @@ pub fn build_chat_payload(prompt: &Prompt, model: &str, instructions: String) ->
                     }],
                 }));
             }
-            ResponseItem::CustomToolCall { call_id, name, input, .. } => {
+            ResponseItem::CustomToolCall {
+                call_id,
+                name,
+                input,
+                ..
+            } => {
                 messages.push(json!({
                     "role": "assistant",
                     "tool_calls": [{
@@ -300,9 +326,13 @@ pub fn build_chat_payload(prompt: &Prompt, model: &str, instructions: String) ->
                 }));
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
-                messages.push(json!({ "role": "tool", "tool_call_id": call_id, "content": output }));
+                messages
+                    .push(json!({ "role": "tool", "tool_call_id": call_id, "content": output }));
             }
-            ResponseItem::WebSearchCall { .. } | ResponseItem::Reasoning { .. } | ResponseItem::Other | ResponseItem::GhostSnapshot { .. } => {}
+            ResponseItem::WebSearchCall { .. }
+            | ResponseItem::Reasoning { .. }
+            | ResponseItem::Other
+            | ResponseItem::GhostSnapshot { .. } => {}
         }
     }
 

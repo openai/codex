@@ -81,3 +81,43 @@ impl<T> Stream for EventStream<T> {
 }
 
 pub type ResponseStream = EventStream<Result<ResponseEvent>>;
+
+#[derive(Debug, Clone)]
+pub struct WireTokenUsage {
+    pub input_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_output_tokens: i64,
+    pub total_tokens: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct WireRateLimitWindow {
+    pub used_percent: Option<f64>,
+    pub window_minutes: Option<i64>,
+    pub resets_at: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WireRateLimitSnapshot {
+    pub primary: Option<WireRateLimitWindow>,
+    pub secondary: Option<WireRateLimitWindow>,
+}
+
+#[derive(Debug)]
+pub enum WireEvent {
+    Created,
+    OutputItemDone(serde_json::Value),
+    OutputItemAdded(serde_json::Value),
+    Completed {
+        response_id: String,
+        token_usage: Option<WireTokenUsage>,
+    },
+    OutputTextDelta(String),
+    ReasoningSummaryDelta(String),
+    ReasoningContentDelta(String),
+    ReasoningSummaryPartAdded,
+    RateLimits(WireRateLimitSnapshot),
+}
+
+pub type WireResponseStream = EventStream<Result<WireEvent>>;

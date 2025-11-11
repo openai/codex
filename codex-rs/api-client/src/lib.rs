@@ -30,6 +30,8 @@ pub use crate::stream::ResponseStream;
 pub use crate::stream::TextControls;
 pub use crate::stream::TextFormat;
 pub use crate::stream::TextFormatType;
+pub use crate::stream::WireEvent;
+pub use crate::stream::WireResponseStream;
 pub use codex_provider_config::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 pub use codex_provider_config::ModelProviderInfo;
 pub use codex_provider_config::WireApi;

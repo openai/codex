@@ -9,6 +9,7 @@ use codex_api_client::Result as ApiClientResult;
 use codex_api_client::RoutedApiClient;
 use codex_api_client::RoutedApiClientConfig;
 use codex_api_client::WireApi;
+use codex_api_client::stream::WireRateLimitWindow;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
@@ -42,8 +43,6 @@ use crate::model_family::ModelFamily;
 use crate::openai_model_info::get_model_info;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
-use crate::tools::spec::create_tools_json_for_chat_completions_api;
-use crate::tools::spec::create_tools_json_for_responses_api;
 
 #[derive(Clone)]
 pub struct ModelClient {
@@ -153,7 +152,9 @@ impl ModelClient {
                 text_controls,
                 instructions,
             ),
-            WireApi::Chat => crate::wire_payload::build_chat_payload(prompt, &self.config.model, instructions),
+            WireApi::Chat => {
+                crate::wire_payload::build_chat_payload(prompt, &self.config.model, instructions)
+            }
         };
 
         let client = self
@@ -163,10 +164,10 @@ impl ModelClient {
             .map_err(map_api_error)?;
 
         let api_stream = client
-            .stream_payload(&payload_json)
+            .stream_payload_wire(&payload_json)
             .await
             .map_err(map_api_error)?;
-        Ok(wrap_stream(api_stream))
+        Ok(wrap_wire_stream(api_stream))
     }
 
     async fn build_api_client(&self) -> ApiClientResult<RoutedApiClient> {
@@ -263,13 +264,13 @@ impl AuthProvider for AuthManagerProvider {
     }
 }
 
-fn wrap_stream(stream: codex_api_client::ResponseStream) -> ResponseStream {
+fn wrap_wire_stream(stream: codex_api_client::WireResponseStream) -> ResponseStream {
     let (tx, rx) = mpsc::channel::<Result<ResponseEvent>>(1600);
 
     tokio::spawn(async move {
         let mut stream = stream;
         while let Some(item) = stream.next().await {
-            let mapped = item.map_err(map_api_error);
+            let mapped = item.map(|ev| map_wire_event(ev)).map_err(map_api_error);
             if tx.send(mapped).await.is_err() {
                 break;
             }
@@ -277,6 +278,63 @@ fn wrap_stream(stream: codex_api_client::ResponseStream) -> ResponseStream {
     });
 
     codex_api_client::EventStream::from_receiver(rx)
+}
+
+fn map_wire_event(ev: codex_api_client::WireEvent) -> ResponseEvent {
+    match ev {
+        codex_api_client::WireEvent::Created => ResponseEvent::Created,
+        codex_api_client::WireEvent::OutputTextDelta(s) => ResponseEvent::OutputTextDelta(s),
+        codex_api_client::WireEvent::ReasoningSummaryDelta(s) => {
+            ResponseEvent::ReasoningSummaryDelta(s)
+        }
+        codex_api_client::WireEvent::ReasoningContentDelta(s) => {
+            ResponseEvent::ReasoningContentDelta(s)
+        }
+        codex_api_client::WireEvent::ReasoningSummaryPartAdded => {
+            ResponseEvent::ReasoningSummaryPartAdded
+        }
+        codex_api_client::WireEvent::RateLimits(w) => {
+            use codex_protocol::protocol::RateLimitSnapshot;
+            use codex_protocol::protocol::RateLimitWindow;
+            let to_win = |ow: Option<WireRateLimitWindow>| -> Option<RateLimitWindow> {
+                ow.map(|w| RateLimitWindow {
+                    used_percent: w.used_percent.unwrap_or(0.0),
+                    window_minutes: w.window_minutes,
+                    resets_at: w.resets_at,
+                })
+            };
+            ResponseEvent::RateLimits(RateLimitSnapshot {
+                primary: to_win(w.primary),
+                secondary: to_win(w.secondary),
+            })
+        }
+        codex_api_client::WireEvent::Completed {
+            response_id,
+            token_usage,
+        } => {
+            let mapped = token_usage.map(|u| codex_protocol::protocol::TokenUsage {
+                input_tokens: u.input_tokens,
+                cached_input_tokens: u.cached_input_tokens,
+                output_tokens: u.output_tokens,
+                reasoning_output_tokens: u.reasoning_output_tokens,
+                total_tokens: u.total_tokens,
+            });
+            ResponseEvent::Completed {
+                response_id,
+                token_usage: mapped,
+            }
+        }
+        codex_api_client::WireEvent::OutputItemAdded(v) => {
+            let item = serde_json::from_value::<codex_protocol::models::ResponseItem>(v)
+                .unwrap_or(codex_protocol::models::ResponseItem::Other);
+            ResponseEvent::OutputItemAdded(item)
+        }
+        codex_api_client::WireEvent::OutputItemDone(v) => {
+            let item = serde_json::from_value::<codex_protocol::models::ResponseItem>(v)
+                .unwrap_or(codex_protocol::models::ResponseItem::Other);
+            ResponseEvent::OutputItemDone(item)
+        }
+    }
 }
 
 fn map_api_error(err: codex_api_client::Error) -> CodexErr {

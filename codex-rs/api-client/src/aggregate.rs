@@ -106,9 +106,7 @@ where
                             }
                         }
                     } else {
-                        return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(
-                            item,
-                        ))));
+                        return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item))));
                     }
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(item)))) => {
@@ -116,9 +114,7 @@ where
                         &item,
                         ResponseItem::Message { role, .. } if role == "assistant"
                     ) {
-                        return Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(
-                            item,
-                        ))));
+                        return Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(item))));
                     }
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta(delta)))) => {

@@ -34,9 +34,7 @@ pub struct ErrorBody {
     pub resets_at: Option<i64>,
 }
 
-pub fn is_quota_exceeded_error(error: &ErrorBody) -> bool {
-    error.code.as_deref() == Some("quota_exceeded")
-}
+// legacy helper removed; decoupled error handling in core
 
 #[derive(Debug, Deserialize)]
 pub struct StreamEvent {

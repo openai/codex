@@ -1,4 +1,3 @@
-
 use async_trait::async_trait;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::protocol::SessionSource;
