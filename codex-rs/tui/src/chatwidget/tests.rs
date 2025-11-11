@@ -18,11 +18,13 @@ use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
@@ -641,7 +643,7 @@ fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
             command,
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             parsed_cmd,
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
         }),
     });
 }
@@ -1712,7 +1714,7 @@ async fn binary_size_transcript_snapshot() {
                                     command: e.command,
                                     cwd: e.cwd,
                                     parsed_cmd,
-                                    is_user_shell_command: false,
+                                    source: ExecCommandSource::Agent,
                                 }),
                             }
                         }
@@ -2130,6 +2132,22 @@ fn status_widget_active_snapshot() {
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw status widget");
     assert_snapshot!("status_widget_active", terminal.backend());
+}
+
+#[test]
+fn background_event_updates_status_header() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "bg-1".into(),
+        msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+            message: "Waiting for `vim`".to_string(),
+        }),
+    });
+
+    assert!(chat.bottom_pane.status_indicator_visible());
+    assert_eq!(chat.current_status_header, "Waiting for `vim`");
+    assert!(drain_insert_history(&mut rx).is_empty());
 }
 
 #[test]
@@ -2783,7 +2801,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
                     path: "diff_render.rs".into(),
                 },
             ],
-            is_user_shell_command: false,
+            source: ExecCommandSource::Agent,
         }),
     });
     chat.handle_codex_event(Event {

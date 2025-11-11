@@ -23,6 +23,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
@@ -128,7 +129,8 @@ const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
-    is_user_shell_command: bool,
+    source: ExecCommandSource,
+    suppress_render: bool,
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
@@ -723,6 +725,9 @@ impl ChatWidget {
 
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
+        self.bottom_pane.ensure_status_indicator();
+        self.bottom_pane.set_interrupt_hint_visible(true);
+        self.set_status_header(message);
     }
 
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
@@ -832,10 +837,20 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
-        let (command, parsed, is_user_shell_command) = match running {
-            Some(rc) => (rc.command, rc.parsed_cmd, rc.is_user_shell_command),
-            None => (vec![ev.call_id.clone()], Vec::new(), false),
+        let (command, parsed, source, suppress_render) = match running {
+            Some(rc) => (rc.command, rc.parsed_cmd, rc.source, rc.suppress_render),
+            None => (
+                vec![ev.call_id.clone()],
+                Vec::new(),
+                ExecCommandSource::Agent,
+                false,
+            ),
         };
+        if suppress_render {
+            return;
+        }
+        let is_unified_exec_interaction =
+            matches!(source, ExecCommandSource::UnifiedExecInteraction);
 
         let needs_new = self
             .active_cell
@@ -848,7 +863,7 @@ impl ChatWidget {
                 ev.call_id.clone(),
                 command,
                 parsed,
-                is_user_shell_command,
+                source,
             )));
         }
 
@@ -857,15 +872,20 @@ impl ChatWidget {
             .as_mut()
             .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
         {
-            cell.complete_call(
-                &ev.call_id,
+            let output = if is_unified_exec_interaction {
+                CommandOutput {
+                    exit_code: ev.exit_code,
+                    formatted_output: String::new(),
+                    aggregated_output: String::new(),
+                }
+            } else {
                 CommandOutput {
                     exit_code: ev.exit_code,
                     formatted_output: ev.formatted_output.clone(),
                     aggregated_output: ev.aggregated_output.clone(),
-                },
-                ev.duration,
-            );
+                }
+            };
+            cell.complete_call(&ev.call_id, output, ev.duration);
             if cell.should_flush() {
                 self.flush_active_cell();
             }
@@ -922,14 +942,19 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
         // Ensure the status indicator is visible while the command runs.
+        let suppress_render = matches!(ev.source, ExecCommandSource::UnifiedExecStartup);
         self.running_commands.insert(
             ev.call_id.clone(),
             RunningCommand {
                 command: ev.command.clone(),
                 parsed_cmd: ev.parsed_cmd.clone(),
-                is_user_shell_command: ev.is_user_shell_command,
+                source: ev.source,
+                suppress_render,
             },
         );
+        if suppress_render {
+            return;
+        }
         if let Some(cell) = self
             .active_cell
             .as_mut()
@@ -938,7 +963,7 @@ impl ChatWidget {
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd.clone(),
-                ev.is_user_shell_command,
+                ev.source,
             )
         {
             *cell = new_exec;
@@ -949,7 +974,7 @@ impl ChatWidget {
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd,
-                ev.is_user_shell_command,
+                ev.source,
             )));
         }
 

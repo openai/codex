@@ -8,6 +8,7 @@ use crate::parse_command::parse_command;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
+use crate::protocol::ExecCommandSource;
 use crate::protocol::FileChange;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
@@ -60,7 +61,7 @@ pub(crate) async fn emit_exec_command_begin(
     ctx: ToolEventCtx<'_>,
     command: &[String],
     cwd: &Path,
-    is_user_shell_command: bool,
+    source: ExecCommandSource,
 ) {
     ctx.session
         .send_event(
@@ -70,7 +71,7 @@ pub(crate) async fn emit_exec_command_begin(
                 command: command.to_vec(),
                 cwd: cwd.to_path_buf(),
                 parsed_cmd: parse_command(command),
-                is_user_shell_command,
+                source,
             }),
         )
         .await;
@@ -80,7 +81,7 @@ pub(crate) enum ToolEmitter {
     Shell {
         command: Vec<String>,
         cwd: PathBuf,
-        is_user_shell_command: bool,
+        source: ExecCommandSource,
     },
     ApplyPatch {
         changes: HashMap<PathBuf, FileChange>,
@@ -89,18 +90,16 @@ pub(crate) enum ToolEmitter {
     UnifiedExec {
         command: String,
         cwd: PathBuf,
-        // True for `exec_command` and false for `write_stdin`.
-        #[allow(dead_code)]
-        is_startup_command: bool,
+        source: ExecCommandSource,
     },
 }
 
 impl ToolEmitter {
-    pub fn shell(command: Vec<String>, cwd: PathBuf, is_user_shell_command: bool) -> Self {
+    pub fn shell(command: Vec<String>, cwd: PathBuf, source: ExecCommandSource) -> Self {
         Self::Shell {
             command,
             cwd,
-            is_user_shell_command,
+            source,
         }
     }
 
@@ -111,11 +110,11 @@ impl ToolEmitter {
         }
     }
 
-    pub fn unified_exec(command: String, cwd: PathBuf, is_startup_command: bool) -> Self {
+    pub fn unified_exec(command: String, cwd: PathBuf, source: ExecCommandSource) -> Self {
         Self::UnifiedExec {
             command,
             cwd,
-            is_startup_command,
+            source,
         }
     }
 
@@ -125,11 +124,11 @@ impl ToolEmitter {
                 Self::Shell {
                     command,
                     cwd,
-                    is_user_shell_command,
+                    source,
                 },
                 ToolEventStage::Begin,
             ) => {
-                emit_exec_command_begin(ctx, command, cwd.as_path(), *is_user_shell_command).await;
+                emit_exec_command_begin(ctx, command, cwd.as_path(), *source).await;
             }
             (Self::Shell { .. }, ToolEventStage::Success(output)) => {
                 emit_exec_end(
@@ -217,8 +216,15 @@ impl ToolEmitter {
             ) => {
                 emit_patch_end(ctx, String::new(), (*message).to_string(), false).await;
             }
-            (Self::UnifiedExec { command, cwd, .. }, ToolEventStage::Begin) => {
-                emit_exec_command_begin(ctx, &[command.to_string()], cwd.as_path(), false).await;
+            (
+                Self::UnifiedExec {
+                    command,
+                    cwd,
+                    source,
+                },
+                ToolEventStage::Begin,
+            ) => {
+                emit_exec_command_begin(ctx, &[command.to_string()], cwd.as_path(), *source).await;
             }
             (Self::UnifiedExec { .. }, ToolEventStage::Success(output)) => {
                 emit_exec_end(

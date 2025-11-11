@@ -6,12 +6,18 @@ use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
+use crate::codex::Session;
+use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::StreamOutput;
 use crate::exec_env::create_env;
+use crate::protocol::BackgroundEventEvent;
+use crate::protocol::EventMsg;
+use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecEnv;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
+use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
@@ -32,6 +38,8 @@ use super::resolve_max_tokens;
 use super::session::OutputBuffer;
 use super::session::UnifiedExecSession;
 use super::truncate_output_to_tokens;
+
+const MAX_INTERACTION_PREVIEW_CHARS: usize = 80;
 
 impl UnifiedExecSessionManager {
     pub(crate) async fn exec_command(
@@ -92,7 +100,12 @@ impl UnifiedExecSessionManager {
             session_id,
             exit_code,
             original_token_count,
+            session_command: Some(request.command.to_string()),
         };
+
+        if response.session_id.is_some() {
+            Self::emit_waiting_status(&context.session, &context.turn, request.command).await;
+        }
 
         // If the command completed during this call, emit an ExecCommandEnd via the emitter.
         if response.session_id.is_none() {
@@ -117,11 +130,46 @@ impl UnifiedExecSessionManager {
     ) -> Result<UnifiedExecResponse, UnifiedExecError> {
         let session_id = request.session_id;
 
-        let (writer_tx, output_buffer, output_notify) =
-            self.prepare_session_handles(session_id).await?;
+        let (
+            writer_tx,
+            output_buffer,
+            output_notify,
+            session_ref,
+            turn_ref,
+            session_command,
+            session_cwd,
+        ) = self.prepare_session_handles(session_id).await?;
+
+        let interaction_command = Self::format_interaction_command(&session_command, request.input);
+        let interaction_emitter = ToolEmitter::unified_exec(
+            interaction_command,
+            session_cwd.clone(),
+            ExecCommandSource::UnifiedExecInteraction,
+        );
+        let make_event_ctx = || {
+            ToolEventCtx::new(
+                session_ref.as_ref(),
+                turn_ref.as_ref(),
+                request.call_id,
+                None,
+            )
+        };
+        interaction_emitter
+            .emit(make_event_ctx(), ToolEventStage::Begin)
+            .await;
 
         if !request.input.is_empty() {
-            Self::send_input(&writer_tx, request.input.as_bytes()).await?;
+            if let Err(err) = Self::send_input(&writer_tx, request.input.as_bytes()).await {
+                interaction_emitter
+                    .emit(
+                        make_event_ctx(),
+                        ToolEventStage::Failure(ToolEventFailure::Message(format!(
+                            "write_stdin failed: {err:?}"
+                        ))),
+                    )
+                    .await;
+                return Err(err);
+            }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
@@ -159,7 +207,27 @@ impl UnifiedExecSessionManager {
             session_id,
             exit_code,
             original_token_count,
+            session_command: Some(session_command.clone()),
         };
+
+        let interaction_output = ExecToolCallOutput {
+            exit_code: response.exit_code.unwrap_or(0),
+            stdout: StreamOutput::new(response.output.clone()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new(response.output.clone()),
+            duration: response.wall_time,
+            timed_out: false,
+        };
+        interaction_emitter
+            .emit(
+                make_event_ctx(),
+                ToolEventStage::Success(interaction_output),
+            )
+            .await;
+
+        if response.session_id.is_some() {
+            Self::emit_waiting_status(&session_ref, &turn_ref, &session_command).await;
+        }
 
         if let (Some(exit), Some(entry)) = (response.exit_code, completion_entry) {
             let total_duration = Instant::now().saturating_duration_since(entry.started_at);
@@ -197,17 +265,44 @@ impl UnifiedExecSessionManager {
     async fn prepare_session_handles(
         &self,
         session_id: i32,
-    ) -> Result<(mpsc::Sender<Vec<u8>>, OutputBuffer, Arc<Notify>), UnifiedExecError> {
+    ) -> Result<
+        (
+            mpsc::Sender<Vec<u8>>,
+            OutputBuffer,
+            Arc<Notify>,
+            Arc<Session>,
+            Arc<TurnContext>,
+            String,
+            PathBuf,
+        ),
+        UnifiedExecError,
+    > {
         let sessions = self.sessions.lock().await;
-        let (output_buffer, output_notify, writer_tx) =
+        let (output_buffer, output_notify, writer_tx, session, turn, command, cwd) =
             if let Some(entry) = sessions.get(&session_id) {
                 let (buffer, notify) = entry.session.output_handles();
-                (buffer, notify, entry.session.writer_sender())
+                (
+                    buffer,
+                    notify,
+                    entry.session.writer_sender(),
+                    Arc::clone(&entry.session_ref),
+                    Arc::clone(&entry.turn_ref),
+                    entry.command.clone(),
+                    entry.cwd.clone(),
+                )
             } else {
                 return Err(UnifiedExecError::UnknownSessionId { session_id });
             };
 
-        Ok((writer_tx, output_buffer, output_notify))
+        Ok((
+            writer_tx,
+            output_buffer,
+            output_notify,
+            session,
+            turn,
+            command,
+            cwd,
+        ))
     }
 
     async fn send_input(
@@ -264,7 +359,11 @@ impl UnifiedExecSessionManager {
             &entry.call_id,
             None,
         );
-        let emitter = ToolEmitter::unified_exec(entry.command, entry.cwd, true);
+        let emitter = ToolEmitter::unified_exec(
+            entry.command,
+            entry.cwd,
+            ExecCommandSource::UnifiedExecStartup,
+        );
         emitter
             .emit(event_ctx, ToolEventStage::Success(output))
             .await;
@@ -292,10 +391,41 @@ impl UnifiedExecSessionManager {
             &context.call_id,
             None,
         );
-        let emitter = ToolEmitter::unified_exec(command, cwd, true);
+        let emitter =
+            ToolEmitter::unified_exec(command, cwd, ExecCommandSource::UnifiedExecStartup);
         emitter
             .emit(event_ctx, ToolEventStage::Success(output))
             .await;
+    }
+
+    async fn emit_waiting_status(session: &Arc<Session>, turn: &Arc<TurnContext>, command: &str) {
+        let message = format!("Waiting for `{command}`");
+        session
+            .send_event(
+                turn.as_ref(),
+                EventMsg::BackgroundEvent(BackgroundEventEvent { message }),
+            )
+            .await;
+    }
+
+    fn format_interaction_command(command: &str, input: &str) -> String {
+        let preview = Self::summarize_interaction_input(input);
+        format!("Interacted with `{command}`, sent `{preview}`")
+    }
+
+    fn summarize_interaction_input(input: &str) -> String {
+        let single_line = input.replace('\n', "\\n");
+        let sanitized = single_line.replace('`', "\\`");
+        if sanitized.chars().count() <= MAX_INTERACTION_PREVIEW_CHARS {
+            return sanitized;
+        }
+
+        let mut preview = String::new();
+        for ch in sanitized.chars().take(MAX_INTERACTION_PREVIEW_CHARS) {
+            preview.push(ch);
+        }
+        preview.push_str("...");
+        preview
     }
 
     pub(crate) async fn open_session_with_exec_env(

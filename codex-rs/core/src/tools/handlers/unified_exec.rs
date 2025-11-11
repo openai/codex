@@ -6,6 +6,7 @@ use serde::Deserialize;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
+use crate::protocol::ExecCommandSource;
 use crate::protocol::ExecOutputStream;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -139,7 +140,11 @@ impl ToolHandler for UnifiedExecHandler {
                     &context.call_id,
                     None,
                 );
-                let emitter = ToolEmitter::unified_exec(cmd.clone(), cwd.clone(), true);
+                let emitter = ToolEmitter::unified_exec(
+                    cmd.clone(),
+                    cwd.clone(),
+                    ExecCommandSource::UnifiedExecStartup,
+                );
                 emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
                 manager
@@ -169,6 +174,7 @@ impl ToolHandler for UnifiedExecHandler {
                 })?;
                 manager
                     .write_stdin(WriteStdinRequest {
+                        call_id: &call_id,
                         session_id: args.session_id,
                         input: &args.chars,
                         yield_time_ms: args.yield_time_ms,

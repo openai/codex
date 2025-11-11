@@ -2,6 +2,7 @@ use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExecOutputStream;
 use codex_core::protocol::Op;
 use codex_core::protocol::TurnAbortReason;
@@ -138,7 +139,7 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
         _ => None,
     })
     .await;
-    assert!(begin_event.is_user_shell_command);
+    assert_eq!(begin_event.source, ExecCommandSource::UserShell);
     let matches_last_arg = begin_event.command.last() == Some(&command);
     let matches_split = shlex::split(&command).is_some_and(|split| split == begin_event.command);
     assert!(
