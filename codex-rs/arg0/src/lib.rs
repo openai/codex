@@ -51,10 +51,6 @@ pub fn arg0_dispatch() -> Option<TempDir> {
     // before creating any threads/the Tokio runtime.
     load_dotenv();
 
-    // Retain the TempDir so it exists for the lifetime of the invocation of
-    // this executable. Admittedly, we could invoke `keep()` on it, but it
-    // would be nice to avoid leaving temporary directories behind, if possible.
-
     match prepend_path_entry_for_codex_aliases() {
         Ok(path_entry) => Some(path_entry),
         Err(err) => {
@@ -92,6 +88,9 @@ where
     F: FnOnce(Option<PathBuf>) -> Fut,
     Fut: Future<Output = anyhow::Result<()>>,
 {
+    // Retain the TempDir so it exists for the lifetime of the invocation of
+    // this executable. Admittedly, we could invoke `keep()` on it, but it
+    // would be nice to avoid leaving temporary directories behind, if possible.
     let _path_entry = arg0_dispatch();
 
     // Regular invocation – create a Tokio runtime and execute the provided
