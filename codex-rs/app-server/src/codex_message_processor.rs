@@ -1285,6 +1285,7 @@ impl CodexMessageProcessor {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_thread_config_overrides(
         &self,
         model: Option<String>,
@@ -1394,6 +1395,7 @@ impl CodexMessageProcessor {
         let ThreadResumeParams {
             thread_id,
             history,
+            path,
             model,
             model_provider,
             cwd,
@@ -1403,19 +1405,6 @@ impl CodexMessageProcessor {
             base_instructions,
             developer_instructions,
         } = params;
-
-        let existing_conversation_id = match ConversationId::from_string(&thread_id) {
-            Ok(id) => id,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("invalid thread id: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
 
         let overrides_requested = model.is_some()
             || model_provider.is_some()
@@ -1462,7 +1451,32 @@ impl CodexMessageProcessor {
                 return;
             }
             InitialHistory::Forked(history.into_iter().map(RolloutItem::ResponseItem).collect())
+        } else if let Some(path) = path {
+            match RolloutRecorder::get_rollout_history(&path).await {
+                Ok(initial_history) => initial_history,
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to load rollout `{}`: {err}", path.display()),
+                    )
+                    .await;
+                    return;
+                }
+            }
         } else {
+            let existing_conversation_id = match ConversationId::from_string(&thread_id) {
+                Ok(id) => id,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid thread id: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
             let path = match find_conversation_path_by_id_str(
                 &self.config.codex_home,
                 &existing_conversation_id.to_string(),
@@ -2958,6 +2972,7 @@ fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
 fn summary_to_thread(summary: ConversationSummary) -> Thread {
     let ConversationSummary {
         conversation_id,
+        path,
         preview,
         timestamp,
         model_provider,
@@ -2971,6 +2986,7 @@ fn summary_to_thread(summary: ConversationSummary) -> Thread {
         preview,
         model_provider,
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
+        path,
     }
 }
 

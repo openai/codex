@@ -45,15 +45,7 @@ async fn thread_resume_emits_session_configured_notification() -> Result<()> {
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id.clone(),
-            history: None,
-            model: None,
-            model_provider: None,
-            cwd: None,
-            approval_policy: None,
-            sandbox: None,
-            config: None,
-            base_instructions: None,
-            developer_instructions: None,
+            ..Default::default()
         })
         .await?;
     let notification: JSONRPCNotification = timeout(
@@ -67,6 +59,61 @@ async fn thread_resume_emits_session_configured_notification() -> Result<()> {
     else {
         unreachable!("expected sessionConfigured notification");
     };
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread: resumed } =
+        to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(resumed, thread);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
+    let server = create_mock_chat_completions_server(vec![]).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5-codex".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let thread_path = thread.path.clone();
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: "not-a-valid-thread-id".to_string(),
+            path: Some(thread_path),
+            ..Default::default()
+        })
+        .await?;
+
+    let notification: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("sessionConfigured"),
+    )
+    .await??;
+    let session_configured: ServerNotification = notification.try_into()?;
+    let ServerNotification::SessionConfigured(SessionConfiguredNotification { .. }) =
+        session_configured
+    else {
+        unreachable!("expected sessionConfigured notification");
+    };
+
     let resume_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
@@ -117,12 +164,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
             history: Some(history),
             model: Some("mock-model".to_string()),
             model_provider: Some("mock_provider".to_string()),
-            cwd: None,
-            approval_policy: None,
-            sandbox: None,
-            config: None,
-            base_instructions: None,
-            developer_instructions: None,
+            ..Default::default()
         })
         .await?;
     let notification: JSONRPCNotification = timeout(

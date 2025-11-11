@@ -289,9 +289,18 @@ pub struct ThreadStartResponse {
     pub thread: Thread,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// There are three ways to resume a thread:
+/// 1. By thread_id: load the thread from disk by thread_id and resume it.
+/// 2. By history: instantiate the thread from memory and resume it.
+/// 3. By path: load the thread from disk by path and resume it.
+///
+/// The precedence is: history > path > thread_id.
+/// If using history or path, the thread_id param will be ignored.
+///
+/// Prefer using thread_id whenever possible.
 pub struct ThreadResumeParams {
     pub thread_id: String,
 
