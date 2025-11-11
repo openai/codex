@@ -72,7 +72,7 @@ pub(crate) struct ExecCommandRequest<'a> {
     pub max_output_tokens: Option<usize>,
     pub workdir: Option<PathBuf>,
     pub with_escalated_permissions: Option<bool>,
-    pub justification: Option<&'a str>,
+    pub justification: Option<String>,
 }
 
 #[derive(Debug)]

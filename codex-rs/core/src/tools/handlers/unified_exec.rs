@@ -122,7 +122,7 @@ impl ToolHandler for UnifiedExecHandler {
                     )
                 {
                     return Err(FunctionCallError::RespondToModel(format!(
-                        "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
+                        "approval policy is {policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {policy:?}",
                         policy = context.turn.approval_policy
                     )));
                 }
@@ -152,7 +152,7 @@ impl ToolHandler for UnifiedExecHandler {
                             max_output_tokens,
                             workdir,
                             with_escalated_permissions,
-                            justification: justification.as_deref(),
+                            justification,
                         },
                         &context,
                     )

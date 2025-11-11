@@ -55,7 +55,7 @@ impl UnifiedExecSessionManager {
                 command,
                 cwd.clone(),
                 request.with_escalated_permissions,
-                request.justification.map(str::to_string),
+                request.justification,
                 context,
             )
             .await?;

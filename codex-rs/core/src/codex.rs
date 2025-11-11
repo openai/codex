@@ -3098,7 +3098,7 @@ mod tests {
         };
 
         let expected = format!(
-            "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
+            "approval policy is {policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {policy:?}",
             policy = turn_context.approval_policy
         );
 
