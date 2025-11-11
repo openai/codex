@@ -114,7 +114,7 @@ fn parse_pattern_token<'v>(value: Value<'v>) -> Result<PatternToken> {
                     .map(str::to_string)
             })
             .collect::<Result<_>>()?;
-        
+
         match tokens.as_slice() {
             [] => Err(Error::InvalidPattern(
                 "pattern alternatives cannot be empty".to_string(),
