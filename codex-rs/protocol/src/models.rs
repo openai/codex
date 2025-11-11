@@ -307,6 +307,22 @@ pub struct ShellToolCallParams {
     pub justification: Option<String>,
 }
 
+/// If the `name` of a `ResponseItem::FunctionCall` is `shell_command`, the
+/// `arguments` field should deserialize to this struct.
+#[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+pub struct ShellCommandToolCallParams {
+    pub command: String,
+    pub workdir: Option<String>,
+
+    /// This is the maximum time in milliseconds that the command is allowed to run.
+    #[serde(alias = "timeout")]
+    pub timeout_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub with_escalated_permissions: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub justification: Option<String>,
+}
+
 /// Responses API compatible content items that can be returned by a tool call.
 /// This is a subset of ContentItem with the types we support as function call outputs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
