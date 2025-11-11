@@ -2929,10 +2929,97 @@ fn summary_to_thread(summary: ConversationSummary) -> Thread {
 mod tests {
     use super::*;
     use anyhow::Result;
+    use codex_protocol::items::AgentMessageItem;
+    use codex_protocol::items::ReasoningItem;
+    use codex_protocol::items::UserMessageItem;
+    use codex_protocol::items::WebSearchItem;
     use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::TempDir;
+
+    #[test]
+    fn to_v2_thread_item_converts_supported_variants() {
+        let user_item = TurnItem::UserMessage(UserMessageItem {
+            id: "user-1".to_string(),
+            content: vec![
+                CoreUserInput::Text {
+                    text: "hello".to_string(),
+                },
+                CoreUserInput::Image {
+                    image_url: "https://example.com/image.png".to_string(),
+                },
+                CoreUserInput::LocalImage {
+                    path: PathBuf::from("local/image.png"),
+                },
+            ],
+        });
+
+        assert_eq!(
+            to_v2_thread_item(&user_item),
+            ThreadItem::UserMessage {
+                id: "user-1".to_string(),
+                content: vec![
+                    V2UserInput::Text {
+                        text: "hello".to_string(),
+                    },
+                    V2UserInput::Image {
+                        url: "https://example.com/image.png".to_string(),
+                    },
+                    V2UserInput::LocalImage {
+                        path: PathBuf::from("local/image.png"),
+                    },
+                ],
+            }
+        );
+
+        let agent_item = TurnItem::AgentMessage(AgentMessageItem {
+            id: "agent-1".to_string(),
+            content: vec![
+                AgentMessageContent::Text {
+                    text: "Hello ".to_string(),
+                },
+                AgentMessageContent::Text {
+                    text: "world".to_string(),
+                },
+            ],
+        });
+
+        assert_eq!(
+            to_v2_thread_item(&agent_item),
+            ThreadItem::AgentMessage {
+                id: "agent-1".to_string(),
+                text: "Hello world".to_string(),
+            }
+        );
+
+        let reasoning_item = TurnItem::Reasoning(ReasoningItem {
+            id: "reasoning-1".to_string(),
+            summary_text: vec!["line one".to_string(), "line two".to_string()],
+            raw_content: vec![],
+        });
+
+        assert_eq!(
+            to_v2_thread_item(&reasoning_item),
+            ThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                text: "line one\nline two".to_string(),
+            }
+        );
+
+        let search_item = TurnItem::WebSearch(WebSearchItem {
+            id: "search-1".to_string(),
+            query: "docs".to_string(),
+        });
+
+        assert_eq!(
+            to_v2_thread_item(&search_item),
+            ThreadItem::WebSearch {
+                id: "search-1".to_string(),
+                query: "docs".to_string(),
+            }
+        );
+    }
 
     #[test]
     fn extract_conversation_summary_prefers_plain_user_messages() -> Result<()> {
