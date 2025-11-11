@@ -427,19 +427,29 @@ impl TryFrom<JSONRPCRequest> for ServerRequest {
 
 server_request_definitions! {
     /// NEW APIs
-    /// Sent when approval is requested for a specific item (e.g. file edit, command execution).
-    ItemRequestApproval => "item/requestApproval" {
-        params: v2::ItemRequestApprovalParams,
-        response: v2::ItemRequestApprovalResponse,
+    /// Sent when approval is requested for a specific command execution.
+    /// This request is used when calling turn/start instead of the legacy APIs (i.e. SendUserTurn, SendUserMessage).
+    CommandExecutionRequestApproval => "item/commandExecution/requestApproval" {
+        params: v2::CommandExecutionRequestApprovalParams,
+        response: v2::CommandExecutionRequestApprovalResponse,
+    },
+
+    /// Sent when approval is requested for a specific file change.
+    /// This request is used when calling turn/start instead of the legacy APIs (i.e. SendUserTurn, SendUserMessage).
+    FileChangeRequestApproval => "item/fileChange/requestApproval" {
+        params: v2::FileChangeRequestApprovalParams,
+        response: v2::FileChangeRequestApprovalResponse,
     },
 
     /// DEPRECATED APIs below
     /// Request to approve a patch.
+    /// This request is used only when calling the legacy APIs (i.e. SendUserTurn, SendUserMessage).
     ApplyPatchApproval {
         params: v1::ApplyPatchApprovalParams,
         response: v1::ApplyPatchApprovalResponse,
     },
     /// Request to exec a command.
+    /// This request is used only when calling the legacy APIs (i.e. SendUserTurn, SendUserMessage).
     ExecCommandApproval {
         params: v1::ExecCommandApprovalParams,
         response: v1::ExecCommandApprovalResponse,
