@@ -402,8 +402,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          x64_sha=$(sha256sum "dist/x86_64-pc-windows-msvc/codex-x86_64-pc-windows-msvc.exe" | awk '{print $1}')
-          arm_sha=$(sha256sum "dist/aarch64-pc-windows-msvc/codex-aarch64-pc-windows-msvc.exe" | awk '{print $1}')
+          x64_sha=$(sha256sum "dist/x86_64-pc-windows-msvc/codex-rs/dist/x86_64-pc-windows-msvc/codex-x86_64-pc-windows-msvc.exe" | awk '{print $1}')
+          arm_sha=$(sha256sum "dist/aarch64-pc-windows-msvc/codex-rs/dist/aarch64-pc-windows-msvc/codex-aarch64-pc-windows-msvc.exe" | awk '{print $1}')
           echo "x64_sha256=${x64_sha}" >> "$GITHUB_OUTPUT"
           echo "arm64_sha256=${arm_sha}" >> "$GITHUB_OUTPUT"
 
