@@ -2,6 +2,7 @@
 
 ## Overview
 - Policy engine and CLI built around `prefix_rule(pattern=[...], decision?, match?, not_match?, id?)`.
+- This release covers only the prefix-rule subset of the planned execpolicy v2 language; a richer language will follow.
 - Tokens are matched in order; any `pattern` element may be a list to denote alternatives. `decision` defaults to `allow`; valid values: `allow`, `prompt`, `forbidden`.
 - `match` / `not_match` supply example invocations that are validated at load time (think of them as unit tests). `id` is optional; auto-generated if omitted.
 - The CLI always prints the JSON serialization of the evaluation result (whether a match or not).
