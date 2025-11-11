@@ -5,7 +5,7 @@ use codex_execpolicy2::RuleMatch;
 use codex_execpolicy2::rule::PatternToken;
 
 fn tokens(cmd: &[&str]) -> Vec<String> {
-    cmd.iter().map(|token| token.to_string()).collect()
+    cmd.iter().map(std::string::ToString::to_string).collect()
 }
 
 #[test]
