@@ -107,22 +107,18 @@ fn parse_pattern_token<'v>(value: Value<'v>) -> Result<PatternToken> {
             })?;
             tokens.push(s.to_string());
         }
-        if tokens.is_empty() {
-            return Err(Error::InvalidPattern(
+        match tokens.as_slice() {
+            [] => Err(Error::InvalidPattern(
                 "pattern alternatives cannot be empty".to_string(),
-            ));
+            )),
+            [single] => Ok(PatternToken::Single(single.clone())),
+            _ => Ok(PatternToken::Alts(tokens)),
         }
-        if tokens.is_empty() {
-            Err(Error::InvalidPattern(...))
-        } else if tokens.len() == 1 {
-            Ok(PatternToken::Single(tokens.into_iter().next().unwrap()))
-        } else {
-            Ok(PatternToken::Alts(tokens))
-        })
+    } else {
+        Err(Error::InvalidPattern(
+            "pattern element must be a string or list of strings".to_string(),
+        ))
     }
-    Err(Error::InvalidPattern(
-        "pattern element must be a string or list of strings".to_string(),
-    ))
 }
 
 fn parse_examples<'v>(examples: UnpackList<Value<'v>>) -> Result<Vec<Vec<String>>> {
@@ -185,7 +181,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
 
         let (first_token, remaining_tokens) = pattern_tokens
             .split_first()
-            .expect("pattern validated as non-empty");
+            .ok_or_else(|| Error::InvalidPattern("pattern cannot be empty".to_string()))?;
 
         #[expect(clippy::unwrap_used)]
         let builder = eval
