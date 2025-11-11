@@ -12,6 +12,9 @@ path = "src/lib.rs"
 name = "codex-execpolicy2"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
