@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use shlex::try_join;
 
+/// Token that can match a single command argument or one of several alternatives.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PatternToken {
     Single(String),
@@ -27,6 +28,7 @@ impl PatternToken {
     }
 }
 
+/// Prefix matcher for commands with support for alternative match tokens.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PrefixPattern {
     pub first: String,
