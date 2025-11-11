@@ -6,7 +6,7 @@ use crate::auth::AuthContext;
 use crate::auth::AuthProvider;
 use crate::common::apply_subagent_header;
 use crate::error::Result;
-use crate::model_provider::ModelProviderInfo;
+use codex_provider_config::ModelProviderInfo;
 
 /// Build a request builder with provider/auth/session headers applied.
 pub async fn build_request(
@@ -16,7 +16,26 @@ pub async fn build_request(
     session_source: Option<&SessionSource>,
     extra_headers: &[(&str, String)],
 ) -> Result<reqwest::RequestBuilder> {
-    let mut builder = provider.create_request_builder(http_client, auth).await?;
+    let mut builder = provider
+        .create_request_builder(
+            http_client,
+            &auth.as_ref().map(|a| codex_provider_config::AuthContext {
+                mode: a.mode,
+                bearer_token: a.bearer_token.clone(),
+                account_id: a.account_id.clone(),
+            }),
+        )
+        .await
+        .map_err(|e| crate::error::Error::MissingEnvVar {
+            var: match e {
+                codex_provider_config::Error::MissingEnvVar { ref var, .. } => var.clone(),
+            },
+            instructions: match e {
+                codex_provider_config::Error::MissingEnvVar {
+                    ref instructions, ..
+                } => instructions.clone(),
+            },
+        })?;
     builder = apply_subagent_header(builder, session_source);
     for (name, value) in extra_headers {
         builder = builder.header(*name, value);

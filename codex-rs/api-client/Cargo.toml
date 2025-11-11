@@ -9,6 +9,7 @@ bytes = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { path = "../protocol" }
+codex-provider-config = { path = "../provider-config" }
 futures = { workspace = true, default-features = false, features = ["std"] }
 maplit = { workspace = true }
 regex-lite = { workspace = true }

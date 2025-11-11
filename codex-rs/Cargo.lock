@@ -839,6 +839,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-otel",
  "codex-protocol",
+ "codex-provider-config",
  "futures",
  "maplit",
  "regex-lite",
@@ -1096,6 +1097,7 @@ dependencies = [
  "codex-keyring-store",
  "codex-otel",
  "codex-protocol",
+ "codex-provider-config",
  "codex-rmcp-client",
  "codex-utils-pty",
  "codex-utils-readiness",
@@ -1388,6 +1390,17 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
+]
+
+[[package]]
+name = "codex-provider-config"
+version = "0.0.0"
+dependencies = [
+ "codex-app-server-protocol",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
 ]
 
 [[package]]

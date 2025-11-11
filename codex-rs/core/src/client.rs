@@ -119,28 +119,9 @@ impl ModelClient {
     }
 
     pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
-        let api_prompt = self.build_api_prompt(prompt)?;
-
-        let client = self
-            .api_client
-            .get_or_try_init(|| async { self.build_api_client().await })
-            .await
-            .map_err(map_api_error)?;
-
-        let api_stream = client.stream(&api_prompt).await.map_err(map_api_error)?;
-        Ok(wrap_stream(api_stream))
-    }
-
-    fn build_api_prompt(&self, prompt: &Prompt) -> Result<codex_api_client::Prompt> {
         let instructions = prompt
             .get_full_instructions(&self.config.model_family)
             .into_owned();
-        let input = prompt.get_formatted_input();
-
-        let tools = match self.provider.wire_api {
-            WireApi::Responses => create_tools_json_for_responses_api(&prompt.tools)?,
-            WireApi::Chat => create_tools_json_for_chat_completions_api(&prompt.tools)?,
-        };
 
         let reasoning = create_reasoning_param_for_request(
             &self.config.model_family,
@@ -160,20 +141,32 @@ impl ModelClient {
         } else {
             None
         };
-
         let text_controls = create_text_param_for_request(verbosity, &prompt.output_schema);
 
-        Ok(codex_api_client::Prompt {
-            instructions,
-            input,
-            tools,
-            parallel_tool_calls: prompt.parallel_tool_calls,
-            output_schema: prompt.output_schema.clone(),
-            reasoning,
-            text_controls,
-            prompt_cache_key: Some(self.conversation_id.to_string()),
-            session_source: Some(self.session_source.clone()),
-        })
+        let payload_json = match self.provider.wire_api {
+            WireApi::Responses => crate::wire_payload::build_responses_payload(
+                prompt,
+                &self.config.model,
+                self.conversation_id,
+                self.provider.is_azure_responses_endpoint(),
+                reasoning,
+                text_controls,
+                instructions,
+            ),
+            WireApi::Chat => crate::wire_payload::build_chat_payload(prompt, &self.config.model, instructions),
+        };
+
+        let client = self
+            .api_client
+            .get_or_try_init(|| async { self.build_api_client().await })
+            .await
+            .map_err(map_api_error)?;
+
+        let api_stream = client
+            .stream_payload(&payload_json)
+            .await
+            .map_err(map_api_error)?;
+        Ok(wrap_stream(api_stream))
     }
 
     async fn build_api_client(&self) -> ApiClientResult<RoutedApiClient> {

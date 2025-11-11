@@ -1,4 +1,3 @@
-use std::time::Duration;
 
 use async_trait::async_trait;
 use codex_otel::otel_event_manager::OtelEventManager;
@@ -6,15 +5,12 @@ use codex_protocol::protocol::SessionSource;
 use futures::TryStreamExt;
 use tokio::sync::mpsc;
 
-use crate::api::ApiClient;
-use crate::client::PayloadBuilder;
-use crate::common::backoff;
+use crate::api::PayloadClient;
 use crate::error::Error;
 use crate::error::Result;
-use crate::model_provider::ModelProviderInfo;
-use crate::prompt::Prompt;
 use crate::stream::ResponseEvent;
 use crate::stream::ResponseStream;
+use codex_provider_config::ModelProviderInfo;
 
 #[derive(Clone)]
 /// Configuration for the Chat Completions client (OpenAI-compatible `/v1/chat/completions`).
@@ -37,103 +33,66 @@ pub struct ChatCompletionsApiClient {
     config: ChatCompletionsApiClientConfig,
 }
 
+// prompt-based API removed; use PayloadClient::stream_payload instead
+
+// prompt-based API removed
+
 #[async_trait]
-impl ApiClient for ChatCompletionsApiClient {
+impl PayloadClient for ChatCompletionsApiClient {
     type Config = ChatCompletionsApiClientConfig;
 
     fn new(config: Self::Config) -> Result<Self> {
         Ok(Self { config })
     }
 
-    async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
-        Self::validate_prompt(prompt)?;
-
-        let payload = crate::payload::chat::ChatPayloadBuilder::new(self.config.model.clone())
-            .build(prompt)?;
-        let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
-
-        let mut attempt: i64 = 0;
-        let max_retries = self.config.provider.request_max_retries();
-
-        loop {
-            attempt += 1;
-
-            let req_builder = crate::client::http::build_request(
-                &self.config.http_client,
-                &self.config.provider,
-                &None,
-                Some(&self.config.session_source),
-                &[],
-            )
-            .await?;
-
-            let res = self
-                .config
-                .otel_event_manager
-                .log_request(attempt as u64, || {
-                    req_builder
-                        .header(reqwest::header::ACCEPT, "text/event-stream")
-                        .json(&payload)
-                        .send()
-                })
-                .await;
-
-            match res {
-                Ok(resp) if resp.status().is_success() => {
-                    let stream = resp
-                        .bytes_stream()
-                        .map_err(|err| Error::ResponseStreamFailed {
-                            source: err,
-                            request_id: None,
-                        });
-                    let idle_timeout = self.config.provider.stream_idle_timeout();
-                    let otel = self.config.otel_event_manager.clone();
-                    tokio::spawn(crate::client::sse::process_sse(
-                        stream,
-                        tx_event.clone(),
-                        idle_timeout,
-                        otel,
-                        crate::decode::chat::ChatSseDecoder::new(),
-                    ));
-
-                    return Ok(ResponseStream { rx_event });
-                }
-                Ok(resp) => {
-                    if attempt >= max_retries {
-                        let status = resp.status();
-                        let body = resp
-                            .text()
-                            .await
-                            .unwrap_or_else(|_| "<failed to read response>".to_string());
-                        return Err(Error::UnexpectedStatus { status, body });
-                    }
-
-                    let retry_after = resp
-                        .headers()
-                        .get(reqwest::header::RETRY_AFTER)
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|s| s.parse::<i64>().ok())
-                        .map(|secs| Duration::from_secs(if secs < 0 { 0 } else { secs as u64 }));
-                    tokio::time::sleep(retry_after.unwrap_or_else(|| backoff(attempt))).await;
-                }
-                Err(error) => {
-                    if attempt >= max_retries {
-                        return Err(Error::Http(error));
-                    }
-                    tokio::time::sleep(backoff(attempt)).await;
-                }
-            }
-        }
-    }
-}
-
-impl ChatCompletionsApiClient {
-    fn validate_prompt(prompt: &Prompt) -> Result<()> {
-        if prompt.output_schema.is_some() {
-            return Err(Error::UnsupportedOperation(
-                "output_schema is not supported for Chat Completions API".to_string(),
+    async fn stream_payload(
+        &self,
+        payload_json: &serde_json::Value,
+        session_source: Option<&codex_protocol::protocol::SessionSource>,
+    ) -> Result<ResponseStream> {
+        if self.config.provider.wire_api != codex_provider_config::WireApi::Chat {
+            return Err(crate::error::Error::UnsupportedOperation(
+                "ChatCompletionsApiClient requires a Chat provider".to_string(),
             ));
         }
-        Ok(())
+
+        let auth = crate::client::http::resolve_auth(&None).await;
+        let mut req_builder = crate::client::http::build_request(
+            &self.config.http_client,
+            &self.config.provider,
+            &auth,
+            session_source,
+            &[],
+        )
+        .await?;
+
+        req_builder = req_builder
+            .header(reqwest::header::ACCEPT, "text/event-stream")
+            .json(payload_json);
+
+        let res = self
+            .config
+            .otel_event_manager
+            .log_request(0, || req_builder.send())
+            .await?;
+
+        let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
+        let stream = res
+            .bytes_stream()
+            .map_err(|err| Error::ResponseStreamFailed {
+                source: err,
+                request_id: None,
+            });
+        let idle_timeout = self.config.provider.stream_idle_timeout();
+        let otel = self.config.otel_event_manager.clone();
+        tokio::spawn(crate::client::sse::process_sse(
+            stream,
+            tx_event,
+            idle_timeout,
+            otel,
+            crate::decode::chat::ChatSseDecoder::new(),
+        ));
+
+        Ok(crate::stream::EventStream::from_receiver(rx_event))
     }
 }

@@ -69,12 +69,12 @@ where
 
         loop {
             match Pin::new(&mut self.inner).poll_next(cx) {
-                std::task::Poll::Pending => return Poll::Pending,
-                std::task::Poll::Ready(None) => return std::task::Poll::Ready(None),
-                std::task::Poll::Ready(Some(Err(err))) => {
-                    return std::task::Poll::Ready(Some(Err(err)));
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(Some(Err(err))) => {
+                    return Poll::Ready(Some(Err(err)));
                 }
-                std::task::Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item)))) => {
+                Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item)))) => {
                     let is_assistant_message = matches!(
                         &item,
                         ResponseItem::Message { role, .. } if role == "assistant"
@@ -106,22 +106,22 @@ where
                             }
                         }
                     } else {
-                        return std::task::Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(
+                        return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(
                             item,
                         ))));
                     }
                 }
-                std::task::Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(item)))) => {
+                Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(item)))) => {
                     if !matches!(
                         &item,
                         ResponseItem::Message { role, .. } if role == "assistant"
                     ) {
-                        return std::task::Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(
+                        return Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(
                             item,
                         ))));
                     }
                 }
-                std::task::Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta(delta)))) => {
+                Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta(delta)))) => {
                     self.cumulative_reasoning.push_str(&delta);
                     if matches!(self.mode, AggregateMode::Streaming) {
                         let ev =
@@ -129,13 +129,13 @@ where
                         self.pending.push_back(ev);
                     }
                 }
-                std::task::Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(delta)))) => {
+                Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(delta)))) => {
                     if matches!(self.mode, AggregateMode::Streaming) {
                         let ev = ResponseEvent::ReasoningSummaryDelta(delta);
                         self.pending.push_back(ev);
                     }
                 }
-                std::task::Poll::Ready(Some(Ok(ResponseEvent::Completed {
+                Poll::Ready(Some(Ok(ResponseEvent::Completed {
                     response_id,
                     token_usage,
                 }))) => {
@@ -155,16 +155,16 @@ where
                         self.pending.push_back(assistant_event);
                         self.pending.push_back(completion_event);
                     } else {
-                        return std::task::Poll::Ready(Some(Ok(assistant_event)));
+                        return Poll::Ready(Some(Ok(assistant_event)));
                     }
                 }
-                std::task::Poll::Ready(Some(Ok(ev))) => {
-                    return std::task::Poll::Ready(Some(Ok(ev)));
+                Poll::Ready(Some(Ok(ev))) => {
+                    return Poll::Ready(Some(Ok(ev)));
                 }
             }
 
             if let Some(ev) = self.pending.pop_front() {
-                return std::task::Poll::Ready(Some(Ok(ev)));
+                return Poll::Ready(Some(Ok(ev)));
             }
         }
     }

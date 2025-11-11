@@ -1,0 +1,18 @@
+[package]
+name = "codex-provider-config"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "codex_provider_config"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-app-server-protocol = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+reqwest = { workspace = true }

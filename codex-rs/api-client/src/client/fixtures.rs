@@ -8,9 +8,9 @@ use tokio_util::io::ReaderStream;
 
 use crate::error::Error;
 use crate::error::Result;
-use crate::model_provider::ModelProviderInfo;
 use crate::stream::ResponseEvent;
 use crate::stream::ResponseStream;
+use codex_provider_config::ModelProviderInfo;
 
 pub async fn stream_from_fixture(
     path: impl AsRef<Path>,
