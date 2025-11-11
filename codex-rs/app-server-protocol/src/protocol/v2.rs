@@ -295,10 +295,14 @@ pub struct ThreadStartResponse {
 pub struct ThreadResumeParams {
     pub thread_id: String,
 
-    /// FOR CODEX CLOUD - DO NOT USE.
+    /// [UNSTABLE] FOR CODEX CLOUD - DO NOT USE.
     /// If specified, the thread will be resumed with the provided history
     /// instead of loaded from disk.
     pub history: Option<Vec<ResponseItem>>,
+
+    /// [UNSTABLE] Specify the rollout path to resume from.
+    /// If specified, the thread_id param will be ignored.
+    pub path: Option<PathBuf>,
 
     /// Configuration overrides for the resumed thread, if any.
     pub model: Option<String>,
@@ -375,6 +379,8 @@ pub struct Thread {
     pub model_provider: String,
     /// Unix timestamp (in seconds) when the thread was created.
     pub created_at: i64,
+    /// [UNSTABLE] Path to the thread on disk.
+    pub path: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
