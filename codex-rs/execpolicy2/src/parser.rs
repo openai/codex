@@ -161,6 +161,15 @@ fn parse_examples<'v>(examples: UnpackList<Value<'v>>) -> Result<Vec<Vec<String>
         .collect()
 }
 
+fn policy_builder<'v, 'a>(eval: &Evaluator<'v, 'a, '_>) -> &'a PolicyBuilder {
+    #[expect(clippy::unwrap_used)]
+    eval.extra
+        .as_ref()
+        .unwrap()
+        .downcast_ref::<PolicyBuilder>()
+        .unwrap()
+}
+
 #[starlark_module]
 fn policy_builtins(builder: &mut GlobalsBuilder) {
     fn prefix_rule<'v>(
@@ -185,28 +194,15 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
             .transpose()?
             .unwrap_or_default();
 
-        let id = id.map(std::string::ToString::to_string).unwrap_or_else(|| {
-            #[expect(clippy::unwrap_used)]
-            let builder = eval
-                .extra
-                .as_ref()
-                .unwrap()
-                .downcast_ref::<PolicyBuilder>()
-                .unwrap();
-            builder.alloc_id()
-        });
+        let builder = policy_builder(eval);
+
+        let id = id
+            .map(std::string::ToString::to_string)
+            .unwrap_or_else(|| builder.alloc_id());
 
         let (first_token, remaining_tokens) = pattern_tokens
             .split_first()
             .ok_or_else(|| Error::InvalidPattern("pattern cannot be empty".to_string()))?;
-
-        #[expect(clippy::unwrap_used)]
-        let builder = eval
-            .extra
-            .as_ref()
-            .unwrap()
-            .downcast_ref::<PolicyBuilder>()
-            .unwrap();
 
         for head in first_token.alternatives() {
             let rule = Rule {
