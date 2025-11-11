@@ -102,13 +102,19 @@ fn parse_pattern_token<'v>(value: Value<'v>) -> Result<PatternToken> {
     }
 
     if let Some(list) = ListRef::from_value(value) {
-        let mut tokens = Vec::new();
-        for value in list.content() {
-            let s = value.unpack_str().ok_or_else(|| {
-                Error::InvalidPattern("pattern alternative must be a string".to_string())
-            })?;
-            tokens.push(s.to_string());
-        }
+        let tokens: Vec<String> = list
+            .content()
+            .iter()
+            .map(|value| {
+                value
+                    .unpack_str()
+                    .ok_or_else(|| {
+                        Error::InvalidPattern("pattern alternative must be a string".to_string())
+                    })
+                    .map(str::to_string)
+            })
+            .collect::<Result<_>>()?;
+        
         match tokens.as_slice() {
             [] => Err(Error::InvalidPattern(
                 "pattern alternatives cannot be empty".to_string(),
@@ -124,27 +130,34 @@ fn parse_pattern_token<'v>(value: Value<'v>) -> Result<PatternToken> {
 }
 
 fn parse_examples<'v>(examples: UnpackList<Value<'v>>) -> Result<Vec<Vec<String>>> {
-    let mut parsed = Vec::new();
-    for example in examples.items {
-        let list = ListRef::from_value(example).ok_or_else(|| {
-            Error::InvalidExample("example must be a list of strings".to_string())
-        })?;
-        let mut tokens = Vec::new();
-        for value in list.content() {
-            let token = value.unpack_str().ok_or_else(|| {
-                Error::InvalidExample("example tokens must be strings".to_string())
+    examples
+        .items
+        .into_iter()
+        .map(|example| {
+            let list = ListRef::from_value(example).ok_or_else(|| {
+                Error::InvalidExample("example must be a list of strings".to_string())
             })?;
-            tokens.push(token.to_string());
-        }
-        if tokens.is_empty() {
-            return Err(Error::InvalidExample(
-                "example cannot be an empty list".to_string(),
-            ));
-        }
+            let tokens: Vec<String> = list
+                .content()
+                .iter()
+                .map(|value| {
+                    value
+                        .unpack_str()
+                        .ok_or_else(|| {
+                            Error::InvalidExample("example tokens must be strings".to_string())
+                        })
+                        .map(str::to_string)
+                })
+                .collect::<Result<_>>()?;
 
-        parsed.push(tokens);
-    }
-    Ok(parsed)
+            match tokens.as_slice() {
+                [] => Err(Error::InvalidExample(
+                    "example cannot be an empty list".to_string(),
+                )),
+                _ => Ok(tokens),
+            }
+        })
+        .collect()
 }
 
 #[starlark_module]
