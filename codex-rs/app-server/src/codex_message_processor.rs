@@ -2469,7 +2469,15 @@ impl CodexMessageProcessor {
 
         let results = match query.as_str() {
             "" => vec![],
-            _ => run_fuzzy_file_search(query, roots, cancel_flag.clone()).await,
+            _ => {
+                run_fuzzy_file_search(
+                    query,
+                    roots,
+                    cancel_flag.clone(),
+                    self.config.file_search_include_gitignored_paths.clone(),
+                )
+                .await
+            }
         };
 
         if let Some(token) = cancellation_token {

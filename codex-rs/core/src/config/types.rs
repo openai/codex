@@ -351,6 +351,15 @@ pub struct Tui {
     pub notifications: Notifications,
 }
 
+/// Settings that control how fuzzy file search behaves.
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct FileSearch {
+    /// Absolute or relative paths that should still be surfaced by `@` search
+    /// even if they are covered by `.gitignore`.
+    #[serde(default)]
+    pub include_gitignored_paths: Vec<PathBuf>,
+}
+
 /// Settings for notices we display to users via the tui and app-server clients
 /// (primarily the Codex IDE extension). NOTE: these are different from
 /// notifications - notices are warnings, NUX screens, acknowledgements, etc.

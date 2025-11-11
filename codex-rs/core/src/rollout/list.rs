@@ -576,6 +576,7 @@ pub async fn find_conversation_path_by_id_str(
         limit,
         &root,
         exclude,
+        &[] as &[PathBuf],
         threads,
         cancel,
         compute_indices,

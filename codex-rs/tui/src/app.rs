@@ -150,7 +150,11 @@ impl App {
             }
         };
 
-        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let file_search = FileSearchManager::new(
+            config.cwd.clone(),
+            config.file_search_include_gitignored_paths.clone(),
+            app_event_tx.clone(),
+        );
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
@@ -734,7 +738,11 @@ mod tests {
         )));
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let file_search = FileSearchManager::new(
+            config.cwd.clone(),
+            config.file_search_include_gitignored_paths.clone(),
+            app_event_tx.clone(),
+        );
 
         App {
             server,

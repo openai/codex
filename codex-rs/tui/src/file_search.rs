@@ -46,6 +46,7 @@ pub(crate) struct FileSearchManager {
     state: Arc<Mutex<SearchState>>,
 
     search_dir: PathBuf,
+    allow_gitignored_paths: Vec<PathBuf>,
     app_tx: AppEventSender,
 }
 
@@ -66,7 +67,15 @@ struct ActiveSearch {
 }
 
 impl FileSearchManager {
-    pub fn new(search_dir: PathBuf, tx: AppEventSender) -> Self {
+    pub fn new(
+        search_dir: PathBuf,
+        allow_gitignored_paths: Vec<PathBuf>,
+        tx: AppEventSender,
+    ) -> Self {
+        let filtered_allow: Vec<PathBuf> = allow_gitignored_paths
+            .into_iter()
+            .filter(|p| p.starts_with(&search_dir))
+            .collect();
         Self {
             state: Arc::new(Mutex::new(SearchState {
                 latest_query: String::new(),
@@ -74,6 +83,7 @@ impl FileSearchManager {
                 active_search: None,
             })),
             search_dir,
+            allow_gitignored_paths: filtered_allow,
             app_tx: tx,
         }
     }
@@ -115,6 +125,7 @@ impl FileSearchManager {
         // dropping the lock. This means we are the only thread that can spawn a
         // debounce timer.
         let state = self.state.clone();
+        let allow_gitignored_paths = self.allow_gitignored_paths.clone();
         let search_dir = self.search_dir.clone();
         let tx_clone = self.app_tx.clone();
         thread::spawn(move || {
@@ -148,6 +159,7 @@ impl FileSearchManager {
             FileSearchManager::spawn_file_search(
                 query,
                 search_dir,
+                allow_gitignored_paths,
                 tx_clone,
                 cancellation_token,
                 state,
@@ -158,6 +170,7 @@ impl FileSearchManager {
     fn spawn_file_search(
         query: String,
         search_dir: PathBuf,
+        allow_gitignored_paths: Vec<PathBuf>,
         tx: AppEventSender,
         cancellation_token: Arc<AtomicBool>,
         search_state: Arc<Mutex<SearchState>>,
@@ -169,6 +182,7 @@ impl FileSearchManager {
                 MAX_FILE_SEARCH_RESULTS,
                 &search_dir,
                 Vec::new(),
+                &allow_gitignored_paths,
                 NUM_FILE_SEARCH_THREADS,
                 cancellation_token.clone(),
                 compute_indices,

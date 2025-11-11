@@ -132,6 +132,17 @@ persistence = "save-all"
 file_opener = "vscode"
 
 ################################################################################
+# File search
+################################################################################
+
+[file_search]
+# Absolute or relative paths to include in @ search even if they are gitignored.
+include_gitignored_paths = [
+    "playground",
+    "/Users/me/app/.env",
+]
+
+################################################################################
 # UI, Notifications, and Misc
 ################################################################################
 

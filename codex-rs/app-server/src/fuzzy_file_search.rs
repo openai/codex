@@ -18,6 +18,7 @@ pub(crate) async fn run_fuzzy_file_search(
     query: String,
     roots: Vec<String>,
     cancellation_flag: Arc<AtomicBool>,
+    allow_gitignored_paths: Vec<PathBuf>,
 ) -> Vec<FuzzyFileSearchResult> {
     #[expect(clippy::expect_used)]
     let limit_per_root =
@@ -35,6 +36,11 @@ pub(crate) async fn run_fuzzy_file_search(
 
     for root in roots {
         let search_dir = PathBuf::from(&root);
+        let allow_for_root: Vec<PathBuf> = allow_gitignored_paths
+            .iter()
+            .filter(|path| path.starts_with(&search_dir))
+            .cloned()
+            .collect();
         let query = query.clone();
         let cancel_flag = cancellation_flag.clone();
         join_set.spawn_blocking(move || {
@@ -43,6 +49,7 @@ pub(crate) async fn run_fuzzy_file_search(
                 limit_per_root,
                 &search_dir,
                 Vec::new(),
+                &allow_for_root,
                 threads,
                 cancel_flag,
                 COMPUTE_INDICES,

@@ -903,6 +903,20 @@ Valid values:
   - FreeBSD/OpenBSD: DBus‑based Secret Service
 - `auto` – Save credentials to the operating system keyring when available; otherwise, fall back to `auth.json` under `$CODEX_HOME`.
 
+### Include gitignored files in `@` search
+
+The fuzzy file search that powers `@` always respects `.gitignore` so large build outputs and secrets stay hidden by default. If you have a few ignored files or directories that you still want to mention, list them under `[file_search]`. Entries can be absolute or relative to the configured working directory, and directories are searched recursively.
+
+```toml
+[file_search]
+include_gitignored_paths = [
+  "playground",         # directory relative to cwd
+  "/Users/me/app/.env", # absolute file outside the repo
+]
+```
+
+Codex will continue to respect sandboxed writable roots; this list only affects which paths show up in the `@` picker.
+
 ## Config reference
 
 | Key                                              | Type / Values                                                     | Notes                                                                                                                      |
@@ -917,6 +931,7 @@ Valid values:
 | `sandbox_workspace_write.network_access`         | boolean                                                           | Allow network in workspace‑write (default: false).                                                                         |
 | `sandbox_workspace_write.exclude_tmpdir_env_var` | boolean                                                           | Exclude `$TMPDIR` from writable roots (default: false).                                                                    |
 | `sandbox_workspace_write.exclude_slash_tmp`      | boolean                                                           | Exclude `/tmp` from writable roots (default: false).                                                                       |
+| `file_search.include_gitignored_paths`           | array<string>                                                     | Files or directories to include in `@` search even if `.gitignore` would hide them; relative paths are resolved against `cwd`. |
 | `notify`                                         | array<string>                                                     | External program for notifications.                                                                                        |
 | `instructions`                                   | string                                                            | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`.                                                    |
 | `features.<feature-flag>`                        | boolean                                                           | See [feature flags](#feature-flags) for details                                                                            |

@@ -1,5 +1,6 @@
 use crate::auth::AuthCredentialsStoreMode;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
+use crate::config::types::FileSearch;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
@@ -198,6 +199,9 @@ pub struct Config {
 
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
+    /// Additional paths that Codex should search even if `.gitignore` would
+    /// normally exclude them.
+    pub file_search_include_gitignored_paths: Vec<PathBuf>,
 
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
@@ -604,6 +608,9 @@ pub struct ConfigToml {
     /// Collection of settings that are specific to the TUI.
     pub tui: Option<Tui>,
 
+    /// Options that control how `@` file search behaves.
+    pub file_search: Option<FileSearch>,
+
     /// When set to `true`, `AgentReasoning` events will be hidden from the
     /// UI/output. Defaults to `false`.
     pub hide_agent_reasoning: Option<bool>,
@@ -993,6 +1000,20 @@ impl Config {
         let shell_environment_policy = cfg.shell_environment_policy.into();
 
         let history = cfg.history.unwrap_or_default();
+        let file_search_include_gitignored_paths: Vec<PathBuf> = cfg
+            .file_search
+            .as_ref()
+            .map(|section| section.include_gitignored_paths.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|path| {
+                if path.is_absolute() {
+                    path
+                } else {
+                    resolved_cwd.join(path)
+                }
+            })
+            .collect();
 
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
@@ -1127,6 +1148,7 @@ impl Config {
                 .collect(),
             codex_home,
             history,
+            file_search_include_gitignored_paths,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
 
@@ -2879,6 +2901,7 @@ model_verbosity = "high"
                 project_doc_fallback_filenames: Vec::new(),
                 codex_home: fixture.codex_home(),
                 history: History::default(),
+                file_search_include_gitignored_paths: Vec::new(),
                 file_opener: UriBasedFileOpener::VsCode,
                 codex_linux_sandbox_exe: None,
                 hide_agent_reasoning: false,
@@ -2950,6 +2973,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             codex_home: fixture.codex_home(),
             history: History::default(),
+            file_search_include_gitignored_paths: Vec::new(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
@@ -3036,6 +3060,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             codex_home: fixture.codex_home(),
             history: History::default(),
+            file_search_include_gitignored_paths: Vec::new(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
@@ -3108,6 +3133,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             codex_home: fixture.codex_home(),
             history: History::default(),
+            file_search_include_gitignored_paths: Vec::new(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,

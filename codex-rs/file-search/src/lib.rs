@@ -10,13 +10,17 @@ use serde::Serialize;
 use std::cell::UnsafeCell;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::collections::HashSet;
+use std::fs;
 use std::num::NonZero;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use tokio::process::Command;
+use walkdir::WalkDir;
 
 mod cli;
 
@@ -103,6 +107,7 @@ pub async fn run_main<T: Reporter>(
         limit,
         &search_directory,
         exclude,
+        &[] as &[PathBuf],
         threads,
         cancel_flag,
         compute_indices,
@@ -129,6 +134,7 @@ pub fn run(
     limit: NonZero<usize>,
     search_directory: &Path,
     exclude: Vec<String>,
+    allow_gitignored: &[PathBuf],
     threads: NonZero<usize>,
     cancel_flag: Arc<AtomicBool>,
     compute_indices: bool,
@@ -241,18 +247,35 @@ pub fn run(
 
     // Merge results across best_matchers_per_worker.
     let mut global_heap: BinaryHeap<Reverse<(u32, String)>> = BinaryHeap::new();
+    let mut seen_paths: HashSet<String> = HashSet::new();
     let mut total_match_count = 0;
     for best_list_cell in best_matchers_per_worker.iter() {
         let best_list = unsafe { &*best_list_cell.get() };
         total_match_count += best_list.num_matches;
         for &Reverse((score, ref line)) in best_list.binary_heap.iter() {
-            if global_heap.len() < limit.get() {
-                global_heap.push(Reverse((score, line.clone())));
-            } else if let Some(min_element) = global_heap.peek()
-                && score > min_element.0.0
-            {
-                global_heap.pop();
-                global_heap.push(Reverse((score, line.clone())));
+            if seen_paths.contains(line.as_str()) {
+                continue;
+            }
+            seen_paths.insert(line.clone());
+            push_scored_match(&mut global_heap, limit.get(), score, line.clone());
+        }
+    }
+
+    if !allow_gitignored.is_empty() {
+        let allowlisted_entries = gather_allowlisted_entries(search_directory, allow_gitignored);
+        if !allowlisted_entries.is_empty() {
+            let mut utf32buf = Vec::<char>::new();
+            let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
+            for entry in allowlisted_entries {
+                let haystack: Utf32Str<'_> = Utf32Str::new(&entry, &mut utf32buf);
+                if let Some(score) = pattern.score(haystack, &mut matcher) {
+                    total_match_count += 1;
+                    if seen_paths.contains(entry.as_str()) {
+                        continue;
+                    }
+                    seen_paths.insert(entry.clone());
+                    push_scored_match(&mut global_heap, limit.get(), score, entry);
+                }
             }
         }
     }
@@ -400,9 +423,73 @@ fn create_pattern(pattern: &str) -> Pattern {
     )
 }
 
+fn push_scored_match(
+    heap: &mut BinaryHeap<Reverse<(u32, String)>>,
+    limit: usize,
+    score: u32,
+    path: String,
+) {
+    if heap.len() < limit {
+        heap.push(Reverse((score, path)));
+    } else if let Some(min_element) = heap.peek()
+        && score > min_element.0.0
+    {
+        heap.pop();
+        heap.push(Reverse((score, path)));
+    }
+}
+
+fn gather_allowlisted_entries(
+    search_directory: &Path,
+    allow_gitignored: &[PathBuf],
+) -> Vec<String> {
+    let mut entries = Vec::new();
+    for allow in allow_gitignored {
+        let absolute = if allow.is_absolute() {
+            allow.clone()
+        } else {
+            search_directory.join(allow)
+        };
+
+        let Ok(metadata) = fs::metadata(&absolute) else {
+            continue;
+        };
+
+        if metadata.is_file() {
+            if let Some(rel) = relative_path_str(&absolute, search_directory) {
+                entries.push(rel);
+            }
+            continue;
+        }
+
+        if metadata.is_dir() {
+            for entry in WalkDir::new(&absolute)
+                .follow_links(true)
+                .into_iter()
+                .filter_map(|entry| entry.ok())
+            {
+                if entry.file_type().is_file()
+                    && let Some(rel) = relative_path_str(entry.path(), search_directory) {
+                        entries.push(rel);
+                    }
+            }
+        }
+    }
+
+    entries
+}
+
+fn relative_path_str(path: &Path, base: &Path) -> Option<String> {
+    let rel = path.strip_prefix(base).ok()?;
+    rel.to_str().map(|s| s.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use tempfile::TempDir;
 
     #[test]
     fn verify_score_is_none_for_non_match() {
@@ -433,5 +520,80 @@ mod tests {
         ];
 
         assert_eq!(matches, expected);
+    }
+
+    #[test]
+    fn allow_gitignored_paths_are_included() {
+        let temp_dir = TempDir::new().expect("tempdir should be created");
+        let root = temp_dir.path();
+
+        fs::write(root.join(".gitignore"), "playground/\nskip.log\n")
+            .expect("should write .gitignore");
+        fs::create_dir(root.join("playground")).expect("should create playground dir");
+        fs::write(root.join("playground/data.txt"), "123").expect("should write ignored file");
+        fs::write(root.join("skip.log"), "log stuff").expect("should write ignored log");
+
+        let limit = NonZero::new(10).expect("non-zero");
+        let threads = NonZero::new(2).expect("non-zero");
+
+        let baseline = run(
+            "data",
+            limit,
+            root,
+            Vec::new(),
+            &[],
+            threads,
+            Arc::new(AtomicBool::new(false)),
+            false,
+            true,
+        )
+        .expect("baseline search should succeed");
+        assert!(
+            baseline.matches.is_empty(),
+            "gitignored file should be hidden"
+        );
+
+        let allow = vec![root.join("playground"), root.join("skip.log")];
+        let from_dir = run(
+            "data",
+            limit,
+            root,
+            Vec::new(),
+            &allow,
+            threads,
+            Arc::new(AtomicBool::new(false)),
+            false,
+            true,
+        )
+        .expect("allowlisted directory search should succeed");
+        assert_eq!(
+            from_dir
+                .matches
+                .iter()
+                .map(|m| m.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["playground/data.txt"]
+        );
+
+        let file_match = run(
+            "skip",
+            limit,
+            root,
+            Vec::new(),
+            &allow,
+            threads,
+            Arc::new(AtomicBool::new(false)),
+            false,
+            true,
+        )
+        .expect("allowlisted file search should succeed");
+        assert_eq!(
+            file_match
+                .matches
+                .iter()
+                .map(|m| m.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["skip.log"]
+        );
     }
 }
