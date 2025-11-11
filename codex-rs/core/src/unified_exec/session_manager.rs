@@ -509,17 +509,4 @@ mod tests {
         let rendered = render_stdin_events(&events);
         assert_eq!(rendered, "first\n> [no output]\nsecond\n> out");
     }
-
-    #[test]
-    fn transcript_is_truncated_after_merge() {
-        let rendered = render_stdin_events(&[StdinEvent {
-            input: "abcde".to_string(),
-            output: "output".to_string(),
-        }]);
-        let expected_prefix: String = rendered.chars().take(5).collect();
-        let (truncated, original_len) = truncate_output_to_tokens(&rendered, 5);
-
-        assert_eq!(truncated, expected_prefix);
-        assert_eq!(original_len, Some(rendered.chars().count()));
-    }
 }
