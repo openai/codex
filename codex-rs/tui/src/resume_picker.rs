@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,6 +13,7 @@ use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_protocol::items::TurnItem;
 use color_eyre::eyre::Result;
+use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -21,6 +23,9 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use serde::Deserialize;
+use serde::Serialize;
+use tokio::fs;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -35,6 +40,8 @@ use codex_protocol::models::ResponseItem;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
+const PINNED_CONVERSATIONS_FILE: &str = "pinned-conversations.json";
+const PIN_COLUMN_WIDTH: usize = 2;
 
 #[derive(Debug, Clone)]
 pub enum ResumeSelection {
@@ -97,11 +104,15 @@ pub async fn run_resume_picker(
         });
     });
 
+    let pinned = PinnedConversations::load(codex_home)
+        .await
+        .wrap_err("failed to load pinned conversations")?;
     let mut state = PickerState::new(
         codex_home.to_path_buf(),
         alt.tui.frame_requester(),
         page_loader,
         default_provider.clone(),
+        pinned,
     );
     state.load_initial_page().await?;
     state.request_frame();
@@ -177,6 +188,7 @@ struct PickerState {
     page_loader: PageLoader,
     view_rows: Option<usize>,
     default_provider: String,
+    pinned: PinnedConversations,
 }
 
 struct PaginationState {
@@ -236,12 +248,105 @@ struct Row {
     updated_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Clone)]
+struct PinnedConversations {
+    file_path: Option<PathBuf>,
+    entries: HashSet<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PinnedConversationsFile {
+    paths: Vec<String>,
+}
+
+impl PinnedConversations {
+    async fn load(codex_home: &Path) -> std::io::Result<Self> {
+        let path = codex_home.join(PINNED_CONVERSATIONS_FILE);
+        let entries = match fs::read_to_string(&path).await {
+            Ok(raw) => Self::parse_file(&raw)?,
+            Err(err) if err.kind() == ErrorKind::NotFound => HashSet::new(),
+            Err(err) => return Err(err),
+        };
+        Ok(Self {
+            file_path: Some(path),
+            entries,
+        })
+    }
+
+    fn contains(&self, path: &Path) -> bool {
+        self.entries.contains(path)
+    }
+
+    async fn toggle(&mut self, path: &Path) -> std::io::Result<bool> {
+        if self.entries.remove(path) {
+            self.persist().await?;
+            Ok(false)
+        } else {
+            self.entries.insert(path.to_path_buf());
+            self.persist().await?;
+            Ok(true)
+        }
+    }
+
+    fn parse_file(raw: &str) -> std::io::Result<HashSet<PathBuf>> {
+        let parsed: PinnedConversationsFile = serde_json::from_str(raw)
+            .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err))?;
+        Ok(parsed.paths.into_iter().map(PathBuf::from).collect())
+    }
+
+    async fn persist(&self) -> std::io::Result<()> {
+        let Some(path) = &self.file_path else {
+            return Ok(());
+        };
+
+        if self.entries.is_empty() {
+            match fs::remove_file(path).await {
+                Ok(_) => {}
+                Err(err) if err.kind() == ErrorKind::NotFound => {}
+                Err(err) => return Err(err),
+            }
+            return Ok(());
+        }
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+
+        let mut paths: Vec<String> = self
+            .entries
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        paths.sort();
+
+        let payload = PinnedConversationsFile { paths };
+        let data = serde_json::to_vec_pretty(&payload)
+            .map_err(|err| std::io::Error::new(ErrorKind::Other, err))?;
+        fs::write(path, data).await
+    }
+}
+
+#[cfg(test)]
+impl PinnedConversations {
+    fn in_memory() -> Self {
+        Self {
+            file_path: None,
+            entries: HashSet::new(),
+        }
+    }
+
+    fn insert_for_tests(&mut self, path: PathBuf) {
+        self.entries.insert(path);
+    }
+}
+
 impl PickerState {
     fn new(
         codex_home: PathBuf,
         requester: FrameRequester,
         page_loader: PageLoader,
         default_provider: String,
+        pinned: PinnedConversations,
     ) -> Self {
         Self {
             codex_home,
@@ -264,6 +369,7 @@ impl PickerState {
             page_loader,
             view_rows: None,
             default_provider,
+            pinned,
         }
     }
 
@@ -285,6 +391,17 @@ impl PickerState {
                 if let Some(row) = self.filtered_rows.get(self.selected) {
                     return Ok(Some(ResumeSelection::Resume(row.path.clone())));
                 }
+            }
+            KeyCode::Char('S')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::SHIFT)
+                    && !key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) =>
+            {
+                self.toggle_selected_pin().await?;
             }
             KeyCode::Up => {
                 if self.selected > 0 {
@@ -429,6 +546,7 @@ impl PickerState {
                 .cloned()
                 .collect();
         }
+        self.reorder_filtered_rows_by_pin();
         if self.selected >= self.filtered_rows.len() {
             self.selected = self.filtered_rows.len().saturating_sub(1);
         }
@@ -588,6 +706,47 @@ impl PickerState {
         self.next_search_token = self.next_search_token.wrapping_add(1);
         token
     }
+
+    fn reorder_filtered_rows_by_pin(&mut self) {
+        if self.filtered_rows.is_empty() || self.pinned.entries.is_empty() {
+            return;
+        }
+        let mut pinned_rows = Vec::new();
+        let mut unpinned_rows = Vec::new();
+        for row in self.filtered_rows.drain(..) {
+            if self.pinned.contains(&row.path) {
+                pinned_rows.push(row);
+            } else {
+                unpinned_rows.push(row);
+            }
+        }
+        pinned_rows.extend(unpinned_rows);
+        self.filtered_rows = pinned_rows;
+    }
+
+    fn select_path(&mut self, path: &Path) {
+        if let Some(idx) = self.filtered_rows.iter().position(|row| row.path == path) {
+            self.selected = idx;
+            self.ensure_selected_visible();
+        }
+    }
+
+    fn is_row_pinned(&self, row: &Row) -> bool {
+        self.pinned.contains(&row.path)
+    }
+
+    async fn toggle_selected_pin(&mut self) -> Result<()> {
+        let Some(row) = self.filtered_rows.get(self.selected).cloned() else {
+            return Ok(());
+        };
+        self.pinned
+            .toggle(&row.path)
+            .await
+            .map_err(color_eyre::Report::from)?;
+        self.apply_filter();
+        self.select_path(&row.path);
+        Ok(())
+    }
 }
 
 fn rows_from_items(items: Vec<ConversationItem>) -> Vec<Row> {
@@ -684,6 +843,9 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             key_hint::plain(KeyCode::Esc).into(),
             " to start new ".dim(),
             "    ".dim(),
+            key_hint::shift(KeyCode::Char('s')).into(),
+            " to pin/unpin ".dim(),
+            "    ".dim(),
             key_hint::ctrl(KeyCode::Char('c')).into(),
             " to quit ".dim(),
             "    ".dim(),
@@ -731,6 +893,11 @@ fn render_list(
         let is_sel = start + idx == state.selected;
         let marker = if is_sel { "> ".bold() } else { "  ".into() };
         let marker_width = 2usize;
+        let pin_span = if state.is_row_pinned(row) {
+            "★ ".yellow()
+        } else {
+            "  ".dim()
+        };
         let created_span = if max_created_width == 0 {
             None
         } else {
@@ -743,6 +910,7 @@ fn render_list(
         };
         let mut preview_width = area.width as usize;
         preview_width = preview_width.saturating_sub(marker_width);
+        preview_width = preview_width.saturating_sub(PIN_COLUMN_WIDTH);
         if max_created_width > 0 {
             preview_width = preview_width.saturating_sub(max_created_width + 2);
         }
@@ -755,6 +923,7 @@ fn render_list(
         }
         let preview = truncate_text(&row.preview, preview_width);
         let mut spans: Vec<Span> = vec![marker];
+        spans.push(pin_span);
         if let Some(created) = created_span {
             spans.push(created);
             spans.push("  ".into());
@@ -766,7 +935,12 @@ fn render_list(
         if add_leading_gap {
             spans.push("  ".into());
         }
-        spans.push(preview.into());
+        let preview_span = if state.is_row_pinned(row) {
+            Span::from(preview).yellow()
+        } else {
+            Span::from(preview)
+        };
+        spans.push(preview_span);
 
         let line: Line = spans.into();
         let rect = Rect::new(area.x, y, area.width, 1);
@@ -775,7 +949,12 @@ fn render_list(
     }
 
     if state.pagination.loading.is_pending() && y < area.y.saturating_add(area.height) {
-        let loading_line: Line = vec!["  ".into(), "Loading older sessions…".italic().dim()].into();
+        let loading_line: Line = vec![
+            "  ".into(),
+            "  ".into(),
+            "Loading older sessions…".italic().dim(),
+        ]
+        .into();
         let rect = Rect::new(area.x, y, area.width, 1);
         frame.render_widget_ref(loading_line, rect);
     }
@@ -867,7 +1046,7 @@ fn render_column_headers(
         return;
     }
 
-    let mut spans: Vec<Span> = vec!["  ".into()];
+    let mut spans: Vec<Span> = vec!["  ".into(), "★ ".dim()];
     if metrics.max_created_width > 0 {
         let label = format!(
             "{text:<width$}",
@@ -1088,6 +1267,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            PinnedConversations::in_memory(),
         );
 
         let now = Utc::now();
@@ -1141,6 +1321,102 @@ mod tests {
     }
 
     #[test]
+    fn pinned_rows_move_to_top() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut pinned = PinnedConversations::in_memory();
+        pinned.insert_for_tests(PathBuf::from("/tmp/b.jsonl"));
+        pinned.insert_for_tests(PathBuf::from("/tmp/c.jsonl"));
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            pinned,
+        );
+
+        let rows = vec![
+            Row {
+                path: PathBuf::from("/tmp/a.jsonl"),
+                preview: String::from("A"),
+                created_at: None,
+                updated_at: None,
+            },
+            Row {
+                path: PathBuf::from("/tmp/b.jsonl"),
+                preview: String::from("B"),
+                created_at: None,
+                updated_at: None,
+            },
+            Row {
+                path: PathBuf::from("/tmp/c.jsonl"),
+                preview: String::from("C"),
+                created_at: None,
+                updated_at: None,
+            },
+        ];
+        state.all_rows = rows.clone();
+        state.filtered_rows = rows;
+        state.apply_filter();
+
+        let names: Vec<_> = state
+            .filtered_rows
+            .iter()
+            .map(|row| row.preview.clone())
+            .collect();
+        assert_eq!(names, vec!["B", "C", "A"]);
+    }
+
+    #[test]
+    fn shift_s_pins_selected_row() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            PinnedConversations::in_memory(),
+        );
+
+        let rows = vec![
+            Row {
+                path: PathBuf::from("/tmp/a.jsonl"),
+                preview: String::from("Alpha"),
+                created_at: None,
+                updated_at: None,
+            },
+            Row {
+                path: PathBuf::from("/tmp/b.jsonl"),
+                preview: String::from("Beta"),
+                created_at: None,
+                updated_at: None,
+            },
+            Row {
+                path: PathBuf::from("/tmp/c.jsonl"),
+                preview: String::from("Gamma"),
+                created_at: None,
+                updated_at: None,
+            },
+        ];
+        state.all_rows = rows.clone();
+        state.filtered_rows = rows;
+        state.selected = 2;
+
+        block_on_future(async {
+            state
+                .handle_key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT))
+                .await
+                .unwrap();
+        });
+
+        assert!(state.pinned.contains(&PathBuf::from("/tmp/c.jsonl")));
+        assert_eq!(state.filtered_rows[0].path, PathBuf::from("/tmp/c.jsonl"));
+        assert_eq!(
+            state.filtered_rows[state.selected].path,
+            PathBuf::from("/tmp/c.jsonl")
+        );
+    }
+
+    #[test]
     fn pageless_scrolling_deduplicates_and_keeps_order() {
         let loader: PageLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
@@ -1148,6 +1424,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            PinnedConversations::in_memory(),
         );
 
         state.reset_pagination();
@@ -1214,6 +1491,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            PinnedConversations::in_memory(),
         );
         state.reset_pagination();
         state.ingest_page(page(
@@ -1243,6 +1521,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            PinnedConversations::in_memory(),
         );
 
         let mut items = Vec::new();
@@ -1291,6 +1570,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            PinnedConversations::in_memory(),
         );
 
         let mut items = Vec::new();
@@ -1335,6 +1615,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
+            PinnedConversations::in_memory(),
         );
         state.reset_pagination();
         state.ingest_page(page(
