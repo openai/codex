@@ -1,4 +1,3 @@
-pub mod aggregate;
 pub mod api;
 pub mod auth;
 pub mod chat;
@@ -10,8 +9,8 @@ pub mod error;
 pub mod responses;
 pub mod routed_client;
 pub mod stream;
+mod wire;
 
-pub use crate::aggregate::AggregateStreamExt;
 pub use crate::auth::AuthContext;
 pub use crate::auth::AuthProvider;
 pub use crate::chat::ChatCompletionsApiClient;
@@ -32,9 +31,5 @@ pub use crate::stream::TextFormat;
 pub use crate::stream::TextFormatType;
 pub use crate::stream::WireEvent;
 pub use crate::stream::WireResponseStream;
-pub use codex_provider_config::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 pub use codex_provider_config::ModelProviderInfo;
 pub use codex_provider_config::WireApi;
-pub use codex_provider_config::built_in_model_providers;
-pub use codex_provider_config::create_oss_provider;
-pub use codex_provider_config::create_oss_provider_with_base_url;

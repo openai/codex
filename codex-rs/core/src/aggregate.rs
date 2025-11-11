@@ -3,12 +3,12 @@ use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
+use crate::ContentItem;
+use crate::ResponseItem;
 use futures::Stream;
 
+use crate::ResponseEvent;
 use crate::error::Result;
-use crate::stream::ResponseEvent;
 
 pub trait AggregateStreamExt: Stream<Item = Result<ResponseEvent>> + Sized {
     fn aggregate(self) -> AggregatedChatStream<Self>

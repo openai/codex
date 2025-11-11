@@ -44,6 +44,7 @@ pub use codex_provider_config::ModelProviderInfo;
 pub use codex_provider_config::WireApi;
 pub use codex_provider_config::built_in_model_providers;
 pub use codex_provider_config::create_oss_provider_with_base_url;
+mod aggregate;
 mod conversation_manager;
 mod event_mapping;
 pub mod review_format;
@@ -94,6 +95,7 @@ pub use codex_protocol::protocol;
 // as those in the protocol crate when constructing protocol messages.
 pub use codex_protocol::config_types as protocol_config_types;
 
+pub use aggregate::AggregateStreamExt;
 pub use client::ModelClient;
 pub use client_common::Prompt;
 pub use client_common::REVIEW_PROMPT;
