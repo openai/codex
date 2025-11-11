@@ -572,8 +572,8 @@ jobs:
       version: ${{ needs.release.outputs.version }}
       x64_sha256: ${{ needs.release.outputs.x64_sha256 }}
       arm64_sha256: ${{ needs.release.outputs.arm64_sha256 }}
-    secrets:
-      WINGET_PUBLISH_PAT: ${{ secrets.WINGET_PUBLISH_PAT }}
+    # secrets:
+    #   WINGET_PUBLISH_PAT: ${{ secrets.WINGET_PUBLISH_PAT }}
 
   winget-manual:
     if: ${{ github.event_name == 'workflow_dispatch' }}
