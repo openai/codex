@@ -41,6 +41,36 @@ impl Shell {
             Shell::Unknown => None,
         }
     }
+
+    /// Takes a string of shell and returns the full list of command args to
+    /// use with `exec()` to run the shell command.
+    pub fn derive_exec_args(&self, command: &str, use_login_shell: bool) -> Vec<String> {
+        match self {
+            Shell::Zsh(zsh) => {
+                let arg = if use_login_shell { "-lc" } else { "-c" };
+                vec![zsh.shell_path.clone(), arg.to_string(), command.to_string()]
+            }
+            Shell::Bash(bash) => {
+                let arg = if use_login_shell { "-lc" } else { "-c" };
+                vec![
+                    bash.shell_path.clone(),
+                    arg.to_string(),
+                    command.to_string(),
+                ]
+            }
+            Shell::PowerShell(ps) => {
+                let mut args = vec![ps.exe.clone(), "-NoLogo".to_string()];
+                if !use_login_shell {
+                    args.push("-NoProfile".to_string());
+                }
+
+                args.push("-Command".to_string());
+                args.push(command.to_string());
+                args
+            }
+            Shell::Unknown => shlex::split(command).unwrap_or_else(|| vec![command.to_string()]),
+        }
+    }
 }
 
 #[cfg(unix)]
