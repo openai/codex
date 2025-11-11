@@ -112,11 +112,13 @@ fn parse_pattern_token<'v>(value: Value<'v>) -> Result<PatternToken> {
                 "pattern alternatives cannot be empty".to_string(),
             ));
         }
-        return Ok(if tokens.len() == 1 {
-            PatternToken::Single(tokens.into_iter().next().unwrap())
+        if tokens.is_empty() {
+            Err(Error::InvalidPattern(...))
+        } else if tokens.len() == 1 {
+            Ok(PatternToken::Single(tokens.into_iter().next().unwrap()))
         } else {
-            PatternToken::Alts(tokens)
-        });
+            Ok(PatternToken::Alts(tokens))
+        })
     }
     Err(Error::InvalidPattern(
         "pattern element must be a string or list of strings".to_string(),
