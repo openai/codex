@@ -574,7 +574,6 @@ jobs:
       arm64_sha256: ${{ needs.release.outputs.arm64_sha256 }}
     secrets:
       WINGET_PUBLISH_PAT: ${{ secrets.WINGET_PUBLISH_PAT }}
-    continue-on-error: true
 
   winget-manual:
     if: ${{ github.event_name == 'workflow_dispatch' }}
@@ -584,7 +583,6 @@ jobs:
       version: 0.58.0-alpha.3
       x64_sha256: ${{ needs.hash-manual.outputs.x64_sha256 }}
       arm64_sha256: ${{ needs.hash-manual.outputs.arm64_sha256 }}
-    continue-on-error: true
 
   hash-manual:
     if: ${{ github.event_name == 'workflow_dispatch' }}

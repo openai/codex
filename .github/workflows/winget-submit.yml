@@ -37,6 +37,7 @@ jobs:
 
       - name: Build manifest directory
         shell: bash
+        continue-on-error: true
         run: |
           set -euo pipefail
           v="$VERSION"
@@ -53,10 +54,12 @@ jobs:
 
       - name: Install WinGet Create
         shell: bash
+        continue-on-error: true
         run: winget install --id Microsoft.WingetCreate -e --accept-package-agreements --accept-source-agreements
 
       - name: Validate manifests
         shell: bash
+        continue-on-error: true
         run: wingetcreate validate "manifests/o/OpenAI/Codex/${{ inputs.version }}"
 
       # - name: Submit PR to winget-pkgs
