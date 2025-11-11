@@ -54,12 +54,11 @@ fn escape_stdin_for_log(input: &str) -> String {
 }
 
 fn render_stdin_events(events: &[StdinEvent]) -> String {
-    let mut lines = Vec::new();
-    for event in events {
-        lines.push(event.input.clone());
-        lines.push(format!("> {}", event.output));
-    }
-    lines.join("\n")
+    events
+        .iter()
+        .map(|event| event.input.clone())
+        .collect::<Vec<String>>()
+        .join("\n")
 }
 
 impl UnifiedExecSessionManager {
@@ -507,7 +506,7 @@ mod tests {
         ];
 
         let rendered = render_stdin_events(&events);
-        assert_eq!(rendered, "first\n> [no output]\nsecond\n> out");
+        assert_eq!(rendered, "first\nsecond");
     }
 
     #[test]
@@ -516,8 +515,8 @@ mod tests {
             input: "abcde".to_string(),
             output: "output".to_string(),
         }]);
-        let expected_prefix: String = rendered.chars().take(6).collect();
-        let (truncated, original_len) = truncate_output_to_tokens(&rendered, 6);
+        let expected_prefix: String = rendered.chars().take(5).collect();
+        let (truncated, original_len) = truncate_output_to_tokens(&rendered, 5);
 
         assert_eq!(truncated, expected_prefix);
         assert_eq!(original_len, Some(rendered.chars().count()));
