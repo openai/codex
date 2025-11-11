@@ -1,6 +1,5 @@
 // Aggregates all former standalone integration tests as modules.
-use codex_arg0::arg0_dispatch_or_else;
-use codex_arg0::prepend_path_entry_for_codex_aliases;
+use codex_arg0::arg0_dispatch;
 use ctor::ctor;
 use tempfile::TempDir;
 
@@ -10,20 +9,8 @@ use tempfile::TempDir;
 // NOTE: this doesn't work on ARM
 #[ctor]
 pub static CODEX_ALIASES_TEMP_DIR: TempDir = unsafe {
-    let mut should_exit = true;
-
     #[allow(clippy::unwrap_used)]
-    arg0_dispatch_or_else(|_| async {
-        should_exit = false;
-        Ok(())
-    })
-    .unwrap();
-    if should_exit {
-        std::process::exit(0);
-    }
-
-    #[allow(clippy::unwrap_used)]
-    prepend_path_entry_for_codex_aliases().unwrap()
+    arg0_dispatch().unwrap()
 };
 
 #[cfg(not(target_os = "windows"))]

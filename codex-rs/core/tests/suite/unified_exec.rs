@@ -1521,7 +1521,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
     let outputs = collect_tool_outputs(&bodies)?;
     let output = outputs.get(call_id).expect("missing output");
 
-    assert_regex_match(r"hello\w+", &output.output);
+    assert_regex_match("hello[\r\n]+", &output.output);
 
     Ok(())
 }
