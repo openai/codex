@@ -37,6 +37,10 @@ impl PrefixPattern {
         self.rest.len() + 1
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn matches_prefix(&self, cmd: &[String]) -> Option<Vec<String>> {
         if cmd.len() < self.len() || cmd[0] != self.first {
             return None;

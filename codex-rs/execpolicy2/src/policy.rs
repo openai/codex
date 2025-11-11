@@ -1,5 +1,6 @@
 use crate::decision::Decision;
 use crate::rule::Rule;
+use crate::rule::RuleMatch;
 use multimap::MultiMap;
 use serde::Deserialize;
 use serde::Serialize;
@@ -10,9 +11,12 @@ pub struct Policy {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Evaluation {
-    pub decision: Decision,
-    pub matched_rules: Vec<crate::rule::RuleMatch>,
+pub enum Evaluation {
+    NoMatch,
+    Match {
+        decision: Decision,
+        matched_rules: Vec<RuleMatch>,
+    },
 }
 
 impl Policy {
@@ -24,12 +28,15 @@ impl Policy {
         &self.rules_by_program
     }
 
-    pub fn evaluate(&self, cmd: &[String]) -> Option<Evaluation> {
-        let first = cmd.first()?;
-        let Some(rules) = self.rules_by_program.get_vec(first) else {
-            return None;
+    pub fn evaluate(&self, cmd: &[String]) -> Evaluation {
+        let rules = match cmd.first() {
+            Some(first) => match self.rules_by_program.get_vec(first) {
+                Some(rules) => rules,
+                None => return Evaluation::NoMatch,
+            },
+            None => return Evaluation::NoMatch,
         };
-        let mut matched_rules: Vec<crate::rule::RuleMatch> = Vec::new();
+        let mut matched_rules: Vec<RuleMatch> = Vec::new();
         let mut best_decision: Option<Decision> = None;
         for rule in rules {
             if let Some(matched) = rule.matches(cmd) {
@@ -47,9 +54,12 @@ impl Policy {
                 matched_rules.push(matched);
             }
         }
-        best_decision.map(|decision| Evaluation {
-            decision,
-            matched_rules,
-        })
+        match best_decision {
+            Some(decision) => Evaluation::Match {
+                decision,
+                matched_rules,
+            },
+            None => Evaluation::NoMatch,
+        }
     }
 }
