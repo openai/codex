@@ -117,6 +117,7 @@ fn status_snapshot_includes_reasoning_details() {
         Some(&usage),
         &None,
         Some(&rate_display),
+        None,
         captured_at,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
@@ -165,6 +166,7 @@ fn status_snapshot_includes_monthly_limit() {
         Some(&usage),
         &None,
         Some(&rate_display),
+        None,
         captured_at,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
@@ -197,7 +199,7 @@ fn status_card_token_usage_excludes_cached_tokens() {
         .single()
         .expect("timestamp");
 
-    let composite = new_status_output(&config, &usage, Some(&usage), &None, None, now);
+    let composite = new_status_output(&config, &usage, Some(&usage), &None, None, None, now);
     let rendered = render_lines(&composite.display_lines(120));
 
     assert!(
@@ -244,6 +246,7 @@ fn status_snapshot_truncates_in_narrow_terminal() {
         Some(&usage),
         &None,
         Some(&rate_display),
+        None,
         captured_at,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(46));
@@ -277,7 +280,7 @@ fn status_snapshot_shows_missing_limits_message() {
         .single()
         .expect("timestamp");
 
-    let composite = new_status_output(&config, &usage, Some(&usage), &None, None, now);
+    let composite = new_status_output(&config, &usage, Some(&usage), &None, None, None, now);
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
@@ -319,6 +322,7 @@ fn status_snapshot_shows_empty_limits_message() {
         Some(&usage),
         &None,
         Some(&rate_display),
+        None,
         captured_at,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
@@ -371,6 +375,7 @@ fn status_snapshot_shows_stale_limits_message() {
         Some(&usage),
         &None,
         Some(&rate_display),
+        None,
         now,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
@@ -409,7 +414,15 @@ fn status_context_window_uses_last_usage() {
         .single()
         .expect("timestamp");
 
-    let composite = new_status_output(&config, &total_usage, Some(&last_usage), &None, None, now);
+    let composite = new_status_output(
+        &config,
+        &total_usage,
+        Some(&last_usage),
+        &None,
+        None,
+        None,
+        now,
+    );
     let rendered_lines = render_lines(&composite.display_lines(80));
     let context_line = rendered_lines
         .into_iter()

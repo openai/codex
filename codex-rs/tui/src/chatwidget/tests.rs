@@ -309,6 +309,7 @@ fn make_chatwidget_manual() -> (
         current_status_header: String::from("Working"),
         retry_status_header: None,
         conversation_id: None,
+        account_info: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),

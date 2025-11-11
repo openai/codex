@@ -20,7 +20,6 @@ use super::format::FieldFormatter;
 use super::format::line_display_width;
 use super::format::push_label;
 use super::format::truncate_line_to_width;
-use super::helpers::compose_account_display;
 use super::helpers::compose_agents_summary;
 use super::helpers::compose_model_display;
 use super::helpers::format_directory_display;
@@ -69,6 +68,7 @@ pub(crate) fn new_status_output(
     context_usage: Option<&TokenUsage>,
     session_id: &Option<ConversationId>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
+    account_info: Option<&StatusAccountDisplay>,
     now: DateTime<Local>,
 ) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
@@ -78,6 +78,7 @@ pub(crate) fn new_status_output(
         context_usage,
         session_id,
         rate_limits,
+        account_info,
         now,
     );
 
@@ -91,6 +92,7 @@ impl StatusHistoryCell {
         context_usage: Option<&TokenUsage>,
         session_id: &Option<ConversationId>,
         rate_limits: Option<&RateLimitSnapshotDisplay>,
+        account_info: Option<&StatusAccountDisplay>,
         now: DateTime<Local>,
     ) -> Self {
         let config_entries = create_config_summary_entries(config);
@@ -106,7 +108,7 @@ impl StatusHistoryCell {
             SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
         };
         let agents_summary = compose_agents_summary(config);
-        let account = compose_account_display(config);
+        let account = account_info.cloned();
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let context_window = config.model_context_window.and_then(|window| {
             context_usage.map(|usage| StatusContextWindowData {
