@@ -4,7 +4,7 @@ use serde::Serialize;
 use crate::error::Error;
 use crate::error::Result;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Decision {
     Allow,
@@ -20,14 +20,5 @@ impl Decision {
             "forbidden" => Ok(Self::Forbidden),
             other => Err(Error::InvalidDecision(other.to_string())),
         }
-    }
-
-    /// Returns true if `self` is stricter (less permissive) than `other`.
-    pub fn is_stricter_than(self, other: Self) -> bool {
-        matches!(
-            (self, other),
-            (Decision::Forbidden, Decision::Prompt | Decision::Allow)
-                | (Decision::Prompt, Decision::Allow)
-        )
     }
 }
