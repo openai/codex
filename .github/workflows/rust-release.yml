@@ -11,19 +11,7 @@ on:
     tags:
       - "rust-v*.*.*"
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Release version (e.g., 0.57.0)"
-        required: true
-        type: string
-      x64_sha256:
-        description: "SHA256 for codex-x86_64-pc-windows-msvc.exe"
-        required: true
-        type: string
-      arm64_sha256:
-        description: "SHA256 for codex-aarch64-pc-windows-msvc.exe"
-        required: true
-        type: string
+    {}
 
 concurrency:
   group: ${{ github.workflow }}
