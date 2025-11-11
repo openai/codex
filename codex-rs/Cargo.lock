@@ -1198,6 +1198,7 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+ "shlex",
  "starlark",
  "thiserror 2.0.17",
 ]
