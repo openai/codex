@@ -139,6 +139,15 @@ fn create_exec_command_tool() -> ToolSpec {
         },
     );
     properties.insert(
+        "workdir".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional working directory to run the command in; defaults to the turn cwd."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
         "shell".to_string(),
         JsonSchema::String {
             description: Some("Shell binary to launch. Defaults to /bin/bash.".to_string()),

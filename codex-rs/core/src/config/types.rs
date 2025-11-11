@@ -360,6 +360,8 @@ pub struct Notice {
     pub hide_full_access_warning: Option<bool>,
     /// Tracks whether the user has acknowledged the Windows world-writable directories warning.
     pub hide_world_writable_warning: Option<bool>,
+    /// Tracks whether the user opted out of the rate limit model switch reminder.
+    pub hide_rate_limit_model_nudge: Option<bool>,
 }
 
 impl Notice {
