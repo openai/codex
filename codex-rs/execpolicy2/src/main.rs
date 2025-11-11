@@ -3,49 +3,38 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::bail;
+use clap::Parser;
 use codex_execpolicy2::PolicyParser;
 use codex_execpolicy2::load_default_policy;
 
-fn main() -> Result<()> {
-    let mut args = std::env::args().skip(1);
-    let mut policy_path: Option<String> = None;
+/// CLI for evaluating exec policies
+#[derive(Parser)]
+#[command(name = "codex-execpolicy2")]
+enum Cli {
+    /// Evaluate a command against a policy.
+    Check {
+        #[arg(short, long, value_name = "PATH")]
+        policy: Option<String>,
 
-    while let Some(arg) = args.next() {
-        if arg == "--policy" || arg == "-p" {
-            let path = args
-                .next()
-                .context("expected a policy path after --policy/-p")?;
-            policy_path = Some(path);
-            continue;
-        }
-        // First non-flag argument is the subcommand.
-        let subcommand = arg;
-        return run_subcommand(subcommand, policy_path, args.collect());
-    }
-
-    print_usage();
-    bail!("missing subcommand")
+        /// Command tokens to evaluate.
+        #[arg(
+            value_name = "COMMAND",
+            required = true,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        command: Vec<String>,
+    },
 }
 
-fn run_subcommand(
-    subcommand: String,
-    policy_path: Option<String>,
-    args: Vec<String>,
-) -> Result<()> {
-    match subcommand.as_str() {
-        "check" => cmd_check(policy_path, args),
-        _ => {
-            print_usage();
-            bail!("unknown subcommand: {subcommand}")
-        }
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+    match cli {
+        Cli::Check { policy, command } => cmd_check(policy, command),
     }
 }
 
 fn cmd_check(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
-    if args.is_empty() {
-        bail!("usage: codex-execpolicy2 check <command tokens...>");
-    }
     let policy = load_policy(policy_path)?;
 
     let eval = policy.evaluate(&args);
@@ -62,11 +51,4 @@ fn load_policy(policy_path: Option<String>) -> Result<codex_execpolicy2::Policy>
         return Ok(parser.parse()?);
     }
     Ok(load_default_policy()?)
-}
-
-fn print_usage() {
-    eprintln!(
-        "usage:
-  codex-execpolicy2 [--policy path] check <command tokens...>"
-    );
 }

@@ -1207,6 +1207,7 @@ name = "codex-execpolicy2"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "clap",
  "multimap",
  "serde",
  "serde_json",
