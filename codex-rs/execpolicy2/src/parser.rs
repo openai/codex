@@ -1,6 +1,5 @@
-use std::cell::RefCell;
-
 use multimap::MultiMap;
+use parking_lot::Mutex;
 use starlark::any::ProvidesStaticType;
 use starlark::environment::GlobalsBuilder;
 use starlark::environment::Module;
@@ -12,6 +11,8 @@ use starlark::values::Value;
 use starlark::values::list::ListRef;
 use starlark::values::list::UnpackList;
 use starlark::values::none::NoneType;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use crate::decision::Decision;
 use crate::error::Error;
@@ -54,33 +55,31 @@ impl PolicyParser {
 
 #[derive(Debug, ProvidesStaticType)]
 struct PolicyBuilder {
-    rules_by_program: RefCell<MultiMap<String, Rule>>,
-    next_auto_id: RefCell<i64>,
+    rules_by_program: Mutex<MultiMap<String, Rule>>,
+    next_auto_id: AtomicU64,
 }
 
 impl PolicyBuilder {
     fn new() -> Self {
         Self {
-            rules_by_program: RefCell::new(MultiMap::new()),
-            next_auto_id: RefCell::new(0),
+            rules_by_program: Mutex::new(MultiMap::new()),
+            next_auto_id: AtomicU64::new(0),
         }
     }
 
     fn alloc_id(&self) -> String {
-        let mut next = self.next_auto_id.borrow_mut();
-        let id = *next;
-        *next += 1;
+        let id = self.next_auto_id.fetch_add(1, Ordering::Relaxed);
         format!("rule_{id}")
     }
 
     fn add_rule(&self, rule: Rule) {
         self.rules_by_program
-            .borrow_mut()
+            .lock()
             .insert(rule.pattern.first.clone(), rule);
     }
 
     fn build(&self) -> crate::policy::Policy {
-        crate::policy::Policy::new(self.rules_by_program.borrow().clone())
+        crate::policy::Policy::new(self.rules_by_program.lock().clone())
     }
 }
 
