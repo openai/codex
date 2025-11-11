@@ -676,20 +676,21 @@ impl Session {
                 let persist = matches!(conversation_history, InitialHistory::Forked(_));
 
                 // If resuming, warn when the last recorded model differs from the current one.
-                if let InitialHistory::Resumed(_) = conversation_history {
-                    if let Some(prev) = rollout_items.iter().rev().find_map(|it| {
+                if let InitialHistory::Resumed(_) = conversation_history
+                    && let Some(prev) = rollout_items.iter().rev().find_map(|it| {
                         if let RolloutItem::TurnContext(ctx) = it {
                             Some(ctx.model.as_str())
                         } else {
                             None
                         }
-                    }) {
-                        let curr = turn_context.client.get_model();
-                        if prev != curr {
-                            warn!(
-                                "resuming session with different model: previous={prev}, current={curr}"
-                            );
-                            self.send_event(
+                    })
+                {
+                    let curr = turn_context.client.get_model();
+                    if prev != curr {
+                        warn!(
+                            "resuming session with different model: previous={prev}, current={curr}"
+                        );
+                        self.send_event(
                                 &turn_context,
                                 EventMsg::Warning(WarningEvent {
                                     message: format!(
@@ -699,7 +700,6 @@ impl Session {
                                 }),
                             )
                                 .await;
-                        }
                     }
                 }
 
