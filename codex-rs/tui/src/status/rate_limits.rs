@@ -137,7 +137,7 @@ pub(crate) fn render_status_limit_progress_bar(percent_remaining: f64) -> String
 }
 
 pub(crate) fn format_status_limit_summary(percent_remaining: f64) -> String {
-    format!("{percent_remaining:.0}% remaining")
+    format!("{percent_remaining:.0}% left")
 }
 
 fn capitalize_first(label: &str) -> String {
