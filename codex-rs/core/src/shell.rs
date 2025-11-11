@@ -41,6 +41,28 @@ impl Shell {
             Shell::Unknown => None,
         }
     }
+
+    pub fn derive_shell_invocation(&self, command: &str) -> Vec<String> {
+        match self {
+            Shell::Zsh(zsh) => vec![
+                zsh.shell_path.clone(),
+                "-lc".to_string(),
+                command.to_string(),
+            ],
+            Shell::Bash(bash) => vec![
+                bash.shell_path.clone(),
+                "-lc".to_string(),
+                command.to_string(),
+            ],
+            Shell::PowerShell(ps) => vec![
+                ps.exe.clone(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                command.to_string(),
+            ],
+            Shell::Unknown => shlex::split(command).unwrap_or_else(|| vec![command.to_string()]),
+        }
+    }
 }
 
 #[cfg(unix)]
