@@ -20,6 +20,8 @@ pub enum ConfigShellToolType {
     Default,
     Local,
     UnifiedExec,
+    /// Takes a command as a single string to be run in the user's default shell.
+    ShellCommand,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +50,8 @@ impl ToolsConfig {
 
         let shell_type = if features.enabled(Feature::UnifiedExec) {
             ConfigShellToolType::UnifiedExec
+        } else if features.enabled(Feature::ShellCommandTool) {
+            ConfigShellToolType::ShellCommand
         } else {
             model_family.shell_type.clone()
         };
@@ -275,6 +279,53 @@ fn create_shell_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "shell".to_string(),
         description: "Runs a shell command and returns its output.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["command".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_shell_command_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "command".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "The shell script to execute in the user's default shell".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "workdir".to_string(),
+        JsonSchema::String {
+            description: Some("The working directory to execute the command in".to_string()),
+        },
+    );
+    properties.insert(
+        "timeout_ms".to_string(),
+        JsonSchema::Number {
+            description: Some("The timeout for the command in milliseconds".to_string()),
+        },
+    );
+    properties.insert(
+        "with_escalated_permissions".to_string(),
+        JsonSchema::Boolean {
+            description: Some("Whether to request escalated permissions. Set to true if command needs to be run without sandbox restrictions".to_string()),
+        },
+    );
+    properties.insert(
+        "justification".to_string(),
+        JsonSchema::String {
+            description: Some("Only set if with_escalated_permissions is true. 1-sentence explanation of why we want to run this command.".to_string()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "shell_command".to_string(),
+        description: "Runs a shell command string and returns its output.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -873,6 +924,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
+    use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::UnifiedExecHandler;
@@ -888,6 +940,7 @@ pub(crate) fn build_specs(
     let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
+    let shell_command_handler = Arc::new(ShellCommandHandler);
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -902,12 +955,16 @@ pub(crate) fn build_specs(
             builder.register_handler("exec_command", unified_exec_handler.clone());
             builder.register_handler("write_stdin", unified_exec_handler);
         }
+        ConfigShellToolType::ShellCommand => {
+            builder.push_spec(create_shell_command_tool());
+        }
     }
 
     // Always register shell aliases so older prompts remain compatible.
     builder.register_handler("shell", shell_handler.clone());
     builder.register_handler("container.exec", shell_handler.clone());
     builder.register_handler("local_shell", shell_handler);
+    builder.register_handler("shell_command", shell_command_handler);
 
     builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
     builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
@@ -1043,6 +1100,7 @@ mod tests {
             ConfigShellToolType::Default => Some("shell"),
             ConfigShellToolType::Local => Some("local_shell"),
             ConfigShellToolType::UnifiedExec => None,
+            ConfigShellToolType::ShellCommand => Some("shell_command"),
         }
     }
 
@@ -1272,6 +1330,29 @@ mod tests {
         if let Some(shell_tool) = shell_tool_name(&config) {
             subset.push(shell_tool);
         }
+        assert_contains_tool_names(&tools, &subset);
+    }
+
+    #[test]
+    fn test_build_specs_shell_command_present() {
+        let mut model_family =
+            find_family_for_model("o3").expect("o3 should be a valid model family");
+        model_family.shell_type = ConfigShellToolType::ShellCommand;
+        let features = Features::with_defaults();
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            features: &features,
+        });
+        let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
+
+        // Only check the shell variant and a couple of core tools.
+        let subset = vec![
+            "shell_command",
+            "list_mcp_resources",
+            "list_mcp_resource_templates",
+            "read_mcp_resource",
+            "update_plan",
+        ];
         assert_contains_tool_names(&tools, &subset);
     }
 
@@ -1727,6 +1808,21 @@ mod tests {
         assert_eq!(name, "shell");
 
         let expected = "Runs a shell command and returns its output.";
+        assert_eq!(description, expected);
+    }
+
+    #[test]
+    fn test_shell_command_tool() {
+        let tool = super::create_shell_command_tool();
+        let ToolSpec::Function(ResponsesApiTool {
+            description, name, ..
+        }) = &tool
+        else {
+            panic!("expected function tool");
+        };
+        assert_eq!(name, "shell_command");
+
+        let expected = "Runs a shell command string and returns its output.";
         assert_eq!(description, expected);
     }
 

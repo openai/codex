@@ -120,6 +120,20 @@ pub fn parse_shell_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<Strin
     try_parse_word_only_commands_sequence(&tree, script)
 }
 
+/// Parse a shell command string and, if it represents a single `bash -lc ...`
+/// (or `zsh -lc ...`) invocation made up purely of words/strings, return the
+/// inner script argument. Used to detect and safely unwrap nested `bash -lc`
+/// when callers start from a raw script string.
+pub fn extract_shell_lc_script_from_str(command: &str) -> Option<String> {
+    let tree = try_parse_shell(command)?;
+    let commands = try_parse_word_only_commands_sequence(&tree, command)?;
+    let [command_words] = commands.as_slice() else {
+        return None;
+    };
+    let (_, script) = extract_bash_command(command_words)?;
+    Some(script.to_string())
+}
+
 fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Vec<String>> {
     if cmd.kind() != "command" {
         return None;
@@ -257,5 +271,20 @@ mod tests {
         let command = vec!["zsh".to_string(), "-lc".to_string(), "ls".to_string()];
         let parsed = parse_shell_lc_plain_commands(&command).unwrap();
         assert_eq!(parsed, vec![vec!["ls".to_string()]]);
+    }
+
+    #[test]
+    fn extracts_bash_lc_script_from_string() {
+        let script = extract_shell_lc_script_from_str(r#"bash -lc "ls -a""#).unwrap();
+        assert_eq!(script, "ls -a");
+
+        let zsh_script = extract_shell_lc_script_from_str("zsh -lc 'echo hello && pwd'").unwrap();
+        assert_eq!(zsh_script, "echo hello && pwd");
+    }
+
+    #[test]
+    fn ignores_non_bash_lc_strings() {
+        assert!(extract_shell_lc_script_from_str("echo hi").is_none());
+        assert!(extract_shell_lc_script_from_str("bash -lc 'ls'; echo hi").is_none());
     }
 }
