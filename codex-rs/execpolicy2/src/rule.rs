@@ -29,6 +29,7 @@ impl PatternToken {
 }
 
 /// Prefix matcher for commands with support for alternative match tokens.
+/// First token is fixed since we key by the first token in policy.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PrefixPattern {
     pub first: String,
