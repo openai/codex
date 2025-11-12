@@ -34,7 +34,7 @@ impl Policy {
         &self.rules_by_program
     }
 
-    pub fn evaluate(&self, cmd: &[String]) -> Evaluation {
+    pub fn check(&self, cmd: &[String]) -> Evaluation {
         let rules = match cmd.first() {
             Some(first) => match self.rules_by_program.get_vec(first) {
                 Some(rules) => rules,
