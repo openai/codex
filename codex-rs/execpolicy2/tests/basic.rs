@@ -29,12 +29,13 @@ prefix_rule(
         .expect("parse policy");
     let cmd = tokens(&["git", "status"]);
     let evaluation = policy.check(&cmd);
-    expect![[r#"Match {
-  decision: allow,
-  matched_rules: [
-    PrefixRuleMatch { matched_prefix: ["git", "status"], decision: allow },
-  ]
-}"#]]
+    expect![[r#"
+        match {
+          decision: allow,
+          matchedRules: [
+            prefixRuleMatch { matchedPrefix: ["git", "status"], decision: allow },
+          ]
+        }"#]]
     .assert_eq(&evaluation.to_string());
 }
 
@@ -56,21 +57,23 @@ prefix_rule(
         .assert_eq(&rules_to_string(sh_rules));
 
     let bash_eval = policy.check(&tokens(&["bash", "-c", "echo", "hi"]));
-    expect![[r#"Match {
-  decision: allow,
-  matched_rules: [
-    PrefixRuleMatch { matched_prefix: ["bash", "-c"], decision: allow },
-  ]
-}"#]]
+    expect![[r#"
+        match {
+          decision: allow,
+          matchedRules: [
+            prefixRuleMatch { matchedPrefix: ["bash", "-c"], decision: allow },
+          ]
+        }"#]]
     .assert_eq(&bash_eval.to_string());
 
     let sh_eval = policy.check(&tokens(&["sh", "-l", "echo", "hi"]));
-    expect![[r#"Match {
-  decision: allow,
-  matched_rules: [
-    PrefixRuleMatch { matched_prefix: ["sh", "-l"], decision: allow },
-  ]
-}"#]]
+    expect![[r#"
+        match {
+          decision: allow,
+          matchedRules: [
+            prefixRuleMatch { matchedPrefix: ["sh", "-l"], decision: allow },
+          ]
+        }"#]]
     .assert_eq(&sh_eval.to_string());
 }
 
@@ -89,21 +92,23 @@ prefix_rule(
         .assert_eq(&rules_to_string(rules));
 
     let npm_i = policy.check(&tokens(&["npm", "i", "--legacy-peer-deps"]));
-    expect![[r#"Match {
-  decision: allow,
-  matched_rules: [
-    PrefixRuleMatch { matched_prefix: ["npm", "i", "--legacy-peer-deps"], decision: allow },
-  ]
-}"#]]
+    expect![[r#"
+        match {
+          decision: allow,
+          matchedRules: [
+            prefixRuleMatch { matchedPrefix: ["npm", "i", "--legacy-peer-deps"], decision: allow },
+          ]
+        }"#]]
     .assert_eq(&npm_i.to_string());
 
     let npm_install = policy.check(&tokens(&["npm", "install", "--no-save", "leftpad"]));
-    expect![[r#"Match {
-  decision: allow,
-  matched_rules: [
-    PrefixRuleMatch { matched_prefix: ["npm", "install", "--no-save"], decision: allow },
-  ]
-}"#]]
+    expect![[r#"
+        match {
+          decision: allow,
+          matchedRules: [
+            prefixRuleMatch { matchedPrefix: ["npm", "install", "--no-save"], decision: allow },
+          ]
+        }"#]]
     .assert_eq(&npm_install.to_string());
 }
 
@@ -122,12 +127,13 @@ prefix_rule(
     let parser = PolicyParser::new("test.codexpolicy", policy_src);
     let policy = parser.parse().expect("parse policy");
     let match_eval = policy.check(&tokens(&["git", "status"]));
-    expect![[r#"Match {
-  decision: allow,
-  matched_rules: [
-    PrefixRuleMatch { matched_prefix: ["git", "status"], decision: allow },
-  ]
-}"#]]
+    expect![[r#"
+        match {
+          decision: allow,
+          matchedRules: [
+            prefixRuleMatch { matchedPrefix: ["git", "status"], decision: allow },
+          ]
+        }"#]]
     .assert_eq(&match_eval.to_string());
 
     let no_match_eval = policy.check(&tokens(&[
@@ -136,7 +142,7 @@ prefix_rule(
         "color.status=always",
         "status",
     ]));
-    expect!["NoMatch"].assert_eq(&no_match_eval.to_string());
+    expect!["noMatch"].assert_eq(&no_match_eval.to_string());
 }
 
 #[test]
@@ -159,22 +165,24 @@ prefix_rule(
     let policy = parser.parse().expect("parse policy");
 
     let status = policy.check(&tokens(&["git", "status"]));
-    expect![[r#"Match {
-  decision: prompt,
-  matched_rules: [
-    PrefixRuleMatch { matched_prefix: ["git", "status"], decision: allow },
-    PrefixRuleMatch { matched_prefix: ["git"], decision: prompt },
-  ]
-}"#]]
+    expect![[r#"
+        match {
+          decision: prompt,
+          matchedRules: [
+            prefixRuleMatch { matchedPrefix: ["git", "status"], decision: allow },
+            prefixRuleMatch { matchedPrefix: ["git"], decision: prompt },
+          ]
+        }"#]]
     .assert_eq(&status.to_string());
 
     let commit = policy.check(&tokens(&["git", "commit", "-m", "hi"]));
-    expect![[r#"Match {
-  decision: forbidden,
-  matched_rules: [
-    PrefixRuleMatch { matched_prefix: ["git"], decision: prompt },
-    PrefixRuleMatch { matched_prefix: ["git", "commit"], decision: forbidden },
-  ]
-}"#]]
+    expect![[r#"
+        match {
+          decision: forbidden,
+          matchedRules: [
+            prefixRuleMatch { matchedPrefix: ["git"], decision: prompt },
+            prefixRuleMatch { matchedPrefix: ["git", "commit"], decision: forbidden },
+          ]
+        }"#]]
     .assert_eq(&commit.to_string());
 }
