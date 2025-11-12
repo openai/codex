@@ -298,7 +298,7 @@ fn wrap_wire_stream(stream: codex_api_client::WireResponseStream) -> ResponseStr
     tokio::spawn(async move {
         let mut stream = stream;
         while let Some(item) = stream.next().await {
-            let mapped = item.map(|ev| map_wire_event(ev)).map_err(map_api_error);
+            let mapped = item.map(map_wire_event).map_err(map_api_error);
             if tx.send(mapped).await.is_err() {
                 break;
             }

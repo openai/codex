@@ -109,9 +109,7 @@ pub async fn process_sse_wire<S, D>(
 
 fn next_frame(buffer: &mut String) -> Option<String> {
     loop {
-        let Some(idx) = buffer.find("\n\n") else {
-            return None;
-        };
+        let idx = buffer.find("\n\n")?;
 
         let frame = buffer[..idx].to_string();
         buffer.drain(..idx + 2);
