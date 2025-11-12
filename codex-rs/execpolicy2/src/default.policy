@@ -5,8 +5,8 @@ prefix_rule(
         ["git", "status", "--", "path/to/file"],
     ],
     not_match = [
-        ["git", "statusx"],
-        ["git", "reset", "--hard"],
+        ["git", "-c", "pager.status=false", "status"],
+        ["git", "--no-optional-locks", "status"],
     ],
 )
 
@@ -15,6 +15,10 @@ prefix_rule(
     decision = "forbidden",
     match = [
         ["git", "reset", "--hard"],
+    ],
+    not_match = [
+        ["git", "reset", "--keep"],
+        ["git", "reset", "--merge"],
     ],
 )
 
@@ -25,9 +29,6 @@ prefix_rule(
         ["ls", "-l"],
         ["ls", "-a", "."],
     ],
-    not_match = [
-        ["lsl"],
-    ],
 )
 
 prefix_rule(
@@ -35,9 +36,6 @@ prefix_rule(
     match = [
         ["cat", "file.txt"],
         ["cat", "-n", "README.md"],
-    ],
-    not_match = [
-        ["catx"],
     ],
 )
 
@@ -48,9 +46,6 @@ prefix_rule(
         ["cp", "foo", "bar"],
         ["cp", "-r", "src", "dest"],
     ],
-    not_match = [
-        ["cpp"],
-    ],
 )
 
 prefix_rule(
@@ -60,7 +55,7 @@ prefix_rule(
         ["head", "-n", "5", "CHANGELOG.md"],
     ],
     not_match = [
-        ["headx"],
+        ["hea", "-n", "1,5p", "CHANGELOG.md"],
     ],
 )
 
@@ -71,7 +66,7 @@ prefix_rule(
         ["printenv", "PATH"],
     ],
     not_match = [
-        ["printenvx"],
+        ["print", "-0"],
     ],
 )
 
@@ -80,9 +75,6 @@ prefix_rule(
     match = [
         ["pwd"],
     ],
-    not_match = [
-        ["pwdx"],
-    ],
 )
 
 prefix_rule(
@@ -90,9 +82,6 @@ prefix_rule(
     match = [
         ["rg", "-n", "init"],
         ["rg", "--files", "--max-depth", "2", "."],
-    ],
-    not_match = [
-        ["rgx"],
     ],
 )
 
@@ -103,9 +92,6 @@ prefix_rule(
         ["sed", "-n", "s/a/b/", "file.txt"],
         ["sed", "s/foo/bar/g", "file.txt"],
     ],
-    not_match = [
-        ["sedx"],
-    ],
 )
 
 prefix_rule(
@@ -113,8 +99,5 @@ prefix_rule(
     match = [
         ["which", "python3"],
         ["which", "-a", "python3"],
-    ],
-    not_match = [
-        ["whichx"],
     ],
 )
