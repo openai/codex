@@ -12,6 +12,7 @@ use starlark::values::Value;
 use starlark::values::list::ListRef;
 use starlark::values::list::UnpackList;
 use starlark::values::none::NoneType;
+use std::sync::Arc;
 
 use crate::decision::Decision;
 use crate::error::Error;
@@ -209,11 +210,13 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
             .split_first()
             .ok_or_else(|| Error::InvalidPattern("pattern cannot be empty".to_string()))?;
 
+        let rest: Arc<[PatternToken]> = remaining_tokens.to_vec().into();
+
         for head in first_token.alternatives() {
             let rule = Rule::Prefix(PrefixRule {
                 pattern: PrefixPattern {
-                    first: head,
-                    rest: remaining_tokens.to_vec(),
+                    first: Arc::from(head.as_str()),
+                    rest: rest.clone(),
                 },
                 decision,
             });
