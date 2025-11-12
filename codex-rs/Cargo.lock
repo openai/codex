@@ -1524,8 +1524,10 @@ name = "codex-utils-pty"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "libc",
  "portable-pty",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
