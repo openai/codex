@@ -130,7 +130,6 @@ struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
     source: ExecCommandSource,
-    suppress_render: bool,
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
@@ -837,18 +836,14 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
-        let (command, parsed, source, suppress_render) = match running {
-            Some(rc) => (rc.command, rc.parsed_cmd, rc.source, rc.suppress_render),
+        let (command, parsed, source) = match running {
+            Some(rc) => (rc.command, rc.parsed_cmd, rc.source),
             None => (
                 vec![ev.call_id.clone()],
                 Vec::new(),
                 ExecCommandSource::Agent,
-                false,
             ),
         };
-        if suppress_render {
-            return;
-        }
         let is_unified_exec_interaction =
             matches!(source, ExecCommandSource::UnifiedExecInteraction);
 
@@ -942,19 +937,14 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
         // Ensure the status indicator is visible while the command runs.
-        let suppress_render = matches!(ev.source, ExecCommandSource::UnifiedExecStartup);
         self.running_commands.insert(
             ev.call_id.clone(),
             RunningCommand {
                 command: ev.command.clone(),
                 parsed_cmd: ev.parsed_cmd.clone(),
                 source: ev.source,
-                suppress_render,
             },
         );
-        if suppress_render {
-            return;
-        }
         if let Some(cell) = self
             .active_cell
             .as_mut()
