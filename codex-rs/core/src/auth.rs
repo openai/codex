@@ -219,12 +219,10 @@ impl CodexAuth {
             InternalKnownPlan::Edu => AccountPlanType::Edu,
         };
 
-        self.get_current_token_data()
-            .and_then(|t| t.id_token.chatgpt_plan_type)
-            .map(|pt| match pt {
-                InternalPlanType::Known(k) => map_known(&k),
-                InternalPlanType::Unknown(_) => AccountPlanType::Unknown,
-            })
+        self.get_plan_type().map(|pt| match pt {
+            InternalPlanType::Known(k) => map_known(&k),
+            InternalPlanType::Unknown(_) => AccountPlanType::Unknown,
+        })
     }
 
     /// Raw plan string from the ID token (including unknown/new plan types).

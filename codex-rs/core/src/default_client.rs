@@ -41,6 +41,14 @@ impl CodexHttpClient {
         Self { inner }
     }
 
+    pub fn inner(&self) -> &reqwest::Client {
+        &self.inner
+    }
+
+    pub fn clone_inner(&self) -> reqwest::Client {
+        self.inner.clone()
+    }
+
     pub fn get<U>(&self, url: U) -> CodexRequestBuilder
     where
         U: IntoUrl,

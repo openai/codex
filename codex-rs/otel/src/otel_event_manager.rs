@@ -220,6 +220,10 @@ impl OtelEventManager {
         );
     }
 
+    pub fn sse_event_kind(&self, kind: &str) {
+        self.sse_event(kind, Duration::from_millis(0));
+    }
+
     pub fn sse_event_failed<T>(&self, kind: Option<&String>, duration: Duration, error: &T)
     where
         T: Display,

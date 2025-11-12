@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
+use crate::ModelClient;
 use crate::client_common::REVIEW_PROMPT;
 use crate::compact;
 use crate::features::Feature;
@@ -53,7 +54,6 @@ use tracing::info;
 use tracing::warn;
 
 use crate::ModelProviderInfo;
-use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
@@ -294,6 +294,8 @@ impl TurnContext {
     }
 }
 
+// Model-specific helpers live on ModelClient; TurnContext remains lean.
+
 #[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
@@ -403,6 +405,11 @@ impl Session {
             session_configuration.model.as_str(),
         );
 
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            features: &config.features,
+        });
+
         let client = ModelClient::new(
             Arc::new(per_turn_config),
             auth_manager,
@@ -413,11 +420,6 @@ impl Session {
             conversation_id,
             session_configuration.session_source.clone(),
         );
-
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
-            features: &config.features,
-        });
 
         TurnContext {
             sub_id,
@@ -1706,6 +1708,7 @@ async fn spawn_review_thread(
         );
 
     let per_turn_config = Arc::new(per_turn_config);
+
     let client = ModelClient::new(
         per_turn_config.clone(),
         auth_manager,
@@ -1968,7 +1971,7 @@ async fn run_turn(
                     retries += 1;
                     let delay = match e {
                         CodexErr::Stream(_, Some(delay)) => delay,
-                        _ => backoff(retries),
+                        _ => backoff(retries.max(0) as u64),
                     };
                     warn!(
                         "stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?})...",
@@ -2027,10 +2030,7 @@ async fn try_run_turn(
     });
 
     sess.persist_rollout_items(&[rollout_item]).await;
-    let mut stream = turn_context
-        .client
-        .clone()
-        .stream(prompt)
+    let mut stream = crate::client::stream_for_turn(&turn_context, prompt)
         .or_cancel(&cancellation_token)
         .await??;
 
@@ -2042,6 +2042,9 @@ async fn try_run_turn(
     );
     let mut output: FuturesOrdered<BoxFuture<CodexResult<ProcessedResponseItem>>> =
         FuturesOrdered::new();
+    // Track whether any tool calls have been scheduled so we can salvage
+    // their outputs if the stream disconnects before `response.completed`.
+    let mut saw_tool_call = false;
 
     let mut active_item: Option<TurnItem> = None;
 
@@ -2060,8 +2063,27 @@ async fn try_run_turn(
         };
 
         let event = match event {
-            Some(res) => res?,
+            Some(res) => match res {
+                Ok(ev) => ev,
+                Err(e) => {
+                    if saw_tool_call {
+                        let processed_items = output.try_collect().await?;
+                        return Ok(TurnRunResult {
+                            processed_items,
+                            total_token_usage: None,
+                        });
+                    }
+                    return Err(e);
+                }
+            },
             None => {
+                if saw_tool_call {
+                    let processed_items = output.try_collect().await?;
+                    return Ok(TurnRunResult {
+                        processed_items,
+                        total_token_usage: None,
+                    });
+                }
                 return Err(CodexErr::Stream(
                     "stream closed before response.completed".into(),
                     None,
@@ -2074,7 +2096,11 @@ async fn try_run_turn(
         };
 
         match event {
-            ResponseEvent::Created => {}
+            ResponseEvent::Created => {
+                // Emit an initial TokenCount so UIs (and rollouts) have a
+                // marker even when providers omit rate-limit headers.
+                sess.send_token_count_event(&turn_context).await;
+            }
             ResponseEvent::OutputItemDone(item) => {
                 let previously_active_item = active_item.take();
                 match ToolRouter::build_tool_call(sess.as_ref(), item.clone()) {
@@ -2085,6 +2111,7 @@ async fn try_run_turn(
                         let response =
                             tool_runtime.handle_tool_call(call, cancellation_token.child_token());
 
+                        saw_tool_call = true;
                         output.push_back(
                             async move {
                                 Ok(ProcessedResponseItem {

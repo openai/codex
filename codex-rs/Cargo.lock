@@ -831,6 +831,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-api-client"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "codex-app-server-protocol",
+ "codex-otel",
+ "codex-protocol",
+ "codex-provider-config",
+ "futures",
+ "maplit",
+ "pretty_assertions",
+ "regex-lite",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "codex-app-server"
 version = "0.0.0"
 dependencies = [
@@ -1065,6 +1088,7 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "codex-api-client",
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-arg0",
@@ -1074,6 +1098,7 @@ dependencies = [
  "codex-keyring-store",
  "codex-otel",
  "codex-protocol",
+ "codex-provider-config",
  "codex-rmcp-client",
  "codex-utils-pty",
  "codex-utils-readiness",
@@ -1366,6 +1391,17 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
+]
+
+[[package]]
+name = "codex-provider-config"
+version = "0.0.0"
+dependencies = [
+ "codex-app-server-protocol",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
 ]
 
 [[package]]

@@ -1,24 +1,21 @@
 use crate::client_common::tools::ToolSpec;
 use crate::error::Result;
 use crate::model_family::ModelFamily;
-use crate::protocol::RateLimitSnapshot;
-use crate::protocol::TokenUsage;
+use codex_api_client::Reasoning;
+pub use codex_api_client::ResponseEvent;
+use codex_api_client::TextControls;
+use codex_api_client::TextFormat;
+use codex_api_client::TextFormatType;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
 use codex_protocol::models::ResponseItem;
-use futures::Stream;
 use serde::Deserialize;
-use serde::Serialize;
 use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ops::Deref;
-use std::pin::Pin;
-use std::task::Context;
-use std::task::Poll;
-use tokio::sync::mpsc;
 
 /// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
 pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
@@ -193,95 +190,7 @@ fn strip_total_output_header(output: &str) -> Option<&str> {
     Some(remainder)
 }
 
-#[derive(Debug)]
-pub enum ResponseEvent {
-    Created,
-    OutputItemDone(ResponseItem),
-    OutputItemAdded(ResponseItem),
-    Completed {
-        response_id: String,
-        token_usage: Option<TokenUsage>,
-    },
-    OutputTextDelta(String),
-    ReasoningSummaryDelta(String),
-    ReasoningContentDelta(String),
-    ReasoningSummaryPartAdded,
-    RateLimits(RateLimitSnapshot),
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct Reasoning {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) effort: Option<ReasoningEffortConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) summary: Option<ReasoningSummaryConfig>,
-}
-
-#[derive(Debug, Serialize, Default, Clone)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum TextFormatType {
-    #[default]
-    JsonSchema,
-}
-
-#[derive(Debug, Serialize, Default, Clone)]
-pub(crate) struct TextFormat {
-    pub(crate) r#type: TextFormatType,
-    pub(crate) strict: bool,
-    pub(crate) schema: Value,
-    pub(crate) name: String,
-}
-
-/// Controls under the `text` field in the Responses API for GPT-5.
-#[derive(Debug, Serialize, Default, Clone)]
-pub(crate) struct TextControls {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) verbosity: Option<OpenAiVerbosity>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) format: Option<TextFormat>,
-}
-
-#[derive(Debug, Serialize, Default, Clone)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum OpenAiVerbosity {
-    Low,
-    #[default]
-    Medium,
-    High,
-}
-
-impl From<VerbosityConfig> for OpenAiVerbosity {
-    fn from(v: VerbosityConfig) -> Self {
-        match v {
-            VerbosityConfig::Low => OpenAiVerbosity::Low,
-            VerbosityConfig::Medium => OpenAiVerbosity::Medium,
-            VerbosityConfig::High => OpenAiVerbosity::High,
-        }
-    }
-}
-
-/// Request object that is serialized as JSON and POST'ed when using the
-/// Responses API.
-#[derive(Debug, Serialize)]
-pub(crate) struct ResponsesApiRequest<'a> {
-    pub(crate) model: &'a str,
-    pub(crate) instructions: &'a str,
-    // TODO(mbolin): ResponseItem::Other should not be serialized. Currently,
-    // we code defensively to avoid this case, but perhaps we should use a
-    // separate enum for serialization.
-    pub(crate) input: &'a Vec<ResponseItem>,
-    pub(crate) tools: &'a [serde_json::Value],
-    pub(crate) tool_choice: &'static str,
-    pub(crate) parallel_tool_calls: bool,
-    pub(crate) reasoning: Option<Reasoning>,
-    pub(crate) store: bool,
-    pub(crate) stream: bool,
-    pub(crate) include: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) prompt_cache_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) text: Option<TextControls>,
-}
+pub type ResponseStream = codex_api_client::EventStream<Result<ResponseEvent>>;
 
 pub(crate) mod tools {
     use crate::tools::spec::JsonSchema;
@@ -366,7 +275,11 @@ pub(crate) fn create_text_param_for_request(
     }
 
     Some(TextControls {
-        verbosity: verbosity.map(std::convert::Into::into),
+        verbosity: verbosity.map(|v| match v {
+            VerbosityConfig::Low => "low".to_string(),
+            VerbosityConfig::Medium => "medium".to_string(),
+            VerbosityConfig::High => "high".to_string(),
+        }),
         format: output_schema.as_ref().map(|schema| TextFormat {
             r#type: TextFormatType::JsonSchema,
             strict: true,
@@ -374,18 +287,6 @@ pub(crate) fn create_text_param_for_request(
             name: "codex_output_schema".to_string(),
         }),
     })
-}
-
-pub struct ResponseStream {
-    pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
-}
-
-impl Stream for ResponseStream {
-    type Item = Result<ResponseEvent>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.rx_event.poll_recv(cx)
-    }
 }
 
 #[cfg(test)]
@@ -453,39 +354,14 @@ mod tests {
 
     #[test]
     fn serializes_text_verbosity_when_set() {
-        let input: Vec<ResponseItem> = vec![];
-        let tools: Vec<serde_json::Value> = vec![];
-        let req = ResponsesApiRequest {
-            model: "gpt-5",
-            instructions: "i",
-            input: &input,
-            tools: &tools,
-            tool_choice: "auto",
-            parallel_tool_calls: true,
-            reasoning: None,
-            store: false,
-            stream: true,
-            include: vec![],
-            prompt_cache_key: None,
-            text: Some(TextControls {
-                verbosity: Some(OpenAiVerbosity::Low),
-                format: None,
-            }),
-        };
-
-        let v = serde_json::to_value(&req).expect("json");
-        assert_eq!(
-            v.get("text")
-                .and_then(|t| t.get("verbosity"))
-                .and_then(|s| s.as_str()),
-            Some("low")
-        );
+        let controls =
+            create_text_param_for_request(Some(VerbosityConfig::Low), &None).expect("controls");
+        assert_eq!(controls.verbosity.as_deref(), Some("low"));
+        assert!(controls.format.is_none());
     }
 
     #[test]
     fn serializes_text_schema_with_strict_format() {
-        let input: Vec<ResponseItem> = vec![];
-        let tools: Vec<serde_json::Value> = vec![];
         let schema = serde_json::json!({
             "type": "object",
             "properties": {
@@ -493,61 +369,17 @@ mod tests {
             },
             "required": ["answer"],
         });
-        let text_controls =
+        let controls =
             create_text_param_for_request(None, &Some(schema.clone())).expect("text controls");
-
-        let req = ResponsesApiRequest {
-            model: "gpt-5",
-            instructions: "i",
-            input: &input,
-            tools: &tools,
-            tool_choice: "auto",
-            parallel_tool_calls: true,
-            reasoning: None,
-            store: false,
-            stream: true,
-            include: vec![],
-            prompt_cache_key: None,
-            text: Some(text_controls),
-        };
-
-        let v = serde_json::to_value(&req).expect("json");
-        let text = v.get("text").expect("text field");
-        assert!(text.get("verbosity").is_none());
-        let format = text.get("format").expect("format field");
-
-        assert_eq!(
-            format.get("name"),
-            Some(&serde_json::Value::String("codex_output_schema".into()))
-        );
-        assert_eq!(
-            format.get("type"),
-            Some(&serde_json::Value::String("json_schema".into()))
-        );
-        assert_eq!(format.get("strict"), Some(&serde_json::Value::Bool(true)));
-        assert_eq!(format.get("schema"), Some(&schema));
+        assert!(controls.verbosity.is_none());
+        let format = controls.format.expect("format");
+        assert_eq!(format.name, "codex_output_schema");
+        assert!(format.strict);
+        assert_eq!(format.schema, schema);
     }
 
     #[test]
     fn omits_text_when_not_set() {
-        let input: Vec<ResponseItem> = vec![];
-        let tools: Vec<serde_json::Value> = vec![];
-        let req = ResponsesApiRequest {
-            model: "gpt-5",
-            instructions: "i",
-            input: &input,
-            tools: &tools,
-            tool_choice: "auto",
-            parallel_tool_calls: true,
-            reasoning: None,
-            store: false,
-            stream: true,
-            include: vec![],
-            prompt_cache_key: None,
-            text: None,
-        };
-
-        let v = serde_json::to_value(&req).expect("json");
-        assert!(v.get("text").is_none());
+        assert!(create_text_param_for_request(None, &None).is_none());
     }
 }
