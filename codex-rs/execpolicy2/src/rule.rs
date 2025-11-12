@@ -96,6 +96,7 @@ pub struct PrefixRule {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum RuleMatch {
     PrefixRuleMatch {
         matched_prefix: Vec<String>,
