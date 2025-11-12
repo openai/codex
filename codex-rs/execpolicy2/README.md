@@ -45,11 +45,7 @@ prefix_rule(
 - The effective `decision` is the strictest severity across all matches (`forbidden` > `prompt` > `allow`).
 
 ## CLI
-- Check a command against a policy (default bundled policy shown):
-```bash
-cargo run -p codex-execpolicy2 -- check git status
-```
-- Use a specific policy file instead of the default:
+- Provide a policy file (for example `src/default.codexpolicy`) to check a command:
 ```bash
 cargo run -p codex-execpolicy2 -- --policy path/to/policy.codexpolicy check git status
 ```
