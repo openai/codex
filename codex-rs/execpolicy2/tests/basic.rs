@@ -21,9 +21,7 @@ prefix_rule(
     pattern = ["git", "status"],
 )
     "#;
-    let policy = PolicyParser::new("test.codexpolicy", policy_src)
-        .parse()
-        .expect("parse policy");
+    let policy = PolicyParser::parse("test.codexpolicy", policy_src).expect("parse policy");
     let cmd = tokens(&["git", "status"]);
     let evaluation = policy.check(&cmd);
     assert_eq!(
@@ -45,8 +43,7 @@ prefix_rule(
     pattern = [["bash", "sh"], ["-c", "-l"]],
 )
     "#;
-    let parser = PolicyParser::new("test.codexpolicy", policy_src);
-    let policy = parser.parse().expect("parse policy");
+    let policy = PolicyParser::parse("test.codexpolicy", policy_src).expect("parse policy");
 
     let bash_rules = policy.rules().get_vec("bash").expect("bash rules");
     let sh_rules = policy.rules().get_vec("sh").expect("sh rules");
@@ -103,8 +100,7 @@ prefix_rule(
     pattern = ["npm", ["i", "install"], ["--legacy-peer-deps", "--no-save"]],
 )
     "#;
-    let parser = PolicyParser::new("test.codexpolicy", policy_src);
-    let policy = parser.parse().expect("parse policy");
+    let policy = PolicyParser::parse("test.codexpolicy", policy_src).expect("parse policy");
 
     let rules = policy.rules().get_vec("npm").expect("npm rules");
     assert_eq!(
@@ -162,8 +158,7 @@ prefix_rule(
     ],
 )
     "#;
-    let parser = PolicyParser::new("test.codexpolicy", policy_src);
-    let policy = parser.parse().expect("parse policy");
+    let policy = PolicyParser::parse("test.codexpolicy", policy_src).expect("parse policy");
     let match_eval = policy.check(&tokens(&["git", "status"]));
     assert_eq!(
         Evaluation::Match {
@@ -201,8 +196,7 @@ prefix_rule(
     decision = "forbidden",
 )
     "#;
-    let parser = PolicyParser::new("test.codexpolicy", policy_src);
-    let policy = parser.parse().expect("parse policy");
+    let policy = PolicyParser::parse("test.codexpolicy", policy_src).expect("parse policy");
 
     let status = policy.check(&tokens(&["git", "status"]));
     assert_eq!(
