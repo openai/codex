@@ -97,6 +97,7 @@ use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TurnDiffEvent;
+use crate::protocol::WarningEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::shell;
@@ -673,6 +674,34 @@ impl Session {
             InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
                 let rollout_items = conversation_history.get_rollout_items();
                 let persist = matches!(conversation_history, InitialHistory::Forked(_));
+
+                // If resuming, warn when the last recorded model differs from the current one.
+                if let InitialHistory::Resumed(_) = conversation_history
+                    && let Some(prev) = rollout_items.iter().rev().find_map(|it| {
+                        if let RolloutItem::TurnContext(ctx) = it {
+                            Some(ctx.model.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                {
+                    let curr = turn_context.client.get_model();
+                    if prev != curr {
+                        warn!(
+                            "resuming session with different model: previous={prev}, current={curr}"
+                        );
+                        self.send_event(
+                                &turn_context,
+                                EventMsg::Warning(WarningEvent {
+                                    message: format!(
+                                        "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
+                         Consider switching back to `{prev}` as it may affect Codex performance."
+                                    ),
+                                }),
+                            )
+                                .await;
+                    }
+                }
 
                 // Always add response items to conversation history
                 let reconstructed_history =
