@@ -1709,6 +1709,7 @@ impl ChatWidget {
         };
         self.add_to_history(crate::status::new_status_output(
             &self.config,
+            self.auth_manager.as_ref(),
             total_usage,
             context_usage,
             &self.conversation_id,

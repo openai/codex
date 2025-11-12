@@ -335,7 +335,10 @@ pub fn save_auth(
 }
 
 /// Load CLI auth data using the configured credential store backend.
-/// Returns `None` when no credentials are stored.
+/// Returns `None` when no credentials are stored. This function is
+/// provided only for tests. Production code should not directly load
+/// from the auth.json storage. It should use the AuthManager abstraction
+/// instead.
 pub fn load_auth_dot_json(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
