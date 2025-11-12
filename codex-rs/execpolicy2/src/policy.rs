@@ -59,6 +59,7 @@ impl Evaluation {
     }
 }
 
+/// Count how many rules match each provided example and error if any example is unmatched.
 pub(crate) fn validate_match_examples(rules: &[Rule], matches: &[Vec<String>]) -> Result<()> {
     let match_counts = rules.iter().fold(vec![0; matches.len()], |counts, rule| {
         counts
@@ -71,10 +72,15 @@ pub(crate) fn validate_match_examples(rules: &[Rule], matches: &[Vec<String>]) -
     let unmatched_examples: Vec<String> = matches
         .iter()
         .zip(&match_counts)
-        .filter(|(_, count)| **count == 0)
-        .map(|(example, _)| {
-            try_join(example.iter().map(String::as_str))
-                .unwrap_or_else(|_| "unable to render example".to_string())
+        .filter_map(|(example, count)| {
+            if *count == 0 {
+                Some(
+                    try_join(example.iter().map(String::as_str))
+                        .unwrap_or_else(|_| "unable to render example".to_string()),
+                )
+            } else {
+                None
+            }
         })
         .collect();
 
