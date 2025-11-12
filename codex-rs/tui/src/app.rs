@@ -7,6 +7,9 @@ use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
+use crate::model_migration::ModelMigrationOutcome;
+use crate::model_migration::model_migration_target;
+use crate::model_migration::run_model_migration_prompt;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
@@ -50,6 +53,36 @@ pub struct AppExitInfo {
     pub update_action: Option<UpdateAction>,
 }
 
+async fn handle_model_migration_prompt_if_needed(
+    tui: &mut tui::Tui,
+    config: &mut Config,
+    app_event_tx: &AppEventSender,
+) -> Result<()> {
+    let target_model = model_migration_target(&config.model);
+    if target_model == config.model || config.notices.hide_gpt5_1_migration_prompt.unwrap_or(false)
+    {
+        return Ok(());
+    }
+
+    app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged);
+    config.notices.hide_gpt5_1_migration_prompt = Some(true);
+    match run_model_migration_prompt(tui, &config.model, &target_model).await? {
+        ModelMigrationOutcome::Accepted => {
+            config.model = target_model.clone();
+            if let Some(family) = find_family_for_model(&target_model) {
+                config.model_family = family;
+            }
+            app_event_tx.send(AppEvent::PersistModelSelection {
+                model: target_model,
+                effort: config.model_reasoning_effort,
+            });
+        }
+        ModelMigrationOutcome::Exit => {}
+    }
+
+    Ok(())
+}
+
 pub(crate) struct App {
     pub(crate) server: Arc<ConversationManager>,
     pub(crate) app_event_tx: AppEventSender,
@@ -89,7 +122,7 @@ impl App {
     pub async fn run(
         tui: &mut tui::Tui,
         auth_manager: Arc<AuthManager>,
-        config: Config,
+        mut config: Config,
         active_profile: Option<String>,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
@@ -99,6 +132,8 @@ impl App {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
+
+        handle_model_migration_prompt_if_needed(tui, &mut config, &app_event_tx).await?;
 
         let conversation_manager = Arc::new(ConversationManager::new(
             auth_manager.clone(),
@@ -544,6 +579,18 @@ impl App {
                     );
                     self.chat_widget.add_error_message(format!(
                         "Failed to save rate limit reminder preference: {err}"
+                    ));
+                }
+            }
+            AppEvent::PersistModelMigrationPromptAcknowledged => {
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_hide_gpt5_1_migration_prompt(true)
+                    .apply()
+                    .await
+                {
+                    tracing::error!(error = %err, "failed to persist model migration prompt acknowledgement");
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save model migration prompt preference: {err}"
                     ));
                 }
             }
