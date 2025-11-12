@@ -10,22 +10,6 @@ pub struct Policy {
     rules_by_program: MultiMap<String, Rule>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Evaluation {
-    NoMatch,
-    Match {
-        decision: Decision,
-        matched_rules: Vec<RuleMatch>,
-    },
-}
-
-impl Evaluation {
-    pub fn is_match(&self) -> bool {
-        matches!(self, Self::Match { .. })
-    }
-}
-
 impl Policy {
     pub fn new(rules_by_program: MultiMap<String, Rule>) -> Self {
         Self { rules_by_program }
@@ -53,6 +37,22 @@ impl Policy {
             },
             None => Evaluation::NoMatch,
         }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Evaluation {
+    NoMatch,
+    Match {
+        decision: Decision,
+        matched_rules: Vec<RuleMatch>,
+    },
+}
+
+impl Evaluation {
+    pub fn is_match(&self) -> bool {
+        matches!(self, Self::Match { .. })
     }
 }
 
