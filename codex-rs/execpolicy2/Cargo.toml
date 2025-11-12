@@ -1,6 +1,6 @@
 [package]
 name = "codex-execpolicy2"
-version = "0.0.0"
+version = { workspace = true }
 edition = "2024"
 description = "Codex exec policy v2: prefix-based Starlark rules for command decisions."
 
