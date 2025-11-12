@@ -842,6 +842,7 @@ dependencies = [
  "codex-provider-config",
  "futures",
  "maplit",
+ "pretty_assertions",
  "regex-lite",
  "reqwest",
  "serde",
