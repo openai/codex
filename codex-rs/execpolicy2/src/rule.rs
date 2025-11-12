@@ -61,25 +61,61 @@ impl PrefixPattern {
 }
 
 #[derive(Clone, Debug)]
-pub struct Rule {
-    pub id: String,
+pub enum Rule {
+    Prefix(PrefixRule),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrefixRule {
     pub pattern: PrefixPattern,
     pub decision: Decision,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct RuleMatch {
-    pub rule_id: String,
-    pub matched_prefix: Vec<String>,
-    pub decision: Decision,
+pub enum RuleMatch {
+    PrefixRuleMatch {
+        matched_prefix: Vec<String>,
+        decision: Decision,
+    },
+}
+
+impl RuleMatch {
+    pub fn decision(&self) -> Decision {
+        match self {
+            Self::PrefixRuleMatch { decision, .. } => *decision,
+        }
+    }
 }
 
 impl Rule {
+    pub fn program(&self) -> &str {
+        match self {
+            Self::Prefix(rule) => &rule.pattern.first,
+        }
+    }
+
+    pub fn matches(&self, cmd: &[String]) -> Option<RuleMatch> {
+        match self {
+            Self::Prefix(rule) => rule.matches(cmd),
+        }
+    }
+
+    pub fn validate_examples(
+        &self,
+        matches: &[Vec<String>],
+        not_matches: &[Vec<String>],
+    ) -> Result<()> {
+        match self {
+            Self::Prefix(rule) => rule.validate_examples(matches, not_matches),
+        }
+    }
+}
+
+impl PrefixRule {
     pub fn matches(&self, cmd: &[String]) -> Option<RuleMatch> {
         self.pattern
             .matches_prefix(cmd)
-            .map(|matched_prefix| RuleMatch {
-                rule_id: self.id.clone(),
+            .map(|matched_prefix| RuleMatch::PrefixRuleMatch {
                 matched_prefix,
                 decision: self.decision,
             })
@@ -87,30 +123,59 @@ impl Rule {
 
     pub fn validate_examples(
         &self,
-        positive: &[Vec<String>],
-        negative: &[Vec<String>],
+        matches: &[Vec<String>],
+        not_matches: &[Vec<String>],
     ) -> Result<()> {
-        for example in positive {
+        for example in matches {
             if self.matches(example).is_none() {
                 return Err(Error::ExampleDidNotMatch {
-                    rule_id: self.id.clone(),
+                    rule: self.description(),
                     example: join_command(example),
                 });
             }
         }
-        for example in negative {
+        for example in not_matches {
             if self.matches(example).is_some() {
                 return Err(Error::ExampleDidMatch {
-                    rule_id: self.id.clone(),
+                    rule: self.description(),
                     example: join_command(example),
                 });
             }
         }
         Ok(())
     }
+
+    pub fn description(&self) -> String {
+        format!(
+            "prefix_rule(pattern = [{}], decision = {})",
+            render_pattern(&self.pattern),
+            render_decision(self.decision)
+        )
+    }
 }
 
 fn join_command(command: &[String]) -> String {
     try_join(command.iter().map(String::as_str))
         .unwrap_or_else(|_| "unable to render example".to_string())
+}
+
+fn render_pattern(pattern: &PrefixPattern) -> String {
+    let mut tokens = vec![pattern.first.clone()];
+    tokens.extend(pattern.rest.iter().map(render_pattern_token));
+    tokens.join(", ")
+}
+
+fn render_pattern_token(token: &PatternToken) -> String {
+    match token {
+        PatternToken::Single(value) => value.clone(),
+        PatternToken::Alts(values) => format!("[{}]", values.join(", ")),
+    }
+}
+
+fn render_decision(decision: Decision) -> &'static str {
+    match decision {
+        Decision::Allow => "allow",
+        Decision::Prompt => "prompt",
+        Decision::Forbidden => "forbidden",
+    }
 }

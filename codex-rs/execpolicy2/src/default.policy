@@ -1,5 +1,4 @@
 prefix_rule(
-    id = "git_status",
     pattern = ["git", "status"],
     match = [
         ["git", "status"],
@@ -12,7 +11,6 @@ prefix_rule(
 )
 
 prefix_rule(
-    id = "git_reset_hard",
     pattern = ["git", "reset", "--hard"],
     decision = "forbidden",
     match = [
@@ -21,7 +19,6 @@ prefix_rule(
 )
 
 prefix_rule(
-    id = "ls",
     pattern = ["ls"],
     match = [
         ["ls"],
@@ -34,7 +31,6 @@ prefix_rule(
 )
 
 prefix_rule(
-    id = "cat",
     pattern = ["cat"],
     match = [
         ["cat", "file.txt"],
@@ -46,7 +42,6 @@ prefix_rule(
 )
 
 prefix_rule(
-    id = "cp_prompt",
     pattern = ["cp"],
     decision = "prompt",
     match = [
@@ -59,7 +54,6 @@ prefix_rule(
 )
 
 prefix_rule(
-    id = "head",
     pattern = ["head"],
     match = [
         ["head", "README.md"],
@@ -71,7 +65,6 @@ prefix_rule(
 )
 
 prefix_rule(
-    id = "printenv",
     pattern = ["printenv"],
     match = [
         ["printenv"],
@@ -83,7 +76,6 @@ prefix_rule(
 )
 
 prefix_rule(
-    id = "pwd",
     pattern = ["pwd"],
     match = [
         ["pwd"],
@@ -94,7 +86,6 @@ prefix_rule(
 )
 
 prefix_rule(
-    id = "rg",
     pattern = ["rg"],
     match = [
         ["rg", "-n", "init"],
@@ -106,7 +97,6 @@ prefix_rule(
 )
 
 prefix_rule(
-    id = "sed_prompt",
     pattern = ["sed"],
     decision = "prompt",
     match = [
@@ -119,7 +109,6 @@ prefix_rule(
 )
 
 prefix_rule(
-    id = "which",
     pattern = ["which"],
     match = [
         ["which", "python3"],

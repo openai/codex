@@ -3,6 +3,7 @@ use codex_execpolicy2::Evaluation;
 use codex_execpolicy2::PolicyParser;
 use codex_execpolicy2::RuleMatch;
 use codex_execpolicy2::rule::PatternToken;
+use codex_execpolicy2::rule::Rule;
 
 fn tokens(cmd: &[&str]) -> Vec<String> {
     cmd.iter().map(std::string::ToString::to_string).collect()
@@ -12,7 +13,6 @@ fn tokens(cmd: &[&str]) -> Vec<String> {
 fn basic_match() {
     let policy_src = r#"
 prefix_rule(
-    id = "git_status",
     pattern = ["git", "status"],
 )
     "#;
@@ -30,8 +30,7 @@ prefix_rule(
     assert_eq!(decision, Decision::Allow);
     assert_eq!(
         matched_rules,
-        vec![RuleMatch {
-            rule_id: "git_status".to_string(),
+        vec![RuleMatch::PrefixRuleMatch {
             matched_prefix: tokens(&["git", "status"]),
             decision: Decision::Allow,
         }]
@@ -42,7 +41,6 @@ prefix_rule(
 fn only_first_token_alias_expands_to_multiple_rules() {
     let policy_src = r#"
 prefix_rule(
-    id = "shell",
     pattern = [["bash", "sh"], ["-c", "-l"]],
 )
     "#;
@@ -64,7 +62,10 @@ prefix_rule(
         let Evaluation::Match { matched_rules, .. } = policy.evaluate(&cmd) else {
             panic!("expected match");
         };
-        assert_eq!(matched_rules[0].matched_prefix, prefix);
+        let matched_prefix = match &matched_rules[0] {
+            RuleMatch::PrefixRuleMatch { matched_prefix, .. } => matched_prefix,
+        };
+        assert_eq!(matched_prefix, &prefix);
     }
 }
 
@@ -72,7 +73,6 @@ prefix_rule(
 fn tail_aliases_are_not_cartesian_expanded() {
     let policy_src = r#"
 prefix_rule(
-    id = "npm_install_variants",
     pattern = ["npm", ["i", "install"], ["--legacy-peer-deps", "--no-save"]],
 )
     "#;
@@ -81,7 +81,9 @@ prefix_rule(
 
     let rules = policy.rules().get_vec("npm").expect("npm rules");
     assert_eq!(rules.len(), 1);
-    let rule = &rules[0];
+    let rule = match &rules[0] {
+        Rule::Prefix(rule) => rule,
+    };
     assert_eq!(
         rule.pattern.rest,
         vec![
@@ -102,7 +104,6 @@ prefix_rule(
 fn match_and_not_match_examples_are_enforced() {
     let policy_src = r#"
 prefix_rule(
-    id = "git_status",
     pattern = ["git", "status"],
     match = [["git", "status"]],
     not_match = [["git", "reset", "--hard"]],
@@ -124,17 +125,14 @@ prefix_rule(
 fn strictest_decision_wins_across_matches() {
     let policy_src = r#"
 prefix_rule(
-    id = "allow_git_status",
     pattern = ["git", "status"],
     decision = "allow",
 )
 prefix_rule(
-    id = "prompt_git",
     pattern = ["git"],
     decision = "prompt",
 )
 prefix_rule(
-    id = "forbid_git_commit",
     pattern = ["git", "commit"],
     decision = "forbidden",
 )
@@ -154,13 +152,11 @@ prefix_rule(
     assert_eq!(
         status_matches,
         vec![
-            RuleMatch {
-                rule_id: "allow_git_status".to_string(),
+            RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["git", "status"]),
                 decision: Decision::Allow,
             },
-            RuleMatch {
-                rule_id: "prompt_git".to_string(),
+            RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["git"]),
                 decision: Decision::Prompt,
             }
@@ -179,13 +175,11 @@ prefix_rule(
     assert_eq!(
         commit_matches,
         vec![
-            RuleMatch {
-                rule_id: "prompt_git".to_string(),
+            RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["git"]),
                 decision: Decision::Prompt,
             },
-            RuleMatch {
-                rule_id: "forbid_git_commit".to_string(),
+            RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["git", "commit"]),
                 decision: Decision::Forbidden,
             }

@@ -10,10 +10,10 @@ pub enum Error {
     InvalidPattern(String),
     #[error("invalid example: {0}")]
     InvalidExample(String),
-    #[error("expected example to match rule `{rule_id}`: {example}")]
-    ExampleDidNotMatch { rule_id: String, example: String },
-    #[error("expected example to not match rule `{rule_id}`: {example}")]
-    ExampleDidMatch { rule_id: String, example: String },
+    #[error("expected example to match rule `{rule}`: {example}")]
+    ExampleDidNotMatch { rule: String, example: String },
+    #[error("expected example to not match rule `{rule}`: {example}")]
+    ExampleDidMatch { rule: String, example: String },
     #[error("starlark error: {0}")]
     Starlark(String),
 }
