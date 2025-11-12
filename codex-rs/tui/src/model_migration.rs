@@ -1,0 +1,334 @@
+use crate::render::Insets;
+use crate::render::renderable::ColumnRenderable;
+use crate::render::renderable::Renderable;
+use crate::render::renderable::RenderableExt as _;
+use crate::tui::FrameRequester;
+use crate::tui::Tui;
+use crate::tui::TuiEvent;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
+use ratatui::prelude::Stylize as _;
+use ratatui::prelude::Widget;
+use ratatui::text::Line;
+use ratatui::widgets::Clear;
+use ratatui::widgets::WidgetRef;
+use tokio_stream::StreamExt;
+
+/// Optional target model slug for the migration prompt.
+pub(crate) fn model_migration_target(current_model: &str) -> String {
+    match current_model {
+        "gpt-5" => "gpt-5.1".to_string(),
+        "gpt-5.1" => "gpt-5.1".to_string(),
+        "gpt-5-codex-mini" => "gpt-5.1-codex-mini".to_string(),
+        _ => "gpt-5.1-codex".to_string(),
+    }
+}
+
+/// Outcome of the migration prompt.
+pub(crate) enum ModelMigrationOutcome {
+    Accepted,
+    Exit,
+}
+
+pub(crate) async fn run_model_migration_prompt(
+    tui: &mut Tui,
+    current_model: &str,
+    target_model: &str,
+) -> ModelMigrationOutcome {
+    // Render the prompt on the terminal's alternate screen so exiting or cancelling
+    // does not leave a large blank region in the normal scrollback. This does not
+    // change the prompt's appearance – only where it is drawn.
+    struct AltScreenGuard<'a> {
+        tui: &'a mut Tui,
+    }
+    impl<'a> AltScreenGuard<'a> {
+        fn enter(tui: &'a mut Tui) -> Self {
+            let _ = tui.enter_alt_screen();
+            Self { tui }
+        }
+    }
+    impl Drop for AltScreenGuard<'_> {
+        fn drop(&mut self) {
+            let _ = self.tui.leave_alt_screen();
+        }
+    }
+
+    let alt = AltScreenGuard::enter(tui);
+
+    let mut screen =
+        ModelMigrationScreen::new(alt.tui.frame_requester(), current_model, target_model);
+
+    let _ = alt.tui.draw(u16::MAX, |frame| {
+        frame.render_widget_ref(&screen, frame.area());
+    });
+
+    let events = alt.tui.event_stream();
+    tokio::pin!(events);
+
+    while !screen.is_done() {
+        if let Some(event) = events.next().await {
+            match event {
+                TuiEvent::Key(key_event) => screen.handle_key(key_event),
+                TuiEvent::Paste(_) => {}
+                TuiEvent::Draw => {
+                    let _ = alt.tui.draw(u16::MAX, |frame| {
+                        frame.render_widget_ref(&screen, frame.area());
+                    });
+                }
+            }
+        } else {
+            screen.defer();
+            break;
+        }
+    }
+
+    screen.outcome()
+}
+
+struct ModelMigrationScreen {
+    request_frame: FrameRequester,
+    target_model: String,
+    done: bool,
+    should_exit: bool,
+    should_defer: bool,
+}
+
+impl ModelMigrationScreen {
+    fn new(request_frame: FrameRequester, _current_model: &str, target_model: &str) -> Self {
+        Self {
+            request_frame,
+            target_model: target_model.to_string(),
+            done: false,
+            should_exit: false,
+            should_defer: false,
+        }
+    }
+
+    fn handle_key(&mut self, key_event: KeyEvent) {
+        if key_event.kind == KeyEventKind::Release {
+            return;
+        }
+
+        if key_event.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('d'))
+        {
+            self.should_exit = true;
+            self.done = true;
+            self.request_frame.schedule_frame();
+            return;
+        }
+
+        if matches!(key_event.code, KeyCode::Esc) {
+            self.defer();
+            return;
+        }
+
+        if matches!(key_event.code, KeyCode::Enter) {
+            self.done = true;
+            self.request_frame.schedule_frame();
+        }
+    }
+
+    fn is_done(&self) -> bool {
+        self.done
+    }
+
+    fn outcome(&self) -> ModelMigrationOutcome {
+        if self.should_exit {
+            ModelMigrationOutcome::Exit
+        } else {
+            ModelMigrationOutcome::Accepted
+        }
+    }
+
+    fn defer(&mut self) {
+        self.should_defer = true;
+        self.done = true;
+        self.request_frame.schedule_frame();
+    }
+}
+
+fn display_model_name(slug: &str) -> String {
+    slug.split('-')
+        .map(|part| match part {
+            "gpt" => "GPT".to_string(),
+            other => {
+                let mut chars = other.chars();
+                match chars.next() {
+                    Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+                    None => String::new(),
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn mini_variant(slug: &str) -> String {
+    if slug.ends_with("-mini") {
+        return display_model_name(slug);
+    }
+
+    format!("{}-Mini", display_model_name(slug))
+}
+
+fn model_family_name(slug: &str) -> String {
+    let parts: Vec<_> = slug.split('-').collect();
+    if parts.len() < 2 {
+        return display_model_name(slug);
+    }
+
+    display_model_name(&parts[0..2].join("-"))
+}
+
+impl WidgetRef for &ModelMigrationScreen {
+    fn render_ref(&self, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
+        Clear.render(area, buf);
+
+        let mut column = ColumnRenderable::new();
+
+        let primary_model = display_model_name(&self.target_model);
+        let mini_model = mini_variant(&self.target_model);
+        let family_model = model_family_name(&self.target_model);
+
+        column.push("");
+        column.push(Line::from(vec![
+            "  ☆ ".cyan().bold(),
+            "Introducing ".cyan().bold(),
+            primary_model.clone().cyan().bold(),
+            " and ".cyan().bold(),
+            mini_model.cyan().bold(),
+        ]));
+        column.push(Line::from(""));
+
+        column.push(
+            Line::from(vec![
+                "We’re releasing ".gray(),
+                primary_model.gray(),
+                ", a version of ".gray(),
+                family_model.gray(),
+                " optimized for long-running, agentic coding tasks.".gray(),
+            ])
+            .inset(Insets::tlbr(0, 2, 0, 0)),
+        );
+        column.push(Line::from(""));
+        column.push(
+            Line::from(vec![
+                "Learn more at ".into(),
+                "www.openai.com/index/gpt-5-1".cyan(),
+            ])
+            .inset(Insets::tlbr(0, 2, 0, 0)),
+        );
+        column.push(Line::from(""));
+        column
+            .push(Line::from(vec!["Press Enter to try now".dim()]).inset(Insets::tlbr(0, 2, 0, 0)));
+
+        column.render(area, buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ModelMigrationScreen;
+    use crate::custom_terminal::Terminal;
+    use crate::test_backend::VT100Backend;
+    use crate::tui::FrameRequester;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use insta::assert_snapshot;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn prompt_snapshot() {
+        let width: u16 = 60;
+        let height: u16 = 12;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+        let screen = ModelMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            "gpt-4.1-codex",
+            "gpt-5.1-codex",
+        );
+
+        {
+            let mut frame = terminal.get_frame();
+            frame.render_widget_ref(&screen, frame.area());
+        }
+        terminal.flush().expect("flush");
+
+        assert_snapshot!("model_migration_prompt", terminal.backend());
+    }
+
+    #[test]
+    fn prompt_snapshot_gpt5_family() {
+        let backend = VT100Backend::new(60, 12);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 60, 12));
+
+        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy(), "gpt-5", "gpt-5.1");
+        {
+            let mut frame = terminal.get_frame();
+            frame.render_widget_ref(&screen, frame.area());
+        }
+        terminal.flush().expect("flush");
+        assert_snapshot!("model_migration_prompt_gpt5_family", terminal.backend());
+    }
+
+    #[test]
+    fn prompt_snapshot_gpt5_codex() {
+        let backend = VT100Backend::new(60, 12);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 60, 12));
+
+        let screen =
+            ModelMigrationScreen::new(FrameRequester::test_dummy(), "gpt-5-codex", "gpt-5.1-codex");
+        {
+            let mut frame = terminal.get_frame();
+            frame.render_widget_ref(&screen, frame.area());
+        }
+        terminal.flush().expect("flush");
+        assert_snapshot!("model_migration_prompt_gpt5_codex", terminal.backend());
+    }
+
+    #[test]
+    fn prompt_snapshot_gpt5_codex_mini() {
+        let backend = VT100Backend::new(60, 12);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 60, 12));
+
+        let screen = ModelMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            "gpt-5-codex-mini",
+            "gpt-5.1-codex-mini",
+        );
+        {
+            let mut frame = terminal.get_frame();
+            frame.render_widget_ref(&screen, frame.area());
+        }
+        terminal.flush().expect("flush");
+        assert_snapshot!("model_migration_prompt_gpt5_codex_mini", terminal.backend());
+    }
+
+    #[test]
+    fn escape_key_defers_prompt() {
+        let screen_target = "gpt-5.1-codex";
+        let mut screen =
+            ModelMigrationScreen::new(FrameRequester::test_dummy(), "gpt-5-codex", screen_target);
+
+        // Simulate pressing Escape
+        screen.handle_key(KeyEvent::new(
+            KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert!(screen.is_done());
+        // Esc should not be treated as Exit – it defers instead.
+        assert!(matches!(
+            screen.outcome(),
+            super::ModelMigrationOutcome::Accepted
+        ));
+    }
+}

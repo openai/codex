@@ -1,0 +1,11 @@
+---
+source: tui/src/model_migration.rs
+expression: terminal.backend()
+---
+  ☆ Introducing GPT-5.1-Codex-Mini and GPT-5.1-Codex-Mini
+
+  We’re releasing GPT-5.1-Codex-Mini, a version of GPT-5.1 o
+
+  Learn more at www.openai.com/index/gpt-5-1
+
+  Press Enter to try now
