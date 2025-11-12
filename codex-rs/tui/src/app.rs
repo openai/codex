@@ -57,16 +57,16 @@ async fn handle_model_migration_prompt_if_needed(
     tui: &mut tui::Tui,
     config: &mut Config,
     app_event_tx: &AppEventSender,
-) -> Result<()> {
+) -> Option<AppExitInfo> {
     let target_model = model_migration_target(&config.model);
     if target_model == config.model || config.notices.hide_gpt5_1_migration_prompt.unwrap_or(false)
     {
-        return Ok(());
+        return None;
     }
 
     app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged);
     config.notices.hide_gpt5_1_migration_prompt = Some(true);
-    match run_model_migration_prompt(tui, &config.model, &target_model).await? {
+    match run_model_migration_prompt(tui, &config.model, &target_model).await {
         ModelMigrationOutcome::Accepted => {
             config.model = target_model.clone();
             if let Some(family) = find_family_for_model(&target_model) {
@@ -77,10 +77,16 @@ async fn handle_model_migration_prompt_if_needed(
                 effort: config.model_reasoning_effort,
             });
         }
-        ModelMigrationOutcome::Exit => {}
+        ModelMigrationOutcome::Exit => {
+            return Some(AppExitInfo {
+                token_usage: TokenUsage::default(),
+                conversation_id: None,
+                update_action: None,
+            });
+        }
     }
 
-    Ok(())
+    None
 }
 
 pub(crate) struct App {
@@ -133,7 +139,11 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
-        handle_model_migration_prompt_if_needed(tui, &mut config, &app_event_tx).await?;
+        let exit_info =
+            handle_model_migration_prompt_if_needed(tui, &mut config, &app_event_tx).await;
+        if let Some(exit_info) = exit_info {
+            return Ok(exit_info);
+        }
 
         let conversation_manager = Arc::new(ConversationManager::new(
             auth_manager.clone(),
