@@ -1,5 +1,5 @@
-name: Winget Submit (Composite)
-description: Template + validate WinGet manifests for Codex
+name: Winget Submit
+description: Template + validate + submission of WinGet manifests for Codex
 inputs:
   version:
     description: Release version (e.g., 0.58.0)
