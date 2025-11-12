@@ -47,6 +47,7 @@ pub(crate) enum CancellationEvent {
 
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::InputResult;
+pub(crate) use chat_composer::normalize_paste_text;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
