@@ -43,26 +43,19 @@ pub struct PrefixPattern {
 }
 
 impl PrefixPattern {
-    pub fn len(&self) -> usize {
-        self.rest.len() + 1
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
     pub fn matches_prefix(&self, cmd: &[String]) -> Option<Vec<String>> {
-        if cmd.len() < self.len() || cmd[0] != self.first {
+        let pattern_length = self.rest.len() + 1;
+        if cmd.len() < pattern_length || cmd[0] != self.first {
             return None;
         }
 
-        for (pattern_token, cmd_token) in self.rest.iter().zip(&cmd[1..self.len()]) {
+        for (pattern_token, cmd_token) in self.rest.iter().zip(&cmd[1..pattern_length]) {
             if !pattern_token.matches(cmd_token) {
                 return None;
             }
         }
 
-        Some(cmd[..self.len()].to_vec())
+        Some(cmd[..pattern_length].to_vec())
     }
 }
 
