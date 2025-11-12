@@ -347,6 +347,49 @@ describe("Codex", () => {
     }
   });
 
+  it("passes additionalDirectories as repeated flags", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Additional directories applied", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread({
+        additionalDirectories: ["../backend", "/tmp/shared"],
+      });
+      await thread.run("test additional dirs");
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      if (!commandArgs) {
+        throw new Error("Command args missing");
+      }
+      const addDirValues: string[] = [];
+      for (let i = 0; i < commandArgs.length; i += 1) {
+        if (commandArgs[i] === "--add-dir") {
+          const directory = commandArgs[i + 1];
+          if (typeof directory === "string") {
+            addDirValues.push(directory);
+          }
+        }
+      }
+      expect(addDirValues).toEqual(["../backend", "/tmp/shared"]);
+    } finally {
+      restore();
+      await close();
+    }
+  });
+
   it("writes output schema to a temporary file and forwards it", async () => {
     const { url, close, requests } = await startResponsesTestProxy({
       statusCode: 200,
