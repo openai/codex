@@ -101,13 +101,23 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         None => prompt.clone(),
     };
 
-    let regular_prompt_opt = parent_or_resume_prompt_arg.map(|p| {
-        if p == "-" {
-            read_prompt_from_stdin_or_exit(true)
-        } else {
-            p
+    // Determine the regular prompt. If explicitly "-", read from stdin.
+    // If omitted, read from stdin when non‑TTY; otherwise exit with a message.
+    let regular_prompt_opt = match parent_or_resume_prompt_arg {
+        Some(p) => {
+            if p == "-" {
+                Some(read_prompt_from_stdin_or_exit(true))
+            } else {
+                Some(p)
+            }
         }
-    });
+        None => match &command {
+            // Review subcommand handles its own inputs later.
+            Some(ExecCommand::Review(_)) => None,
+            // Default/Resume flows: honor piped stdin or exit if TTY.
+            _ => Some(read_prompt_from_stdin_or_exit(false)),
+        },
+    };
 
     let output_schema = load_output_schema(output_schema_path);
 
@@ -378,7 +388,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 .into_iter()
                 .map(|path| UserInput::LocalImage { path })
                 .collect();
-            let text = regular_prompt_opt.unwrap_or_default();
+            let text = match regular_prompt_opt {
+                Some(t) => t,
+                None => read_prompt_from_stdin_or_exit(false),
+            };
             items.push(UserInput::Text { text });
             let id = conversation
                 .submit(Op::UserTurn {
