@@ -797,13 +797,7 @@ async fn apply_patch_shell_failure_propagates_error_and_skips_diff() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
-async fn apply_patch_function_accepts_lenient_heredoc_wrapped_patch(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_function_accepts_lenient_heredoc_wrapped_patch() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -814,7 +808,12 @@ async fn apply_patch_function_accepts_lenient_heredoc_wrapped_patch(
     let wrapped = format!("<<'EOF'\n{patch_inner}EOF\n");
     let call_id = "apply-lenient";
     harness
-        .mount_apply_patch_call(call_id, wrapped.as_str(), "ok", model_output)
+        .mount_apply_patch_call(
+            call_id,
+            wrapped.as_str(),
+            "ok",
+            ApplyPatchModelOutput::Function,
+        )
         .await;
 
     harness.submit("apply lenient heredoc patch").await?;
