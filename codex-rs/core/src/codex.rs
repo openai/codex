@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::io;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -16,6 +18,7 @@ use crate::parse_turn_item;
 use crate::response_processing::process_items;
 use crate::terminal;
 use crate::user_notification::UserNotifier;
+use crate::util::display_path_relative_to_home;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -771,6 +774,66 @@ impl Session {
         self.persist_rollout_items(&rollout_items).await;
         if let Err(e) = self.tx_event.send(event).await {
             error!("failed to send tool call event: {e}");
+        }
+    }
+
+    /// Attempts to recover a missing codex binary by searching PATH.
+    /// If found, sends a warning event to the user and returns the new path.
+    /// If not found, sends an error event and returns an error.
+    ///
+    /// A surprising amount of users are affected by this, because they run
+    /// Codex in the background for long periods of time and some installation
+    /// methods may change the binary path. This would cause panics like:
+    /// "No such file or directory (os error 2)".
+    ///
+    /// See context: https://github.com/openai/codex/issues/3051
+    pub(crate) async fn try_recover_codex_binary(
+        &self,
+        original_path: Option<&Path>,
+        turn_context: &TurnContext,
+    ) -> CodexResult<PathBuf> {
+        use crate::protocol::ErrorEvent;
+        use crate::protocol::WarningEvent;
+
+        let original_display = original_path
+            .map(display_path_relative_to_home)
+            .unwrap_or_else(|| "(unknown location)".to_string());
+
+        match crate::updates::try_codex_in_path().await {
+            Some(alt_path) => {
+                let alt_display = display_path_relative_to_home(&alt_path);
+                self.send_event(
+                    turn_context,
+                    EventMsg::Warning(WarningEvent {
+                        message: format!(
+                            "Did you update Codex while it was running?\n\
+                             │ Expected binary to exist: {original_display}\n\
+                             └ Found binary: {alt_display}"
+                        ),
+                    }),
+                )
+                .await;
+                Ok(alt_path)
+            }
+            None => {
+                let reinstall_hint = crate::updates::get_reinstall_hint();
+                let message = format!(
+                    "Did you delete Codex while it was running?\n\
+                     │ Expected binary to exist: {original_display}\n\
+                     └ Install Codex again to resolve: {reinstall_hint}"
+                );
+                self.send_event(
+                    turn_context,
+                    EventMsg::Error(ErrorEvent {
+                        message: message.clone(),
+                    }),
+                )
+                .await;
+                Err(CodexErr::Io(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "Codex binary not found; see previous error message",
+                )))
+            }
         }
     }
 

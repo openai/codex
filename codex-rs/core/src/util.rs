@@ -1,3 +1,6 @@
+use dirs::home_dir;
+use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use rand::Rng;
@@ -20,6 +23,19 @@ pub(crate) fn error_or_panic(message: String) {
     } else {
         error!("{message}");
     }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn display_path_relative_to_home(path: &Path) -> String {
+    home_dir()
+        .and_then(|home| path.strip_prefix(&home).ok().map(PathBuf::from))
+        .map(|relative| format!("~/{}", relative.display()))
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+#[cfg(windows)]
+pub(crate) fn display_path_relative_to_home(path: &Path) -> String {
+    path.display().to_string()
 }
 
 pub(crate) fn try_parse_error_message(text: &str) -> String {
@@ -63,5 +79,59 @@ mod tests {
         let text = r#"{"message": "test"}"#;
         let message = try_parse_error_message(text);
         assert_eq!(message, r#"{"message": "test"}"#);
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn test_display_path_relative_to_home() {
+        if let Some(home) = home_dir() {
+            let path = home.join("foo").join("bar");
+            let display = display_path_relative_to_home(&path);
+            assert_eq!(display, "~/foo/bar");
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_display_path_relative_to_home() {
+        if let Some(home) = home_dir() {
+            let path = home.join("foo").join("bar");
+            let display = display_path_relative_to_home(&path);
+            assert_eq!(display, path.display().to_string());
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_display_path_outside_home() {
+        let path = Path::new("/usr/local/bin/codex");
+        let display = display_path_relative_to_home(path);
+        assert_eq!(display, "/usr/local/bin/codex");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_display_path_outside_home() {
+        let path = Path::new("C:\\Program Files\\codex");
+        let display = display_path_relative_to_home(path);
+        assert_eq!(display, "C:\\Program Files\\codex");
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn test_display_home_dir_itself() {
+        if let Some(home) = home_dir() {
+            let display = display_path_relative_to_home(&home);
+            assert_eq!(display, "~/");
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_display_home_dir_itself() {
+        if let Some(home) = home_dir() {
+            let display = display_path_relative_to_home(&home);
+            assert_eq!(display, home.display().to_string());
+        }
     }
 }

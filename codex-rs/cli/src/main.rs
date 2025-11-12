@@ -19,10 +19,11 @@ use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
+use codex_core::updates::UpdateAction;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
-use codex_tui::update_action::UpdateAction;
 use owo_colors::OwoColorize;
+use std::env;
 use std::path::PathBuf;
 use supports_color::Stream;
 
@@ -60,6 +61,9 @@ struct MultitoolCli {
 
     #[clap(flatten)]
     interactive: TuiCli,
+
+    #[arg(long = "print-binary-path", hide = true)]
+    print_binary_path: bool,
 
     #[clap(subcommand)]
     subcommand: Option<Subcommand>,
@@ -275,6 +279,13 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     lines
 }
 
+fn print_binary_path_to_stdout() -> std::io::Result<()> {
+    let current_exe = env::current_exe()?;
+    let canonical_exe = current_exe.canonicalize().unwrap_or(current_exe);
+    println!("{}", canonical_exe.display());
+    Ok(())
+}
+
 /// Handle the app exit and print the results. Optionally run the update action.
 fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
     let update_action = exit_info.update_action;
@@ -396,12 +407,21 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
+    let cli = MultitoolCli::parse();
+    if cli.print_binary_path {
+        if let Err(e) = print_binary_path_to_stdout() {
+            eprintln!("Error: failed to print binary path: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
         mut interactive,
         subcommand,
-    } = MultitoolCli::parse();
+        ..
+    } = cli;
 
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
@@ -696,7 +716,7 @@ mod tests {
             interactive,
             config_overrides: root_overrides,
             subcommand,
-            feature_toggles: _,
+            ..
         } = cli;
 
         let Subcommand::Resume(ResumeCommand {

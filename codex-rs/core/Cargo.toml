@@ -113,6 +113,7 @@ maplit = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
+temp-env = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
 tracing-test = { workspace = true, features = ["no-env-filter"] }

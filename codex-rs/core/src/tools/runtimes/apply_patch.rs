@@ -54,24 +54,36 @@ impl ApplyPatchRuntime {
         Self
     }
 
-    fn build_command_spec(req: &ApplyPatchRequest) -> Result<CommandSpec, ToolError> {
-        use std::env;
-        let exe = if let Some(path) = &req.codex_exe {
-            path.clone()
-        } else {
-            env::current_exe()
-                .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))?
-        };
-        let program = exe.to_string_lossy().to_string();
-        Ok(CommandSpec {
-            program,
-            args: vec![CODEX_APPLY_PATCH_ARG1.to_string(), req.patch.clone()],
-            cwd: req.cwd.clone(),
-            timeout_ms: req.timeout_ms,
-            // Run apply_patch with a minimal environment for determinism and to avoid leaks.
-            env: HashMap::new(),
-            with_escalated_permissions: None,
-            justification: None,
+    fn build_command_spec<'a>(
+        req: &'a ApplyPatchRequest,
+        ctx: &'a ToolCtx<'a>,
+    ) -> BoxFuture<'a, std::result::Result<CommandSpec, ToolError>> {
+        Box::pin(async move {
+            use std::env;
+
+            let initial_exe = req.codex_exe.clone().or_else(|| env::current_exe().ok());
+            let exe = match initial_exe.as_ref() {
+                Some(path) if path.exists() => path.clone(),
+                _ => match ctx
+                    .session
+                    .try_recover_codex_binary(initial_exe.as_deref(), ctx.turn)
+                    .await
+                {
+                    Ok(path) => path,
+                    Err(err) => return Err(ToolError::Codex(err)),
+                },
+            };
+
+            let program = exe.to_string_lossy().to_string();
+            Ok(CommandSpec {
+                program,
+                args: vec![CODEX_APPLY_PATCH_ARG1.to_string(), req.patch.clone()],
+                cwd: req.cwd.clone(),
+                timeout_ms: req.timeout_ms,
+                env: HashMap::new(),
+                with_escalated_permissions: None,
+                justification: None,
+            })
         })
     }
 
@@ -151,7 +163,7 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx<'_>,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let spec = Self::build_command_spec(req)?;
+        let spec = Self::build_command_spec(req, ctx).await?;
         let env = attempt
             .env_for(&spec)
             .map_err(|err| ToolError::Codex(err.into()))?;

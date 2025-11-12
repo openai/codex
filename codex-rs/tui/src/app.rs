@@ -13,7 +13,7 @@ use crate::render::renderable::Renderable;
 use crate::resume_picker::ResumeSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
-use crate::update_action::UpdateAction;
+use codex_core::updates::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
@@ -203,7 +203,7 @@ impl App {
                 tui,
                 AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
                     latest_version,
-                    crate::update_action::get_update_action(),
+                    codex_core::updates::get_update_action(),
                 ))),
             )
             .await?;

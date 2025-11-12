@@ -1,6 +1,7 @@
 // Aggregates all former standalone integration tests as modules.
 mod apply_patch;
 mod auth_env;
+mod binary_recovery;
 mod originator;
 mod output_schema;
 mod resume;
