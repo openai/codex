@@ -90,16 +90,18 @@ pub(crate) async fn run_model_migration_prompt(
 struct ModelMigrationScreen {
     request_frame: FrameRequester,
     target_model: String,
+    current_model: String,
     done: bool,
     should_exit: bool,
     should_defer: bool,
 }
 
 impl ModelMigrationScreen {
-    fn new(request_frame: FrameRequester, _current_model: &str, target_model: &str) -> Self {
+    fn new(request_frame: FrameRequester, current_model: &str, target_model: &str) -> Self {
         Self {
             request_frame,
             target_model: target_model.to_string(),
+            current_model: current_model.to_string(),
             done: false,
             should_exit: false,
             should_defer: false,
@@ -174,15 +176,6 @@ fn mini_variant(slug: &str) -> String {
     format!("{}-Mini", display_model_name(slug))
 }
 
-fn model_family_name(slug: &str) -> String {
-    let parts: Vec<_> = slug.split('-').collect();
-    if parts.len() < 2 {
-        return display_model_name(slug);
-    }
-
-    display_model_name(&parts[0..2].join("-"))
-}
-
 impl WidgetRef for &ModelMigrationScreen {
     fn render_ref(&self, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
         Clear.render(area, buf);
@@ -191,7 +184,6 @@ impl WidgetRef for &ModelMigrationScreen {
 
         let primary_model = display_model_name(&self.target_model);
         let mini_model = mini_variant(&self.target_model);
-        let family_model = model_family_name(&self.target_model);
 
         column.push("");
         column.push(Line::from(vec![
@@ -208,7 +200,7 @@ impl WidgetRef for &ModelMigrationScreen {
                 "We’re releasing ".gray(),
                 primary_model.gray(),
                 ", a version of ".gray(),
-                family_model.gray(),
+                self.current_model.clone().gray(),
                 " optimized for long-running, agentic coding tasks.".gray(),
             ])
             .inset(Insets::tlbr(0, 2, 0, 0)),
@@ -248,11 +240,8 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, width, height));
 
-        let screen = ModelMigrationScreen::new(
-            FrameRequester::test_dummy(),
-            "gpt-4.1-codex",
-            "gpt-5.1-codex",
-        );
+        let screen =
+            ModelMigrationScreen::new(FrameRequester::test_dummy(), "gpt-5-codex", "gpt-5.1-codex");
 
         {
             let mut frame = terminal.get_frame();
@@ -265,9 +254,9 @@ mod tests {
 
     #[test]
     fn prompt_snapshot_gpt5_family() {
-        let backend = VT100Backend::new(60, 12);
+        let backend = VT100Backend::new(65, 12);
         let mut terminal = Terminal::with_options(backend).expect("terminal");
-        terminal.set_viewport_area(Rect::new(0, 0, 60, 12));
+        terminal.set_viewport_area(Rect::new(0, 0, 65, 12));
 
         let screen = ModelMigrationScreen::new(FrameRequester::test_dummy(), "gpt-5", "gpt-5.1");
         {

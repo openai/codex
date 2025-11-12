@@ -4,7 +4,7 @@ expression: terminal.backend()
 ---
   ☆ Introducing GPT-5.1 and GPT-5.1-Mini
 
-  We’re releasing GPT-5.1, a version of GPT-5.1 optimized fo
+  We’re releasing GPT-5.1, a version of gpt-5 optimized for long-
 
   Learn more at www.openai.com/index/gpt-5-1
 
