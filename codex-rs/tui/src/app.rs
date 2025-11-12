@@ -67,18 +67,9 @@ async fn handle_model_migration_prompt_if_needed(
     app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
         migration_config: "hide_gpt5_1_migration_prompt".to_string(),
     });
-
+    app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
     match run_model_migration_prompt(tui, &config.model, &target_model).await {
-        ModelMigrationOutcome::Accepted => {
-            config.model = target_model.clone();
-            if let Some(family) = find_family_for_model(&target_model) {
-                config.model_family = family;
-            }
-            app_event_tx.send(AppEvent::PersistModelSelection {
-                model: target_model,
-                effort: config.model_reasoning_effort,
-            });
-        }
+        ModelMigrationOutcome::Accepted => {}
         ModelMigrationOutcome::Exit => {
             return Some(AppExitInfo {
                 token_usage: TokenUsage::default(),
