@@ -18,7 +18,7 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
-use codex_common::model_presets::builtin_model_presets;
+use codex_common::model_presets::all_model_presets;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
@@ -54,21 +54,29 @@ pub struct AppExitInfo {
     pub update_action: Option<UpdateAction>,
 }
 
+fn should_show_model_migration_prompt(
+    current_model: &str,
+    target_model: &str,
+    hide_prompt_flag: Option<bool>,
+) -> bool {
+    if target_model == current_model || hide_prompt_flag.unwrap_or(false) {
+        return false;
+    }
+
+    all_model_presets()
+        .iter()
+        .filter(|preset| preset.is_deprecated)
+        .any(|preset| preset.model == current_model)
+}
+
 async fn handle_model_migration_prompt_if_needed(
     tui: &mut tui::Tui,
     config: &mut Config,
     app_event_tx: &AppEventSender,
 ) -> Option<AppExitInfo> {
     let target_model = model_migration_target(&config.model);
-    let deprecated_models = builtin_model_presets(None)
-        .iter()
-        .filter(|preset| preset.is_deprecated)
-        .map(|preset| preset.model)
-        .collect::<std::collections::HashSet<_>>();
-    if deprecated_models.contains(&config.model.as_str())
-        || target_model == config.model
-        || config.notices.hide_gpt5_1_migration_prompt.unwrap_or(false)
-    {
+    let hide_prompt_flag = config.notices.hide_gpt5_1_migration_prompt;
+    if !should_show_model_migration_prompt(&config.model, &target_model, hide_prompt_flag) {
         return None;
     }
 
@@ -822,6 +830,38 @@ mod tests {
             pending_update_action: None,
             skip_world_writable_scan_once: false,
         }
+    }
+
+    #[test]
+    fn model_migration_prompt_only_shows_for_deprecated_models() {
+        assert!(should_show_model_migration_prompt("gpt-5", "gpt-5.1", None));
+        assert!(should_show_model_migration_prompt(
+            "gpt-5-codex",
+            "gpt-5.1-codex",
+            None
+        ));
+        assert!(should_show_model_migration_prompt(
+            "gpt-5-codex-mini",
+            "gpt-5.1-codex-mini",
+            None
+        ));
+        assert!(!should_show_model_migration_prompt(
+            "gpt-5.1-codex",
+            "gpt-5.1-codex",
+            None
+        ));
+    }
+
+    #[test]
+    fn model_migration_prompt_respects_hide_flag_and_self_target() {
+        assert!(!should_show_model_migration_prompt(
+            "gpt-5",
+            "gpt-5.1",
+            Some(true)
+        ));
+        assert!(!should_show_model_migration_prompt(
+            "gpt-5.1", "gpt-5.1", None
+        ));
     }
 
     #[test]

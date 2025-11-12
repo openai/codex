@@ -111,6 +111,10 @@ pub fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
         .collect()
 }
 
+pub fn all_model_presets() -> &'static [ModelPreset] {
+    PRESETS
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
