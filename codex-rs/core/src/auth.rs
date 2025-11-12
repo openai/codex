@@ -227,6 +227,14 @@ impl CodexAuth {
             })
     }
 
+    /// Raw plan string from the ID token (including unknown/new plan types).
+    pub fn raw_plan_type(&self) -> Option<String> {
+        self.get_plan_type().map(|plan| match plan {
+            InternalPlanType::Known(k) => format!("{k:?}"),
+            InternalPlanType::Unknown(raw) => raw,
+        })
+    }
+
     /// Raw internal plan value from the ID token.
     /// Exposes the underlying `token_data::PlanType` without mapping it to the
     /// public `AccountPlanType`. Use this when downstream code needs to inspect
