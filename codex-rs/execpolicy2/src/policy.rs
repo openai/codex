@@ -44,19 +44,9 @@ impl Policy {
             None => return Evaluation::NoMatch,
         };
 
-        let mut matched_rules: Vec<RuleMatch> = Vec::new();
-        let mut strictest_decision: Option<Decision> = None;
-        for rule in rules {
-            if let Some(matched) = rule.matches(cmd) {
-                let decision = match strictest_decision {
-                    None => matched.decision(),
-                    Some(current) => std::cmp::max(matched.decision(), current),
-                };
-                strictest_decision = Some(decision);
-                matched_rules.push(matched);
-            }
-        }
-        match strictest_decision {
+        let matched_rules: Vec<RuleMatch> =
+            rules.iter().filter_map(|rule| rule.matches(cmd)).collect();
+        match matched_rules.iter().map(RuleMatch::decision).max() {
             Some(decision) => Evaluation::Match {
                 decision,
                 matched_rules,

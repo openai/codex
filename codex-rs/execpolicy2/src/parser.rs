@@ -92,8 +92,7 @@ fn parse_pattern<'v>(pattern: UnpackList<Value<'v>>) -> Result<Vec<PatternToken>
 fn parse_pattern_token<'v>(value: Value<'v>) -> Result<PatternToken> {
     if let Some(s) = value.unpack_str() {
         Ok(PatternToken::Single(s.to_string()))
-    }
-    else if let Some(list) = ListRef::from_value(value) {
+    } else if let Some(list) = ListRef::from_value(value) {
         let tokens: Vec<String> = list
             .content()
             .iter()
