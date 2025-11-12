@@ -128,4 +128,32 @@ async fn model_selects_expected_tools() {
         ],
         "gpt-5-codex should expose the apply_patch tool",
     );
+
+    let gpt51_codex_tools = collect_tool_identifiers_for_model("gpt-5.1-codex").await;
+    assert_eq!(
+        gpt51_codex_tools,
+        vec![
+            "shell".to_string(),
+            "list_mcp_resources".to_string(),
+            "list_mcp_resource_templates".to_string(),
+            "read_mcp_resource".to_string(),
+            "update_plan".to_string(),
+            "apply_patch".to_string()
+        ],
+        "gpt-5-codex should expose the apply_patch tool",
+    );
+
+    let gpt51_tools = collect_tool_identifiers_for_model("gpt-5-codex").await;
+    assert_eq!(
+        gpt51_tools,
+        vec![
+            "shell".to_string(),
+            "list_mcp_resources".to_string(),
+            "list_mcp_resource_templates".to_string(),
+            "read_mcp_resource".to_string(),
+            "update_plan".to_string(),
+            "apply_patch".to_string()
+        ],
+        "gpt-5-codex should expose the apply_patch tool",
+    );
 }
