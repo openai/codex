@@ -18,13 +18,14 @@ use tokio::process::Child;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::SandboxErr;
-use crate::landlock::spawn_command_under_linux_sandbox;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::SandboxPolicy;
-use crate::seatbelt::spawn_command_under_seatbelt;
+use crate::sandboxing::CommandSpec;
+use crate::sandboxing::ExecEnv;
+use crate::sandboxing::SandboxManager;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 
@@ -53,6 +54,7 @@ pub struct ExecParams {
     pub env: HashMap<String, String>,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
+    pub arg0: Option<String>,
 }
 
 impl ExecParams {
@@ -70,6 +72,9 @@ pub enum SandboxType {
 
     /// Only available on Linux.
     LinuxSeccomp,
+
+    /// Only available on Windows.
+    WindowsRestrictedToken,
 }
 
 #[derive(Clone)]
@@ -87,57 +92,163 @@ pub async fn process_exec_tool_call(
     codex_linux_sandbox_exe: &Option<PathBuf>,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
+    let ExecParams {
+        command,
+        cwd,
+        timeout_ms,
+        env,
+        with_escalated_permissions,
+        justification,
+        arg0: _,
+    } = params;
+
+    let (program, args) = command.split_first().ok_or_else(|| {
+        CodexErr::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "command args are empty",
+        ))
+    })?;
+
+    let spec = CommandSpec {
+        program: program.clone(),
+        args: args.to_vec(),
+        cwd,
+        env,
+        timeout_ms,
+        with_escalated_permissions,
+        justification,
+    };
+
+    let manager = SandboxManager::new();
+    let exec_env = manager
+        .transform(
+            &spec,
+            sandbox_policy,
+            sandbox_type,
+            sandbox_cwd,
+            codex_linux_sandbox_exe.as_ref(),
+        )
+        .map_err(CodexErr::from)?;
+
+    // Route through the sandboxing module for a single, unified execution path.
+    crate::sandboxing::execute_env(&exec_env, sandbox_policy, stdout_stream).await
+}
+
+pub(crate) async fn execute_exec_env(
+    env: ExecEnv,
+    sandbox_policy: &SandboxPolicy,
+    stdout_stream: Option<StdoutStream>,
+) -> Result<ExecToolCallOutput> {
+    let ExecEnv {
+        command,
+        cwd,
+        env,
+        timeout_ms,
+        sandbox,
+        with_escalated_permissions,
+        justification,
+        arg0,
+    } = env;
+
+    let params = ExecParams {
+        command,
+        cwd,
+        timeout_ms,
+        env,
+        with_escalated_permissions,
+        justification,
+        arg0,
+    };
+
     let start = Instant::now();
+    let raw_output_result = exec(params, sandbox, sandbox_policy, stdout_stream).await;
+    let duration = start.elapsed();
+    finalize_exec_result(raw_output_result, sandbox, duration)
+}
 
-    let timeout_duration = params.timeout_duration();
+#[cfg(target_os = "windows")]
+async fn exec_windows_sandbox(
+    params: ExecParams,
+    sandbox_policy: &SandboxPolicy,
+) -> Result<RawExecToolCallOutput> {
+    use crate::config::find_codex_home;
+    use codex_windows_sandbox::run_windows_sandbox_capture;
 
-    let raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr> = match sandbox_type
-    {
-        SandboxType::None => exec(params, sandbox_policy, stdout_stream.clone()).await,
-        SandboxType::MacosSeatbelt => {
-            let ExecParams {
-                command,
-                cwd: command_cwd,
-                env,
-                ..
-            } = params;
-            let child = spawn_command_under_seatbelt(
-                command,
-                command_cwd,
-                sandbox_policy,
-                sandbox_cwd,
-                StdioPolicy::RedirectForShellTool,
-                env,
-            )
-            .await?;
-            consume_truncated_output(child, timeout_duration, stdout_stream.clone()).await
+    let ExecParams {
+        command,
+        cwd,
+        env,
+        timeout_ms,
+        ..
+    } = params;
+
+    let policy_str = match sandbox_policy {
+        SandboxPolicy::DangerFullAccess => "workspace-write",
+        SandboxPolicy::ReadOnly => "read-only",
+        SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
+    };
+
+    let sandbox_cwd = cwd.clone();
+    let logs_base_dir = find_codex_home().ok();
+    let spawn_res = tokio::task::spawn_blocking(move || {
+        run_windows_sandbox_capture(
+            policy_str,
+            &sandbox_cwd,
+            command,
+            &cwd,
+            env,
+            timeout_ms,
+            logs_base_dir.as_deref(),
+        )
+    })
+    .await;
+
+    let capture = match spawn_res {
+        Ok(Ok(v)) => v,
+        Ok(Err(err)) => {
+            return Err(CodexErr::Io(io::Error::other(format!(
+                "windows sandbox: {err}"
+            ))));
         }
-        SandboxType::LinuxSeccomp => {
-            let ExecParams {
-                command,
-                cwd: command_cwd,
-                env,
-                ..
-            } = params;
-
-            let codex_linux_sandbox_exe = codex_linux_sandbox_exe
-                .as_ref()
-                .ok_or(CodexErr::LandlockSandboxExecutableNotProvided)?;
-            let child = spawn_command_under_linux_sandbox(
-                codex_linux_sandbox_exe,
-                command,
-                command_cwd,
-                sandbox_policy,
-                sandbox_cwd,
-                StdioPolicy::RedirectForShellTool,
-                env,
-            )
-            .await?;
-
-            consume_truncated_output(child, timeout_duration, stdout_stream).await
+        Err(join_err) => {
+            return Err(CodexErr::Io(io::Error::other(format!(
+                "windows sandbox join error: {join_err}"
+            ))));
         }
     };
-    let duration = start.elapsed();
+
+    let exit_status = synthetic_exit_status(capture.exit_code);
+    let stdout = StreamOutput {
+        text: capture.stdout,
+        truncated_after_lines: None,
+    };
+    let stderr = StreamOutput {
+        text: capture.stderr,
+        truncated_after_lines: None,
+    };
+    // Best-effort aggregate: stdout then stderr
+    let mut aggregated = Vec::with_capacity(stdout.text.len() + stderr.text.len());
+    append_all(&mut aggregated, &stdout.text);
+    append_all(&mut aggregated, &stderr.text);
+    let aggregated_output = StreamOutput {
+        text: aggregated,
+        truncated_after_lines: None,
+    };
+
+    Ok(RawExecToolCallOutput {
+        exit_status,
+        stdout,
+        stderr,
+        aggregated_output,
+        timed_out: capture.timed_out,
+    })
+}
+
+fn finalize_exec_result(
+    raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr>,
+    sandbox_type: SandboxType,
+    duration: Duration,
+) -> Result<ExecToolCallOutput> {
     match raw_output_result {
         Ok(raw_output) => {
             #[allow(unused_mut)]
@@ -192,12 +303,34 @@ pub async fn process_exec_tool_call(
     }
 }
 
+pub(crate) mod errors {
+    use super::CodexErr;
+    use crate::sandboxing::SandboxTransformError;
+
+    impl From<SandboxTransformError> for CodexErr {
+        fn from(err: SandboxTransformError) -> Self {
+            match err {
+                SandboxTransformError::MissingLinuxSandboxExecutable => {
+                    CodexErr::LandlockSandboxExecutableNotProvided
+                }
+                #[cfg(not(target_os = "macos"))]
+                SandboxTransformError::SeatbeltUnavailable => CodexErr::UnsupportedOperation(
+                    "seatbelt sandbox is only available on macOS".to_string(),
+                ),
+            }
+        }
+    }
+}
+
 /// We don't have a fully deterministic way to tell if our command failed
 /// because of the sandbox - a command in the user's zshrc file might hit an
 /// error, but the command itself might fail or succeed for other reasons.
 /// For now, we conservatively check for well known command failure exit codes and
 /// also look for common sandbox denial keywords in the command output.
-fn is_likely_sandbox_denied(sandbox_type: SandboxType, exec_output: &ExecToolCallOutput) -> bool {
+pub(crate) fn is_likely_sandbox_denied(
+    sandbox_type: SandboxType,
+    exec_output: &ExecToolCallOutput,
+) -> bool {
     if sandbox_type == SandboxType::None || exec_output.exit_code == 0 {
         return false;
     }
@@ -206,21 +339,17 @@ fn is_likely_sandbox_denied(sandbox_type: SandboxType, exec_output: &ExecToolCal
     // 2: misuse of shell builtins
     // 126: permission denied
     // 127: command not found
-    const QUICK_REJECT_EXIT_CODES: [i32; 3] = [2, 126, 127];
-    if QUICK_REJECT_EXIT_CODES.contains(&exec_output.exit_code) {
-        return false;
-    }
-
-    const SANDBOX_DENIED_KEYWORDS: [&str; 6] = [
+    const SANDBOX_DENIED_KEYWORDS: [&str; 7] = [
         "operation not permitted",
         "permission denied",
         "read-only file system",
         "seccomp",
         "sandbox",
         "landlock",
+        "failed to write file",
     ];
 
-    if [
+    let has_sandbox_keyword = [
         &exec_output.stderr.text,
         &exec_output.stdout.text,
         &exec_output.aggregated_output.text,
@@ -231,8 +360,15 @@ fn is_likely_sandbox_denied(sandbox_type: SandboxType, exec_output: &ExecToolCal
         SANDBOX_DENIED_KEYWORDS
             .iter()
             .any(|needle| lower.contains(needle))
-    }) {
+    });
+
+    if has_sandbox_keyword {
         return true;
+    }
+
+    const QUICK_REJECT_EXIT_CODES: [i32; 3] = [2, 126, 127];
+    if QUICK_REJECT_EXIT_CODES.contains(&exec_output.exit_code) {
+        return false;
     }
 
     #[cfg(unix)]
@@ -248,11 +384,12 @@ fn is_likely_sandbox_denied(sandbox_type: SandboxType, exec_output: &ExecToolCal
     false
 }
 
-#[derive(Debug)]
-pub struct StreamOutput<T> {
+#[derive(Debug, Clone)]
+pub struct StreamOutput<T: Clone> {
     pub text: T,
     pub truncated_after_lines: Option<u32>,
 }
+
 #[derive(Debug)]
 struct RawExecToolCallOutput {
     pub exit_status: ExitStatus,
@@ -285,7 +422,7 @@ fn append_all(dst: &mut Vec<u8>, src: &[u8]) {
     dst.extend_from_slice(src);
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ExecToolCallOutput {
     pub exit_code: i32,
     pub stdout: StreamOutput<String>,
@@ -295,14 +432,24 @@ pub struct ExecToolCallOutput {
     pub timed_out: bool,
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
 async fn exec(
     params: ExecParams,
+    sandbox: SandboxType,
     sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<RawExecToolCallOutput> {
+    #[cfg(target_os = "windows")]
+    if sandbox == SandboxType::WindowsRestrictedToken {
+        return exec_windows_sandbox(params, sandbox_policy).await;
+    }
     let timeout = params.timeout_duration();
     let ExecParams {
-        command, cwd, env, ..
+        command,
+        cwd,
+        env,
+        arg0,
+        ..
     } = params;
 
     let (program, args) = command.split_first().ok_or_else(|| {
@@ -311,11 +458,11 @@ async fn exec(
             "command args are empty",
         ))
     })?;
-    let arg0 = None;
+    let arg0_ref = arg0.as_deref();
     let child = spawn_child_async(
         PathBuf::from(program),
         args.into(),
-        arg0,
+        arg0_ref,
         cwd,
         sandbox_policy,
         StdioPolicy::RedirectForShellTool,
@@ -371,6 +518,7 @@ async fn consume_truncated_output(
                 }
                 Err(_) => {
                     // timeout
+                    kill_child_process_group(&mut child)?;
                     child.start_kill()?;
                     // Debatable whether `child.wait().await` should be called here.
                     (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true)
@@ -378,6 +526,7 @@ async fn consume_truncated_output(
             }
         }
         _ = tokio::signal::ctrl_c() => {
+            kill_child_process_group(&mut child)?;
             child.start_kill()?;
             (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
         }
@@ -469,8 +618,41 @@ fn synthetic_exit_status(code: i32) -> ExitStatus {
 #[cfg(windows)]
 fn synthetic_exit_status(code: i32) -> ExitStatus {
     use std::os::windows::process::ExitStatusExt;
-    #[expect(clippy::unwrap_used)]
-    std::process::ExitStatus::from_raw(code.try_into().unwrap())
+    // On Windows the raw status is a u32. Use a direct cast to avoid
+    // panicking on negative i32 values produced by prior narrowing casts.
+    std::process::ExitStatus::from_raw(code as u32)
+}
+
+#[cfg(unix)]
+fn kill_child_process_group(child: &mut Child) -> io::Result<()> {
+    use std::io::ErrorKind;
+
+    if let Some(pid) = child.id() {
+        let pid = pid as libc::pid_t;
+        let pgid = unsafe { libc::getpgid(pid) };
+        if pgid == -1 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() != ErrorKind::NotFound {
+                return Err(err);
+            }
+            return Ok(());
+        }
+
+        let result = unsafe { libc::killpg(pgid, libc::SIGKILL) };
+        if result == -1 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() != ErrorKind::NotFound {
+                return Err(err);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn kill_child_process_group(_: &mut Child) -> io::Result<()> {
+    Ok(())
 }
 
 #[cfg(test)]
@@ -544,5 +726,52 @@ mod tests {
         let exit_code = EXIT_CODE_SIGNAL_BASE + libc::SIGSYS;
         let output = make_exec_output(exit_code, "", "", "");
         assert!(is_likely_sandbox_denied(SandboxType::LinuxSeccomp, &output));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()> {
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-c".to_string(),
+            "sleep 60 & echo $!; sleep 60".to_string(),
+        ];
+        let env: HashMap<String, String> = std::env::vars().collect();
+        let params = ExecParams {
+            command,
+            cwd: std::env::current_dir()?,
+            timeout_ms: Some(500),
+            env,
+            with_escalated_permissions: None,
+            justification: None,
+            arg0: None,
+        };
+
+        let output = exec(params, SandboxType::None, &SandboxPolicy::ReadOnly, None).await?;
+        assert!(output.timed_out);
+
+        let stdout = output.stdout.from_utf8_lossy().text;
+        let pid_line = stdout.lines().next().unwrap_or("").trim();
+        let pid: i32 = pid_line.parse().map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Failed to parse pid from stdout '{pid_line}': {error}"),
+            )
+        })?;
+
+        let mut killed = false;
+        for _ in 0..20 {
+            // Use kill(pid, 0) to check if the process is alive.
+            if unsafe { libc::kill(pid, 0) } == -1
+                && let Some(libc::ESRCH) = std::io::Error::last_os_error().raw_os_error()
+            {
+                killed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        assert!(killed, "grandchild process with pid {pid} is still alive");
+        Ok(())
     }
 }

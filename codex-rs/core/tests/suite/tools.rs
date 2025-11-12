@@ -1,15 +1,16 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use anyhow::Context;
 use anyhow::Result;
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -38,7 +39,7 @@ async fn submit_turn(
 
     test.codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: prompt.into(),
             }],
             final_output_json_schema: None,
@@ -228,56 +229,97 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn local_shell_missing_ids_maps_to_function_output_error() -> Result<()> {
+async fn sandbox_denied_shell_returns_original_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex();
-    let test = builder.build(&server).await?;
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5-codex".to_string();
+        config.model_family =
+            find_family_for_model("gpt-5-codex").expect("gpt-5-codex model family");
+    });
+    let fixture = builder.build(&server).await?;
 
-    let local_shell_event = json!({
-        "type": "response.output_item.done",
-        "item": {
-            "type": "local_shell_call",
-            "status": "completed",
-            "action": {
-                "type": "exec",
-                "command": ["/bin/echo", "hi"],
-            }
-        }
+    let call_id = "sandbox-denied-shell";
+    let target_path = fixture.workspace_path("sandbox-denied.txt");
+    let sentinel = "sandbox-denied sentinel output";
+    let command = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        format!(
+            "printf {sentinel:?}; printf {content:?} > {path:?}",
+            sentinel = format!("{sentinel}\n"),
+            content = "sandbox denied",
+            path = &target_path
+        ),
+    ];
+    let args = json!({
+        "command": command,
+        "timeout_ms": 1_000,
     });
 
-    mount_sse_once(
-        &server,
+    let responses = vec![
         sse(vec![
             ev_response_created("resp-1"),
-            local_shell_event,
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
-    )
-    .await;
-    let second_mock = mount_sse_once(
-        &server,
         sse(vec![
             ev_assistant_message("msg-1", "done"),
             ev_completed("resp-2"),
         ]),
-    )
-    .await;
+    ];
+    let mock = mount_sse_sequence(&server, responses).await;
 
-    submit_turn(
-        &test,
-        "check shell output",
-        AskForApproval::Never,
-        SandboxPolicy::DangerFullAccess,
-    )
-    .await?;
+    fixture
+        .submit_turn_with_policy(
+            "run a command that should be denied by the read-only sandbox",
+            SandboxPolicy::ReadOnly,
+        )
+        .await?;
 
-    let item = second_mock.single_request().function_call_output("");
-    assert_eq!(item.get("call_id").and_then(Value::as_str), Some(""));
-    assert_eq!(
-        item.get("output").and_then(Value::as_str),
-        Some("LocalShellCall without call_id or id"),
+    let output_text = mock
+        .function_call_output_text(call_id)
+        .context("shell output present")?;
+    let exit_code_line = output_text
+        .lines()
+        .next()
+        .context("exit code line present")?;
+    let exit_code = exit_code_line
+        .strip_prefix("Exit code: ")
+        .context("exit code prefix present")?
+        .trim()
+        .parse::<i32>()
+        .context("exit code is integer")?;
+    let body = output_text;
+
+    let body_lower = body.to_lowercase();
+    // Required for multi-OS.
+    let has_denial = body_lower.contains("permission denied")
+        || body_lower.contains("operation not permitted")
+        || body_lower.contains("read-only file system");
+    assert!(
+        has_denial,
+        "expected sandbox denial details in tool output: {body}"
+    );
+    assert!(
+        body.contains(sentinel),
+        "expected sentinel output from command to reach the model: {body}"
+    );
+    let target_path_str = target_path
+        .to_str()
+        .context("target path string representation")?;
+    assert!(
+        body.contains(target_path_str),
+        "expected sandbox error to mention denied path: {body}"
+    );
+    assert!(
+        !body_lower.contains("failed in sandbox"),
+        "expected original tool output, found fallback message: {body}"
+    );
+    assert_ne!(
+        exit_code, 0,
+        "sandbox denial should surface a non-zero exit code"
     );
 
     Ok(())
@@ -320,14 +362,22 @@ async fn unified_exec_spec_toggle_end_to_end() -> Result<()> {
 
     let tools_disabled = collect_tools(false).await?;
     assert!(
-        !tools_disabled.iter().any(|name| name == "unified_exec"),
-        "tools list should not include unified_exec when disabled: {tools_disabled:?}"
+        !tools_disabled.iter().any(|name| name == "exec_command"),
+        "tools list should not include exec_command when disabled: {tools_disabled:?}"
+    );
+    assert!(
+        !tools_disabled.iter().any(|name| name == "write_stdin"),
+        "tools list should not include write_stdin when disabled: {tools_disabled:?}"
     );
 
     let tools_enabled = collect_tools(true).await?;
     assert!(
-        tools_enabled.iter().any(|name| name == "unified_exec"),
-        "tools list should include unified_exec when enabled: {tools_enabled:?}"
+        tools_enabled.iter().any(|name| name == "exec_command"),
+        "tools list should include exec_command when enabled: {tools_enabled:?}"
+    );
+    assert!(
+        tools_enabled.iter().any(|name| name == "write_stdin"),
+        "tools list should include write_stdin when enabled: {tools_enabled:?}"
     );
 
     Ok(())

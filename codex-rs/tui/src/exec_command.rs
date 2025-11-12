@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_core::bash::extract_bash_command;
 use dirs::home_dir;
 use shlex::try_join;
 
@@ -9,10 +10,10 @@ pub(crate) fn escape_command(command: &[String]) -> String {
 }
 
 pub(crate) fn strip_bash_lc_and_escape(command: &[String]) -> String {
-    match command {
-        [first, second, third] if first == "bash" && second == "-lc" => third.clone(),
-        _ => escape_command(command),
+    if let Some((_, script)) = extract_bash_command(command) {
+        return script.to_string();
     }
+    escape_command(command)
 }
 
 /// If `path` is absolute and inside $HOME, return the part *after* the home
@@ -46,7 +47,23 @@ mod tests {
 
     #[test]
     fn test_strip_bash_lc_and_escape() {
+        // Test bash
         let args = vec!["bash".into(), "-lc".into(), "echo hello".into()];
+        let cmdline = strip_bash_lc_and_escape(&args);
+        assert_eq!(cmdline, "echo hello");
+
+        // Test zsh
+        let args = vec!["zsh".into(), "-lc".into(), "echo hello".into()];
+        let cmdline = strip_bash_lc_and_escape(&args);
+        assert_eq!(cmdline, "echo hello");
+
+        // Test absolute path to zsh
+        let args = vec!["/usr/bin/zsh".into(), "-lc".into(), "echo hello".into()];
+        let cmdline = strip_bash_lc_and_escape(&args);
+        assert_eq!(cmdline, "echo hello");
+
+        // Test absolute path to bash
+        let args = vec!["/bin/bash".into(), "-lc".into(), "echo hello".into()];
         let cmdline = strip_bash_lc_and_escape(&args);
         assert_eq!(cmdline, "echo hello");
     }

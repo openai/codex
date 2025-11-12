@@ -2,8 +2,8 @@ use crate::exec_command::relativize_to_home;
 use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
-use codex_core::auth::get_auth_file;
-use codex_core::auth::try_read_auth_json;
+use codex_app_server_protocol::AuthMode;
+use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::project_doc::discover_project_doc_paths;
 use std::path::Path;
@@ -83,27 +83,21 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
     }
 }
 
-pub(crate) fn compose_account_display(config: &Config) -> Option<StatusAccountDisplay> {
-    let auth_file = get_auth_file(&config.codex_home);
-    let auth = try_read_auth_json(&auth_file).ok()?;
+pub(crate) fn compose_account_display(auth_manager: &AuthManager) -> Option<StatusAccountDisplay> {
+    let auth = auth_manager.auth()?;
 
-    if let Some(tokens) = auth.tokens.as_ref() {
-        let info = &tokens.id_token;
-        let email = info.email.clone();
-        let plan = info.get_chatgpt_plan_type().map(|plan| title_case(&plan));
-        return Some(StatusAccountDisplay::ChatGpt { email, plan });
+    match auth.mode {
+        AuthMode::ChatGPT => {
+            let email = auth.get_account_email();
+            let plan = auth.raw_plan_type().map(|plan| title_case(plan.as_str()));
+            Some(StatusAccountDisplay::ChatGpt { email, plan })
+        }
+        AuthMode::ApiKey => Some(StatusAccountDisplay::ApiKey),
     }
-
-    if let Some(key) = auth.openai_api_key
-        && !key.is_empty()
-    {
-        return Some(StatusAccountDisplay::ApiKey);
-    }
-
-    None
 }
 
-pub(crate) fn format_tokens_compact(value: u64) -> String {
+pub(crate) fn format_tokens_compact(value: i64) -> String {
+    let value = value.max(0);
     if value == 0 {
         return "0".to_string();
     }
@@ -111,14 +105,15 @@ pub(crate) fn format_tokens_compact(value: u64) -> String {
         return value.to_string();
     }
 
+    let value_f64 = value as f64;
     let (scaled, suffix) = if value >= 1_000_000_000_000 {
-        (value as f64 / 1_000_000_000_000.0, "T")
+        (value_f64 / 1_000_000_000_000.0, "T")
     } else if value >= 1_000_000_000 {
-        (value as f64 / 1_000_000_000.0, "B")
+        (value_f64 / 1_000_000_000.0, "B")
     } else if value >= 1_000_000 {
-        (value as f64 / 1_000_000.0, "M")
+        (value_f64 / 1_000_000.0, "M")
     } else {
-        (value as f64 / 1_000.0, "K")
+        (value_f64 / 1_000.0, "K")
     };
 
     let decimals = if scaled < 10.0 {

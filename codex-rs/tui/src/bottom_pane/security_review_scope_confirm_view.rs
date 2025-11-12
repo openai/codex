@@ -77,10 +77,6 @@ impl BottomPaneView for SecurityReviewScopeConfirmView {
     fn handle_paste(&mut self, _pasted: String) -> bool {
         false
     }
-
-    fn cursor_pos(&self, _area: Rect) -> Option<(u16, u16)> {
-        None
-    }
 }
 
 impl Renderable for SecurityReviewScopeConfirmView {

@@ -14,6 +14,8 @@ use codex_core::CodexAuth;
 use codex_core::ModelProviderInfo;
 use codex_core::WireApi;
 use codex_core::config::GPT_5_CODEX_MEDIUM_MODEL;
+use codex_core::default_client::CodexHttpClient;
+use codex_core::default_client::create_client;
 use codex_core::default_retry_backoff;
 use codex_core::git_info::collect_git_info;
 use codex_core::git_info::get_git_repo_root;
@@ -22,7 +24,6 @@ use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 use pathdiff::diff_paths;
 use regex::Regex;
-use reqwest::Client;
 use reqwest::header::ACCEPT;
 use serde::Deserialize;
 use serde::Serialize;
@@ -39,6 +40,7 @@ use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -263,11 +265,11 @@ struct ReviewMetrics {
     command_seq: AtomicU64,
 
     // Aggregated token usage across all model calls
-    input_tokens: std::sync::atomic::AtomicU64,
-    cached_input_tokens: std::sync::atomic::AtomicU64,
-    output_tokens: std::sync::atomic::AtomicU64,
-    reasoning_output_tokens: std::sync::atomic::AtomicU64,
-    total_tokens: std::sync::atomic::AtomicU64,
+    input_tokens: AtomicI64,
+    cached_input_tokens: AtomicI64,
+    output_tokens: AtomicI64,
+    reasoning_output_tokens: AtomicI64,
+    total_tokens: AtomicI64,
 }
 
 #[derive(Clone, Copy)]
@@ -360,11 +362,11 @@ impl ReviewMetrics {
 
     fn record_usage_raw(
         &self,
-        input_tokens: u64,
-        cached_input_tokens: u64,
-        output_tokens: u64,
-        reasoning_output_tokens: u64,
-        total_tokens: u64,
+        input_tokens: i64,
+        cached_input_tokens: i64,
+        output_tokens: i64,
+        reasoning_output_tokens: i64,
+        total_tokens: i64,
     ) {
         let usage = TokenUsage {
             input_tokens,
@@ -1273,7 +1275,7 @@ fn linkify_file_lines(markdown: &str, git_link_info: Option<&GitLinkInfo>) -> St
 }
 
 async fn polish_bug_markdowns(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     summaries: &mut [BugSummary],
@@ -1409,7 +1411,7 @@ pub(crate) async fn run_security_review(
     let progress_sender = request.progress_sender.clone();
     let mut logs = Vec::new();
     let metrics = Arc::new(ReviewMetrics::default());
-    let client = Client::new();
+    let model_client = create_client();
     let overall_start = Instant::now();
 
     let mut record = |line: String| {
@@ -1446,7 +1448,7 @@ pub(crate) async fn run_security_review(
             "Auto-detecting review scope from user prompt: {prompt}"
         ));
         match auto_detect_scope(
-            &client,
+            &model_client,
             &request.provider,
             &request.auth,
             auto_scope_model,
@@ -1625,7 +1627,7 @@ pub(crate) async fn run_security_review(
 
     record("Running LLM file triage to prioritize analysis...".to_string());
     let triage = match triage_files_for_bug_analysis(
-        &client,
+        &model_client,
         &request.provider,
         &request.auth,
         &request.triage_model,
@@ -1692,7 +1694,7 @@ pub(crate) async fn run_security_review(
             spec_targets.len()
         ));
         match generate_specs(
-            &client,
+            &model_client,
             &request.provider,
             &request.auth,
             &request.repo_path,
@@ -1752,7 +1754,7 @@ pub(crate) async fn run_security_review(
     let threat_model = if matches!(request.mode, SecurityReviewMode::Full) {
         if let Some(spec) = spec_generation.as_ref() {
             match generate_threat_model(
-                &client,
+                &model_client,
                 &request.provider,
                 &request.auth,
                 THREAT_MODEL_MODEL,
@@ -1808,7 +1810,7 @@ pub(crate) async fn run_security_review(
         ));
 
         let pass_outcome = match analyze_files_individually(
-            &client,
+            &model_client,
             &request.provider,
             &request.auth,
             &request.model,
@@ -1943,7 +1945,7 @@ pub(crate) async fn run_security_review(
     // Run risk rerank after deduplication to avoid redundant work.
     if !all_summaries.is_empty() {
         let risk_logs = rerank_bugs_by_risk(
-            &client,
+            &model_client,
             &request.provider,
             &request.auth,
             &request.model,
@@ -2021,7 +2023,7 @@ pub(crate) async fn run_security_review(
         record(polish_message.clone());
         aggregated_logs.push(polish_message);
         let polish_logs = match polish_bug_markdowns(
-            &client,
+            &model_client,
             &request.provider,
             &request.auth,
             &mut all_summaries,
@@ -2331,7 +2333,7 @@ fn collect_snippets_blocking(
 
 #[allow(clippy::needless_collect)]
 async fn triage_files_for_bug_analysis(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     triage_model: &str,
@@ -2422,7 +2424,7 @@ async fn triage_files_for_bug_analysis(
     for _ in 0..concurrency {
         if let Some(request) = remaining.next() {
             in_flight.push(triage_chunk(
-                client.clone(),
+				client,
                 provider.clone(),
                 auth.clone(),
                 triage_model.to_string(),
@@ -2454,7 +2456,7 @@ async fn triage_files_for_bug_analysis(
                 }
                 if let Some(next_request) = remaining.next() {
                     in_flight.push(triage_chunk(
-                        client.clone(),
+					client,
                         provider.clone(),
                         auth.clone(),
                         triage_model.to_string(),
@@ -2503,7 +2505,7 @@ async fn triage_files_for_bug_analysis(
 }
 
 async fn triage_chunk(
-    client: Client,
+    client: &CodexHttpClient,
     provider: ModelProviderInfo,
     auth: Option<CodexAuth>,
     triage_model: String,
@@ -2535,7 +2537,7 @@ async fn triage_chunk(
         "running file triage",
         Some(detail.as_str()),
         call_model(
-            &client,
+            client,
             &provider,
             &auth,
             &triage_model,
@@ -2661,7 +2663,7 @@ async fn triage_chunk(
 }
 
 async fn generate_specs(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     repo_root: &Path,
@@ -2795,7 +2797,7 @@ async fn generate_specs(
     let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
     for path in normalized {
         in_flight.push(generate_spec_for_location(
-            client.clone(),
+            client,
             provider.clone(),
             auth.clone(),
             repo_root.to_path_buf(),
@@ -3081,7 +3083,7 @@ fn fallback_keywords_from_prompt(user_query: &str) -> Vec<String> {
 }
 
 async fn expand_auto_scope_keywords(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     user_query: &str,
@@ -3317,7 +3319,7 @@ fn parse_auto_scope_response(raw: &str) -> AutoScopeParseResult {
 }
 
 async fn auto_detect_scope(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
@@ -3902,7 +3904,7 @@ mod risk_rerank_tool_tests {
 }
 
 async fn filter_spec_directories(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     repo_root: &Path,
@@ -4011,7 +4013,7 @@ Return ALL to keep every directory.",
 
 #[allow(clippy::too_many_arguments)]
 async fn generate_spec_for_location(
-    client: Client,
+    client: &CodexHttpClient,
     provider: ModelProviderInfo,
     auth: Option<CodexAuth>,
     repo_root: PathBuf,
@@ -4040,7 +4042,7 @@ async fn generate_spec_for_location(
     );
 
     let response = call_model(
-        &client,
+        client,
         &provider,
         &auth,
         SPEC_GENERATION_MODEL,
@@ -4077,7 +4079,7 @@ async fn generate_spec_for_location(
         }
         logs.push(polish_message);
         let outcome =
-            polish_markdown_block(&client, &provider, &auth, metrics.clone(), &sanitized, None)
+            polish_markdown_block(client, &provider, &auth, metrics.clone(), &sanitized, None)
                 .await
                 .map_err(|err| SecurityReviewFailure {
                     message: format!("Failed to polish specification for {location_label}: {err}"),
@@ -4125,7 +4127,7 @@ async fn generate_spec_for_location(
 }
 
 async fn generate_threat_model(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
@@ -4330,7 +4332,7 @@ async fn generate_threat_model(
 }
 
 async fn combine_spec_markdown(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     project_locations: &[String],
@@ -4889,7 +4891,7 @@ fn inject_data_classification_section(spec_markdown: &str, table_markdown: &str)
 }
 
 async fn extract_data_classification(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     spec_markdown: &str,
@@ -4974,7 +4976,7 @@ struct MarkdownPolishOutcome {
 }
 
 async fn polish_markdown_block(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     metrics: Arc<ReviewMetrics>,
@@ -5020,7 +5022,7 @@ async fn polish_markdown_block(
 }
 
 async fn analyze_files_individually(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
@@ -5363,7 +5365,7 @@ async fn analyze_files_individually(
 
 #[allow(clippy::too_many_arguments)]
 async fn analyze_single_file(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
@@ -6642,7 +6644,7 @@ struct RiskRerankChunkFailure {
 }
 
 async fn run_risk_rerank_chunk(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
@@ -6965,7 +6967,7 @@ async fn run_risk_rerank_chunk(
 }
 
 async fn rerank_bugs_by_risk(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
@@ -7019,7 +7021,6 @@ async fn rerank_bugs_by_risk(
     let max_concurrency = BUG_RERANK_MAX_CONCURRENCY.max(1).min(total_chunks.max(1));
 
     let chunk_results = futures::stream::iter(prompt_chunks.into_iter().map(|(ids, prompt)| {
-        let client = client.clone();
         let provider = provider.clone();
         let auth_clone = auth.clone();
         let model_owned = model.to_string();
@@ -7028,7 +7029,7 @@ async fn rerank_bugs_by_risk(
 
         async move {
             run_risk_rerank_chunk(
-                &client,
+                client,
                 &provider,
                 &auth_clone,
                 model_owned.as_str(),
@@ -8786,7 +8787,7 @@ async fn write_accounts(work_dir: &Path, creds: &[AccountPair]) -> Result<PathBu
 
 #[allow(clippy::too_many_arguments)]
 async fn setup_accounts(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
@@ -8994,7 +8995,7 @@ pub(crate) async fn run_web_validation(
             logs: vec![],
         })?;
 
-    let client = Client::new();
+    let client = create_client();
     if let Some(tx) = progress_sender.as_ref() {
         tx.send(AppEvent::SecurityReviewLog(
             "Planning web/API validation for high-risk findings...".to_string(),
@@ -9144,7 +9145,7 @@ struct ModelCallOutput {
 }
 
 async fn call_model(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
@@ -9194,7 +9195,7 @@ async fn call_model(
 }
 
 async fn call_model_attempt(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
@@ -9294,7 +9295,7 @@ async fn call_model_attempt(
 }
 
 async fn send_chat_request(
-    client: &Client,
+    client: &CodexHttpClient,
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     model: &str,
@@ -9392,11 +9393,11 @@ async fn send_chat_request(
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(input_tokens.saturating_add(output_tokens));
         metrics.record_usage_raw(
-            input_tokens,
-            cached_input_tokens,
-            output_tokens,
-            reasoning_output_tokens,
-            total_tokens,
+            i64::try_from(input_tokens).unwrap_or(i64::MAX),
+            i64::try_from(cached_input_tokens).unwrap_or(i64::MAX),
+            i64::try_from(output_tokens).unwrap_or(i64::MAX),
+            i64::try_from(reasoning_output_tokens).unwrap_or(i64::MAX),
+            i64::try_from(total_tokens).unwrap_or(i64::MAX),
         );
     }
 
@@ -9584,11 +9585,11 @@ fn handle_responses_event(
                                 .and_then(serde_json::Value::as_u64)
                                 .unwrap_or(input_tokens.saturating_add(output_tokens));
                             metrics.record_usage_raw(
-                                input_tokens,
-                                cached_input_tokens,
-                                output_tokens,
-                                reasoning_output_tokens,
-                                total_tokens,
+                                i64::try_from(input_tokens).unwrap_or(i64::MAX),
+                                i64::try_from(cached_input_tokens).unwrap_or(i64::MAX),
+                                i64::try_from(output_tokens).unwrap_or(i64::MAX),
+                                i64::try_from(reasoning_output_tokens).unwrap_or(i64::MAX),
+                                i64::try_from(total_tokens).unwrap_or(i64::MAX),
                             );
                         }
                     }

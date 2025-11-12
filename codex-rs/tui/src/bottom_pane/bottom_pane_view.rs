@@ -1,7 +1,6 @@
 use crate::bottom_pane::ApprovalRequest;
 use crate::render::renderable::Renderable;
 use crossterm::event::KeyEvent;
-use ratatui::layout::Rect;
 
 use super::CancellationEvent;
 
@@ -25,11 +24,6 @@ pub(crate) trait BottomPaneView: Renderable {
     /// needs a redraw.
     fn handle_paste(&mut self, _pasted: String) -> bool {
         false
-    }
-
-    /// Cursor position when this view is active.
-    fn cursor_pos(&self, _area: Rect) -> Option<(u16, u16)> {
-        None
     }
 
     /// Try to handle approval request; return the original value if not

@@ -29,6 +29,9 @@ pub enum SlashCommand {
     Mcp,
     Logout,
     Quit,
+    Exit,
+    Feedback,
+    Rollout,
     #[cfg(debug_assertions)]
     TestApproval,
 }
@@ -37,6 +40,7 @@ impl SlashCommand {
     /// User-visible description shown in the popup.
     pub fn description(self) -> &'static str {
         match self {
+            SlashCommand::Feedback => "send logs to maintainers",
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
@@ -44,7 +48,7 @@ impl SlashCommand {
             SlashCommand::SecReview => "run an AppSec security review over the repo",
             SlashCommand::Validate => "validate high-risk findings (web + api)",
             SlashCommand::Undo => "restore the workspace to the last Codex snapshot",
-            SlashCommand::Quit => "exit Codex",
+            SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Status => "show current session configuration and token usage",
@@ -52,6 +56,7 @@ impl SlashCommand {
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
+            SlashCommand::Rollout => "print the rollout file path",
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "test approval request",
         }
@@ -80,10 +85,20 @@ impl SlashCommand {
             | SlashCommand::Mention
             | SlashCommand::Status
             | SlashCommand::Mcp
-            | SlashCommand::Quit => true,
+            | SlashCommand::Feedback
+            | SlashCommand::Quit
+            | SlashCommand::Exit
+            | SlashCommand::Rollout => true,
 
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => true,
+        }
+    }
+
+    fn is_visible(self) -> bool {
+        match self {
+            SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
+            _ => true,
         }
     }
 }
@@ -97,7 +112,7 @@ pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
             if *cmd == SlashCommand::Undo {
                 show_beta_features
             } else {
-                true
+                cmd.is_visible()
             }
         })
         .map(|c| (c.command(), c))

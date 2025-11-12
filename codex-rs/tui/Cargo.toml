@@ -27,6 +27,7 @@ base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
 codex-ansi-escape = { workspace = true }
+codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-common = { workspace = true, features = [
     "cli",
@@ -34,14 +35,14 @@ codex-common = { workspace = true, features = [
     "sandbox_summary",
 ] }
 codex-core = { workspace = true }
+codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
-codex-git-tooling = { workspace = true }
 codex-login = { workspace = true }
 codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
-codex-app-server-protocol = { workspace = true }
 color-eyre = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
+derive_more = { workspace = true, features = ["is_variant"] }
 diffy = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
@@ -49,7 +50,7 @@ image = { workspace = true, features = ["jpeg", "png"] }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
 mcp-types = { workspace = true }
-path-clean = { workspace = true }
+opentelemetry-appender-tracing = { workspace = true }
 pathdiff = { workspace = true }
 pulldown-cmark = { workspace = true }
 rand = { workspace = true }
@@ -59,6 +60,7 @@ ratatui = { workspace = true, features = [
     "unstable-rendered-line-info",
     "unstable-widget-ref",
 ] }
+ratatui-macros = { workspace = true }
 regex-lite = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -69,8 +71,6 @@ strum_macros = { workspace = true }
 supports-color = { workspace = true }
 tempfile = { workspace = true }
 textwrap = { workspace = true }
-tree-sitter-highlight = { workspace = true }
-tree-sitter-bash = { workspace = true }
 tokio = { workspace = true, features = [
     "fs",
     "io-std",
@@ -80,16 +80,20 @@ tokio = { workspace = true, features = [
     "signal",
 ] }
 tokio-stream = { workspace = true }
+toml = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-opentelemetry-appender-tracing = { workspace = true }
+tree-sitter-bash = { workspace = true }
+tree-sitter-highlight = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true }
 time = { workspace = true, features = ["serde"] }
+
+codex-windows-sandbox = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
@@ -106,4 +110,5 @@ chrono = { workspace = true, features = ["serde"] }
 insta = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
+serial_test = { workspace = true }
 vt100 = { workspace = true }

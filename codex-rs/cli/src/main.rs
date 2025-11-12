@@ -1,3 +1,4 @@
+use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
@@ -7,6 +8,7 @@ use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
+use codex_cli::WindowsCommand;
 use codex_cli::login::read_api_key_from_stdin;
 use codex_cli::login::run_login_status;
 use codex_cli::login::run_login_with_api_key;
@@ -19,15 +21,20 @@ use codex_exec::Cli as ExecCli;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
+use codex_tui::update_action::UpdateAction;
 use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use supports_color::Stream;
 
 mod mcp_cmd;
+#[cfg(not(windows))]
+mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
+
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::features::is_known_feature_key;
 
 /// Codex CLI
 ///
@@ -41,7 +48,8 @@ use codex_core::config::ConfigOverrides;
     // The executable is sometimes invoked via a platform‑specific name like
     // `codex-x86_64-unknown-linux-musl`, but the help output should always use
     // the generic `codex` command name that users run.
-    bin_name = "codex"
+    bin_name = "codex",
+    override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct MultitoolCli {
     #[clap(flatten)]
@@ -75,8 +83,8 @@ enum Subcommand {
     /// [experimental] Run the Codex MCP server (stdio transport).
     McpServer,
 
-    /// [experimental] Run the app server.
-    AppServer,
+    /// [experimental] Run the app server or related tooling.
+    AppServer(AppServerCommand),
 
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
@@ -92,9 +100,6 @@ enum Subcommand {
     /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
     Resume(ResumeCommand),
 
-    /// Internal: generate TypeScript protocol bindings.
-    #[clap(hide = true)]
-    GenerateTs(GenerateTsCommand),
     /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
     #[clap(name = "cloud", alias = "cloud-tasks")]
     Cloud(CloudTasksCli),
@@ -102,6 +107,10 @@ enum Subcommand {
     /// Internal: run the responses API proxy.
     #[clap(hide = true)]
     ResponsesApiProxy(ResponsesApiProxyArgs),
+
+    /// Internal: relay stdio to a Unix domain socket.
+    #[clap(hide = true, name = "stdio-to-uds")]
+    StdioToUds(StdioToUdsCommand),
 
     /// Inspect feature flags.
     Features(FeaturesCli),
@@ -144,6 +153,9 @@ enum SandboxCommand {
     /// Run a command under Landlock+seccomp (Linux only).
     #[clap(visible_alias = "landlock")]
     Linux(LandlockCommand),
+
+    /// Run a command under Windows restricted token (Windows only).
+    Windows(WindowsCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -194,6 +206,22 @@ struct LogoutCommand {
 }
 
 #[derive(Debug, Parser)]
+struct AppServerCommand {
+    /// Omit to run the app server; specify a subcommand for tooling.
+    #[command(subcommand)]
+    subcommand: Option<AppServerSubcommand>,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum AppServerSubcommand {
+    /// [experimental] Generate TypeScript bindings for the app server protocol.
+    GenerateTs(GenerateTsCommand),
+
+    /// [experimental] Generate JSON Schema for the app server protocol.
+    GenerateJsonSchema(GenerateJsonSchemaCommand),
+}
+
+#[derive(Debug, Args)]
 struct GenerateTsCommand {
     /// Output directory where .ts files will be written
     #[arg(short = 'o', long = "out", value_name = "DIR")]
@@ -204,10 +232,25 @@ struct GenerateTsCommand {
     prettier: Option<PathBuf>,
 }
 
+#[derive(Debug, Args)]
+struct GenerateJsonSchemaCommand {
+    /// Output directory where the schema bundle will be written
+    #[arg(short = 'o', long = "out", value_name = "DIR")]
+    out_dir: PathBuf,
+}
+
+#[derive(Debug, Parser)]
+struct StdioToUdsCommand {
+    /// Path to the Unix domain socket to connect to.
+    #[arg(value_name = "SOCKET_PATH")]
+    socket_path: PathBuf,
+}
+
 fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
     let AppExitInfo {
         token_usage,
         conversation_id,
+        ..
     } = exit_info;
 
     if token_usage.is_zero() {
@@ -232,11 +275,52 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     lines
 }
 
-fn print_exit_messages(exit_info: AppExitInfo) {
+/// Handle the app exit and print the results. Optionally run the update action.
+fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
+    let update_action = exit_info.update_action;
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
     for line in format_exit_messages(exit_info, color_enabled) {
         println!("{line}");
     }
+    if let Some(action) = update_action {
+        run_update_action(action)?;
+    }
+    Ok(())
+}
+
+/// Run the update action and print the result.
+fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
+    println!();
+    let cmd_str = action.command_str();
+    println!("Updating Codex via `{cmd_str}`...");
+
+    let status = {
+        #[cfg(windows)]
+        {
+            // On Windows, run via cmd.exe so .CMD/.BAT are correctly resolved (PATHEXT semantics).
+            std::process::Command::new("cmd")
+                .args(["/C", &cmd_str])
+                .status()?
+        }
+        #[cfg(not(windows))]
+        {
+            let (cmd, args) = action.command_args();
+            let command_path = crate::wsl_paths::normalize_for_wsl(cmd);
+            let normalized_args: Vec<String> = args
+                .iter()
+                .map(crate::wsl_paths::normalize_for_wsl)
+                .collect();
+            std::process::Command::new(&command_path)
+                .args(&normalized_args)
+                .status()?
+        }
+    };
+    if !status.success() {
+        anyhow::bail!("`{cmd_str}` failed with status {status}");
+    }
+    println!();
+    println!("🎉 Update ran successfully! Please restart Codex.");
+    Ok(())
 }
 
 #[derive(Debug, Default, Parser, Clone)]
@@ -251,15 +335,25 @@ struct FeatureToggles {
 }
 
 impl FeatureToggles {
-    fn to_overrides(&self) -> Vec<String> {
+    fn to_overrides(&self) -> anyhow::Result<Vec<String>> {
         let mut v = Vec::new();
-        for k in &self.enable {
-            v.push(format!("features.{k}=true"));
+        for feature in &self.enable {
+            Self::validate_feature(feature)?;
+            v.push(format!("features.{feature}=true"));
         }
-        for k in &self.disable {
-            v.push(format!("features.{k}=false"));
+        for feature in &self.disable {
+            Self::validate_feature(feature)?;
+            v.push(format!("features.{feature}=false"));
         }
-        v
+        Ok(v)
+    }
+
+    fn validate_feature(feature: &str) -> anyhow::Result<()> {
+        if is_known_feature_key(feature) {
+            Ok(())
+        } else {
+            anyhow::bail!("Unknown feature flag: {feature}")
+        }
     }
 }
 
@@ -310,9 +404,8 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     } = MultitoolCli::parse();
 
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
-    root_config_overrides
-        .raw_overrides
-        .extend(feature_toggles.to_overrides());
+    let toggle_overrides = feature_toggles.to_overrides()?;
+    root_config_overrides.raw_overrides.extend(toggle_overrides);
 
     match subcommand {
         None => {
@@ -321,7 +414,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
             );
             let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
-            print_exit_messages(exit_info);
+            handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             prepend_config_flags(
@@ -338,9 +431,20 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
             mcp_cli.run().await?;
         }
-        Some(Subcommand::AppServer) => {
-            codex_app_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;
-        }
+        Some(Subcommand::AppServer(app_server_cli)) => match app_server_cli.subcommand {
+            None => {
+                codex_app_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;
+            }
+            Some(AppServerSubcommand::GenerateTs(gen_cli)) => {
+                codex_app_server_protocol::generate_ts(
+                    &gen_cli.out_dir,
+                    gen_cli.prettier.as_deref(),
+                )?;
+            }
+            Some(AppServerSubcommand::GenerateJsonSchema(gen_cli)) => {
+                codex_app_server_protocol::generate_json(&gen_cli.out_dir)?;
+            }
+        },
         Some(Subcommand::Resume(ResumeCommand {
             session_id,
             last,
@@ -354,7 +458,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 config_overrides,
             );
             let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
-            print_exit_messages(exit_info);
+            handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(
@@ -427,6 +531,17 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 )
                 .await?;
             }
+            SandboxCommand::Windows(mut windows_cli) => {
+                prepend_config_flags(
+                    &mut windows_cli.config_overrides,
+                    root_config_overrides.clone(),
+                );
+                codex_cli::debug_sandbox::run_command_under_windows(
+                    windows_cli,
+                    codex_linux_sandbox_exe,
+                )
+                .await?;
+            }
         },
         Some(Subcommand::Apply(mut apply_cli)) => {
             prepend_config_flags(
@@ -439,21 +554,29 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
                 .await??;
         }
-        Some(Subcommand::GenerateTs(gen_cli)) => {
-            codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
+        Some(Subcommand::StdioToUds(cmd)) => {
+            let socket_path = cmd.socket_path;
+            tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
+                .await??;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
                 // Respect root-level `-c` overrides plus top-level flags like `--profile`.
-                let cli_kv_overrides = root_config_overrides
+                let mut cli_kv_overrides = root_config_overrides
                     .parse_overrides()
-                    .map_err(|e| anyhow::anyhow!(e))?;
+                    .map_err(anyhow::Error::msg)?;
+
+                // Honor `--search` via the new feature toggle.
+                if interactive.web_search {
+                    cli_kv_overrides.push((
+                        "features.web_search_request".to_string(),
+                        toml::Value::Boolean(true),
+                    ));
+                }
 
                 // Thread through relevant top-level flags (at minimum, `--profile`).
-                // Also honor `--search` since it maps to a feature toggle.
                 let overrides = ConfigOverrides {
                     config_profile: interactive.config_profile.clone(),
-                    tools_web_search_request: interactive.web_search.then_some(true),
                     ..Default::default()
                 };
 
@@ -540,6 +663,9 @@ fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
     if !resume_cli.images.is_empty() {
         interactive.images = resume_cli.images;
     }
+    if !resume_cli.add_dir.is_empty() {
+        interactive.add_dir.extend(resume_cli.add_dir);
+    }
     if let Some(prompt) = resume_cli.prompt {
         interactive.prompt = Some(prompt);
     }
@@ -562,6 +688,7 @@ mod tests {
     use assert_matches::assert_matches;
     use codex_core::protocol::TokenUsage;
     use codex_protocol::ConversationId;
+    use pretty_assertions::assert_eq;
 
     fn finalize_from_args(args: &[&str]) -> TuiCli {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");
@@ -595,6 +722,7 @@ mod tests {
             conversation_id: conversation
                 .map(ConversationId::from_string)
                 .map(Result::unwrap),
+            update_action: None,
         }
     }
 
@@ -603,6 +731,7 @@ mod tests {
         let exit_info = AppExitInfo {
             token_usage: TokenUsage::default(),
             conversation_id: None,
+            update_action: None,
         };
         let lines = format_exit_messages(exit_info, false);
         assert!(lines.is_empty());
@@ -735,5 +864,33 @@ mod tests {
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn feature_toggles_known_features_generate_overrides() {
+        let toggles = FeatureToggles {
+            enable: vec!["web_search_request".to_string()],
+            disable: vec!["unified_exec".to_string()],
+        };
+        let overrides = toggles.to_overrides().expect("valid features");
+        assert_eq!(
+            overrides,
+            vec![
+                "features.web_search_request=true".to_string(),
+                "features.unified_exec=false".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn feature_toggles_unknown_feature_errors() {
+        let toggles = FeatureToggles {
+            enable: vec!["does_not_exist".to_string()],
+            disable: Vec::new(),
+        };
+        let err = toggles
+            .to_overrides()
+            .expect_err("feature should be rejected");
+        assert_eq!(err.to_string(), "Unknown feature flag: does_not_exist");
     }
 }

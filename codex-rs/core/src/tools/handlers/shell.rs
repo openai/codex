@@ -1,19 +1,33 @@
 use async_trait::async_trait;
+use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use std::sync::Arc;
 
+use crate::apply_patch;
+use crate::apply_patch::InternalApplyPatchInvocation;
+use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
+use crate::is_safe_command::is_known_safe_command;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
-use crate::tools::handle_container_exec_with_params;
+use crate::tools::events::ToolEmitter;
+use crate::tools::events::ToolEventCtx;
+use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
+use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
+use crate::tools::runtimes::shell::ShellRequest;
+use crate::tools::runtimes::shell::ShellRuntime;
+use crate::tools::sandboxing::ToolCtx;
 
 pub struct ShellHandler;
+
+pub struct ShellCommandHandler;
 
 impl ShellHandler {
     fn to_exec_params(params: ShellToolCallParams, turn_context: &TurnContext) -> ExecParams {
@@ -24,6 +38,29 @@ impl ShellHandler {
             env: create_env(&turn_context.shell_environment_policy),
             with_escalated_permissions: params.with_escalated_permissions,
             justification: params.justification,
+            arg0: None,
+        }
+    }
+}
+
+impl ShellCommandHandler {
+    fn to_exec_params(
+        params: ShellCommandToolCallParams,
+        session: &crate::codex::Session,
+        turn_context: &TurnContext,
+    ) -> ExecParams {
+        let shell = session.user_shell();
+        let use_login_shell = true;
+        let command = shell.derive_exec_args(&params.command, use_login_shell);
+
+        ExecParams {
+            command,
+            cwd: turn_context.resolve_path(params.workdir.clone()),
+            timeout_ms: params.timeout_ms,
+            env: create_env(&turn_context.shell_environment_policy),
+            with_escalated_permissions: params.with_escalated_permissions,
+            justification: params.justification,
+            arg0: None,
         }
     }
 }
@@ -41,12 +78,23 @@ impl ToolHandler for ShellHandler {
         )
     }
 
+    fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
+        match &invocation.payload {
+            ToolPayload::Function { arguments } => {
+                serde_json::from_str::<ShellToolCallParams>(arguments)
+                    .map(|params| !is_known_safe_command(&params.command))
+                    .unwrap_or(true)
+            }
+            ToolPayload::LocalShell { params } => !is_known_safe_command(&params.command),
+            _ => true, // unknown payloads => assume mutating
+        }
+    }
+
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
             tracker,
-            sub_id,
             call_id,
             tool_name,
             payload,
@@ -61,41 +109,261 @@ impl ToolHandler for ShellHandler {
                         ))
                     })?;
                 let exec_params = Self::to_exec_params(params, turn.as_ref());
-                let content = handle_container_exec_with_params(
+                Self::run_exec_like(
                     tool_name.as_str(),
                     exec_params,
-                    Arc::clone(&session),
-                    Arc::clone(&turn),
-                    Arc::clone(&tracker),
-                    sub_id.clone(),
-                    call_id.clone(),
+                    session,
+                    turn,
+                    tracker,
+                    call_id,
+                    false,
                 )
-                .await?;
-                Ok(ToolOutput::Function {
-                    content,
-                    success: Some(true),
-                })
+                .await
             }
             ToolPayload::LocalShell { params } => {
                 let exec_params = Self::to_exec_params(params, turn.as_ref());
-                let content = handle_container_exec_with_params(
+                Self::run_exec_like(
                     tool_name.as_str(),
                     exec_params,
-                    Arc::clone(&session),
-                    Arc::clone(&turn),
-                    Arc::clone(&tracker),
-                    sub_id.clone(),
-                    call_id.clone(),
+                    session,
+                    turn,
+                    tracker,
+                    call_id,
+                    true,
                 )
-                .await?;
-                Ok(ToolOutput::Function {
-                    content,
-                    success: Some(true),
-                })
+                .await
             }
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "unsupported payload for shell handler: {tool_name}"
             ))),
         }
+    }
+}
+
+#[async_trait]
+impl ToolHandler for ShellCommandHandler {
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+        let ToolInvocation {
+            session,
+            turn,
+            tracker,
+            call_id,
+            tool_name,
+            payload,
+        } = invocation;
+
+        let ToolPayload::Function { arguments } = payload else {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "unsupported payload for shell_command handler: {tool_name}"
+            )));
+        };
+
+        let params: ShellCommandToolCallParams = serde_json::from_str(&arguments).map_err(|e| {
+            FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e:?}"))
+        })?;
+        let exec_params = Self::to_exec_params(params, session.as_ref(), turn.as_ref());
+        ShellHandler::run_exec_like(
+            tool_name.as_str(),
+            exec_params,
+            session,
+            turn,
+            tracker,
+            call_id,
+            false,
+        )
+        .await
+    }
+}
+
+impl ShellHandler {
+    async fn run_exec_like(
+        tool_name: &str,
+        exec_params: ExecParams,
+        session: Arc<crate::codex::Session>,
+        turn: Arc<TurnContext>,
+        tracker: crate::tools::context::SharedTurnDiffTracker,
+        call_id: String,
+        is_user_shell_command: bool,
+    ) -> Result<ToolOutput, FunctionCallError> {
+        // Approval policy guard for explicit escalation in non-OnRequest modes.
+        if exec_params.with_escalated_permissions.unwrap_or(false)
+            && !matches!(
+                turn.approval_policy,
+                codex_protocol::protocol::AskForApproval::OnRequest
+            )
+        {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
+                policy = turn.approval_policy
+            )));
+        }
+
+        // Intercept apply_patch if present.
+        match codex_apply_patch::maybe_parse_apply_patch_verified(
+            &exec_params.command,
+            &exec_params.cwd,
+        ) {
+            codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+                match apply_patch::apply_patch(session.as_ref(), turn.as_ref(), &call_id, changes)
+                    .await
+                {
+                    InternalApplyPatchInvocation::Output(item) => {
+                        // Programmatic apply_patch path; return its result.
+                        let content = item?;
+                        return Ok(ToolOutput::Function {
+                            content,
+                            content_items: None,
+                            success: Some(true),
+                        });
+                    }
+                    InternalApplyPatchInvocation::DelegateToExec(apply) => {
+                        let emitter = ToolEmitter::apply_patch(
+                            convert_apply_patch_to_protocol(&apply.action),
+                            !apply.user_explicitly_approved_this_action,
+                        );
+                        let event_ctx = ToolEventCtx::new(
+                            session.as_ref(),
+                            turn.as_ref(),
+                            &call_id,
+                            Some(&tracker),
+                        );
+                        emitter.begin(event_ctx).await;
+
+                        let req = ApplyPatchRequest {
+                            patch: apply.action.patch.clone(),
+                            cwd: apply.action.cwd.clone(),
+                            timeout_ms: exec_params.timeout_ms,
+                            user_explicitly_approved: apply.user_explicitly_approved_this_action,
+                            codex_exe: turn.codex_linux_sandbox_exe.clone(),
+                        };
+                        let mut orchestrator = ToolOrchestrator::new();
+                        let mut runtime = ApplyPatchRuntime::new();
+                        let tool_ctx = ToolCtx {
+                            session: session.as_ref(),
+                            turn: turn.as_ref(),
+                            call_id: call_id.clone(),
+                            tool_name: tool_name.to_string(),
+                        };
+                        let out = orchestrator
+                            .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
+                            .await;
+                        let event_ctx = ToolEventCtx::new(
+                            session.as_ref(),
+                            turn.as_ref(),
+                            &call_id,
+                            Some(&tracker),
+                        );
+                        let content = emitter.finish(event_ctx, out).await?;
+                        return Ok(ToolOutput::Function {
+                            content,
+                            content_items: None,
+                            success: Some(true),
+                        });
+                    }
+                }
+            }
+            codex_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "apply_patch verification failed: {parse_error}"
+                )));
+            }
+            codex_apply_patch::MaybeApplyPatchVerified::ShellParseError(error) => {
+                tracing::trace!("Failed to parse shell command, {error:?}");
+                // Fall through to regular shell execution.
+            }
+            codex_apply_patch::MaybeApplyPatchVerified::NotApplyPatch => {
+                // Fall through to regular shell execution.
+            }
+        }
+
+        // Regular shell execution path.
+        let emitter = ToolEmitter::shell(
+            exec_params.command.clone(),
+            exec_params.cwd.clone(),
+            is_user_shell_command,
+        );
+        let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
+        emitter.begin(event_ctx).await;
+
+        let req = ShellRequest {
+            command: exec_params.command.clone(),
+            cwd: exec_params.cwd.clone(),
+            timeout_ms: exec_params.timeout_ms,
+            env: exec_params.env.clone(),
+            with_escalated_permissions: exec_params.with_escalated_permissions,
+            justification: exec_params.justification.clone(),
+        };
+        let mut orchestrator = ToolOrchestrator::new();
+        let mut runtime = ShellRuntime::new();
+        let tool_ctx = ToolCtx {
+            session: session.as_ref(),
+            turn: turn.as_ref(),
+            call_id: call_id.clone(),
+            tool_name: tool_name.to_string(),
+        };
+        let out = orchestrator
+            .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
+            .await;
+        let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
+        let content = emitter.finish(event_ctx, out).await?;
+        Ok(ToolOutput::Function {
+            content,
+            content_items: None,
+            success: Some(true),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::is_safe_command::is_known_safe_command;
+    use crate::shell::BashShell;
+    use crate::shell::Shell;
+    use crate::shell::ZshShell;
+
+    /// The logic for is_known_safe_command() has heuristics for known shells,
+    /// so we must ensure the commands generated by [ShellCommandHandler] can be
+    /// recognized as safe if the `command` is safe.
+    #[test]
+    fn commands_generated_by_shell_command_handler_can_be_matched_by_is_known_safe_command() {
+        let bash_shell = Shell::Bash(BashShell {
+            shell_path: "/bin/bash".to_string(),
+            bashrc_path: "/home/user/.bashrc".to_string(),
+        });
+        assert_safe(&bash_shell, "ls -la");
+
+        let zsh_shell = Shell::Zsh(ZshShell {
+            shell_path: "/bin/zsh".to_string(),
+            zshrc_path: "/home/user/.zshrc".to_string(),
+        });
+        assert_safe(&zsh_shell, "ls -la");
+
+        #[cfg(target_os = "windows")]
+        {
+            use crate::shell::PowerShellConfig;
+
+            let powershell = Shell::PowerShell(PowerShellConfig {
+                exe: "pwsh.exe".to_string(),
+                bash_exe_fallback: None,
+            });
+            assert_safe(&powershell, "ls -Name");
+        }
+    }
+
+    fn assert_safe(shell: &Shell, command: &str) {
+        assert!(is_known_safe_command(
+            &shell.derive_exec_args(command, /* use_login_shell */ true)
+        ));
+        assert!(is_known_safe_command(
+            &shell.derive_exec_args(command, /* use_login_shell */ false)
+        ));
     }
 }

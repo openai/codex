@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
+use codex_common::approval_presets::ApprovalPreset;
 use codex_common::model_presets::ModelPreset;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
-use codex_file_search::FileMatch;
-
-use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort;
+use codex_file_search::FileMatch;
 use tokio::sync::oneshot;
 
 use crate::bottom_pane::ApprovalRequest;
@@ -82,15 +82,65 @@ pub(crate) enum AppEvent {
 
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
-        model: String,
-        presets: Vec<ModelPreset>,
+        model: ModelPreset,
     },
+
+    /// Open the confirmation prompt before enabling full access mode.
+    OpenFullAccessConfirmation {
+        preset: ApprovalPreset,
+    },
+
+    /// Open the Windows world-writable directories warning.
+    /// If `preset` is `Some`, the confirmation will apply the provided
+    /// approval/sandbox configuration on Continue; if `None`, it performs no
+    /// policy change and only acknowledges/dismisses the warning.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    OpenWorldWritableWarningConfirmation {
+        preset: Option<ApprovalPreset>,
+        /// Up to 3 sample world-writable directories to display in the warning.
+        sample_paths: Vec<String>,
+        /// If there are more than `sample_paths`, this carries the remaining count.
+        extra_count: usize,
+        /// True when the scan failed (e.g. ACL query error) and protections could not be verified.
+        failed_scan: bool,
+    },
+
+    /// Show Windows Subsystem for Linux setup instructions for auto mode.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    ShowWindowsAutoModeInstructions,
 
     /// Update the current approval policy in the running app and widget.
     UpdateAskForApprovalPolicy(AskForApproval),
 
     /// Update the current sandbox policy in the running app and widget.
     UpdateSandboxPolicy(SandboxPolicy),
+
+    /// Update whether the full access warning prompt has been acknowledged.
+    UpdateFullAccessWarningAcknowledged(bool),
+
+    /// Update whether the world-writable directories warning has been acknowledged.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    UpdateWorldWritableWarningAcknowledged(bool),
+
+    /// Update whether the rate limit switch prompt has been acknowledged for the session.
+    UpdateRateLimitSwitchPromptHidden(bool),
+
+    /// Persist the acknowledgement flag for the full access warning prompt.
+    PersistFullAccessWarningAcknowledged,
+
+    /// Persist the acknowledgement flag for the world-writable directories warning.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    PersistWorldWritableWarningAcknowledged,
+
+    /// Persist the acknowledgement flag for the rate limit switch prompt.
+    PersistRateLimitSwitchPromptHidden,
+
+    /// Skip the next world-writable scan (one-shot) after a user-confirmed continue.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    SkipNextWorldWritableScan,
+
+    /// Re-open the approval presets popup.
+    OpenApprovalsPopup,
 
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationPathResponseEvent),
@@ -106,6 +156,16 @@ pub(crate) enum AppEvent {
 
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
+    /// Open the feedback note entry overlay after the user selects a category.
+    OpenFeedbackNote {
+        category: FeedbackCategory,
+        include_logs: bool,
+    },
+
+    /// Open the upload consent popup for feedback after selecting a category.
+    OpenFeedbackConsent {
+        category: FeedbackCategory,
+    },
 
     /// Open the scoped path input for security reviews.
     OpenSecurityReviewPathPrompt(SecurityReviewMode),
@@ -164,4 +224,12 @@ pub(crate) enum AppEvent {
     SecurityReviewFailed {
         error: SecurityReviewFailure,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FeedbackCategory {
+    BadResult,
+    GoodResult,
+    Bug,
+    Other,
 }
