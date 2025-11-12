@@ -436,81 +436,80 @@ mod tests_windows {
         }
     }
 
-    // Ignored-by-default environment check: requires WSL installed, and the target bash
-    // precedes System32\bash.exe in PATH. Compare run resolution (bash.exe --version)
-    // with the which-resolved path (<which path> --version). Expect different outputs to
-    // highlight the Windows run vs which mismatch.
     #[test]
-    #[ignore]
-    fn test_bash_run_vs_which_with_target_bash_priority() {
-        use std::path::PathBuf;
-        use std::process::Command;
+    fn test_default_user_shell_prefers_path_bash_override() {
+        // Create a high-priority PATH entry that exposes a known bash.exe alias and
+        // ensure default_user_shell picks that path for its bash fallback.
+        let temp_dir = tempfile::tempdir().expect("create temp dir for bash alias");
+        let temp_bash = temp_dir.path().join("bash.exe");
 
-        let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
-        let sys32 = PathBuf::from(&windir).join("System32");
-        let wsl_exe = sys32.join("wsl.exe");
-        let sys_bash_exe = sys32.join("bash.exe");
-        if !wsl_exe.exists() && !sys_bash_exe.exists() {
-            tracing::warn!("[test] skip: WSL not detected under System32");
+        let cmd_source = match which::which("cmd.exe") {
+            Ok(path) => path,
+            Err(err) => {
+                tracing::warn!("[test] skip: which('cmd.exe') failed: {err}");
+                return;
+            }
+        };
+        if !cmd_source.exists() {
+            tracing::warn!("[test] skip: cmd.exe missing at {cmd_source:?}");
             return;
         }
+        std::fs::copy(&cmd_source, &temp_bash).expect("copy cmd.exe into temp dir");
 
-        let which_path = match which::which("bash.exe") {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!("[test] skip: which('bash.exe') failed: {e}");
-                return;
-            }
-        };
-        let sys_bash_canon = sys_bash_exe.canonicalize().ok();
-        let which_canon = which_path.canonicalize().ok();
-        if sys_bash_canon.is_some() && which_canon.is_some() && sys_bash_canon == which_canon {
-            tracing::warn!(
-                "[test] skip: which resolved to System32\\bash.exe; ensure target bash precedes WSL in PATH"
-            );
-            return;
+        let mut path_value = std::ffi::OsString::new();
+        path_value.push(temp_dir.path());
+        if let Some(existing) = std::env::var_os("PATH") {
+            path_value.push(";");
+            path_value.push(existing);
         }
+        let _guard = EnvVarGuard::set("PATH", path_value);
 
-        let run_out = Command::new("bash.exe").arg("--version").output();
-        let which_out = Command::new(&which_path).arg("--version").output();
+        let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let shell = runtime.block_on(default_user_shell());
+        let expected_bash = temp_bash
+            .canonicalize()
+            .unwrap_or_else(|_| temp_bash.clone());
 
-        let (run_ok, run_stdout) = match run_out {
-            Ok(o) => (
-                o.status.success(),
-                String::from_utf8_lossy(&o.stdout).to_string(),
-            ),
-            Err(e) => {
-                tracing::warn!("[test] run bash.exe failed: {e}");
-                return;
+        match shell {
+            Shell::PowerShell(config) => {
+                let fallback = config
+                    .bash_exe_fallback
+                    .expect("bash fallback should be present");
+                let resolved = std::fs::canonicalize(&fallback).unwrap_or(fallback);
+                assert_eq!(
+                    resolved, expected_bash,
+                    "default_user_shell should honor PATH override for bash.exe"
+                );
             }
-        };
-        let (which_ok, which_stdout) = match which_out {
-            Ok(o) => (
-                o.status.success(),
-                String::from_utf8_lossy(&o.stdout).to_string(),
-            ),
-            Err(e) => {
-                tracing::warn!("[test] which path {which_path:?} failed: {e}");
-                return;
+            other => panic!("expected PowerShell config, got {other:?}"),
+        }
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: std::ffi::OsString) -> Self {
+            let original = std::env::var_os(key);
+            // SAFETY: tests run serially; mutating the process environment is controlled and restored.
+            unsafe {
+                std::env::set_var(key, &value);
             }
-        };
+            Self { key, original }
+        }
+    }
 
-        tracing::info!("[test] which_path: {which_path:?}");
-        tracing::info!("[test] run_ok: {run_ok}");
-        tracing::info!("[test] which_ok: {which_ok}");
-        let run_stdout_trimmed = run_stdout.trim();
-        let which_stdout_trimmed = which_stdout.trim();
-        tracing::info!("[test] run_stdout:\n{run_stdout_trimmed}");
-        tracing::info!("[test] which_stdout:\n{which_stdout_trimmed}");
-
-        assert!(
-            run_ok,
-            "run bash.exe --version should succeed (WSL present)"
-        );
-        assert!(which_ok, "which-resolved bash --version should succeed");
-        assert_ne!(
-            run_stdout, which_stdout,
-            "Expected different outputs; ensure PATH target bash precedes WSL bash"
-        );
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: guard restores the previous environment state before other tests continue.
+            unsafe {
+                match &self.original {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
     }
 }
