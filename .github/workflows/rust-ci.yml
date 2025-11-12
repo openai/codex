@@ -407,9 +407,18 @@ jobs:
       - name: tests
         id: test
         continue-on-error: true
-        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test
+        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --profile ci-test --cargo-profile ci-test
         env:
           RUST_BACKTRACE: 1
+
+      - name: Publish Test Report
+        uses: mikepenz/action-junit-report@v4
+        if: always()
+        with:
+          report_paths: '**/target/nextest/*/junit.xml'
+          check_name: 'Test Results (${{ matrix.target }})'
+          detailed_summary: true
+          include_passed: false
 
       - name: Save cargo home cache
         if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'
