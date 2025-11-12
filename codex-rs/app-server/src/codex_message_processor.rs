@@ -131,6 +131,8 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::Op;
+use codex_core::protocol::ReasoningContentDeltaEvent;
+use codex_core::protocol::ReasoningRawContentDeltaEvent;
 use codex_core::protocol::ReviewDecision;
 use codex_core::read_head_for_summary;
 use codex_feedback::CodexFeedback;
@@ -2586,11 +2588,15 @@ async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::AgentMessageDelta(notification))
                 .await;
         }
-        EventMsg::ReasoningContentDelta(event) => {
-            let notification = ReasoningDeltaNotification {
-                item_id: event.item_id,
-                delta: event.delta,
-            };
+        // The logic of whether to emit reasoning summary or reasoning raw content delta is handled in the core.
+        // The client just receives ReasoningDelta notifications and handles both cases the same way.
+        EventMsg::ReasoningContentDelta(ReasoningContentDeltaEvent { item_id, delta, .. })
+        | EventMsg::ReasoningRawContentDelta(ReasoningRawContentDeltaEvent {
+            item_id,
+            delta,
+            ..
+        }) => {
+            let notification = ReasoningDeltaNotification { item_id, delta };
             outgoing
                 .send_server_notification(ServerNotification::ReasoningDelta(notification))
                 .await;
