@@ -71,20 +71,6 @@ impl RuleMatch {
     }
 }
 
-impl std::fmt::Display for RuleMatch {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::PrefixRuleMatch {
-                matched_prefix,
-                decision,
-            } => write!(
-                f,
-                "prefixRuleMatch {{ matchedPrefix: {matched_prefix:?}, decision: {decision} }}"
-            ),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PrefixRule {
     pub pattern: PrefixPattern,
