@@ -4,7 +4,7 @@
 - Policy engine and CLI built around `prefix_rule(pattern=[...], decision?, match?, not_match?)`.
 - This release covers only the prefix-rule subset of the planned execpolicy v2 language; a richer language will follow.
 - Tokens are matched in order; any `pattern` element may be a list to denote alternatives. `decision` defaults to `allow`; valid values: `allow`, `prompt`, `forbidden`.
-- `match` / `not_match` supply example invocations that are validated at load time (think of them as unit tests).
+- `match` / `not_match` supply example invocations that are validated at load time (think of them as unit tests); examples can be token arrays or strings (strings are tokenized with `shlex`).
 - The CLI always prints the JSON serialization of the evaluation result (whether a match or not).
 
 ## Policy shapes
@@ -13,8 +13,8 @@
 prefix_rule(
     pattern = ["cmd", ["alt1", "alt2"]], # ordered tokens; list entries denote alternatives
     decision = "prompt",                 # allow | prompt | forbidden; defaults to allow
-    match = [["cmd", "alt1"]],           # examples that must match this rule
-    not_match = [["cmd", "oops"]],       # examples that must not match this rule
+    match = [["cmd", "alt1"], "cmd alt2"],           # examples that must match this rule
+    not_match = [["cmd", "oops"], "cmd alt3"],       # examples that must not match this rule
 )
 ```
 
