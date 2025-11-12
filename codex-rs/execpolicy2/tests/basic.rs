@@ -113,7 +113,7 @@ fn match_and_not_match_examples_are_enforced() {
 prefix_rule(
     pattern = ["git", "status"],
     match = [["git", "status"]],
-    not_match = [["git", "reset", "--hard"]],
+    not_match = [["git", "--config", "color.status=always", "status"]],
 )
     "#;
     let parser = PolicyParser::new("test.policy", policy_src);
@@ -127,7 +127,12 @@ prefix_rule(
 }"#]]
     .assert_eq(&match_eval.to_string());
 
-    let no_match_eval = policy.evaluate(&tokens(&["git", "reset", "--hard"]));
+    let no_match_eval = policy.evaluate(&tokens(&[
+        "git",
+        "--config",
+        "color.status=always",
+        "status",
+    ]));
     expect!["NoMatch"].assert_eq(&no_match_eval.to_string());
 }
 
