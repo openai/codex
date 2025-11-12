@@ -1,15 +1,17 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 
 use crate::JSONRPCNotification;
 use crate::JSONRPCRequest;
 use crate::RequestId;
+use crate::export::GeneratedSchema;
+use crate::export::write_json_schema;
 use crate::protocol::v1;
 use crate::protocol::v2;
 use codex_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxCommandAssessment;
 use paste::paste;
@@ -44,7 +46,7 @@ macro_rules! client_request_definitions {
     (
         $(
             $(#[$variant_meta:meta])*
-            $variant:ident {
+            $variant:ident $(=> $wire:literal)? {
                 params: $(#[$params_meta:meta])* $params:ty,
                 response: $response:ty,
             }
@@ -56,6 +58,7 @@ macro_rules! client_request_definitions {
         pub enum ClientRequest {
             $(
                 $(#[$variant_meta])*
+                $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
                 $variant {
                     #[serde(rename = "id")]
                     request_id: RequestId,
@@ -74,66 +77,103 @@ macro_rules! client_request_definitions {
             Ok(())
         }
 
+        #[allow(clippy::vec_init_then_push)]
         pub fn export_client_response_schemas(
             out_dir: &::std::path::Path,
-        ) -> ::anyhow::Result<()> {
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let mut schemas = Vec::new();
             $(
-                crate::export::write_json_schema::<$response>(out_dir, stringify!($response))?;
+                schemas.push(write_json_schema::<$response>(out_dir, stringify!($response))?);
             )*
-            Ok(())
+            Ok(schemas)
+        }
+
+        #[allow(clippy::vec_init_then_push)]
+        pub fn export_client_param_schemas(
+            out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let mut schemas = Vec::new();
+            $(
+                schemas.push(write_json_schema::<$params>(out_dir, stringify!($params))?);
+            )*
+            Ok(schemas)
         }
     };
 }
 
 client_request_definitions! {
-    /// NEW APIs
-    #[serde(rename = "model/list")]
-    #[ts(rename = "model/list")]
-    ListModels {
-        params: v2::ListModelsParams,
-        response: v2::ListModelsResponse,
-    },
-
-    #[serde(rename = "account/login")]
-    #[ts(rename = "account/login")]
-    LoginAccount {
-        params: v2::LoginAccountParams,
-        response: v2::LoginAccountResponse,
-    },
-
-    #[serde(rename = "account/logout")]
-    #[ts(rename = "account/logout")]
-    LogoutAccount {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v2::LogoutAccountResponse,
-    },
-
-    #[serde(rename = "account/rateLimits/read")]
-    #[ts(rename = "account/rateLimits/read")]
-    GetAccountRateLimits {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v2::GetAccountRateLimitsResponse,
-    },
-
-    #[serde(rename = "feedback/upload")]
-    #[ts(rename = "feedback/upload")]
-    UploadFeedback {
-        params: v2::UploadFeedbackParams,
-        response: v2::UploadFeedbackResponse,
-    },
-
-    #[serde(rename = "account/read")]
-    #[ts(rename = "account/read")]
-    GetAccount {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v2::GetAccountResponse,
-    },
-
-    /// DEPRECATED APIs below
     Initialize {
         params: v1::InitializeParams,
         response: v1::InitializeResponse,
     },
+
+    /// NEW APIs
+    // Thread lifecycle
+    ThreadStart => "thread/start" {
+        params: v2::ThreadStartParams,
+        response: v2::ThreadStartResponse,
+    },
+    ThreadResume => "thread/resume" {
+        params: v2::ThreadResumeParams,
+        response: v2::ThreadResumeResponse,
+    },
+    ThreadArchive => "thread/archive" {
+        params: v2::ThreadArchiveParams,
+        response: v2::ThreadArchiveResponse,
+    },
+    ThreadList => "thread/list" {
+        params: v2::ThreadListParams,
+        response: v2::ThreadListResponse,
+    },
+    ThreadCompact => "thread/compact" {
+        params: v2::ThreadCompactParams,
+        response: v2::ThreadCompactResponse,
+    },
+    TurnStart => "turn/start" {
+        params: v2::TurnStartParams,
+        response: v2::TurnStartResponse,
+    },
+    TurnInterrupt => "turn/interrupt" {
+        params: v2::TurnInterruptParams,
+        response: v2::TurnInterruptResponse,
+    },
+
+    ModelList => "model/list" {
+        params: v2::ModelListParams,
+        response: v2::ModelListResponse,
+    },
+
+    LoginAccount => "account/login/start" {
+        params: v2::LoginAccountParams,
+        response: v2::LoginAccountResponse,
+    },
+
+    CancelLoginAccount => "account/login/cancel" {
+        params: v2::CancelLoginAccountParams,
+        response: v2::CancelLoginAccountResponse,
+    },
+
+    LogoutAccount => "account/logout" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::LogoutAccountResponse,
+    },
+
+    GetAccountRateLimits => "account/rateLimits/read" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::GetAccountRateLimitsResponse,
+    },
+
+    FeedbackUpload => "feedback/upload" {
+        params: v2::FeedbackUploadParams,
+        response: v2::FeedbackUploadResponse,
+    },
+
+    GetAccount => "account/read" {
+        params: v2::GetAccountParams,
+        response: v2::GetAccountResponse,
+    },
+
+    /// DEPRECATED APIs below
     NewConversation {
         params: v1::NewConversationParams,
         response: v1::NewConversationResponse,
@@ -188,6 +228,7 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v1::LoginChatGptResponse,
     },
+    // DEPRECATED in favor of CancelLoginAccount
     CancelLoginChatGpt {
         params: v1::CancelLoginChatGptParams,
         response: v1::CancelLoginChatGptResponse,
@@ -196,6 +237,7 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v1::LogoutChatGptResponse,
     },
+    /// DEPRECATED in favor of GetAccount
     GetAuthStatus {
         params: v1::GetAuthStatusParams,
         response: v1::GetAuthStatusResponse,
@@ -276,13 +318,101 @@ macro_rules! server_request_definitions {
             Ok(())
         }
 
+        #[allow(clippy::vec_init_then_push)]
         pub fn export_server_response_schemas(
-            out_dir: &::std::path::Path,
-        ) -> ::anyhow::Result<()> {
+            out_dir: &Path,
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let mut schemas = Vec::new();
             paste! {
-                $(crate::export::write_json_schema::<[<$variant Response>]>(out_dir, stringify!([<$variant Response>]))?;)*
+                $(schemas.push(crate::export::write_json_schema::<[<$variant Response>]>(out_dir, stringify!([<$variant Response>]))?);)*
             }
-            Ok(())
+            Ok(schemas)
+        }
+
+        #[allow(clippy::vec_init_then_push)]
+        pub fn export_server_param_schemas(
+            out_dir: &Path,
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let mut schemas = Vec::new();
+            paste! {
+                $(schemas.push(crate::export::write_json_schema::<[<$variant Params>]>(out_dir, stringify!([<$variant Params>]))?);)*
+            }
+            Ok(schemas)
+        }
+    };
+}
+
+/// Generates `ServerNotification` enum and helpers, including a JSON Schema
+/// exporter for each notification.
+macro_rules! server_notification_definitions {
+    (
+        $(
+            $(#[$variant_meta:meta])*
+            $variant:ident $(=> $wire:literal)? ( $payload:ty )
+        ),* $(,)?
+    ) => {
+        /// Notification sent from the server to the client.
+        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
+        #[serde(tag = "method", content = "params", rename_all = "camelCase")]
+        #[strum(serialize_all = "camelCase")]
+        pub enum ServerNotification {
+            $(
+                $(#[$variant_meta])*
+                $(#[serde(rename = $wire)] #[ts(rename = $wire)] #[strum(serialize = $wire)])?
+                $variant($payload),
+            )*
+        }
+
+        impl ServerNotification {
+            pub fn to_params(self) -> Result<serde_json::Value, serde_json::Error> {
+                match self {
+                    $(Self::$variant(params) => serde_json::to_value(params),)*
+                }
+            }
+        }
+
+        impl TryFrom<JSONRPCNotification> for ServerNotification {
+            type Error = serde_json::Error;
+
+            fn try_from(value: JSONRPCNotification) -> Result<Self, Self::Error> {
+                serde_json::from_value(serde_json::to_value(value)?)
+            }
+        }
+
+        #[allow(clippy::vec_init_then_push)]
+        pub fn export_server_notification_schemas(
+            out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let mut schemas = Vec::new();
+            $(schemas.push(crate::export::write_json_schema::<$payload>(out_dir, stringify!($payload))?);)*
+            Ok(schemas)
+        }
+    };
+}
+/// Notifications sent from the client to the server.
+macro_rules! client_notification_definitions {
+    (
+        $(
+            $(#[$variant_meta:meta])*
+            $variant:ident $( ( $payload:ty ) )?
+        ),* $(,)?
+    ) => {
+        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
+        #[serde(tag = "method", content = "params", rename_all = "camelCase")]
+        #[strum(serialize_all = "camelCase")]
+        pub enum ClientNotification {
+            $(
+                $(#[$variant_meta])*
+                $variant $( ( $payload ) )?,
+            )*
+        }
+
+        pub fn export_client_notification_schemas(
+            _out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+            let schemas = Vec::new();
+            $( $(schemas.push(crate::export::write_json_schema::<$payload>(_out_dir, stringify!($payload))?);)? )*
+            Ok(schemas)
         }
     };
 }
@@ -366,52 +496,33 @@ pub struct FuzzyFileSearchResponse {
     pub files: Vec<FuzzyFileSearchResult>,
 }
 
-/// Notification sent from the server to the client.
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
-#[serde(tag = "method", content = "params", rename_all = "camelCase")]
-#[strum(serialize_all = "camelCase")]
-pub enum ServerNotification {
+server_notification_definitions! {
     /// NEW NOTIFICATIONS
-    #[serde(rename = "account/rateLimits/updated")]
-    #[ts(rename = "account/rateLimits/updated")]
-    #[strum(serialize = "account/rateLimits/updated")]
-    AccountRateLimitsUpdated(RateLimitSnapshot),
+    ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
+    TurnStarted => "turn/started" (v2::TurnStartedNotification),
+    TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
+    ItemStarted => "item/started" (v2::ItemStartedNotification),
+    ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
+    AgentMessageDelta => "item/agentMessage/delta" (v2::AgentMessageDeltaNotification),
+    CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
+    McpToolCallProgress => "item/mcpToolCall/progress" (v2::McpToolCallProgressNotification),
+    AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
+    AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
+
+    #[serde(rename = "account/login/completed")]
+    #[ts(rename = "account/login/completed")]
+    #[strum(serialize = "account/login/completed")]
+    AccountLoginCompleted(v2::AccountLoginCompletedNotification),
 
     /// DEPRECATED NOTIFICATIONS below
-    /// Authentication status changed
     AuthStatusChange(v1::AuthStatusChangeNotification),
 
-    /// ChatGPT login flow completed
+    /// Deprecated: use `account/login/completed` instead.
     LoginChatGptComplete(v1::LoginChatGptCompleteNotification),
-
-    /// The special session configured event for a new or resumed conversation.
     SessionConfigured(v1::SessionConfiguredNotification),
 }
 
-impl ServerNotification {
-    pub fn to_params(self) -> Result<serde_json::Value, serde_json::Error> {
-        match self {
-            ServerNotification::AccountRateLimitsUpdated(params) => serde_json::to_value(params),
-            ServerNotification::AuthStatusChange(params) => serde_json::to_value(params),
-            ServerNotification::LoginChatGptComplete(params) => serde_json::to_value(params),
-            ServerNotification::SessionConfigured(params) => serde_json::to_value(params),
-        }
-    }
-}
-
-impl TryFrom<JSONRPCNotification> for ServerNotification {
-    type Error = serde_json::Error;
-
-    fn try_from(value: JSONRPCNotification) -> Result<Self, Self::Error> {
-        serde_json::from_value(serde_json::to_value(value)?)
-    }
-}
-
-/// Notification sent from the client to the server.
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
-#[serde(tag = "method", content = "params", rename_all = "camelCase")]
-#[strum(serialize_all = "camelCase")]
-pub enum ClientNotification {
+client_notification_definitions! {
     Initialized,
 }
 
@@ -571,7 +682,7 @@ mod tests {
         };
         assert_eq!(
             json!({
-                "method": "account/login",
+                "method": "account/login/start",
                 "id": 2,
                 "params": {
                     "type": "apiKey",
@@ -587,11 +698,11 @@ mod tests {
     fn serialize_account_login_chatgpt() -> Result<()> {
         let request = ClientRequest::LoginAccount {
             request_id: RequestId::Integer(3),
-            params: v2::LoginAccountParams::ChatGpt,
+            params: v2::LoginAccountParams::Chatgpt,
         };
         assert_eq!(
             json!({
-                "method": "account/login",
+                "method": "account/login/start",
                 "id": 3,
                 "params": {
                     "type": "chatgpt"
@@ -622,12 +733,17 @@ mod tests {
     fn serialize_get_account() -> Result<()> {
         let request = ClientRequest::GetAccount {
             request_id: RequestId::Integer(5),
-            params: None,
+            params: v2::GetAccountParams {
+                refresh_token: false,
+            },
         };
         assert_eq!(
             json!({
                 "method": "account/read",
                 "id": 5,
+                "params": {
+                    "refreshToken": false
+                }
             }),
             serde_json::to_value(&request)?,
         );
@@ -636,19 +752,16 @@ mod tests {
 
     #[test]
     fn account_serializes_fields_in_camel_case() -> Result<()> {
-        let api_key = v2::Account::ApiKey {
-            api_key: "secret".to_string(),
-        };
+        let api_key = v2::Account::ApiKey {};
         assert_eq!(
             json!({
                 "type": "apiKey",
-                "apiKey": "secret",
             }),
             serde_json::to_value(&api_key)?,
         );
 
-        let chatgpt = v2::Account::ChatGpt {
-            email: Some("user@example.com".to_string()),
+        let chatgpt = v2::Account::Chatgpt {
+            email: "user@example.com".to_string(),
             plan_type: PlanType::Plus,
         };
         assert_eq!(
@@ -665,16 +778,16 @@ mod tests {
 
     #[test]
     fn serialize_list_models() -> Result<()> {
-        let request = ClientRequest::ListModels {
+        let request = ClientRequest::ModelList {
             request_id: RequestId::Integer(6),
-            params: v2::ListModelsParams::default(),
+            params: v2::ModelListParams::default(),
         };
         assert_eq!(
             json!({
                 "method": "model/list",
                 "id": 6,
                 "params": {
-                    "pageSize": null,
+                    "limit": null,
                     "cursor": null
                 }
             }),
