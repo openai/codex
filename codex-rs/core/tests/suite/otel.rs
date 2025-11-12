@@ -100,6 +100,7 @@ async fn process_sse_emits_failed_event_on_parse_error() {
 
     mount_sse_once(&server, "data: not-json\n\n".to_string()).await;
 
+<<<<<<< Updated upstream
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
@@ -109,6 +110,9 @@ async fn process_sse_emits_failed_event_on_parse_error() {
         .build(&server)
         .await
         .unwrap();
+=======
+    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
+>>>>>>> Stashed changes
 
     codex
         .submit(Op::UserInput {
@@ -141,6 +145,7 @@ async fn process_sse_records_failed_event_when_stream_closes_without_completed()
 
     mount_sse_once(&server, sse(vec![ev_assistant_message("id", "hi")])).await;
 
+<<<<<<< Updated upstream
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
@@ -150,6 +155,9 @@ async fn process_sse_records_failed_event_when_stream_closes_without_completed()
         .build(&server)
         .await
         .unwrap();
+=======
+    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
+>>>>>>> Stashed changes
 
     codex
         .submit(Op::UserInput {
@@ -193,7 +201,16 @@ async fn process_sse_failed_event_records_response_error_message() {
         })]),
     )
     .await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
 
+<<<<<<< Updated upstream
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
@@ -203,6 +220,9 @@ async fn process_sse_failed_event_records_response_error_message() {
         .build(&server)
         .await
         .unwrap();
+=======
+    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
+>>>>>>> Stashed changes
 
     codex
         .submit(Op::UserInput {
@@ -245,6 +265,7 @@ async fn process_sse_failed_event_logs_parse_error() {
     )
     .await;
 
+<<<<<<< Updated upstream
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
@@ -254,6 +275,18 @@ async fn process_sse_failed_event_logs_parse_error() {
         .build(&server)
         .await
         .unwrap();
+=======
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+
+    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
+>>>>>>> Stashed changes
 
     codex
         .submit(Op::UserInput {
@@ -291,6 +324,7 @@ async fn process_sse_failed_event_logs_missing_error() {
     )
     .await;
 
+<<<<<<< Updated upstream
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
@@ -300,6 +334,9 @@ async fn process_sse_failed_event_logs_missing_error() {
         .build(&server)
         .await
         .unwrap();
+=======
+    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
+>>>>>>> Stashed changes
 
     codex
         .submit(Op::UserInput {
@@ -337,6 +374,7 @@ async fn process_sse_failed_event_logs_response_completed_parse_error() {
     )
     .await;
 
+<<<<<<< Updated upstream
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
@@ -346,6 +384,18 @@ async fn process_sse_failed_event_logs_response_completed_parse_error() {
         .build(&server)
         .await
         .unwrap();
+=======
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+
+    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
+>>>>>>> Stashed changes
 
     codex
         .submit(Op::UserInput {
@@ -442,7 +492,16 @@ async fn handle_response_item_records_tool_result_for_custom_tool_call() {
         ]),
     )
     .await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
 
+<<<<<<< Updated upstream
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
@@ -452,6 +511,9 @@ async fn handle_response_item_records_tool_result_for_custom_tool_call() {
         .build(&server)
         .await
         .unwrap();
+=======
+    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
+>>>>>>> Stashed changes
 
     codex
         .submit(Op::UserInput {
@@ -503,6 +565,7 @@ async fn handle_response_item_records_tool_result_for_function_call() {
     )
     .await;
 
+<<<<<<< Updated upstream
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
@@ -512,6 +575,18 @@ async fn handle_response_item_records_tool_result_for_function_call() {
         .build(&server)
         .await
         .unwrap();
+=======
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+
+    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
+>>>>>>> Stashed changes
 
     codex
         .submit(Op::UserInput {
@@ -573,6 +648,7 @@ async fn handle_response_item_records_tool_result_for_local_shell_missing_ids() 
     )
     .await;
 
+<<<<<<< Updated upstream
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
@@ -582,6 +658,18 @@ async fn handle_response_item_records_tool_result_for_local_shell_missing_ids() 
         .build(&server)
         .await
         .unwrap();
+=======
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+
+    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
+>>>>>>> Stashed changes
 
     codex
         .submit(Op::UserInput {
@@ -627,6 +715,7 @@ async fn handle_response_item_records_tool_result_for_local_shell_call() {
     )
     .await;
 
+<<<<<<< Updated upstream
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
@@ -636,6 +725,18 @@ async fn handle_response_item_records_tool_result_for_local_shell_call() {
         .build(&server)
         .await
         .unwrap();
+=======
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+
+    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
+>>>>>>> Stashed changes
 
     codex
         .submit(Op::UserInput {
@@ -710,10 +811,23 @@ fn tool_decision_assertion<'a>(
 #[traced_test]
 async fn handle_container_exec_autoapprove_from_config_records_tool_decision() {
     let server = start_mock_server().await;
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
-            ev_local_shell_call("auto_config_call", "completed", vec!["/bin/echo", "hello"]),
+            ev_local_shell_call(
+                "auto_config_call",
+                "completed",
+                vec!["/bin/echo", "local shell"],
+            ),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
             ev_completed("done"),
         ]),
     )
@@ -723,8 +837,6 @@ async fn handle_container_exec_autoapprove_from_config_records_tool_decision() {
         .with_config(|config| {
             config.approval_policy = AskForApproval::OnRequest;
             config.sandbox_policy = SandboxPolicy::DangerFullAccess;
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -739,7 +851,7 @@ async fn handle_container_exec_autoapprove_from_config_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(tool_decision_assertion(
         "auto_config_call",
@@ -761,11 +873,18 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
     )
     .await;
 
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.approval_policy = AskForApproval::UnlessTrusted;
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -812,12 +931,18 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
         ]),
     )
     .await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.approval_policy = AskForApproval::UnlessTrusted;
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -864,12 +989,18 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
         ]),
     )
     .await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.approval_policy = AskForApproval::UnlessTrusted;
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -917,11 +1048,17 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
     )
     .await;
 
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.approval_policy = AskForApproval::UnlessTrusted;
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -968,12 +1105,18 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
         ]),
     )
     .await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.approval_policy = AskForApproval::UnlessTrusted;
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -1021,11 +1164,18 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
     )
     .await;
 
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.approval_policy = AskForApproval::UnlessTrusted;
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
