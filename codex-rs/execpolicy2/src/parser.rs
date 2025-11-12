@@ -11,14 +11,13 @@ use starlark::values::Value;
 use starlark::values::list::ListRef;
 use starlark::values::list::UnpackList;
 use starlark::values::none::NoneType;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 
 use crate::decision::Decision;
 use crate::error::Error;
 use crate::error::Result;
 use crate::rule::PatternToken;
 use crate::rule::PrefixPattern;
+use crate::rule::PrefixRule;
 use crate::rule::Rule;
 
 pub struct PolicyParser {
@@ -56,26 +55,19 @@ impl PolicyParser {
 #[derive(Debug, ProvidesStaticType)]
 struct PolicyBuilder {
     rules_by_program: Mutex<MultiMap<String, Rule>>,
-    next_auto_id: AtomicU64,
 }
 
 impl PolicyBuilder {
     fn new() -> Self {
         Self {
             rules_by_program: Mutex::new(MultiMap::new()),
-            next_auto_id: AtomicU64::new(0),
         }
-    }
-
-    fn alloc_id(&self) -> String {
-        let id = self.next_auto_id.fetch_add(1, Ordering::Relaxed);
-        format!("rule_{id}")
     }
 
     fn add_rule(&self, rule: Rule) {
         self.rules_by_program
             .lock()
-            .insert(rule.pattern.first.clone(), rule);
+            .insert(rule.program().to_string(), rule);
     }
 
     fn build(&self) -> crate::policy::Policy {
@@ -177,7 +169,6 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
         decision: Option<&'v str>,
         r#match: Option<UnpackList<Value<'v>>>,
         not_match: Option<UnpackList<Value<'v>>>,
-        id: Option<&'v str>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<NoneType> {
         let decision = match decision {
@@ -187,33 +178,28 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
 
         let pattern_tokens = parse_pattern(pattern)?;
 
-        let positive_examples: Vec<Vec<String>> =
+        let matches: Vec<Vec<String>> =
             r#match.map(parse_examples).transpose()?.unwrap_or_default();
-        let negative_examples: Vec<Vec<String>> = not_match
+        let not_matches: Vec<Vec<String>> = not_match
             .map(parse_examples)
             .transpose()?
             .unwrap_or_default();
 
         let builder = policy_builder(eval);
 
-        let id = id
-            .map(std::string::ToString::to_string)
-            .unwrap_or_else(|| builder.alloc_id());
-
         let (first_token, remaining_tokens) = pattern_tokens
             .split_first()
             .ok_or_else(|| Error::InvalidPattern("pattern cannot be empty".to_string()))?;
 
         for head in first_token.alternatives() {
-            let rule = Rule {
-                id: id.clone(),
+            let rule = Rule::Prefix(PrefixRule {
                 pattern: PrefixPattern {
                     first: head,
                     rest: remaining_tokens.to_vec(),
                 },
                 decision,
-            };
-            rule.validate_examples(&positive_examples, &negative_examples)?;
+            });
+            rule.validate_examples(&matches, &not_matches)?;
             builder.add_rule(rule);
         }
         Ok(NoneType)

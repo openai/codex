@@ -42,8 +42,8 @@ impl Policy {
         for rule in rules {
             if let Some(matched) = rule.matches(cmd) {
                 let decision = match strictest_decision {
-                    None => matched.decision,
-                    Some(current) => std::cmp::max(matched.decision, current),
+                    None => matched.decision(),
+                    Some(current) => std::cmp::max(matched.decision(), current),
                 };
                 strictest_decision = Some(decision);
                 matched_rules.push(matched);
