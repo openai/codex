@@ -54,5 +54,5 @@ cargo run -p codex-execpolicy2 -- check git status
 cargo run -p codex-execpolicy2 -- --policy path/to/policy.codexpolicy check git status
 ```
 - Example outcomes:
-  - Match: `{"Match": { ... "decision": "allow" ... }}`
-  - No match: `"NoMatch"`
+  - Match: `{"match": { ... "decision": "allow" ... }}`
+  - No match: `"noMatch"`

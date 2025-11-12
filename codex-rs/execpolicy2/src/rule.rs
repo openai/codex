@@ -120,7 +120,7 @@ impl std::fmt::Display for RuleMatch {
                 decision,
             } => write!(
                 f,
-                "PrefixRuleMatch {{ matched_prefix: {matched_prefix:?}, decision: {decision} }}"
+                "prefixRuleMatch {{ matchedPrefix: {matched_prefix:?}, decision: {decision} }}"
             ),
         }
     }
