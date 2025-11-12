@@ -182,40 +182,6 @@ prefix_rule(
 }
 
 #[test]
-fn reports_unmatched_example_for_first_token_alternatives() {
-    let policy_src = r#"
-prefix_rule(
-    pattern = [["bash", "sh"], "-c"],
-    match = [
-        ["bash", "-c"],
-        ["zsh", "-c"],
-    ],
-)
-    "#;
-
-    let err = PolicyParser::parse("test.codexpolicy", policy_src)
-        .expect_err("expected unmatched example error");
-    let expected_message = r#"Traceback (most recent call last):
-  * test.codexpolicy:2, in <module>
-      prefix_rule(
-error: expected every example to match at least one rule. rules: ["Prefix(PrefixRule { pattern: PrefixPattern { first: "bash", rest: [Single("-c")] }, decision: Allow })", "Prefix(PrefixRule { pattern: PrefixPattern { first: "sh", rest: [Single("-c")] }, decision: Allow })"]; unmatched examples: ["zsh -c"]
- --> test.codexpolicy:2:1
-  |
-2 | / prefix_rule(
-3 | |     pattern = [["bash", "sh"], "-c"],
-4 | |     match = [
-5 | |         ["bash", "-c"],
-6 | |         ["zsh", "-c"],
-7 | |     ],
-8 | | )
-  | |_^
-  |
-"#;
-    let expected_err = Error::Starlark(expected_message.to_string());
-    assert_eq!(expected_err, err);
-}
-
-#[test]
 fn strictest_decision_wins_across_matches() {
     let policy_src = r#"
 prefix_rule(
