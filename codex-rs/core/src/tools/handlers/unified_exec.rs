@@ -36,6 +36,10 @@ struct ExecCommandArgs {
     yield_time_ms: Option<u64>,
     #[serde(default)]
     max_output_tokens: Option<usize>,
+    #[serde(default)]
+    with_escalated_permissions: Option<bool>,
+    #[serde(default)]
+    justification: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,8 +104,30 @@ impl ToolHandler for UnifiedExecHandler {
                         "failed to parse exec_command arguments: {err:?}"
                     ))
                 })?;
-                let workdir = args
-                    .workdir
+                let ExecCommandArgs {
+                    cmd,
+                    workdir,
+                    shell,
+                    login,
+                    yield_time_ms,
+                    max_output_tokens,
+                    with_escalated_permissions,
+                    justification,
+                } = args;
+
+                if with_escalated_permissions.unwrap_or(false)
+                    && !matches!(
+                        context.turn.approval_policy,
+                        codex_protocol::protocol::AskForApproval::OnRequest
+                    )
+                {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "approval policy is {policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {policy:?}",
+                        policy = context.turn.approval_policy
+                    )));
+                }
+
+                let workdir = workdir
                     .as_deref()
                     .filter(|value| !value.is_empty())
                     .map(PathBuf::from);
@@ -113,18 +139,20 @@ impl ToolHandler for UnifiedExecHandler {
                     &context.call_id,
                     None,
                 );
-                let emitter = ToolEmitter::unified_exec(args.cmd.clone(), cwd.clone(), true);
+                let emitter = ToolEmitter::unified_exec(cmd.clone(), cwd.clone(), true);
                 emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
                 manager
                     .exec_command(
                         ExecCommandRequest {
-                            command: &args.cmd,
-                            shell: &args.shell,
-                            login: args.login,
-                            yield_time_ms: args.yield_time_ms,
-                            max_output_tokens: args.max_output_tokens,
+                            command: &cmd,
+                            shell: &shell,
+                            login,
+                            yield_time_ms,
+                            max_output_tokens,
                             workdir,
+                            with_escalated_permissions,
+                            justification,
                         },
                         &context,
                     )

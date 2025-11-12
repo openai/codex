@@ -65,9 +65,9 @@ impl ToolCallRuntime {
                         Ok(Self::aborted_response(&call, secs))
                     },
                     res = async {
-                        tracing::info!("waiting for tool gate");
+                        tracing::trace!("waiting for tool gate");
                         readiness.wait_ready().await;
-                        tracing::info!("tool gate released");
+                        tracing::trace!("tool gate released");
                         let _guard = if supports_parallel {
                             Either::Left(lock.read().await)
                         } else {

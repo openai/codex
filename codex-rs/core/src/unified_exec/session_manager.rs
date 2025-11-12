@@ -51,7 +51,13 @@ impl UnifiedExecSessionManager {
         ];
 
         let session = self
-            .open_session_with_sandbox(command, cwd.clone(), context)
+            .open_session_with_sandbox(
+                command,
+                cwd.clone(),
+                request.with_escalated_permissions,
+                request.justification,
+                context,
+            )
             .await?;
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
@@ -317,6 +323,8 @@ impl UnifiedExecSessionManager {
         &self,
         command: Vec<String>,
         cwd: PathBuf,
+        with_escalated_permissions: Option<bool>,
+        justification: Option<String>,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
         let mut orchestrator = ToolOrchestrator::new();
@@ -325,6 +333,8 @@ impl UnifiedExecSessionManager {
             command,
             cwd,
             create_env(&context.turn.shell_environment_policy),
+            with_escalated_permissions,
+            justification,
         );
         let tool_ctx = ToolCtx {
             session: context.session.as_ref(),

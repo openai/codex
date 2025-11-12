@@ -71,6 +71,8 @@ pub(crate) struct ExecCommandRequest<'a> {
     pub yield_time_ms: Option<u64>,
     pub max_output_tokens: Option<usize>,
     pub workdir: Option<PathBuf>,
+    pub with_escalated_permissions: Option<bool>,
+    pub justification: Option<String>,
 }
 
 #[derive(Debug)]
@@ -201,6 +203,8 @@ mod tests {
                     yield_time_ms,
                     max_output_tokens: None,
                     workdir: None,
+                    with_escalated_permissions: None,
+                    justification: None,
                 },
                 &context,
             )
