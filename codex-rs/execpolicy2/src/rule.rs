@@ -66,29 +66,6 @@ impl std::fmt::Display for PrefixPattern {
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum Rule {
-    Prefix(PrefixRule),
-}
-
-impl std::fmt::Display for Rule {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Prefix(rule) => write!(
-                f,
-                "prefix_rule(pattern = {}, decision = {})",
-                rule.pattern, rule.decision
-            ),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PrefixRule {
-    pub pattern: PrefixPattern,
-    pub decision: Decision,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RuleMatch {
@@ -120,28 +97,10 @@ impl std::fmt::Display for RuleMatch {
     }
 }
 
-impl Rule {
-    pub fn program(&self) -> &str {
-        match self {
-            Self::Prefix(rule) => rule.pattern.first.as_ref(),
-        }
-    }
-
-    pub fn matches(&self, cmd: &[String]) -> Option<RuleMatch> {
-        match self {
-            Self::Prefix(rule) => rule.matches(cmd),
-        }
-    }
-
-    pub fn validate_examples(
-        &self,
-        matches: &[Vec<String>],
-        not_matches: &[Vec<String>],
-    ) -> Result<()> {
-        match self {
-            Self::Prefix(rule) => rule.validate_examples(matches, not_matches),
-        }
-    }
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrefixRule {
+    pub pattern: PrefixPattern,
+    pub decision: Decision,
 }
 
 impl PrefixRule {
@@ -184,6 +143,47 @@ impl PrefixRule {
             render_pattern(&self.pattern),
             render_decision(self.decision)
         )
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Rule {
+    Prefix(PrefixRule),
+}
+
+impl Rule {
+    pub fn program(&self) -> &str {
+        match self {
+            Self::Prefix(rule) => rule.pattern.first.as_ref(),
+        }
+    }
+
+    pub fn matches(&self, cmd: &[String]) -> Option<RuleMatch> {
+        match self {
+            Self::Prefix(rule) => rule.matches(cmd),
+        }
+    }
+
+    pub fn validate_examples(
+        &self,
+        matches: &[Vec<String>],
+        not_matches: &[Vec<String>],
+    ) -> Result<()> {
+        match self {
+            Self::Prefix(rule) => rule.validate_examples(matches, not_matches),
+        }
+    }
+}
+
+impl std::fmt::Display for Rule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Prefix(rule) => write!(
+                f,
+                "prefix_rule(pattern = {}, decision = {})",
+                rule.pattern, rule.decision
+            ),
+        }
     }
 }
 
