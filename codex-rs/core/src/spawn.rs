@@ -73,6 +73,43 @@ pub(crate) async fn spawn_child_async(
                 return Err(std::io::Error::last_os_error());
             }
 
+            #[cfg(target_os = "macos")]
+            {
+                // macOS network stack (via reqwest/hyper) opens PF_SYSTEM control sockets
+                // such as com.apple.netsrc without setting FD_CLOEXEC. Those descriptors
+                // get inherited by shell tool children, which is surprising and lets the
+                // child talk to that kernel control socket. Close everything above stdio
+                // to keep those sockets (and any similar long-lived fds) out of subshells.
+                // We bound the sweep by min(RLIMIT_NOFILE, 128) because netsrc fds are
+                // low and this avoids a pathological case where another thread lowers
+                // the rlimit between opening the socket and spawning the child. If we ever
+                // move the reqwest traffic into a helper process, leaking these fds would
+                // be less concerning. We leave CLOEXEC fds alone (for example, the stdlib
+                // error-reporting pipe used when exec fails) and only close descriptors
+                // that would have been inherited.
+                let mut max_fd = 128_i64;
+                let mut limit = libc::rlimit {
+                    rlim_cur: 0,
+                    rlim_max: 0,
+                };
+                if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) == 0
+                    && limit.rlim_cur != libc::RLIM_INFINITY
+                {
+                    let soft_limit = limit.rlim_cur.min(i64::MAX as libc::rlim_t) as i64;
+                    max_fd = max_fd.min(soft_limit);
+                }
+
+                let bound = max_fd.max(3);
+                let mut fd = 3;
+                while (fd as i64) < bound {
+                    let flags = libc::fcntl(fd, libc::F_GETFD);
+                    if flags != -1 && (flags & libc::FD_CLOEXEC) == 0 {
+                        libc::close(fd);
+                    }
+                    fd += 1;
+                }
+            }
+
             // This relies on prctl(2), so it only works on Linux.
             #[cfg(target_os = "linux")]
             {
