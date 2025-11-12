@@ -15,13 +15,16 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
+use codex_common::exit::ExitReason;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::model_family::find_family_for_model;
+use codex_core::protocol::EventMsg;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::ConversationId;
 use color_eyre::eyre::Result;
@@ -48,6 +51,7 @@ pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub conversation_id: Option<ConversationId>,
     pub update_action: Option<UpdateAction>,
+    pub exit_reason: Option<ExitReason>,
 }
 
 pub(crate) struct App {
@@ -82,6 +86,9 @@ pub(crate) struct App {
 
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
+
+    /// Track exit reason across the app lifecycle
+    exit_reason: Option<ExitReason>,
 }
 
 impl App {
@@ -172,6 +179,7 @@ impl App {
             feedback: feedback.clone(),
             pending_update_action: None,
             skip_world_writable_scan_once: false,
+            exit_reason: None,
         };
 
         // On startup, if Auto mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -223,10 +231,12 @@ impl App {
             }
         } {}
         tui.terminal.clear()?;
+
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
             conversation_id: app.chat_widget.conversation_id(),
             update_action: app.pending_update_action,
+            exit_reason: app.exit_reason,
         })
     }
 
@@ -338,6 +348,18 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::CodexEvent(event) => {
+                match &event.msg {
+                    EventMsg::TaskStarted(_) | EventMsg::TaskComplete(_) => {
+                        self.exit_reason = None;
+                    }
+                    EventMsg::Error(_) | EventMsg::StreamError(_) => {
+                        self.exit_reason = Some(ExitReason::Error);
+                    }
+                    EventMsg::TurnAborted(ev) if ev.reason == TurnAbortReason::Interrupted => {
+                        self.exit_reason = Some(ExitReason::Interrupted);
+                    }
+                    _ => {}
+                }
                 self.chat_widget.handle_codex_event(event);
             }
             AppEvent::ConversationHistory(ev) => {
@@ -754,6 +776,7 @@ mod tests {
             feedback: codex_feedback::CodexFeedback::new(),
             pending_update_action: None,
             skip_world_writable_scan_once: false,
+            exit_reason: None,
         }
     }
 

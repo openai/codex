@@ -34,6 +34,7 @@ use serde_json::Value;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
+use std::sync::Arc;
 use supports_color::Stream;
 use tracing::debug;
 use tracing::error;
@@ -44,6 +45,7 @@ use tracing_subscriber::prelude::*;
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
+use codex_common::exit::ExitReason;
 use codex_core::default_client::set_default_originator;
 use codex_core::find_conversation_path_by_id_str;
 
@@ -285,18 +287,23 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     info!("Codex initialized with event: {session_configured:?}");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+    let interrupted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
     {
         let conversation = conversation.clone();
+        let interrupted_clone = interrupted.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {
                         tracing::debug!("Keyboard interrupt");
+                        interrupted_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+
                         // Immediately notify Codex to abort any in‑flight task.
                         conversation.submit(Op::Interrupt).await.ok();
 
-                        // Exit the inner loop and return to the main input prompt. The codex
-                        // will emit a `TurnInterrupted` (Error) event which is drained later.
+                        // Exit the event loop. This will close the channel and cause
+                        // the main loop to check interrupted flag and exit with code 130.
                         break;
                     }
                     res = conversation.next_event() => match res {
@@ -344,27 +351,36 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     info!("Sent prompt with event ID: {initial_prompt_task_id}");
 
     // Run the loop until the task is complete.
-    // Track whether a fatal error was reported by the server so we can
-    // exit with a non-zero status for automation-friendly signaling.
-    let mut error_seen = false;
+    let mut exit_reason: Option<ExitReason> = None;
+
     while let Some(event) = rx.recv().await {
+        // Track errors in the main loop to determine exit code
         if matches!(event.msg, EventMsg::Error(_)) {
-            error_seen = true;
+            exit_reason = Some(ExitReason::Error);
         }
-        let shutdown: CodexStatus = event_processor.process_event(event);
-        match shutdown {
+
+        let status: CodexStatus = event_processor.process_event(event);
+        match status {
             CodexStatus::Running => continue,
             CodexStatus::InitiateShutdown => {
                 conversation.submit(Op::Shutdown).await?;
             }
-            CodexStatus::Shutdown => {
-                break;
-            }
+            CodexStatus::Shutdown => break,
         }
     }
+
+    // Print final output before exiting
     event_processor.print_final_output();
-    if error_seen {
-        std::process::exit(1);
+
+    // Merge exit reasons with priority: interrupted > error
+    let final_reason = if interrupted.load(std::sync::atomic::Ordering::SeqCst) {
+        Some(ExitReason::Interrupted)
+    } else {
+        exit_reason
+    };
+
+    if let Some(exit_code) = final_reason {
+        std::process::exit(exit_code as i32);
     }
 
     Ok(())

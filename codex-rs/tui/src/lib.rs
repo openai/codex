@@ -316,6 +316,7 @@ async fn run_ratatui_app(
                         token_usage: codex_core::protocol::TokenUsage::default(),
                         conversation_id: None,
                         update_action: Some(action),
+                        exit_reason: None,
                     });
                 }
             }
@@ -362,6 +363,7 @@ async fn run_ratatui_app(
                 token_usage: codex_core::protocol::TokenUsage::default(),
                 conversation_id: None,
                 update_action: None,
+                exit_reason: None,
             });
         }
         if onboarding_result.windows_install_selected {
@@ -375,6 +377,7 @@ async fn run_ratatui_app(
                 token_usage: codex_core::protocol::TokenUsage::default(),
                 conversation_id: None,
                 update_action: None,
+                exit_reason: None,
             });
         }
         // if the user acknowledged windows or made an explicit decision ato trust the directory, reload the config accordingly
@@ -411,6 +414,7 @@ async fn run_ratatui_app(
                     token_usage: codex_core::protocol::TokenUsage::default(),
                     conversation_id: None,
                     update_action: None,
+                    exit_reason: Some(codex_common::exit::ExitReason::Error),
                 });
             }
         }
@@ -448,6 +452,7 @@ async fn run_ratatui_app(
                     token_usage: codex_core::protocol::TokenUsage::default(),
                     conversation_id: None,
                     update_action: None,
+                    exit_reason: None,
                 });
             }
             other => other,

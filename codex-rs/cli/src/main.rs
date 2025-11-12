@@ -277,14 +277,25 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 
 /// Handle the app exit and print the results. Optionally run the update action.
 fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
-    let update_action = exit_info.update_action;
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
-    for line in format_exit_messages(exit_info, color_enabled) {
+    for line in format_exit_messages(exit_info.clone(), color_enabled) {
         println!("{line}");
     }
+
+    let AppExitInfo {
+        update_action,
+        exit_reason,
+        ..
+    } = exit_info;
+
     if let Some(action) = update_action {
         run_update_action(action)?;
     }
+
+    if let Some(reason) = exit_reason {
+        std::process::exit(reason as i32);
+    }
+
     Ok(())
 }
 
@@ -723,6 +734,7 @@ mod tests {
                 .map(ConversationId::from_string)
                 .map(Result::unwrap),
             update_action: None,
+            exit_reason: None,
         }
     }
 
@@ -732,6 +744,7 @@ mod tests {
             token_usage: TokenUsage::default(),
             conversation_id: None,
             update_action: None,
+            exit_reason: None,
         };
         let lines = format_exit_messages(exit_info, false);
         assert!(lines.is_empty());
