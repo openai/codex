@@ -25,3 +25,13 @@ impl Decision {
         }
     }
 }
+
+impl std::fmt::Display for Decision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Allow => f.write_str("allow"),
+            Self::Prompt => f.write_str("prompt"),
+            Self::Forbidden => f.write_str("forbidden"),
+        }
+    }
+}

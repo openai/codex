@@ -64,3 +64,23 @@ impl Policy {
         }
     }
 }
+
+impl std::fmt::Display for Evaluation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoMatch => f.write_str("NoMatch"),
+            Self::Match {
+                decision,
+                matched_rules,
+            } => {
+                writeln!(f, "Match {{")?;
+                writeln!(f, "  decision: {decision},")?;
+                writeln!(f, "  matched_rules: [")?;
+                for rule in matched_rules {
+                    writeln!(f, "    {rule},")?;
+                }
+                write!(f, "  ]\n}}")
+            }
+        }
+    }
+}
