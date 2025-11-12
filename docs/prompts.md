@@ -45,7 +45,7 @@ Custom prompts turn your repeatable instructions into reusable slash commands, s
 
 ### Example 1: Basic named arguments
 
-**File:** `~/.codex/prompts/ticket.md`
+**File**: `~/.codex/prompts/ticket.md`
 
 ```markdown
 ---
@@ -55,23 +55,23 @@ argument-hint: TICKET_ID=<id> TICKET_TITLE=<title>
 Please write a concise commit message for ticket $TICKET_ID: $TICKET_TITLE
 ```
 
-**Usage:**
+**Usage**:
 
 ```
 /prompts:ticket TICKET_ID=JIRA-1234 TICKET_TITLE="Fix login bug"
 ```
 
-**Expanded prompt sent to Codex:**
+**Expanded prompt sent to Codex**:
 
 ```
 Please write a concise commit message for ticket JIRA-1234: Fix login bug
 ```
 
-**Note:** Both `TICKET_ID` and `TICKET_TITLE` are required. If either is missing, Codex will show a validation error. Values with spaces must be double-quoted.
+**Note**: Both `TICKET_ID` and `TICKET_TITLE` are required. If either is missing, Codex will show a validation error. Values with spaces must be double-quoted.
 
 ### Example 2: Mixed positional and named arguments
 
-**File:** `~/.codex/prompts/review.md`
+**File**: `~/.codex/prompts/review.md`
 
 ```markdown
 ---
@@ -81,13 +81,13 @@ argument-hint: FILE=<path> [FOCUS=<section>]
 Review the code in $FILE. Pay special attention to $FOCUS.
 ```
 
-**Usage:**
+**Usage**:
 
 ```
 /prompts:review FILE=src/auth.js FOCUS="error handling"
 ```
 
-**Expanded prompt:**
+**Expanded prompt**:
 
 ```
 Review the code in src/auth.js. Pay special attention to error handling.
