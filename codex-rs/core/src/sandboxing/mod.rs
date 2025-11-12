@@ -14,8 +14,11 @@ use crate::exec::StdoutStream;
 use crate::exec::execute_exec_env;
 use crate::landlock::create_linux_sandbox_command_args;
 use crate::protocol::SandboxPolicy;
+#[cfg(target_os = "macos")]
 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+#[cfg(target_os = "macos")]
 use crate::seatbelt::create_seatbelt_command_args;
+#[cfg(target_os = "macos")]
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use crate::tools::sandboxing::SandboxablePreference;
@@ -56,6 +59,9 @@ pub enum SandboxPreference {
 pub(crate) enum SandboxTransformError {
     #[error("missing codex-linux-sandbox executable path")]
     MissingLinuxSandboxExecutable,
+    #[cfg(not(target_os = "macos"))]
+    #[error("seatbelt sandbox is only available on macOS")]
+    SeatbeltUnavailable,
 }
 
 #[derive(Default)]
@@ -107,6 +113,7 @@ impl SandboxManager {
 
         let (command, sandbox_env, arg0_override) = match sandbox {
             SandboxType::None => (command, HashMap::new(), None),
+            #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => {
                 let mut seatbelt_env = HashMap::new();
                 seatbelt_env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
@@ -117,6 +124,8 @@ impl SandboxManager {
                 full_command.append(&mut args);
                 (full_command, seatbelt_env, None)
             }
+            #[cfg(not(target_os = "macos"))]
+            SandboxType::MacosSeatbelt => return Err(SandboxTransformError::SeatbeltUnavailable),
             SandboxType::LinuxSeccomp => {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
