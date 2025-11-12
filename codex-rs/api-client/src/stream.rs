@@ -6,6 +6,7 @@ use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::TokenUsage;
 use futures::Stream;
 use serde::Serialize;
@@ -102,6 +103,25 @@ pub struct WireRateLimitWindow {
 pub struct WireRateLimitSnapshot {
     pub primary: Option<WireRateLimitWindow>,
     pub secondary: Option<WireRateLimitWindow>,
+}
+
+impl From<RateLimitWindow> for WireRateLimitWindow {
+    fn from(window: RateLimitWindow) -> Self {
+        Self {
+            used_percent: Some(window.used_percent),
+            window_minutes: window.window_minutes,
+            resets_at: window.resets_at,
+        }
+    }
+}
+
+impl From<RateLimitSnapshot> for WireRateLimitSnapshot {
+    fn from(snapshot: RateLimitSnapshot) -> Self {
+        Self {
+            primary: snapshot.primary.map(Into::into),
+            secondary: snapshot.secondary.map(Into::into),
+        }
+    }
 }
 
 #[derive(Debug)]

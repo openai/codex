@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use bytes::Bytes;
 use codex_otel::otel_event_manager::OtelEventManager;
+use codex_provider_config::ModelProviderInfo;
 use futures::Stream;
 use futures::StreamExt;
 use tokio::sync::mpsc;
@@ -14,6 +15,51 @@ use crate::error::Result;
 use crate::stream::WireEvent;
 
 // Legacy ResponseEvent-based SSE framer removed
+
+async fn send_stream_error(
+    otel_event_manager: &OtelEventManager,
+    tx_event: &mpsc::Sender<Result<WireEvent>>,
+    event: Option<String>,
+    duration: Duration,
+    log_reason: impl std::fmt::Display,
+    error: Error,
+) {
+    otel_event_manager.sse_event_failed(event.as_ref(), duration, &log_reason);
+    let _ = tx_event.send(Err(error)).await;
+}
+
+/// Spawn an SSE processing task and return a sender/stream pair for wire events.
+pub fn spawn_wire_stream<S, D>(
+    stream: S,
+    provider: &ModelProviderInfo,
+    otel_event_manager: OtelEventManager,
+    decoder: D,
+) -> (
+    mpsc::Sender<Result<WireEvent>>,
+    crate::stream::WireResponseStream,
+)
+where
+    S: Stream<Item = Result<Bytes>> + Send + 'static + Unpin,
+    D: crate::client::WireResponseDecoder + Send + 'static,
+{
+    let (tx_event, rx_event) = mpsc::channel::<Result<WireEvent>>(1600);
+    let idle_timeout = provider.stream_idle_timeout();
+    let otel = otel_event_manager;
+    let tx_for_task = tx_event.clone();
+
+    tokio::spawn(process_sse_wire(
+        stream,
+        tx_for_task,
+        idle_timeout,
+        otel,
+        decoder,
+    ));
+
+    (
+        tx_event,
+        crate::stream::EventStream::from_receiver(rx_event),
+    )
+}
 
 /// Generic SSE framer for wire events: Byte stream -> framed JSON -> WireResponseDecoder.
 #[allow(clippy::too_many_arguments)]
@@ -36,57 +82,45 @@ pub async fn process_sse_wire<S, D>(
         let duration = start.elapsed();
         match result {
             Err(_) => {
-                otel_event_manager.sse_event_failed(
+                send_stream_error(
+                    &otel_event_manager,
+                    &tx_event,
                     None,
                     duration,
-                    &"idle timeout waiting for SSE",
-                );
-                let _ = tx_event
-                    .send(Err(Error::Stream(
+                    "idle timeout waiting for SSE",
+                    Error::Stream(
                         "stream idle timeout fired before Completed event".to_string(),
                         None,
-                    )))
-                    .await;
+                    ),
+                )
+                .await;
                 return;
             }
             Ok(Some(Err(err))) => {
-                otel_event_manager.sse_event_failed(None, duration, &err);
-                let _ = tx_event.send(Err(err)).await;
+                let message = format!("{err}");
+                send_stream_error(
+                    &otel_event_manager,
+                    &tx_event,
+                    None,
+                    duration,
+                    &message,
+                    err,
+                )
+                .await;
                 return;
             }
             Ok(Some(Ok(chunk))) => {
-                let chunk_str = match std::str::from_utf8(&chunk) {
-                    Ok(s) => s,
-                    Err(err) => {
-                        otel_event_manager.sse_event_failed(
-                            None,
-                            duration,
-                            &format!("UTF8 error: {err}"),
-                        );
-                        let _ = tx_event
-                            .send(Err(Error::Other(format!(
-                                "Invalid UTF-8 in SSE chunk: {err}"
-                            ))))
-                            .await;
-                        return;
-                    }
-                }
-                .replace("\r\n", "\n")
-                .replace('\r', "\n");
-
-                buffer.push_str(&chunk_str);
-                while let Some(frame) = next_frame(&mut buffer) {
-                    if !handle_frame(
-                        frame,
-                        &mut decoder,
-                        &tx_event,
-                        &otel_event_manager,
-                        duration,
-                    )
-                    .await
-                    {
-                        return;
-                    }
+                if !process_chunk(
+                    chunk,
+                    duration,
+                    &mut buffer,
+                    &mut decoder,
+                    &tx_event,
+                    &otel_event_manager,
+                )
+                .await
+                {
+                    return;
                 }
             }
             Ok(None) => {
@@ -105,6 +139,45 @@ pub async fn process_sse_wire<S, D>(
             }
         }
     }
+}
+
+async fn process_chunk<D>(
+    chunk: Bytes,
+    duration: Duration,
+    buffer: &mut String,
+    decoder: &mut D,
+    tx_event: &mpsc::Sender<Result<WireEvent>>,
+    otel_event_manager: &OtelEventManager,
+) -> bool
+where
+    D: crate::client::WireResponseDecoder + Send,
+{
+    let chunk_str = match std::str::from_utf8(&chunk) {
+        Ok(s) => s,
+        Err(err) => {
+            send_stream_error(
+                otel_event_manager,
+                tx_event,
+                None,
+                duration,
+                &format!("UTF8 error: {err}"),
+                Error::Other(format!("Invalid UTF-8 in SSE chunk: {err}")),
+            )
+            .await;
+            return false;
+        }
+    }
+    .replace("\r\n", "\n")
+    .replace('\r', "\n");
+
+    buffer.push_str(&chunk_str);
+    while let Some(frame) = next_frame(buffer) {
+        if !handle_frame(frame, decoder, tx_event, otel_event_manager, duration).await {
+            return false;
+        }
+    }
+
+    true
 }
 
 fn next_frame(buffer: &mut String) -> Option<String> {
@@ -170,8 +243,16 @@ where
                 otel_event_manager.sse_event_kind(&frame.event);
             }
             Err(e) => {
-                otel_event_manager.sse_event_failed(Some(&frame.event), duration, &e);
-                let _ = tx_event.send(Err(e)).await;
+                let reason = format!("{e}");
+                send_stream_error(
+                    otel_event_manager,
+                    tx_event,
+                    Some(frame.event.clone()),
+                    duration,
+                    &reason,
+                    e,
+                )
+                .await;
                 return false;
             }
         };

@@ -46,3 +46,11 @@ pub async fn resolve_auth(auth_provider: &Option<Arc<dyn AuthProvider>>) -> Opti
         None
     }
 }
+
+/// Convert owned header pairs into borrowed key/value tuples for reqwest.
+pub fn header_pairs(headers: &[(String, String)]) -> Vec<(&str, String)> {
+    headers
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.clone()))
+        .collect()
+}

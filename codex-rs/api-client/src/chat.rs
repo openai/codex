@@ -38,12 +38,7 @@ impl ChatCompletionsApiClient {
             ));
         }
 
-        let extra_headers: Vec<(&str, String)> = self
-            .config
-            .extra_headers
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.clone()))
-            .collect();
+        let extra_headers = crate::client::http::header_pairs(&self.config.extra_headers);
         let mut req_builder = crate::client::http::build_request(
             &self.config.http_client,
             &self.config.provider,
@@ -62,24 +57,19 @@ impl ChatCompletionsApiClient {
             .log_request(0, || req_builder.send())
             .await?;
 
-        let (tx_event, rx_event) =
-            tokio::sync::mpsc::channel::<Result<crate::stream::WireEvent>>(1600);
         let stream = res
             .bytes_stream()
             .map_err(|err| Error::ResponseStreamFailed {
                 source: err,
                 request_id: None,
             });
-        let idle_timeout = self.config.provider.stream_idle_timeout();
-        let otel = self.config.otel_event_manager.clone();
-        tokio::spawn(crate::client::sse::process_sse_wire(
+        let (_, rx_event) = crate::client::sse::spawn_wire_stream(
             stream,
-            tx_event,
-            idle_timeout,
-            otel,
+            &self.config.provider,
+            self.config.otel_event_manager.clone(),
             crate::decode_wire::chat::WireChatSseDecoder::new(),
-        ));
+        );
 
-        Ok(crate::stream::EventStream::from_receiver(rx_event))
+        Ok(rx_event)
     }
 }

@@ -42,14 +42,6 @@ impl RoutedApiClient {
     ) -> Result<WireResponseStream> {
         match self.config.provider.wire_api {
             WireApi::Responses => {
-                let cfg = ResponsesApiClientConfig {
-                    http_client: self.config.http_client.clone(),
-                    provider: self.config.provider.clone(),
-                    conversation_id: self.config.conversation_id,
-                    auth_provider: self.config.auth_provider.clone(),
-                    otel_event_manager: self.config.otel_event_manager.clone(),
-                    extra_headers: self.config.extra_headers.clone(),
-                };
                 if let Some(path) = &self.config.responses_fixture_path {
                     return crate::client::fixtures::stream_from_fixture_wire(
                         path,
@@ -58,19 +50,35 @@ impl RoutedApiClient {
                     )
                     .await;
                 }
-                let client = ResponsesApiClient::new(cfg)?;
+                let client = ResponsesApiClient::new(self.responses_config())?;
                 client.stream_payload_wire(payload_json).await
             }
             WireApi::Chat => {
-                let cfg = ChatCompletionsApiClientConfig {
-                    http_client: self.config.http_client.clone(),
-                    provider: self.config.provider.clone(),
-                    otel_event_manager: self.config.otel_event_manager.clone(),
-                    extra_headers: self.config.extra_headers.clone(),
-                };
-                let client = ChatCompletionsApiClient::new(cfg)?;
+                let client = ChatCompletionsApiClient::new(self.chat_config())?;
                 client.stream_payload_wire(payload_json).await
             }
+        }
+    }
+}
+
+impl RoutedApiClient {
+    fn responses_config(&self) -> ResponsesApiClientConfig {
+        ResponsesApiClientConfig {
+            http_client: self.config.http_client.clone(),
+            provider: self.config.provider.clone(),
+            conversation_id: self.config.conversation_id,
+            auth_provider: self.config.auth_provider.clone(),
+            otel_event_manager: self.config.otel_event_manager.clone(),
+            extra_headers: self.config.extra_headers.clone(),
+        }
+    }
+
+    fn chat_config(&self) -> ChatCompletionsApiClientConfig {
+        ChatCompletionsApiClientConfig {
+            http_client: self.config.http_client.clone(),
+            provider: self.config.provider.clone(),
+            otel_event_manager: self.config.otel_event_manager.clone(),
+            extra_headers: self.config.extra_headers.clone(),
         }
     }
 }

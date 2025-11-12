@@ -2,7 +2,6 @@ use std::path::Path;
 
 use codex_otel::otel_event_manager::OtelEventManager;
 use futures::TryStreamExt;
-use tokio::sync::mpsc;
 use tokio_util::io::ReaderStream;
 
 use crate::error::Error;
@@ -14,7 +13,6 @@ pub async fn stream_from_fixture_wire(
     provider: ModelProviderInfo,
     otel_event_manager: OtelEventManager,
 ) -> Result<crate::stream::WireResponseStream> {
-    let (tx_event, rx_event) = mpsc::channel::<Result<crate::stream::WireEvent>>(1600);
     let display_path = path.as_ref().display().to_string();
     let content = std::fs::read_to_string(path.as_ref()).map_err(|err| {
         Error::Other(format!(
@@ -33,12 +31,11 @@ pub async fn stream_from_fixture_wire(
 
     let rdr = std::io::Cursor::new(content);
     let stream = ReaderStream::new(rdr).map_err(|err| Error::Other(err.to_string()));
-    tokio::spawn(crate::client::sse::process_sse_wire(
+    let (_, rx_event) = crate::client::sse::spawn_wire_stream(
         stream,
-        tx_event,
-        provider.stream_idle_timeout(),
+        &provider,
         otel_event_manager,
         crate::decode_wire::responses::WireResponsesSseDecoder,
-    ));
-    Ok(crate::stream::EventStream::from_receiver(rx_event))
+    );
+    Ok(rx_event)
 }
