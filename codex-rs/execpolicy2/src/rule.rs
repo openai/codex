@@ -4,6 +4,7 @@ use crate::error::Result;
 use serde::Deserialize;
 use serde::Serialize;
 use shlex::try_join;
+use std::sync::Arc;
 
 /// Matches a single command token, either a fixed string or one of several allowed alternatives.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20,10 +21,10 @@ impl PatternToken {
         }
     }
 
-    pub fn alternatives(&self) -> Vec<String> {
+    pub fn alternatives(&self) -> &[String] {
         match self {
-            Self::Single(expected) => vec![expected.clone()],
-            Self::Alts(alternatives) => alternatives.clone(),
+            Self::Single(expected) => std::slice::from_ref(expected),
+            Self::Alts(alternatives) => alternatives,
         }
     }
 }
@@ -38,14 +39,14 @@ impl std::fmt::Display for PatternToken {
 /// First token is fixed since we key by the first token in policy.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PrefixPattern {
-    pub first: String,
-    pub rest: Vec<PatternToken>,
+    pub first: Arc<str>,
+    pub rest: Arc<[PatternToken]>,
 }
 
 impl PrefixPattern {
     pub fn matches_prefix(&self, cmd: &[String]) -> Option<Vec<String>> {
         let pattern_length = self.rest.len() + 1;
-        if cmd.len() < pattern_length || cmd[0] != self.first {
+        if cmd.len() < pattern_length || cmd[0] != self.first.as_ref() {
             return None;
         }
 
@@ -122,7 +123,7 @@ impl std::fmt::Display for RuleMatch {
 impl Rule {
     pub fn program(&self) -> &str {
         match self {
-            Self::Prefix(rule) => &rule.pattern.first,
+            Self::Prefix(rule) => rule.pattern.first.as_ref(),
         }
     }
 
@@ -192,7 +193,7 @@ fn join_command(command: &[String]) -> String {
 }
 
 fn render_pattern(pattern: &PrefixPattern) -> String {
-    let mut tokens = vec![pattern.first.clone()];
+    let mut tokens = vec![pattern.first.as_ref().to_string()];
     tokens.extend(pattern.rest.iter().map(render_pattern_token));
     tokens.join(", ")
 }
