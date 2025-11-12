@@ -27,4 +27,4 @@ parking_lot = { workspace = true }
 shlex = { workspace = true }
 
 [dev-dependencies]
-expect-test = "1.5.0"
+expect-test = { workspace = true }
