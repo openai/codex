@@ -92,6 +92,8 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     {
         let status = Command::new(prettier_bin)
             .arg("--write")
+            .arg("--log-level")
+            .arg("warn")
             .args(ts_files.iter().map(|p| p.as_os_str()))
             .status()
             .with_context(|| format!("Failed to invoke Prettier at {}", prettier_bin.display()))?;
@@ -666,6 +668,8 @@ fn ts_files_in_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+/// Generate an index.ts file that re-exports all generated types.
+/// This allows consumers to import all types from a single file.
 fn generate_index_ts(out_dir: &Path) -> Result<PathBuf> {
     let mut entries: Vec<String> = Vec::new();
     let mut stems: Vec<String> = ts_files_in(out_dir)?

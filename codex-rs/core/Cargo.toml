@@ -32,6 +32,7 @@ codex-utils-pty = { workspace = true }
 codex-utils-readiness = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-utils-tokenizer = { workspace = true }
+codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
 dirs = { workspace = true }
 dunce = { workspace = true }
 env-flags = { workspace = true }
@@ -83,7 +84,6 @@ tree-sitter-bash = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 wildmatch = { workspace = true }
-codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
 
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -104,7 +104,9 @@ openssl-sys = { workspace = true, features = ["vendored"] }
 [dev-dependencies]
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
+codex-arg0 = { workspace = true }
 core_test_support = { workspace = true }
+ctor = { workspace = true }
 escargot = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png"] }
 maplit = { workspace = true }

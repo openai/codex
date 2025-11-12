@@ -25,7 +25,6 @@ members = [
     "ollama",
     "process-hardening",
     "protocol",
-    "protocol-ts",
     "rmcp-client",
     "responses-api-proxy",
     "stdio-to-uds",
@@ -75,7 +74,6 @@ codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
-codex-protocol-ts = { path = "protocol-ts" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
@@ -96,8 +94,8 @@ mcp_test_support = { path = "mcp-server/tests/common" }
 allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 anyhow = "1"
-arboard = "3"
-askama = "0.12"
+arboard = { version = "3", features = ["wayland-data-control"] }
+askama = "0.14"
 assert_cmd = "2"
 assert_matches = "1.5.0"
 async-channel = "2.3.1"
@@ -213,7 +211,7 @@ which = "6"
 wildmatch = "2.5.0"
 
 wiremock = "0.6"
-zeroize = "1.8.1"
+zeroize = "1.8.2"
 
 [workspace.lints]
 rust = {}

@@ -88,17 +88,33 @@ pub fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<V
     Some(commands)
 }
 
+pub fn is_well_known_sh_shell(shell: &str) -> bool {
+    if shell == "bash" || shell == "zsh" {
+        return true;
+    }
+
+    let shell_name = std::path::Path::new(shell)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(shell);
+    matches!(shell_name, "bash" | "zsh")
+}
+
+pub fn extract_bash_command(command: &[String]) -> Option<(&str, &str)> {
+    let [shell, flag, script] = command else {
+        return None;
+    };
+    if flag != "-lc" || !is_well_known_sh_shell(shell) {
+        return None;
+    }
+    Some((shell, script))
+}
+
 /// Returns the sequence of plain commands within a `bash -lc "..."` or
 /// `zsh -lc "..."` invocation when the script only contains word-only commands
 /// joined by safe operators.
 pub fn parse_shell_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<String>>> {
-    let [shell, flag, script] = command else {
-        return None;
-    };
-
-    if flag != "-lc" || !(shell == "bash" || shell == "zsh") {
-        return None;
-    }
+    let (_, script) = extract_bash_command(command)?;
 
     let tree = try_parse_shell(script)?;
     try_parse_word_only_commands_sequence(&tree, script)

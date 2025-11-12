@@ -284,7 +284,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::GhostCommit,
         key: "ghost_commit",
         stage: Stage::Experimental,
-        default_enabled: false,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,

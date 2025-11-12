@@ -8,10 +8,11 @@ Similar to [MCP](https://modelcontextprotocol.io/), `codex app-server` supports 
 
 ## Message Schema
 
-Currently, you can dump a TypeScript version of the schema using `codex generate-ts`. It is specific to the version of Codex you used to run `generate-ts`, so the two are guaranteed to be compatible.
+Currently, you can dump a TypeScript version of the schema using `codex app-server generate-ts`, or a JSON Schema bundle via `codex app-server generate-json-schema`. Each output is specific to the version of Codex you used to run the command, so the generated artifacts are guaranteed to match that version.
 
 ```
-codex generate-ts --out DIR
+codex app-server generate-ts --out DIR
+codex app-server generate-json-schema --out DIR
 ```
 
 ## Initialization
@@ -49,15 +50,16 @@ The JSON-RPC API exposes dedicated methods for managing Codex conversations. Thr
 
 ### 1) Start or resume a thread
 
-Start a fresh thread when you need a new Codex conversation. Optional fields mirror CLI defaults: set `model`, `modelProvider`, `cwd`, `approvalPolicy`, `sandbox`, or custom `config` values. Instructions can be set via `baseInstructions` and `developerInstructions`:
+Start a fresh thread when you need a new Codex conversation.
 
 ```json
 { "method": "thread/start", "id": 10, "params": {
+    // Optionally set config settings. If not specified, will use the user's
+    // current config settings.
     "model": "gpt-5-codex",
     "cwd": "/Users/me/project",
     "approvalPolicy": "never",
-    "sandbox": "workspace-write",
-    "baseInstructions": "You're helping with refactors."
+    "sandbox": "workspaceWrite",
 } }
 { "id": 10, "result": {
     "thread": {
@@ -90,7 +92,6 @@ Example:
 { "method": "thread/list", "id": 20, "params": {
     "cursor": null,
     "limit": 25,
-    "modelProviders": ["openai"]
 } }
 { "id": 20, "result": {
     "data": [
@@ -122,18 +123,23 @@ Turns attach user input (text or images) to a thread and trigger Codex generatio
 - `{"type":"image","url":"https://…png"}`
 - `{"type":"localImage","path":"/tmp/screenshot.png"}`
 
-Override knobs apply to the new turn and become the defaults for subsequent turns on the same thread:
+You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread.
 
 ```json
 { "method": "turn/start", "id": 30, "params": {
     "threadId": "thr_123",
     "input": [ { "type": "text", "text": "Run tests" } ],
+    // Below are optional config overrides
     "cwd": "/Users/me/project",
-    "approvalPolicy": "untrusted",
-    "sandboxPolicy": "workspace-write",
+    "approvalPolicy": "unlessTrusted",
+    "sandboxPolicy": {
+        "mode": "workspaceWrite",
+        "writableRoots": ["/Users/me/project"],
+        "networkAccess": true
+    },
     "model": "gpt-5-codex",
     "effort": "medium",
-    "summary": "focus-on-test-failures"
+    "summary": "concise"
 } }
 { "id": 30, "result": { "turn": {
     "id": "turn_456",
@@ -159,7 +165,7 @@ The server requests cancellations for running subprocesses, then emits a `turn/c
 
 ## Auth endpoints
 
-The v2 JSON-RPC auth/account surface exposes request/response methods plus server-initiated notifications (no `id`). Use these to determine auth state, start or cancel logins, logout, and inspect ChatGPT rate limits.
+The JSON-RPC auth/account surface exposes request/response methods plus server-initiated notifications (no `id`). Use these to determine auth state, start or cancel logins, logout, and inspect ChatGPT rate limits.
 
 ### Quick reference
 - `account/read` — fetch current account info; optionally refresh tokens.
@@ -249,5 +255,6 @@ Field notes:
 
 ### Dev notes
 
-- `codex generate-ts --out <dir>` emits v2 types under `v2/`.
+- `codex app-server generate-ts --out <dir>` emits v2 types under `v2/`.
+- `codex app-server generate-json-schema --out <dir>` outputs `codex_app_server_protocol.schemas.json`.
 - See [“Authentication and authorization” in the config docs](../../docs/config.md#authentication-and-authorization) for configuration knobs.
