@@ -338,7 +338,11 @@ impl ExecCell {
         };
         let header_prefix_width = header_line.width();
 
-        let cmd_display = strip_bash_lc_and_escape(&call.command);
+        let cmd_display = if call.is_unified_exec_interaction() {
+            call.command.join(" ")
+        } else {
+            strip_bash_lc_and_escape(&call.command)
+        };
         let highlighted_lines = highlight_bash_to_lines(&cmd_display);
 
         let continuation_wrap_width = layout.command_continuation.wrap_width(width);
