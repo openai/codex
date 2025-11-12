@@ -112,8 +112,11 @@ fn match_and_not_match_examples_are_enforced() {
     let policy_src = r#"
 prefix_rule(
     pattern = ["git", "status"],
-    match = [["git", "status"]],
-    not_match = [["git", "--config", "color.status=always", "status"]],
+    match = [["git", "status"], "git status"],
+    not_match = [
+        ["git", "--config", "color.status=always", "status"],
+        "git --config color.status=always status",
+    ],
 )
     "#;
     let parser = PolicyParser::new("test.codexpolicy", policy_src);

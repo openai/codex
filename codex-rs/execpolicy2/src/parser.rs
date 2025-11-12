@@ -1,5 +1,6 @@
 use multimap::MultiMap;
 use parking_lot::Mutex;
+use shlex;
 use starlark::any::ProvidesStaticType;
 use starlark::environment::GlobalsBuilder;
 use starlark::environment::Module;
@@ -123,34 +124,55 @@ fn parse_pattern_token<'v>(value: Value<'v>) -> Result<PatternToken> {
 }
 
 fn parse_examples<'v>(examples: UnpackList<Value<'v>>) -> Result<Vec<Vec<String>>> {
-    examples
-        .items
-        .into_iter()
-        .map(|example| {
-            let list = ListRef::from_value(example).ok_or_else(|| {
-                Error::InvalidExample("example must be a list of strings".to_string())
-            })?;
-            let tokens: Vec<String> = list
-                .content()
-                .iter()
-                .map(|value| {
-                    value
-                        .unpack_str()
-                        .ok_or_else(|| {
-                            Error::InvalidExample("example tokens must be strings".to_string())
-                        })
-                        .map(str::to_string)
-                })
-                .collect::<Result<_>>()?;
+    examples.items.into_iter().map(parse_example).collect()
+}
 
-            match tokens.as_slice() {
-                [] => Err(Error::InvalidExample(
-                    "example cannot be an empty list".to_string(),
-                )),
-                _ => Ok(tokens),
-            }
+fn parse_example<'v>(value: Value<'v>) -> Result<Vec<String>> {
+    if let Some(raw) = value.unpack_str() {
+        return parse_string_example(raw);
+    }
+
+    if let Some(list) = ListRef::from_value(value) {
+        return parse_list_example(&list);
+    }
+
+    Err(Error::InvalidExample(format!(
+        "example must be a string or list of strings (got {})",
+        value.get_type()
+    )))
+}
+
+fn parse_string_example(raw: &str) -> Result<Vec<String>> {
+    let tokens = shlex::split(raw).ok_or_else(|| {
+        Error::InvalidExample("example string has invalid shell syntax".to_string())
+    })?;
+
+    match tokens.as_slice() {
+        [] => Err(Error::InvalidExample(
+            "example cannot be an empty string".to_string(),
+        )),
+        _ => Ok(tokens),
+    }
+}
+
+fn parse_list_example(list: &ListRef) -> Result<Vec<String>> {
+    let tokens: Vec<String> = list
+        .content()
+        .iter()
+        .map(|value| {
+            value
+                .unpack_str()
+                .ok_or_else(|| Error::InvalidExample("example tokens must be strings".to_string()))
+                .map(str::to_string)
         })
-        .collect()
+        .collect::<Result<_>>()?;
+
+    match tokens.as_slice() {
+        [] => Err(Error::InvalidExample(
+            "example cannot be an empty list".to_string(),
+        )),
+        _ => Ok(tokens),
+    }
 }
 
 fn policy_builder<'v, 'a>(eval: &Evaluator<'v, 'a, '_>) -> &'a PolicyBuilder {
