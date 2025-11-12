@@ -139,6 +139,7 @@ impl Rule {
         }
     }
 
+    /// Return a boolean for each example indicating whether this rule matches it.
     pub fn validate_matches(&self, matches: &[Vec<String>]) -> Vec<bool> {
         match self {
             Self::Prefix(rule) => rule.validate_matches(matches),

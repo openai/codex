@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use codex_execpolicy2::Decision;
-use codex_execpolicy2::Error;
 use codex_execpolicy2::Evaluation;
 use codex_execpolicy2::PolicyParser;
 use codex_execpolicy2::Rule;

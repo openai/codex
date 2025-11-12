@@ -207,12 +207,11 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
         let rules: Vec<Rule> = first_token
             .alternatives()
             .iter()
-            .zip(std::iter::repeat(rest.clone()))
-            .map(|(head, rest)| {
+            .map(|head| {
                 Rule::Prefix(PrefixRule {
                     pattern: PrefixPattern {
                         first: Arc::from(head.as_str()),
-                        rest,
+                        rest: rest.clone(),
                     },
                     decision,
                 })
