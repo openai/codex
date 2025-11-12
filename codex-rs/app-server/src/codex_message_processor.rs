@@ -12,6 +12,7 @@ use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
+use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
 use codex_app_server_protocol::ArchiveConversationParams;
@@ -2573,6 +2574,15 @@ async fn apply_bespoke_event_handling(
             tokio::spawn(async move {
                 on_patch_approval_response(event_id, rx, conversation).await;
             });
+        }
+        EventMsg::AgentMessageContentDelta(event) => {
+            let notification = AgentMessageDeltaNotification {
+                item_id: event.item_id,
+                delta: event.delta,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::AgentMessageDelta(notification))
+                .await;
         }
         EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
             call_id,
