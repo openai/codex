@@ -13,7 +13,7 @@ use crate::render::renderable::Renderable;
 use crate::resume_picker::ResumeSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
-use crate::updates::UpdateAction;
+use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
@@ -203,7 +203,7 @@ impl App {
                 tui,
                 AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
                     latest_version,
-                    crate::updates::get_update_action(),
+                    crate::update_action::get_update_action(),
                 ))),
             )
             .await?;
@@ -499,6 +499,9 @@ impl App {
                 self.chat_widget
                     .set_world_writable_warning_acknowledged(ack);
             }
+            AppEvent::UpdateRateLimitSwitchPromptHidden(hidden) => {
+                self.chat_widget.set_rate_limit_switch_prompt_hidden(hidden);
+            }
             AppEvent::PersistFullAccessWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
                     .set_hide_full_access_warning(true)
@@ -526,6 +529,21 @@ impl App {
                     );
                     self.chat_widget.add_error_message(format!(
                         "Failed to save Auto mode warning preference: {err}"
+                    ));
+                }
+            }
+            AppEvent::PersistRateLimitSwitchPromptHidden => {
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_hide_rate_limit_model_nudge(true)
+                    .apply()
+                    .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist rate limit switch prompt preference"
+                    );
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save rate limit reminder preference: {err}"
                     ));
                 }
             }

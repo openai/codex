@@ -139,6 +139,15 @@ fn create_exec_command_tool() -> ToolSpec {
         },
     );
     properties.insert(
+        "workdir".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional working directory to run the command in; defaults to the turn cwd."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
         "shell".to_string(),
         JsonSchema::String {
             description: Some("Shell binary to launch. Defaults to /bin/bash.".to_string()),
@@ -165,6 +174,24 @@ fn create_exec_command_tool() -> ToolSpec {
         JsonSchema::Number {
             description: Some(
                 "Maximum number of tokens to return. Excess output will be truncated.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "with_escalated_permissions".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Whether to request escalated permissions. Set to true if command needs to be run without sandbox restrictions"
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "justification".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Only set if with_escalated_permissions is true. 1-sentence explanation of why we want to run this command."
+                    .to_string(),
             ),
         },
     );

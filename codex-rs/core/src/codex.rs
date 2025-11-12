@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
+use crate::compact;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::mcp::auth::McpAuthStatusEntry;
@@ -66,6 +67,8 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 // Removed: legacy executor wiring replaced by ToolOrchestrator flows.
 // legacy normalize_exec_result no longer used after orchestrator migration
+use crate::compact::build_compacted_history;
+use crate::compact::collect_user_messages;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_family::find_family_for_model;
@@ -94,6 +97,7 @@ use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TurnDiffEvent;
+use crate::protocol::WarningEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::shell;
@@ -128,10 +132,6 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
-
-pub mod compact;
-use self::compact::build_compacted_history;
-use self::compact::collect_user_messages;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -675,6 +675,34 @@ impl Session {
                 let rollout_items = conversation_history.get_rollout_items();
                 let persist = matches!(conversation_history, InitialHistory::Forked(_));
 
+                // If resuming, warn when the last recorded model differs from the current one.
+                if let InitialHistory::Resumed(_) = conversation_history
+                    && let Some(prev) = rollout_items.iter().rev().find_map(|it| {
+                        if let RolloutItem::TurnContext(ctx) = it {
+                            Some(ctx.model.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                {
+                    let curr = turn_context.client.get_model();
+                    if prev != curr {
+                        warn!(
+                            "resuming session with different model: previous={prev}, current={curr}"
+                        );
+                        self.send_event(
+                                &turn_context,
+                                EventMsg::Warning(WarningEvent {
+                                    message: format!(
+                                        "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
+                         Consider switching back to `{prev}` as it may affect Codex performance."
+                                    ),
+                                }),
+                            )
+                                .await;
+                    }
+                }
+
                 // Always add response items to conversation history
                 let reconstructed_history =
                     self.reconstruct_history_from_rollout(&turn_context, &rollout_items);
@@ -968,7 +996,7 @@ impl Session {
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
-    async fn record_into_history(&self, items: &[ResponseItem]) {
+    pub(crate) async fn record_into_history(&self, items: &[ResponseItem]) {
         let mut state = self.state.lock().await;
         state.record_items(items.iter());
     }
@@ -1020,7 +1048,7 @@ impl Session {
         items
     }
 
-    async fn persist_rollout_items(&self, items: &[RolloutItem]) {
+    pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
         let recorder = {
             let guard = self.services.rollout.lock().await;
             guard.clone()
@@ -1037,7 +1065,7 @@ impl Session {
         state.clone_history()
     }
 
-    async fn update_token_usage_info(
+    pub(crate) async fn update_token_usage_info(
         &self,
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
@@ -1054,7 +1082,7 @@ impl Session {
         self.send_token_count_event(turn_context).await;
     }
 
-    async fn update_rate_limits(
+    pub(crate) async fn update_rate_limits(
         &self,
         turn_context: &TurnContext,
         new_rate_limits: RateLimitSnapshot,
@@ -1075,7 +1103,7 @@ impl Session {
         self.send_event(turn_context, event).await;
     }
 
-    async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
+    pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
         let context_window = turn_context.client.get_model_context_window();
         if let Some(context_window) = context_window {
             {
@@ -1118,7 +1146,11 @@ impl Session {
         self.send_event(turn_context, event).await;
     }
 
-    async fn notify_stream_error(&self, turn_context: &TurnContext, message: impl Into<String>) {
+    pub(crate) async fn notify_stream_error(
+        &self,
+        turn_context: &TurnContext,
+        message: impl Into<String>,
+    ) {
         let event = EventMsg::StreamError(StreamErrorEvent {
             message: message.into(),
         });
@@ -2320,6 +2352,7 @@ mod tests {
     use crate::tools::context::ToolOutput;
     use crate::tools::context::ToolPayload;
     use crate::tools::handlers::ShellHandler;
+    use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::registry::ToolHandler;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_app_server_protocol::AuthMode;
@@ -3057,6 +3090,48 @@ mod tests {
 
         pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
         assert!(exec_output.output.contains("hi"));
+    }
+
+    #[tokio::test]
+    async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request() {
+        use crate::protocol::AskForApproval;
+        use crate::turn_diff_tracker::TurnDiffTracker;
+
+        let (session, mut turn_context_raw) = make_session_and_context();
+        turn_context_raw.approval_policy = AskForApproval::OnFailure;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context_raw);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+
+        let handler = UnifiedExecHandler;
+        let resp = handler
+            .handle(ToolInvocation {
+                session: Arc::clone(&session),
+                turn: Arc::clone(&turn_context),
+                tracker: Arc::clone(&tracker),
+                call_id: "exec-call".to_string(),
+                tool_name: "exec_command".to_string(),
+                payload: ToolPayload::Function {
+                    arguments: serde_json::json!({
+                        "cmd": "echo hi",
+                        "with_escalated_permissions": true,
+                        "justification": "need unsandboxed execution",
+                    })
+                    .to_string(),
+                },
+            })
+            .await;
+
+        let Err(FunctionCallError::RespondToModel(output)) = resp else {
+            panic!("expected error result");
+        };
+
+        let expected = format!(
+            "approval policy is {policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {policy:?}",
+            policy = turn_context.approval_policy
+        );
+
+        pretty_assertions::assert_eq!(output, expected);
     }
 
     #[test]
