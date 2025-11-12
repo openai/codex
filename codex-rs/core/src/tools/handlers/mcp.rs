@@ -1,12 +1,16 @@
 use async_trait::async_trait;
 
 use crate::function_tool::FunctionCallError;
-use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use crate::tools::runtimes::mcp::McpRuntime;
+use crate::tools::runtimes::mcp::McpToolCallRequest;
+use crate::tools::sandboxing::ToolCtx;
+use crate::tools::sandboxing::ToolError;
 
 pub struct McpHandler;
 
@@ -21,6 +25,7 @@ impl ToolHandler for McpHandler {
             session,
             turn,
             call_id,
+            tool_name,
             payload,
             ..
         } = invocation;
@@ -39,17 +44,26 @@ impl ToolHandler for McpHandler {
         };
 
         let (server, tool, raw_arguments) = payload;
-        let arguments_str = raw_arguments;
-
-        let response = handle_mcp_tool_call(
-            session.as_ref(),
-            turn.as_ref(),
-            call_id.clone(),
+        let req = McpToolCallRequest {
             server,
             tool,
-            arguments_str,
-        )
-        .await;
+            raw_arguments,
+            cwd: turn.cwd.clone(),
+        };
+
+        let mut orchestrator = ToolOrchestrator::new();
+        let mut runtime = McpRuntime::new();
+        let tool_ctx = ToolCtx {
+            session: session.as_ref(),
+            turn: turn.as_ref(),
+            call_id: call_id.clone(),
+            tool_name: tool_name.to_string(),
+        };
+
+        let response = orchestrator
+            .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
+            .await
+            .map_err(map_tool_error)?;
 
         match response {
             codex_protocol::models::ResponseInputItem::McpToolCallOutput { result, .. } => {
@@ -70,6 +84,15 @@ impl ToolHandler for McpHandler {
             _ => Err(FunctionCallError::RespondToModel(
                 "mcp handler received unexpected response variant".to_string(),
             )),
+        }
+    }
+}
+
+fn map_tool_error(err: ToolError) -> FunctionCallError {
+    match err {
+        ToolError::Rejected(message) => FunctionCallError::RespondToModel(message),
+        ToolError::Codex(other) => {
+            FunctionCallError::RespondToModel(format!("mcp tool call failed: {other:?}"))
         }
     }
 }

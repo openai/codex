@@ -19,6 +19,7 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once_match;
@@ -174,6 +175,141 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     server.verify().await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(mcp_test_value)]
+async fn mcp_calls_require_approval_when_requested() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+
+    let call_id = "call-with-approval";
+    let server_name = "rmcp";
+    let tool_name = format!("mcp__{server_name}__echo");
+
+    mount_sse_once_match(
+        &server,
+        any(),
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, &tool_name, "{\"message\":\"ping\"}"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        any(),
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "rmcp echo tool completed successfully."),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let expected_env_value = "propagated-env";
+    let rmcp_test_server_bin = CargoBuild::new()
+        .package("codex-rmcp-client")
+        .bin("test_stdio_server")
+        .run()?
+        .path()
+        .to_string_lossy()
+        .into_owned();
+
+    let fixture = test_codex()
+        .with_config(move |config| {
+            config.features.enable(Feature::RmcpClient);
+            config.mcp_servers.insert(
+                server_name.to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin.clone(),
+                        args: Vec::new(),
+                        env: Some(HashMap::from([(
+                            "MCP_TEST_VALUE".to_string(),
+                            expected_env_value.to_string(),
+                        )])),
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    enabled: true,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                },
+            );
+        })
+        .build(&server)
+        .await?;
+    let session_model = fixture.session_configured.model.clone();
+
+    fixture
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "call the rmcp echo tool".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: fixture.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    let approval_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::ExecApprovalRequest(_))
+    })
+    .await;
+    let EventMsg::ExecApprovalRequest(request) = approval_event else {
+        unreachable!("event guard guarantees ExecApprovalRequest");
+    };
+    assert_eq!(
+        request.command,
+        vec![
+            "mcp.call".to_string(),
+            format!("server={server_name}"),
+            "tool=echo".to_string(),
+            "args={\"message\":\"ping\"}".to_string(),
+        ]
+    );
+
+    fixture
+        .codex
+        .submit(Op::ExecApproval {
+            id: "0".into(),
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+
+    let begin_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallBegin(_))
+    })
+    .await;
+    let EventMsg::McpToolCallBegin(begin) = begin_event else {
+        unreachable!("event guard guarantees McpToolCallBegin");
+    };
+    assert_eq!(begin.invocation.server, server_name);
+    assert_eq!(begin.invocation.tool, "echo");
+
+    let end_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallEnd(_))
+    })
+    .await;
+    let EventMsg::McpToolCallEnd(end) = end_event else {
+        unreachable!("event guard guarantees McpToolCallEnd");
+    };
+    let result = end
+        .result
+        .as_ref()
+        .expect("rmcp echo tool should return success");
+    assert_eq!(result.is_error, Some(false));
 
     Ok(())
 }
