@@ -28,7 +28,7 @@ prefix_rule(
         .parse()
         .expect("parse policy");
     let cmd = tokens(&["git", "status"]);
-    let evaluation = policy.evaluate(&cmd);
+    let evaluation = policy.check(&cmd);
     expect![[r#"Match {
   decision: allow,
   matched_rules: [
@@ -55,7 +55,7 @@ prefix_rule(
     expect![[r#"[prefix_rule(pattern = [sh, [-c, -l]], decision = allow)]"#]]
         .assert_eq(&rules_to_string(sh_rules));
 
-    let bash_eval = policy.evaluate(&tokens(&["bash", "-c", "echo", "hi"]));
+    let bash_eval = policy.check(&tokens(&["bash", "-c", "echo", "hi"]));
     expect![[r#"Match {
   decision: allow,
   matched_rules: [
@@ -64,7 +64,7 @@ prefix_rule(
 }"#]]
     .assert_eq(&bash_eval.to_string());
 
-    let sh_eval = policy.evaluate(&tokens(&["sh", "-l", "echo", "hi"]));
+    let sh_eval = policy.check(&tokens(&["sh", "-l", "echo", "hi"]));
     expect![[r#"Match {
   decision: allow,
   matched_rules: [
@@ -88,7 +88,7 @@ prefix_rule(
     expect![[r#"[prefix_rule(pattern = [npm, [i, install], [--legacy-peer-deps, --no-save]], decision = allow)]"#]]
         .assert_eq(&rules_to_string(rules));
 
-    let npm_i = policy.evaluate(&tokens(&["npm", "i", "--legacy-peer-deps"]));
+    let npm_i = policy.check(&tokens(&["npm", "i", "--legacy-peer-deps"]));
     expect![[r#"Match {
   decision: allow,
   matched_rules: [
@@ -97,7 +97,7 @@ prefix_rule(
 }"#]]
     .assert_eq(&npm_i.to_string());
 
-    let npm_install = policy.evaluate(&tokens(&["npm", "install", "--no-save", "leftpad"]));
+    let npm_install = policy.check(&tokens(&["npm", "install", "--no-save", "leftpad"]));
     expect![[r#"Match {
   decision: allow,
   matched_rules: [
@@ -118,7 +118,7 @@ prefix_rule(
     "#;
     let parser = PolicyParser::new("test.policy", policy_src);
     let policy = parser.parse().expect("parse policy");
-    let match_eval = policy.evaluate(&tokens(&["git", "status"]));
+    let match_eval = policy.check(&tokens(&["git", "status"]));
     expect![[r#"Match {
   decision: allow,
   matched_rules: [
@@ -127,7 +127,7 @@ prefix_rule(
 }"#]]
     .assert_eq(&match_eval.to_string());
 
-    let no_match_eval = policy.evaluate(&tokens(&[
+    let no_match_eval = policy.check(&tokens(&[
         "git",
         "--config",
         "color.status=always",
@@ -155,7 +155,7 @@ prefix_rule(
     let parser = PolicyParser::new("test.policy", policy_src);
     let policy = parser.parse().expect("parse policy");
 
-    let status = policy.evaluate(&tokens(&["git", "status"]));
+    let status = policy.check(&tokens(&["git", "status"]));
     expect![[r#"Match {
   decision: prompt,
   matched_rules: [
@@ -165,7 +165,7 @@ prefix_rule(
 }"#]]
     .assert_eq(&status.to_string());
 
-    let commit = policy.evaluate(&tokens(&["git", "commit", "-m", "hi"]));
+    let commit = policy.check(&tokens(&["git", "commit", "-m", "hi"]));
     expect![[r#"Match {
   decision: forbidden,
   matched_rules: [

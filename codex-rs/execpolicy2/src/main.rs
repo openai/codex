@@ -16,7 +16,7 @@ enum Cli {
         #[arg(short, long, value_name = "PATH")]
         policy: Option<String>,
 
-        /// Command tokens to evaluate.
+        /// Command tokens to check.
         #[arg(
             value_name = "COMMAND",
             required = true,
@@ -37,7 +37,7 @@ fn main() -> Result<()> {
 fn cmd_check(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
     let policy = load_policy(policy_path)?;
 
-    let eval = policy.evaluate(&args);
+    let eval = policy.check(&args);
     let json = serde_json::to_string_pretty(&eval)?;
     println!("{json}");
     Ok(())
