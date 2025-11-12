@@ -302,13 +302,20 @@ impl ModelProviderInfo {
                 account_id: None,
             })
         } else {
-            match self.api_key()? {
-                Some(key) => Some(AuthContext {
+            match self.api_key() {
+                Ok(Some(key)) => Some(AuthContext {
                     mode: AuthMode::ApiKey,
                     bearer_token: Some(key),
                     account_id: None,
                 }),
-                None => auth.clone(),
+                Ok(None) => auth.clone(),
+                Err(err) => {
+                    if auth.is_some() {
+                        auth.clone()
+                    } else {
+                        return Err(err);
+                    }
+                }
             }
         };
 

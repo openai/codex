@@ -35,10 +35,10 @@ impl WireResponseDecoder for WireResponsesSseDecoder {
         tx: &mpsc::Sender<Result<WireEvent>>,
         otel: &OtelEventManager,
     ) -> Result<()> {
-        let Ok(event) = serde_json::from_str::<StreamEvent>(json) else {
+        let event = serde_json::from_str::<StreamEvent>(json).map_err(|err| {
             debug!("failed to parse Responses SSE JSON: {}", json);
-            return Ok(());
-        };
+            Error::Other(format!("failed to parse Responses SSE JSON: {err}"))
+        })?;
 
         match event.event_type.as_str() {
             "response.created" => {
