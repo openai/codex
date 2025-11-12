@@ -28,6 +28,12 @@ impl PatternToken {
     }
 }
 
+impl std::fmt::Display for PatternToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(render_pattern_token(self).as_str())
+    }
+}
+
 /// Prefix matcher for commands with support for alternative match tokens.
 /// First token is fixed since we key by the first token in policy.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -60,9 +66,27 @@ impl PrefixPattern {
     }
 }
 
+impl std::fmt::Display for PrefixPattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}]", render_pattern(self))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Rule {
     Prefix(PrefixRule),
+}
+
+impl std::fmt::Display for Rule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Prefix(rule) => write!(
+                f,
+                "prefix_rule(pattern = {}, decision = {})",
+                rule.pattern, rule.decision
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -83,6 +107,20 @@ impl RuleMatch {
     pub fn decision(&self) -> Decision {
         match self {
             Self::PrefixRuleMatch { decision, .. } => *decision,
+        }
+    }
+}
+
+impl std::fmt::Display for RuleMatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PrefixRuleMatch {
+                matched_prefix,
+                decision,
+            } => write!(
+                f,
+                "PrefixRuleMatch {{ matched_prefix: {matched_prefix:?}, decision: {decision} }}"
+            ),
         }
     }
 }

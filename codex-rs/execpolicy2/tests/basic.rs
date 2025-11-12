@@ -1,12 +1,20 @@
-use codex_execpolicy2::Decision;
-use codex_execpolicy2::Evaluation;
 use codex_execpolicy2::PolicyParser;
-use codex_execpolicy2::RuleMatch;
-use codex_execpolicy2::rule::PatternToken;
-use codex_execpolicy2::rule::Rule;
+use codex_execpolicy2::Rule;
+use expect_test::expect;
 
 fn tokens(cmd: &[&str]) -> Vec<String> {
     cmd.iter().map(std::string::ToString::to_string).collect()
+}
+
+fn rules_to_string(rules: &[Rule]) -> String {
+    format!(
+        "[{}]",
+        rules
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 #[test]
@@ -20,21 +28,14 @@ prefix_rule(
         .parse()
         .expect("parse policy");
     let cmd = tokens(&["git", "status"]);
-    let Evaluation::Match {
-        decision,
-        matched_rules,
-    } = policy.evaluate(&cmd)
-    else {
-        panic!("expected match");
-    };
-    assert_eq!(decision, Decision::Allow);
-    assert_eq!(
-        matched_rules,
-        vec![RuleMatch::PrefixRuleMatch {
-            matched_prefix: tokens(&["git", "status"]),
-            decision: Decision::Allow,
-        }]
-    );
+    let evaluation = policy.evaluate(&cmd);
+    expect![[r#"Match {
+  decision: allow,
+  matched_rules: [
+    PrefixRuleMatch { matched_prefix: ["git", "status"], decision: allow },
+  ]
+}"#]]
+    .assert_eq(&evaluation.to_string());
 }
 
 #[test]
@@ -49,24 +50,28 @@ prefix_rule(
 
     let bash_rules = policy.rules().get_vec("bash").expect("bash rules");
     let sh_rules = policy.rules().get_vec("sh").expect("sh rules");
-    assert_eq!(bash_rules.len(), 1);
-    assert_eq!(sh_rules.len(), 1);
+    expect![[r#"[prefix_rule(pattern = [bash, [-c, -l]], decision = allow)]"#]]
+        .assert_eq(&rules_to_string(bash_rules));
+    expect![[r#"[prefix_rule(pattern = [sh, [-c, -l]], decision = allow)]"#]]
+        .assert_eq(&rules_to_string(sh_rules));
 
-    for (cmd, prefix) in [
-        (
-            tokens(&["bash", "-c", "echo", "hi"]),
-            tokens(&["bash", "-c"]),
-        ),
-        (tokens(&["sh", "-l", "echo", "hi"]), tokens(&["sh", "-l"])),
-    ] {
-        let Evaluation::Match { matched_rules, .. } = policy.evaluate(&cmd) else {
-            panic!("expected match");
-        };
-        let matched_prefix = match &matched_rules[0] {
-            RuleMatch::PrefixRuleMatch { matched_prefix, .. } => matched_prefix,
-        };
-        assert_eq!(matched_prefix, &prefix);
-    }
+    let bash_eval = policy.evaluate(&tokens(&["bash", "-c", "echo", "hi"]));
+    expect![[r#"Match {
+  decision: allow,
+  matched_rules: [
+    PrefixRuleMatch { matched_prefix: ["bash", "-c"], decision: allow },
+  ]
+}"#]]
+    .assert_eq(&bash_eval.to_string());
+
+    let sh_eval = policy.evaluate(&tokens(&["sh", "-l", "echo", "hi"]));
+    expect![[r#"Match {
+  decision: allow,
+  matched_rules: [
+    PrefixRuleMatch { matched_prefix: ["sh", "-l"], decision: allow },
+  ]
+}"#]]
+    .assert_eq(&sh_eval.to_string());
 }
 
 #[test]
@@ -80,22 +85,26 @@ prefix_rule(
     let policy = parser.parse().expect("parse policy");
 
     let rules = policy.rules().get_vec("npm").expect("npm rules");
-    assert_eq!(rules.len(), 1);
-    let Rule::Prefix(rule) = &rules[0];
-    assert_eq!(
-        rule.pattern.rest,
-        vec![
-            PatternToken::Alts(tokens(&["i", "install"])),
-            PatternToken::Alts(tokens(&["--legacy-peer-deps", "--no-save"])),
-        ],
-    );
+    expect![[r#"[prefix_rule(pattern = [npm, [i, install], [--legacy-peer-deps, --no-save]], decision = allow)]"#]]
+        .assert_eq(&rules_to_string(rules));
 
-    for cmd in [
-        tokens(&["npm", "i", "--legacy-peer-deps"]),
-        tokens(&["npm", "install", "--no-save", "leftpad"]),
-    ] {
-        assert!(matches!(policy.evaluate(&cmd), Evaluation::Match { .. }));
-    }
+    let npm_i = policy.evaluate(&tokens(&["npm", "i", "--legacy-peer-deps"]));
+    expect![[r#"Match {
+  decision: allow,
+  matched_rules: [
+    PrefixRuleMatch { matched_prefix: ["npm", "i", "--legacy-peer-deps"], decision: allow },
+  ]
+}"#]]
+    .assert_eq(&npm_i.to_string());
+
+    let npm_install = policy.evaluate(&tokens(&["npm", "install", "--no-save", "leftpad"]));
+    expect![[r#"Match {
+  decision: allow,
+  matched_rules: [
+    PrefixRuleMatch { matched_prefix: ["npm", "install", "--no-save"], decision: allow },
+  ]
+}"#]]
+    .assert_eq(&npm_install.to_string());
 }
 
 #[test]
@@ -109,14 +118,17 @@ prefix_rule(
     "#;
     let parser = PolicyParser::new("test.policy", policy_src);
     let policy = parser.parse().expect("parse policy");
-    assert!(matches!(
-        policy.evaluate(&tokens(&["git", "status"])),
-        Evaluation::Match { .. }
-    ));
-    assert!(matches!(
-        policy.evaluate(&tokens(&["git", "reset", "--hard"])),
-        Evaluation::NoMatch
-    ));
+    let match_eval = policy.evaluate(&tokens(&["git", "status"]));
+    expect![[r#"Match {
+  decision: allow,
+  matched_rules: [
+    PrefixRuleMatch { matched_prefix: ["git", "status"], decision: allow },
+  ]
+}"#]]
+    .assert_eq(&match_eval.to_string());
+
+    let no_match_eval = policy.evaluate(&tokens(&["git", "reset", "--hard"]));
+    expect!["NoMatch"].assert_eq(&no_match_eval.to_string());
 }
 
 #[test]
@@ -138,49 +150,23 @@ prefix_rule(
     let parser = PolicyParser::new("test.policy", policy_src);
     let policy = parser.parse().expect("parse policy");
 
-    let status = tokens(&["git", "status"]);
-    let Evaluation::Match {
-        decision: status_decision,
-        matched_rules: status_matches,
-    } = policy.evaluate(&status)
-    else {
-        panic!("expected status to match");
-    };
-    assert_eq!(status_decision, Decision::Prompt);
-    assert_eq!(
-        status_matches,
-        vec![
-            RuleMatch::PrefixRuleMatch {
-                matched_prefix: tokens(&["git", "status"]),
-                decision: Decision::Allow,
-            },
-            RuleMatch::PrefixRuleMatch {
-                matched_prefix: tokens(&["git"]),
-                decision: Decision::Prompt,
-            }
-        ]
-    );
+    let status = policy.evaluate(&tokens(&["git", "status"]));
+    expect![[r#"Match {
+  decision: prompt,
+  matched_rules: [
+    PrefixRuleMatch { matched_prefix: ["git", "status"], decision: allow },
+    PrefixRuleMatch { matched_prefix: ["git"], decision: prompt },
+  ]
+}"#]]
+    .assert_eq(&status.to_string());
 
-    let commit = tokens(&["git", "commit", "-m", "hi"]);
-    let Evaluation::Match {
-        decision: commit_decision,
-        matched_rules: commit_matches,
-    } = policy.evaluate(&commit)
-    else {
-        panic!("expected commit to match");
-    };
-    assert_eq!(commit_decision, Decision::Forbidden);
-    assert_eq!(
-        commit_matches,
-        vec![
-            RuleMatch::PrefixRuleMatch {
-                matched_prefix: tokens(&["git"]),
-                decision: Decision::Prompt,
-            },
-            RuleMatch::PrefixRuleMatch {
-                matched_prefix: tokens(&["git", "commit"]),
-                decision: Decision::Forbidden,
-            }
-        ]
-    );
+    let commit = policy.evaluate(&tokens(&["git", "commit", "-m", "hi"]));
+    expect![[r#"Match {
+  decision: forbidden,
+  matched_rules: [
+    PrefixRuleMatch { matched_prefix: ["git"], decision: prompt },
+    PrefixRuleMatch { matched_prefix: ["git", "commit"], decision: forbidden },
+  ]
+}"#]]
+    .assert_eq(&commit.to_string());
 }
