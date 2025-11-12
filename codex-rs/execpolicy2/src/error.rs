@@ -2,7 +2,7 @@ use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum Error {
     #[error("invalid decision: {0}")]
     InvalidDecision(String),
@@ -10,8 +10,14 @@ pub enum Error {
     InvalidPattern(String),
     #[error("invalid example: {0}")]
     InvalidExample(String),
-    #[error("expected example to match rule `{rule}`: {example}")]
-    ExampleDidNotMatch { rule: String, example: String },
+    #[error(
+        "expected every example to match at least one rule. rules: {rules:?}; unmatched examples: \
+         {examples:?}"
+    )]
+    ExampleDidNotMatch {
+        rules: Vec<String>,
+        examples: Vec<String>,
+    },
     #[error("expected example to not match rule `{rule}`: {example}")]
     ExampleDidMatch { rule: String, example: String },
     #[error("starlark error: {0}")]

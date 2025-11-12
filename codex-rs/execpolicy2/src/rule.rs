@@ -101,19 +101,14 @@ impl PrefixRule {
             })
     }
 
-    pub fn validate_examples(
-        &self,
-        matches: &[Vec<String>],
-        not_matches: &[Vec<String>],
-    ) -> Result<()> {
-        for example in matches {
-            if self.matches(example).is_none() {
-                return Err(Error::ExampleDidNotMatch {
-                    rule: format!("{self:?}"),
-                    example: join_command(example),
-                });
-            }
-        }
+    pub fn validate_matches(&self, matches: &[Vec<String>]) -> Vec<bool> {
+        matches
+            .iter()
+            .map(|example| self.matches(example).is_some())
+            .collect()
+    }
+
+    pub fn validate_not_matches(&self, not_matches: &[Vec<String>]) -> Result<()> {
         for example in not_matches {
             if self.matches(example).is_some() {
                 return Err(Error::ExampleDidMatch {
@@ -144,13 +139,15 @@ impl Rule {
         }
     }
 
-    pub fn validate_examples(
-        &self,
-        matches: &[Vec<String>],
-        not_matches: &[Vec<String>],
-    ) -> Result<()> {
+    pub fn validate_matches(&self, matches: &[Vec<String>]) -> Vec<bool> {
         match self {
-            Self::Prefix(rule) => rule.validate_examples(matches, not_matches),
+            Self::Prefix(rule) => rule.validate_matches(matches),
+        }
+    }
+
+    pub fn validate_not_matches(&self, not_matches: &[Vec<String>]) -> Result<()> {
+        match self {
+            Self::Prefix(rule) => rule.validate_not_matches(not_matches),
         }
     }
 }
