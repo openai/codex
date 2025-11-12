@@ -1,4 +1,3 @@
-#![cfg(not(target_os = "windows"))]
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -151,6 +150,104 @@ fn collect_tool_outputs(bodies: &[Value]) -> Result<HashMap<String, ParsedUnifie
     Ok(outputs)
 }
 
+fn echo_command(text: &str) -> String {
+    if cfg!(target_os = "windows") {
+        format!("Write-Output \"{text}\"")
+    } else {
+        format!("/bin/echo {text}")
+    }
+}
+
+fn print_no_newline_command(text: &str) -> String {
+    if cfg!(target_os = "windows") {
+        format!("[Console]::Write('{text}')")
+    } else {
+        format!("printf '{text}'")
+    }
+}
+
+fn current_dir_command() -> String {
+    if cfg!(target_os = "windows") {
+        "[Environment]::CurrentDirectory".to_string()
+    } else {
+        "pwd".to_string()
+    }
+}
+
+fn ready_command() -> String {
+    echo_command("ready")
+}
+
+fn cat_like_command() -> String {
+    if cfg!(target_os = "windows") {
+        "while (($line = [Console]::In.ReadLine()) -ne $null) { if ($line -eq '__EXIT__') { break }; Write-Output $line }".to_string()
+    } else {
+        "/bin/cat".to_string()
+    }
+}
+
+fn cat_exit_input() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "__EXIT__\n"
+    } else {
+        "\u{0004}"
+    }
+}
+
+fn sleep_then_ready_command() -> String {
+    if cfg!(target_os = "windows") {
+        "Start-Sleep -Seconds 0.5; Write-Output 'ready'".to_string()
+    } else {
+        "sleep 0.5; echo ready".to_string()
+    }
+}
+
+fn laggy_output_script() -> String {
+    if cfg!(target_os = "windows") {
+        concat!(
+            "$chunk = 'x' * 1048576; ",
+            "1..4 | ForEach-Object { [Console]::Write($chunk); [Console]::Out.Flush() }; ",
+            "Start-Sleep -Milliseconds 200; ",
+            "1..5 | ForEach-Object { Write-Output 'TAIL-MARKER'; Start-Sleep -Milliseconds 50 }; ",
+            "Start-Sleep -Milliseconds 200",
+        )
+        .to_string()
+    } else {
+        r#"python3 - <<'PY'
+import sys
+import time
+
+chunk = b'x' * (1 << 20)
+for _ in range(4):
+    sys.stdout.buffer.write(chunk)
+    sys.stdout.flush()
+
+time.sleep(0.2)
+for _ in range(5):
+    sys.stdout.write("TAIL-MARKER\n")
+    sys.stdout.flush()
+    time.sleep(0.05)
+
+time.sleep(0.2)
+PY
+"#
+        .to_string()
+    }
+}
+
+fn large_output_script() -> String {
+    if cfg!(target_os = "windows") {
+        "1..300 | ForEach-Object { \"line-$_\" }".to_string()
+    } else {
+        r#"python3 - <<'PY'
+for i in range(300):
+    print(f"line-{i}")
+PY
+"#
+        .to_string()
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -171,7 +268,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
 
     let call_id = "uexec-begin-event";
     let args = json!({
-        "cmd": "/bin/echo hello unified exec".to_string(),
+        "cmd": echo_command("hello unified exec"),
         "yield_time_ms": 250,
     });
 
@@ -212,9 +309,10 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     })
     .await;
 
+    let expected_command = vec![echo_command("hello unified exec")];
     assert_eq!(
         begin_event.command,
-        vec!["/bin/echo hello unified exec".to_string()]
+        expected_command
     );
     assert_eq!(begin_event.cwd, cwd.path());
 
@@ -245,11 +343,17 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
     std::fs::create_dir_all(&workdir)?;
 
     let call_id = "uexec-workdir";
-    let args = json!({
-        "cmd": "pwd",
+    let mut args = json!({
+        "cmd": current_dir_command(),
         "yield_time_ms": 250,
         "workdir": workdir.to_string_lossy().to_string(),
     });
+    if cfg!(target_os = "windows") {
+        if let Some(obj) = args.as_object_mut() {
+            obj.insert("shell".to_string(), json!("cmd.exe"));
+            obj.insert("login".to_string(), json!(false));
+        }
+    }
 
     let responses = vec![
         sse(vec![
@@ -297,7 +401,19 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
         .get(call_id)
         .expect("missing exec_command workdir output");
     let output_text = output.output.trim();
-    let output_canonical = std::fs::canonicalize(output_text)?;
+    assert!(
+        !output_text.is_empty(),
+        "workdir command should produce a path (raw output: {raw:?}, exit_code: {exit_code:?}, session_id: {session_id:?})",
+        raw = output.output,
+        exit_code = output.exit_code,
+        session_id = output.session_id
+    );
+    let output_path = std::path::PathBuf::from(output_text);
+    assert!(
+        output_path.exists(),
+        "workdir output path does not exist: {output_text}"
+    );
+    let output_canonical = std::fs::canonicalize(output_path)?;
     let expected_canonical = std::fs::canonicalize(&workdir)?;
     assert_eq!(
         output_canonical, expected_canonical,
@@ -327,7 +443,7 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
 
     let call_id = "uexec-end-event";
     let args = json!({
-        "cmd": "/bin/echo END-EVENT".to_string(),
+        "cmd": echo_command("END-EVENT"),
         "yield_time_ms": 250,
     });
     let poll_call_id = "uexec-end-event-poll";
@@ -413,7 +529,7 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
 
     let call_id = "uexec-delta-1";
     let args = json!({
-        "cmd": "printf 'HELLO-UEXEC'",
+        "cmd": print_no_newline_command("HELLO-UEXEC"),
         "yield_time_ms": 1000,
     });
 
@@ -484,7 +600,7 @@ async fn unified_exec_emits_output_delta_for_write_stdin() -> Result<()> {
 
     let open_call_id = "uexec-open";
     let open_args = json!({
-        "cmd": "/bin/bash -i",
+        "cmd": cat_like_command(),
         "yield_time_ms": 200,
     });
 
@@ -582,8 +698,9 @@ async fn unified_exec_skips_begin_event_for_empty_input() -> Result<()> {
     } = builder.build(&server).await?;
 
     let open_call_id = "uexec-open-session";
+    let open_cmd = ready_command();
     let open_args = json!({
-        "cmd": "/bin/sh -c echo ready".to_string(),
+        "cmd": open_cmd,
         "yield_time_ms": 250,
     });
 
@@ -654,7 +771,7 @@ async fn unified_exec_skips_begin_event_for_empty_input() -> Result<()> {
         "expected only the initial command to emit begin event"
     );
     assert_eq!(begin_events[0].call_id, open_call_id);
-    assert_eq!(begin_events[0].command[0], "/bin/sh -c echo ready");
+    assert_eq!(begin_events[0].command[0], open_cmd);
 
     Ok(())
 }
@@ -678,7 +795,7 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
 
     let call_id = "uexec-metadata";
     let args = serde_json::json!({
-        "cmd": "printf 'abcdefghijklmnopqrstuvwxyz'",
+        "cmd": print_no_newline_command("abcdefghijklmnopqrstuvwxyz"),
         "yield_time_ms": 500,
         "max_output_tokens": 6,
     });
@@ -788,7 +905,7 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
     let exit_call_id = "uexec-cat-exit";
 
     let start_args = serde_json::json!({
-        "cmd": "/bin/cat",
+        "cmd": cat_like_command(),
         "yield_time_ms": 500,
     });
     let send_args = serde_json::json!({
@@ -797,7 +914,7 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
         "yield_time_ms": 500,
     });
     let exit_args = serde_json::json!({
-        "chars": "\u{0004}",
+        "chars": cat_exit_input(),
         "session_id": 0,
         "yield_time_ms": 500,
     });
@@ -945,7 +1062,7 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
 
     let start_call_id = "uexec-end-on-exit-start";
     let start_args = serde_json::json!({
-        "cmd": "/bin/cat",
+        "cmd": cat_like_command(),
         "yield_time_ms": 200,
     });
 
@@ -958,7 +1075,7 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
 
     let exit_call_id = "uexec-end-on-exit";
     let exit_args = serde_json::json!({
-        "chars": "\u{0004}",
+        "chars": cat_exit_input(),
         "session_id": 0,
         "yield_time_ms": 500,
     });
@@ -1048,7 +1165,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
 
     let first_call_id = "uexec-start";
     let first_args = serde_json::json!({
-        "cmd": "/bin/cat",
+        "cmd": cat_like_command(),
         "yield_time_ms": 200,
     });
 
@@ -1155,24 +1272,7 @@ async fn unified_exec_streams_after_lagged_output() -> Result<()> {
         ..
     } = builder.build(&server).await?;
 
-    let script = r#"python3 - <<'PY'
-import sys
-import time
-
-chunk = b'x' * (1 << 20)
-for _ in range(4):
-    sys.stdout.buffer.write(chunk)
-    sys.stdout.flush()
-
-time.sleep(0.2)
-for _ in range(5):
-    sys.stdout.write("TAIL-MARKER\n")
-    sys.stdout.flush()
-    time.sleep(0.05)
-
-time.sleep(0.2)
-PY
-"#;
+    let script = laggy_output_script();
 
     let first_call_id = "uexec-lag-start";
     let first_args = serde_json::json!({
@@ -1282,7 +1382,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
 
     let first_call_id = "uexec-timeout";
     let first_args = serde_json::json!({
-        "cmd": "sleep 0.5; echo ready",
+        "cmd": sleep_then_ready_command(),
         "yield_time_ms": 10,
     });
 
@@ -1386,11 +1486,7 @@ async fn unified_exec_formats_large_output_summary() -> Result<()> {
         ..
     } = builder.build(&server).await?;
 
-    let script = r#"python3 - <<'PY'
-for i in range(300):
-    print(f"line-{i}")
-PY
-"#;
+    let script = large_output_script();
 
     let call_id = "uexec-large-output";
     let args = serde_json::json!({
@@ -1473,7 +1569,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
 
     let call_id = "uexec";
     let args = serde_json::json!({
-        "cmd": "echo 'hello'",
+        "cmd": echo_command("hello"),
         "yield_time_ms": 500,
     });
 

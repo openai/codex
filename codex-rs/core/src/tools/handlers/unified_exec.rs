@@ -54,7 +54,14 @@ struct WriteStdinArgs {
 }
 
 fn default_shell() -> String {
-    "/bin/bash".to_string()
+    #[cfg(target_os = "windows")]
+    {
+        "powershell.exe".to_string()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "/bin/bash".to_string()
+    }
 }
 
 fn default_login() -> bool {

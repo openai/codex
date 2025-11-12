@@ -43,12 +43,7 @@ impl UnifiedExecSessionManager {
             .workdir
             .clone()
             .unwrap_or_else(|| context.turn.cwd.clone());
-        let shell_flag = if request.login { "-lc" } else { "-c" };
-        let command = vec![
-            request.shell.to_string(),
-            shell_flag.to_string(),
-            request.command.to_string(),
-        ];
+        let command = Self::build_shell_command(request.shell, request.login, request.command);
 
         let session = self
             .open_session_with_sandbox(
@@ -109,6 +104,30 @@ impl UnifiedExecSessionManager {
         }
 
         Ok(response)
+    }
+
+    fn build_shell_command(shell: &str, login: bool, command: &str) -> Vec<String> {
+        #[cfg(target_os = "windows")]
+        {
+            let _ = login;
+            let shell_lower = shell.to_ascii_lowercase();
+            let flag = if shell_lower.contains("cmd") {
+                "/C"
+            } else {
+                "-Command"
+            };
+            return vec![shell.to_string(), flag.to_string(), command.to_string()];
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let shell_flag = if login { "-lc" } else { "-c" };
+            vec![
+                shell.to_string(),
+                shell_flag.to_string(),
+                command.to_string(),
+            ]
+        }
     }
 
     pub(crate) async fn write_stdin(
