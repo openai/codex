@@ -24,10 +24,28 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 use crate::load_default_config_for_test;
+use crate::responses::ev_apply_patch_custom_tool_call;
+use crate::responses::ev_apply_patch_function_call;
+use crate::responses::ev_apply_patch_shell_call;
+use crate::responses::ev_apply_patch_shell_call_via_heredoc;
+use crate::responses::ev_assistant_message;
+use crate::responses::ev_completed;
+use crate::responses::ev_response_created;
+use crate::responses::mount_sse_sequence;
+use crate::responses::sse;
 use crate::responses::start_mock_server;
 use crate::wait_for_event;
 
 type ConfigMutator = dyn FnOnce(&mut Config) + Send;
+
+/// A collection of different ways the model can output an apply_patch call
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ApplyPatchModelOutput {
+    Freeform,
+    Function,
+    Shell,
+    ShellViaHeredoc,
+}
 
 pub struct TestCodexBuilder {
     config_mutators: Vec<Box<ConfigMutator>>,
@@ -257,6 +275,48 @@ impl TestCodexHarness {
             .and_then(Value::as_str)
             .expect("output string")
             .to_string()
+    }
+
+    pub async fn mount_apply_patch_call(
+        &self,
+        call_id: &str,
+        patch: &str,
+        assistant_msg: &str,
+        output_type: ApplyPatchModelOutput,
+    ) {
+        let ev_fn = match output_type {
+            ApplyPatchModelOutput::Freeform => ev_apply_patch_custom_tool_call,
+            ApplyPatchModelOutput::Function => ev_apply_patch_function_call,
+            ApplyPatchModelOutput::Shell => ev_apply_patch_shell_call,
+            ApplyPatchModelOutput::ShellViaHeredoc => ev_apply_patch_shell_call_via_heredoc,
+        };
+
+        let responses = vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_fn(call_id, patch),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", assistant_msg),
+                ev_completed("resp-2"),
+            ]),
+        ];
+
+        mount_sse_sequence(self.server(), responses).await;
+    }
+
+    pub async fn get_patch_output(
+        &self,
+        call_id: &str,
+        output_type: ApplyPatchModelOutput,
+    ) -> String {
+        match output_type {
+            ApplyPatchModelOutput::Freeform => self.custom_tool_call_output(call_id).await,
+            ApplyPatchModelOutput::Function
+            | ApplyPatchModelOutput::Shell
+            | ApplyPatchModelOutput::ShellViaHeredoc => self.function_call_stdout(call_id).await,
+        }
     }
 }
 
