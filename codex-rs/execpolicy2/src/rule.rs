@@ -29,12 +29,6 @@ impl PatternToken {
     }
 }
 
-impl std::fmt::Display for PatternToken {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(render_pattern_token(self).as_str())
-    }
-}
-
 /// Prefix matcher for commands with support for alternative match tokens.
 /// First token is fixed since we key by the first token in policy.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -57,12 +51,6 @@ impl PrefixPattern {
         }
 
         Some(cmd[..pattern_length].to_vec())
-    }
-}
-
-impl std::fmt::Display for PrefixPattern {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}]", render_pattern(self))
     }
 }
 
@@ -139,14 +127,14 @@ impl PrefixRule {
 
     pub fn description(&self) -> String {
         format!(
-            "prefix_rule(pattern = [{}], decision = {})",
-            render_pattern(&self.pattern),
-            render_decision(self.decision)
+            "prefix_rule(pattern = {pattern:?}, decision = {decision})",
+            pattern = self.pattern,
+            decision = self.decision
         )
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Rule {
     Prefix(PrefixRule),
 }
@@ -175,40 +163,7 @@ impl Rule {
     }
 }
 
-impl std::fmt::Display for Rule {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Prefix(rule) => write!(
-                f,
-                "prefix_rule(pattern = {}, decision = {})",
-                rule.pattern, rule.decision
-            ),
-        }
-    }
-}
-
 fn join_command(command: &[String]) -> String {
     try_join(command.iter().map(String::as_str))
         .unwrap_or_else(|_| "unable to render example".to_string())
-}
-
-fn render_pattern(pattern: &PrefixPattern) -> String {
-    let mut tokens = vec![pattern.first.as_ref().to_string()];
-    tokens.extend(pattern.rest.iter().map(render_pattern_token));
-    tokens.join(", ")
-}
-
-fn render_pattern_token(token: &PatternToken) -> String {
-    match token {
-        PatternToken::Single(value) => value.clone(),
-        PatternToken::Alts(values) => format!("[{}]", values.join(", ")),
-    }
-}
-
-fn render_decision(decision: Decision) -> &'static str {
-    match decision {
-        Decision::Allow => "allow",
-        Decision::Prompt => "prompt",
-        Decision::Forbidden => "forbidden",
-    }
 }

@@ -55,23 +55,3 @@ impl Evaluation {
         matches!(self, Self::Match { .. })
     }
 }
-
-impl std::fmt::Display for Evaluation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NoMatch => f.write_str("noMatch"),
-            Self::Match {
-                decision,
-                matched_rules,
-            } => {
-                writeln!(f, "match {{")?;
-                writeln!(f, "  decision: {decision},")?;
-                writeln!(f, "  matchedRules: [")?;
-                for rule in matched_rules {
-                    writeln!(f, "    {rule},")?;
-                }
-                write!(f, "  ]\n}}")
-            }
-        }
-    }
-}
