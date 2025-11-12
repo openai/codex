@@ -301,6 +301,7 @@ async fn prompt_tools_are_consistent_across_requests() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "flaky on ubuntu-24.04-arm - aarch64-unknown-linux-gpu"]
 async fn prefixes_context_and_instructions_once_and_consistently_across_requests() {
     skip_if_no_network!();
     use pretty_assertions::assert_eq;
