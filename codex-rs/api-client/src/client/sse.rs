@@ -16,16 +16,139 @@ use crate::stream::WireEvent;
 
 // Legacy ResponseEvent-based SSE framer removed
 
-async fn send_stream_error(
-    otel_event_manager: &OtelEventManager,
-    tx_event: &mpsc::Sender<Result<WireEvent>>,
-    event: Option<String>,
-    duration: Duration,
-    log_reason: impl std::fmt::Display,
-    error: Error,
-) {
-    otel_event_manager.sse_event_failed(event.as_ref(), duration, &log_reason);
-    let _ = tx_event.send(Err(error)).await;
+struct SseProcessor<S, D> {
+    stream: S,
+    decoder: D,
+    tx_event: mpsc::Sender<Result<WireEvent>>,
+    otel_event_manager: OtelEventManager,
+    buffer: String,
+    max_idle_duration: Duration,
+}
+
+impl<S, D> SseProcessor<S, D>
+where
+    S: Stream<Item = Result<Bytes>> + Send + 'static + Unpin,
+    D: crate::client::WireResponseDecoder + Send,
+{
+    async fn run(mut self) {
+        loop {
+            let start = Instant::now();
+            let result = timeout(self.max_idle_duration, self.stream.next()).await;
+            let duration = start.elapsed();
+            match result {
+                Err(_) => {
+                    self.send_error(
+                        None,
+                        duration,
+                        "idle timeout waiting for SSE",
+                        Error::Stream(
+                            "stream idle timeout fired before Completed event".to_string(),
+                            None,
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+                Ok(Some(Err(err))) => {
+                    let message = format!("{err}");
+                    self.send_error(None, duration, &message, err).await;
+                    return;
+                }
+                Ok(Some(Ok(chunk))) => {
+                    if !self.process_chunk(chunk, duration).await {
+                        return;
+                    }
+                }
+                Ok(None) => {
+                    if !self.drain_buffer(duration).await {
+                        return;
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    async fn process_chunk(&mut self, chunk: Bytes, duration: Duration) -> bool {
+        let chunk_str = match std::str::from_utf8(&chunk) {
+            Ok(s) => s,
+            Err(err) => {
+                self.send_error(
+                    None,
+                    duration,
+                    &format!("UTF8 error: {err}"),
+                    Error::Other(format!("Invalid UTF-8 in SSE chunk: {err}")),
+                )
+                .await;
+                return false;
+            }
+        }
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
+
+        self.buffer.push_str(&chunk_str);
+        while let Some(frame) = next_frame(&mut self.buffer) {
+            if !self.handle_frame(frame, duration).await {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    async fn drain_buffer(&mut self, duration: Duration) -> bool {
+        while let Some(frame) = next_frame(&mut self.buffer) {
+            if !self.handle_frame(frame, duration).await {
+                return false;
+            }
+        }
+
+        if self.buffer.is_empty() {
+            return true;
+        }
+
+        let remainder = std::mem::take(&mut self.buffer);
+        self.handle_frame(remainder, duration).await
+    }
+
+    async fn handle_frame(&mut self, frame: String, duration: Duration) -> bool {
+        if let Some(frame) = parse_sse_frame(&frame) {
+            if frame.data.trim() == "[DONE]" {
+                self.otel_event_manager.sse_event_kind(&frame.event);
+                return true;
+            }
+
+            match self
+                .decoder
+                .on_frame(&frame.data, &self.tx_event, &self.otel_event_manager)
+                .await
+            {
+                Ok(_) => {
+                    self.otel_event_manager.sse_event_kind(&frame.event);
+                }
+                Err(e) => {
+                    let reason = format!("{e}");
+                    self.send_error(Some(frame.event.clone()), duration, &reason, e)
+                        .await;
+                    return false;
+                }
+            };
+        }
+
+        true
+    }
+
+    async fn send_error(
+        &mut self,
+        event: Option<String>,
+        duration: Duration,
+        log_reason: impl std::fmt::Display,
+        error: Error,
+    ) {
+        self.otel_event_manager
+            .sse_event_failed(event.as_ref(), duration, &log_reason);
+        let _ = self.tx_event.send(Err(error)).await;
+    }
 }
 
 /// Spawn an SSE processing task and return a sender/stream pair for wire events.
@@ -68,116 +191,21 @@ pub async fn process_sse_wire<S, D>(
     tx_event: mpsc::Sender<Result<WireEvent>>,
     max_idle_duration: Duration,
     otel_event_manager: OtelEventManager,
-    mut decoder: D,
+    decoder: D,
 ) where
     S: Stream<Item = Result<Bytes>> + Send + 'static + Unpin,
     D: crate::client::WireResponseDecoder + Send,
 {
-    let mut stream = stream;
-    let mut buffer = String::new();
-
-    loop {
-        let start = Instant::now();
-        let result = timeout(max_idle_duration, stream.next()).await;
-        let duration = start.elapsed();
-        match result {
-            Err(_) => {
-                send_stream_error(
-                    &otel_event_manager,
-                    &tx_event,
-                    None,
-                    duration,
-                    "idle timeout waiting for SSE",
-                    Error::Stream(
-                        "stream idle timeout fired before Completed event".to_string(),
-                        None,
-                    ),
-                )
-                .await;
-                return;
-            }
-            Ok(Some(Err(err))) => {
-                let message = format!("{err}");
-                send_stream_error(
-                    &otel_event_manager,
-                    &tx_event,
-                    None,
-                    duration,
-                    &message,
-                    err,
-                )
-                .await;
-                return;
-            }
-            Ok(Some(Ok(chunk))) => {
-                if !process_chunk(
-                    chunk,
-                    duration,
-                    &mut buffer,
-                    &mut decoder,
-                    &tx_event,
-                    &otel_event_manager,
-                )
-                .await
-                {
-                    return;
-                }
-            }
-            Ok(None) => {
-                if !drain_buffer(
-                    &mut buffer,
-                    &mut decoder,
-                    &tx_event,
-                    &otel_event_manager,
-                    duration,
-                )
-                .await
-                {
-                    return;
-                }
-                return;
-            }
-        }
+    SseProcessor {
+        stream,
+        decoder,
+        tx_event,
+        otel_event_manager,
+        buffer: String::new(),
+        max_idle_duration,
     }
-}
-
-async fn process_chunk<D>(
-    chunk: Bytes,
-    duration: Duration,
-    buffer: &mut String,
-    decoder: &mut D,
-    tx_event: &mpsc::Sender<Result<WireEvent>>,
-    otel_event_manager: &OtelEventManager,
-) -> bool
-where
-    D: crate::client::WireResponseDecoder + Send,
-{
-    let chunk_str = match std::str::from_utf8(&chunk) {
-        Ok(s) => s,
-        Err(err) => {
-            send_stream_error(
-                otel_event_manager,
-                tx_event,
-                None,
-                duration,
-                &format!("UTF8 error: {err}"),
-                Error::Other(format!("Invalid UTF-8 in SSE chunk: {err}")),
-            )
-            .await;
-            return false;
-        }
-    }
-    .replace("\r\n", "\n")
-    .replace('\r', "\n");
-
-    buffer.push_str(&chunk_str);
-    while let Some(frame) = next_frame(buffer) {
-        if !handle_frame(frame, decoder, tx_event, otel_event_manager, duration).await {
-            return false;
-        }
-    }
-
-    true
+    .run()
+    .await;
 }
 
 fn next_frame(buffer: &mut String) -> Option<String> {
@@ -193,72 +221,6 @@ fn next_frame(buffer: &mut String) -> Option<String> {
 
         return Some(frame);
     }
-}
-
-async fn drain_buffer<D>(
-    buffer: &mut String,
-    decoder: &mut D,
-    tx_event: &mpsc::Sender<Result<WireEvent>>,
-    otel_event_manager: &OtelEventManager,
-    duration: Duration,
-) -> bool
-where
-    D: crate::client::WireResponseDecoder + Send,
-{
-    while let Some(frame) = next_frame(buffer) {
-        if !handle_frame(frame, decoder, tx_event, otel_event_manager, duration).await {
-            return false;
-        }
-    }
-
-    if buffer.is_empty() {
-        return true;
-    }
-
-    let remainder = std::mem::take(buffer);
-    handle_frame(remainder, decoder, tx_event, otel_event_manager, duration).await
-}
-
-async fn handle_frame<D>(
-    frame: String,
-    decoder: &mut D,
-    tx_event: &mpsc::Sender<Result<WireEvent>>,
-    otel_event_manager: &OtelEventManager,
-    duration: Duration,
-) -> bool
-where
-    D: crate::client::WireResponseDecoder + Send,
-{
-    if let Some(frame) = parse_sse_frame(&frame) {
-        if frame.data.trim() == "[DONE]" {
-            otel_event_manager.sse_event_kind(&frame.event);
-            return true;
-        }
-
-        match decoder
-            .on_frame(&frame.data, tx_event, otel_event_manager)
-            .await
-        {
-            Ok(_) => {
-                otel_event_manager.sse_event_kind(&frame.event);
-            }
-            Err(e) => {
-                let reason = format!("{e}");
-                send_stream_error(
-                    otel_event_manager,
-                    tx_event,
-                    Some(frame.event.clone()),
-                    duration,
-                    &reason,
-                    e,
-                )
-                .await;
-                return false;
-            }
-        };
-    }
-
-    true
 }
 
 fn parse_sse_frame(frame: &str) -> Option<SseFrame> {

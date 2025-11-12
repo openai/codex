@@ -6,7 +6,6 @@ use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::TokenUsage;
 use futures::Stream;
 use serde::Serialize;
@@ -83,61 +82,5 @@ impl<T> Stream for EventStream<T> {
 
 pub type ResponseStream = EventStream<Result<ResponseEvent>>;
 
-#[derive(Debug, Clone)]
-pub struct WireTokenUsage {
-    pub input_tokens: i64,
-    pub cached_input_tokens: i64,
-    pub output_tokens: i64,
-    pub reasoning_output_tokens: i64,
-    pub total_tokens: i64,
-}
-
-#[derive(Debug, Clone)]
-pub struct WireRateLimitWindow {
-    pub used_percent: Option<f64>,
-    pub window_minutes: Option<i64>,
-    pub resets_at: Option<i64>,
-}
-
-#[derive(Debug, Clone)]
-pub struct WireRateLimitSnapshot {
-    pub primary: Option<WireRateLimitWindow>,
-    pub secondary: Option<WireRateLimitWindow>,
-}
-
-impl From<RateLimitWindow> for WireRateLimitWindow {
-    fn from(window: RateLimitWindow) -> Self {
-        Self {
-            used_percent: Some(window.used_percent),
-            window_minutes: window.window_minutes,
-            resets_at: window.resets_at,
-        }
-    }
-}
-
-impl From<RateLimitSnapshot> for WireRateLimitSnapshot {
-    fn from(snapshot: RateLimitSnapshot) -> Self {
-        Self {
-            primary: snapshot.primary.map(Into::into),
-            secondary: snapshot.secondary.map(Into::into),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum WireEvent {
-    Created,
-    OutputItemDone(serde_json::Value),
-    OutputItemAdded(serde_json::Value),
-    Completed {
-        response_id: String,
-        token_usage: Option<WireTokenUsage>,
-    },
-    OutputTextDelta(String),
-    ReasoningSummaryDelta(String),
-    ReasoningContentDelta(String),
-    ReasoningSummaryPartAdded,
-    RateLimits(WireRateLimitSnapshot),
-}
-
-pub type WireResponseStream = EventStream<Result<WireEvent>>;
+pub type WireEvent = ResponseEvent;
+pub type WireResponseStream = ResponseStream;

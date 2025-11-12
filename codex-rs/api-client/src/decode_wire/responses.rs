@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 use codex_otel::otel_event_manager::OtelEventManager;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::TokenUsage;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -9,7 +11,6 @@ use crate::client::WireResponseDecoder;
 use crate::error::Error;
 use crate::error::Result;
 use crate::stream::WireEvent;
-use crate::stream::WireTokenUsage;
 
 #[derive(Debug, Deserialize)]
 struct StreamEvent {
@@ -96,12 +97,14 @@ impl WireResponseDecoder for WireResponsesSseDecoder {
             }
             "response.output_item.done" => {
                 if let Some(item_val) = event.item {
-                    let _ = tx.send(Ok(WireEvent::OutputItemDone(item_val))).await;
+                    let item = parse_response_item(item_val);
+                    let _ = tx.send(Ok(WireEvent::OutputItemDone(item))).await;
                 }
             }
             "response.output_item.added" => {
                 if let Some(item_val) = event.item {
-                    let _ = tx.send(Ok(WireEvent::OutputItemAdded(item_val))).await;
+                    let item = parse_response_item(item_val);
+                    let _ = tx.send(Ok(WireEvent::OutputItemAdded(item))).await;
                 }
             }
             "response.reasoning_summary_part.added" => {
@@ -114,7 +117,7 @@ impl WireResponseDecoder for WireResponsesSseDecoder {
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
                         .to_string();
-                    let usage = parse_wire_usage(&resp);
+                    let usage = parse_usage(&resp);
                     if let Some(u) = &usage {
                         otel.sse_event_completed(
                             u.input_tokens,
@@ -151,7 +154,7 @@ impl WireResponseDecoder for WireResponsesSseDecoder {
     }
 }
 
-fn parse_wire_usage(resp: &Value) -> Option<WireTokenUsage> {
+fn parse_usage(resp: &Value) -> Option<TokenUsage> {
     let usage: WireUsage = serde_json::from_value(resp.get("usage")?.clone()).ok()?;
     let cached_input_tokens = usage
         .cached_input_tokens
@@ -170,11 +173,15 @@ fn parse_wire_usage(resp: &Value) -> Option<WireTokenUsage> {
         })
         .unwrap_or(0);
 
-    Some(WireTokenUsage {
+    Some(TokenUsage {
         input_tokens: usage.input_tokens,
         cached_input_tokens,
         output_tokens: usage.output_tokens,
         reasoning_output_tokens,
         total_tokens: usage.total_tokens,
     })
+}
+
+fn parse_response_item(value: Value) -> ResponseItem {
+    serde_json::from_value(value).unwrap_or(ResponseItem::Other)
 }

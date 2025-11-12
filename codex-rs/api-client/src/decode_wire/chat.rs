@@ -3,7 +3,7 @@ use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
-use serde_json::Value;
+use serde::Deserialize;
 use tokio::sync::mpsc;
 use tracing::debug;
 
@@ -16,15 +16,57 @@ async fn send_wire_event(tx: &mpsc::Sender<crate::error::Result<WireEvent>>, eve
     let _ = tx.send(Ok(event)).await;
 }
 
-fn serialize_response_item(item: ResponseItem) -> Value {
-    serde_json::to_value(item).unwrap_or_else(|_| Value::String(String::new()))
-}
-
 #[derive(Default)]
 struct FunctionCallState {
     active: bool,
     call_id: Option<String>,
     name: Option<String>,
+    arguments: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ChatChunk {
+    #[serde(default)]
+    choices: Vec<ChatChoice>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ChatChoice {
+    #[serde(default)]
+    delta: Option<ChatDelta>,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ChatDelta {
+    #[serde(default)]
+    content: Vec<DeltaText>,
+    #[serde(default)]
+    reasoning_content: Vec<DeltaText>,
+    #[serde(default)]
+    tool_calls: Vec<ChatToolCall>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DeltaText {
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ChatToolCall {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    function: Option<ChatFunction>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ChatFunction {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
     arguments: String,
 }
 
@@ -53,24 +95,22 @@ impl WireChatSseDecoder {
 
     async fn handle_content_delta(
         &mut self,
-        delta: &Value,
+        delta: &ChatDelta,
         tx: &mpsc::Sender<crate::error::Result<WireEvent>>,
     ) {
-        if let Some(content) = delta.get("content").and_then(|c| c.as_array()) {
-            for piece in content {
-                if let Some(text) = piece.get("text").and_then(|t| t.as_str()) {
-                    self.push_assistant_text(text, tx).await;
-                }
+        for piece in &delta.content {
+            if !piece.text.is_empty() {
+                self.push_assistant_text(&piece.text, tx).await;
             }
         }
 
-        if let Some(reasoning) = delta.get("reasoning_content").and_then(|c| c.as_array()) {
-            for entry in reasoning {
-                if let Some(text) = entry.get("text").and_then(|t| t.as_str()) {
-                    self.push_reasoning_text(text, tx).await;
-                }
+        for entry in &delta.reasoning_content {
+            if !entry.text.is_empty() {
+                self.push_reasoning_text(&entry.text, tx).await;
             }
         }
+
+        self.record_tool_calls(&delta.tool_calls);
     }
 
     async fn push_assistant_text(
@@ -105,11 +145,7 @@ impl WireChatSseDecoder {
                 text: String::new(),
             }],
         };
-        send_wire_event(
-            tx,
-            WireEvent::OutputItemAdded(serialize_response_item(message)),
-        )
-        .await;
+        send_wire_event(tx, WireEvent::OutputItemAdded(message)).await;
     }
 
     async fn start_reasoning(&mut self, tx: &mpsc::Sender<crate::error::Result<WireEvent>>) {
@@ -123,33 +159,27 @@ impl WireChatSseDecoder {
             content: None,
             encrypted_content: None,
         };
-        send_wire_event(
-            tx,
-            WireEvent::OutputItemAdded(serialize_response_item(reasoning_item)),
-        )
-        .await;
+        send_wire_event(tx, WireEvent::OutputItemAdded(reasoning_item)).await;
     }
 
-    fn record_tool_calls(&mut self, delta: &Value) {
-        if let Some(tool_calls) = delta.get("tool_calls").and_then(|c| c.as_array()) {
-            for call in tool_calls {
-                if let Some(id_val) = call.get("id").and_then(|id| id.as_str()) {
-                    self.fn_call_state.call_id = Some(id_val.to_string());
+    fn record_tool_calls(&mut self, tool_calls: &[ChatToolCall]) {
+        for call in tool_calls {
+            if let Some(id_val) = &call.id {
+                self.fn_call_state.call_id = Some(id_val.clone());
+            }
+            if let Some(function) = &call.function {
+                if !function.name.is_empty() {
+                    self.fn_call_state.name = Some(function.name.clone());
+                    self.fn_call_state.active = true;
                 }
-                if let Some(function) = call.get("function") {
-                    if let Some(name) = function.get("name").and_then(|n| n.as_str()) {
-                        self.fn_call_state.name = Some(name.to_string());
-                        self.fn_call_state.active = true;
-                    }
-                    if let Some(args) = function.get("arguments").and_then(|a| a.as_str()) {
-                        self.fn_call_state.arguments.push_str(args);
-                    }
+                if !function.arguments.is_empty() {
+                    self.fn_call_state.arguments.push_str(&function.arguments);
                 }
             }
         }
     }
 
-    fn finish_function_call(&mut self) -> Option<Value> {
+    fn finish_function_call(&mut self) -> Option<ResponseItem> {
         if !self.fn_call_state.active {
             return None;
         }
@@ -158,16 +188,15 @@ impl WireChatSseDecoder {
         let arguments = std::mem::take(&mut self.fn_call_state.arguments);
         self.fn_call_state = FunctionCallState::default();
 
-        Some(serde_json::json!({
-            "type": "function_call",
-            "id": call_id,
-            "call_id": call_id,
-            "name": function_name,
-            "arguments": arguments,
-        }))
+        Some(ResponseItem::FunctionCall {
+            id: Some(call_id.clone()),
+            name: function_name,
+            arguments,
+            call_id,
+        })
     }
 
-    fn finish_reasoning(&mut self) -> Option<Value> {
+    fn finish_reasoning(&mut self) -> Option<ResponseItem> {
         if !self.reasoning_started {
             return None;
         }
@@ -179,26 +208,26 @@ impl WireChatSseDecoder {
         }
         self.reasoning_started = false;
 
-        Some(serialize_response_item(ResponseItem::Reasoning {
+        Some(ResponseItem::Reasoning {
             id: String::new(),
             summary: vec![],
             content: Some(content),
             encrypted_content: None,
-        }))
+        })
     }
 
-    fn finish_assistant(&mut self) -> Option<Value> {
+    fn finish_assistant(&mut self) -> Option<ResponseItem> {
         if !self.assistant_started {
             return None;
         }
         let text = std::mem::take(&mut self.assistant_text);
         self.assistant_started = false;
 
-        Some(serialize_response_item(ResponseItem::Message {
+        Some(ResponseItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText { text }],
-        }))
+        })
     }
 
     fn reset_reasoning_and_assistant(&mut self) {
@@ -217,55 +246,45 @@ impl WireResponseDecoder for WireChatSseDecoder {
         tx: &mpsc::Sender<crate::error::Result<WireEvent>>,
         _otel: &OtelEventManager,
     ) -> Result<()> {
-        // Chat sends a terminal "[DONE]" frame; ignore it. Treat other parse errors as failures.
-        let parsed_chunk = serde_json::from_str::<Value>(json).map_err(|err| {
+        let chunk = serde_json::from_str::<ChatChunk>(json).map_err(|err| {
             debug!("failed to parse Chat SSE JSON: {}", json);
             Error::Other(format!("failed to parse Chat SSE JSON: {err}"))
         })?;
 
-        let choices = parsed_chunk
-            .get("choices")
-            .and_then(|choices| choices.as_array())
-            .cloned()
-            .unwrap_or_default();
-
-        for choice in choices {
+        for choice in chunk.choices {
             self.emit_created_once(tx).await;
 
-            if let Some(delta) = choice.get("delta") {
+            if let Some(delta) = &choice.delta {
                 self.handle_content_delta(delta, tx).await;
-                self.record_tool_calls(delta);
             }
 
-            if let Some(finish_reason) = choice.get("finish_reason").and_then(|f| f.as_str()) {
-                match finish_reason {
-                    "tool_calls" => {
-                        if let Some(item) = self.finish_function_call() {
-                            send_wire_event(tx, WireEvent::OutputItemDone(item)).await;
-                        }
+            match choice.finish_reason.as_deref() {
+                Some("tool_calls") => {
+                    if let Some(item) = self.finish_function_call() {
+                        send_wire_event(tx, WireEvent::OutputItemDone(item)).await;
                     }
-                    "stop" | "length" => {
-                        if let Some(reasoning_item) = self.finish_reasoning() {
-                            send_wire_event(tx, WireEvent::OutputItemDone(reasoning_item)).await;
-                        }
-
-                        if let Some(message) = self.finish_assistant() {
-                            send_wire_event(tx, WireEvent::OutputItemDone(message)).await;
-                        }
-
-                        send_wire_event(
-                            tx,
-                            WireEvent::Completed {
-                                response_id: String::new(),
-                                token_usage: None,
-                            },
-                        )
-                        .await;
-
-                        self.reset_reasoning_and_assistant();
-                    }
-                    _ => {}
                 }
+                Some("stop") | Some("length") => {
+                    if let Some(reasoning_item) = self.finish_reasoning() {
+                        send_wire_event(tx, WireEvent::OutputItemDone(reasoning_item)).await;
+                    }
+
+                    if let Some(message) = self.finish_assistant() {
+                        send_wire_event(tx, WireEvent::OutputItemDone(message)).await;
+                    }
+
+                    send_wire_event(
+                        tx,
+                        WireEvent::Completed {
+                            response_id: String::new(),
+                            token_usage: None,
+                        },
+                    )
+                    .await;
+
+                    self.reset_reasoning_and_assistant();
+                }
+                _ => {}
             }
         }
 

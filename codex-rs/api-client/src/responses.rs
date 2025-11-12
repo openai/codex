@@ -125,7 +125,7 @@ impl ResponsesApiClient {
         );
         if let Some(snapshot) = snapshot
             && tx_event
-                .send(Ok(crate::stream::WireEvent::RateLimits(snapshot.into())))
+                .send(Ok(crate::stream::WireEvent::RateLimits(snapshot)))
                 .await
                 .is_err()
         {
