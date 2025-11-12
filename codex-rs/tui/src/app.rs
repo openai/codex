@@ -59,7 +59,10 @@ async fn handle_model_migration_prompt_if_needed(
     app_event_tx: &AppEventSender,
 ) -> Option<AppExitInfo> {
     let target_model = model_migration_target(&config.model);
-    if target_model == config.model || config.notices.hide_gpt5_1_migration_prompt.unwrap_or(false)
+    let deprecated_models = ["gpt-5", "gpt-5-codex", "gpt-5-codex-mini"];
+    if !deprecated_models.contains(&config.model.as_str())
+        || target_model == config.model
+        || config.notices.hide_gpt5_1_migration_prompt.unwrap_or(false)
     {
         return None;
     }
