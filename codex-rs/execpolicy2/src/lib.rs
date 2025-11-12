@@ -12,10 +12,3 @@ pub use policy::Evaluation;
 pub use policy::Policy;
 pub use rule::Rule;
 pub use rule::RuleMatch;
-
-/// Load the default bundled policy.
-pub fn load_default_policy() -> Result<Policy> {
-    let policy_src = include_str!("default.codexpolicy");
-    let parser = PolicyParser::new("default.codexpolicy", policy_src);
-    parser.parse()
-}

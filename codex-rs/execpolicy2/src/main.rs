@@ -5,7 +5,6 @@ use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
 use codex_execpolicy2::PolicyParser;
-use codex_execpolicy2::load_default_policy;
 
 /// CLI for evaluating exec policies
 #[derive(Parser)]
@@ -14,7 +13,7 @@ enum Cli {
     /// Evaluate a command against a policy.
     Check {
         #[arg(short, long, value_name = "PATH")]
-        policy: Option<String>,
+        policy: String,
 
         /// Command tokens to check.
         #[arg(
@@ -34,8 +33,8 @@ fn main() -> Result<()> {
     }
 }
 
-fn cmd_check(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
-    let policy = load_policy(policy_path)?;
+fn cmd_check(policy_path: String, args: Vec<String>) -> Result<()> {
+    let policy = load_policy(&policy_path)?;
 
     let eval = policy.check(&args);
     let json = serde_json::to_string_pretty(&eval)?;
@@ -43,13 +42,13 @@ fn cmd_check(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-fn load_policy(policy_path: Option<String>) -> Result<codex_execpolicy2::Policy> {
-    if let Some(path) = policy_path {
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read policy at {}", Path::new(&path).display()))?;
-        let parser = PolicyParser::new(&path, &content);
-        return Ok(parser.parse()?);
-    }
-
-    Ok(load_default_policy()?)
+fn load_policy(policy_path: &str) -> Result<codex_execpolicy2::Policy> {
+    let content = fs::read_to_string(policy_path).with_context(|| {
+        format!(
+            "failed to read policy at {}",
+            Path::new(policy_path).display()
+        )
+    })?;
+    let parser = PolicyParser::new(policy_path, &content);
+    Ok(parser.parse()?)
 }
