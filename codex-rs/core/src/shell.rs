@@ -3,6 +3,13 @@ use serde::Serialize;
 use std::path::PathBuf;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub enum ShellType {
+    Zsh,
+    Bash,
+    PowerShell,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct ZshShell {
     pub(crate) shell_path: String,
     pub(crate) zshrc_path: String,
@@ -60,6 +67,87 @@ impl Shell {
                 args
             }
             Shell::Unknown => shlex::split(command).unwrap_or_else(|| vec![command.to_string()]),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn get_user_home() -> Option<String> {
+    use libc::getpwuid;
+    use libc::getuid;
+    use std::ffi::CStr;
+
+    unsafe {
+        let uid = getuid();
+        let pw = getpwuid(uid);
+
+        if !pw.is_null() {
+            let home_path = CStr::from_ptr((*pw).pw_dir).to_string_lossy().into_owned();
+            Some(home_path)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn get_user_home() -> Option<String> {
+    std::env::var("HOME").ok()
+}
+
+#[cfg(unix)]
+fn get_user_shell() -> Option<String> {
+    use libc::getpwuid;
+    use libc::getuid;
+    use std::ffi::CStr;
+
+    unsafe {
+        let uid = getuid();
+        let pw = getpwuid(uid);
+
+        if !pw.is_null() {
+            let shell_path = CStr::from_ptr((*pw).pw_shell)
+                .to_string_lossy()
+                .into_owned();
+            Some(shell_path)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn get_user_shell() -> Option<String> {
+    None
+}
+
+pub fn get_shell_path(shell_type: ShellType) -> Option<String> {
+    let default_shell_path = get_user_shell();
+
+    // Check if the shell we are trying to load is user's default shell
+    // if just use it
+
+    if detect_shell_type(default_shell_path) == Some(shell_type) {
+        return default_shell_path;
+    }
+}
+
+pub fn get_shell(shell_type: ShellType) -> Shell {
+    match shell_type {}
+}
+
+pub fn detect_shell_type(shell_path: &str) -> Option<ShellType> {
+    match shell_path {
+        "zsh" => Some(ShellType::Zsh),
+        "bash" => Some(ShellType::Bash),
+        "pwsh" => Some(ShellType::PowerShell),
+        "powershell" => Some(ShellType::PowerShell),
+        _ => {
+            let shell_name = std::path::Path::new(shell_path)
+                .file_stem()
+                .and_then(|s| s.to_str());
+
+            shell_name.and_then(detect_shell_type)
         }
     }
 }
@@ -147,6 +235,26 @@ pub async fn default_user_shell() -> Shell {
 #[cfg(all(not(target_os = "windows"), not(unix)))]
 pub async fn default_user_shell() -> Shell {
     Shell::Unknown
+}
+
+#[cfg(test)]
+mod detect_shell_type_tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_shell_type() {
+        assert_eq!(detect_shell_type("zsh"), ShellType::Zsh);
+        assert_eq!(detect_shell_type("bash"), ShellType::Bash);
+        assert_eq!(detect_shell_type("pwsh"), ShellType::PowerShell);
+        assert_eq!(detect_shell_type("powershell"), ShellType::PowerShell);
+        assert_eq!(detect_shell_type("fish"), ShellType::Unknown);
+        assert_eq!(detect_shell_type("other"), ShellType::Unknown);
+        assert_eq!(detect_shell_type("/bin/zsh"), ShellType::Zsh);
+        assert_eq!(detect_shell_type("/bin/bash"), ShellType::Bash);
+        assert_eq!(detect_shell_type("powershell.exe"), ShellType::PowerShell);
+        assert_eq!(detect_shell_type("pwsh.exe"), ShellType::PowerShell);
+        assert_eq!(detect_shell_type("/usr/local/bin/pwsh"), ShellType::Unknown);
+    }
 }
 
 #[cfg(test)]
