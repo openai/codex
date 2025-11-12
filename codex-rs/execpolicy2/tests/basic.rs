@@ -81,9 +81,7 @@ prefix_rule(
 
     let rules = policy.rules().get_vec("npm").expect("npm rules");
     assert_eq!(rules.len(), 1);
-    let rule = match &rules[0] {
-        Rule::Prefix(rule) => rule,
-    };
+    let Rule::Prefix(rule) = &rules[0];
     assert_eq!(
         rule.pattern.rest,
         vec![
