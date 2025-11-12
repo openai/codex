@@ -85,12 +85,11 @@ pub(crate) fn validate_match_examples(rules: &[Rule], matches: &[Vec<String>]) -
         .collect();
 
     if unmatched_examples.is_empty() {
-        return Ok(());
+        Ok(())
+    } else {
+        Err(Error::ExampleDidNotMatch {
+            rules: rules.iter().map(|rule| format!("{rule:?}")).collect(),
+            examples: unmatched_examples,
+        })
     }
-
-    let rules: Vec<String> = rules.iter().map(|rule| format!("{rule:?}")).collect();
-    Err(Error::ExampleDidNotMatch {
-        rules,
-        examples: unmatched_examples,
-    })
 }
