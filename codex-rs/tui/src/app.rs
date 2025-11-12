@@ -64,8 +64,10 @@ async fn handle_model_migration_prompt_if_needed(
         return None;
     }
 
-    app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged);
-    config.notices.hide_gpt5_1_migration_prompt = Some(true);
+    app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
+        migration_config: "hide_gpt5_1_migration_prompt".to_string(),
+    });
+
     match run_model_migration_prompt(tui, &config.model, &target_model).await {
         ModelMigrationOutcome::Accepted => {
             config.model = target_model.clone();
@@ -592,9 +594,9 @@ impl App {
                     ));
                 }
             }
-            AppEvent::PersistModelMigrationPromptAcknowledged => {
+            AppEvent::PersistModelMigrationPromptAcknowledged { migration_config } => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .set_hide_gpt5_1_migration_prompt(true)
+                    .set_hide_model_migration_prompt(&migration_config, true)
                     .apply()
                     .await
                 {

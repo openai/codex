@@ -30,7 +30,7 @@ pub enum ConfigEdit {
     /// Toggle the Windows onboarding acknowledgement flag.
     SetWindowsWslSetupAcknowledged(bool),
     /// Toggle the model migration prompt acknowledgement flag.
-    SetNoticeHideModelMigrationPrompt(bool),
+    SetNoticeHideModelMigrationPrompt(String, bool),
     /// Replace the entire `[mcp_servers]` table.
     ReplaceMcpServers(BTreeMap<String, McpServerConfig>),
     /// Set trust_level = "trusted" under `[projects."<path>"]`,
@@ -255,11 +255,13 @@ impl ConfigDocument {
                 &[Notice::TABLE_KEY, "hide_rate_limit_model_nudge"],
                 value(*acknowledged),
             )),
-            ConfigEdit::SetNoticeHideModelMigrationPrompt(acknowledged) => Ok(self.write_value(
-                Scope::Global,
-                &[Notice::TABLE_KEY, "hide_gpt5_1_migration_prompt"],
-                value(*acknowledged),
-            )),
+            ConfigEdit::SetNoticeHideModelMigrationPrompt(migration_config, acknowledged) => {
+                Ok(self.write_value(
+                    Scope::Global,
+                    &[Notice::TABLE_KEY, migration_config.as_str()],
+                    value(*acknowledged),
+                ))
+            }
             ConfigEdit::SetWindowsWslSetupAcknowledged(acknowledged) => Ok(self.write_value(
                 Scope::Global,
                 &["windows_wsl_setup_acknowledged"],
@@ -506,9 +508,12 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn set_hide_gpt5_1_migration_prompt(mut self, acknowledged: bool) -> Self {
+    pub fn set_hide_model_migration_prompt(mut self, model: &str, acknowledged: bool) -> Self {
         self.edits
-            .push(ConfigEdit::SetNoticeHideModelMigrationPrompt(acknowledged));
+            .push(ConfigEdit::SetNoticeHideModelMigrationPrompt(
+                model.to_string(),
+                acknowledged,
+            ));
         self
     }
 
@@ -800,7 +805,10 @@ existing = "value"
         apply_blocking(
             codex_home,
             None,
-            &[ConfigEdit::SetNoticeHideModelMigrationPrompt(true)],
+            &[ConfigEdit::SetNoticeHideModelMigrationPrompt(
+                "hide_gpt5_1_migration_prompt".to_string(),
+                true,
+            )],
         )
         .expect("persist");
 

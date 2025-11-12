@@ -118,7 +118,9 @@ pub(crate) enum AppEvent {
     PersistRateLimitSwitchPromptHidden,
 
     /// Persist the acknowledgement flag for the model migration prompt.
-    PersistModelMigrationPromptAcknowledged,
+    PersistModelMigrationPromptAcknowledged {
+        migration_config: String,
+    },
 
     /// Skip the next world-writable scan (one-shot) after a user-confirmed continue.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
