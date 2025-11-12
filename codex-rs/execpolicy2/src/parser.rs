@@ -91,10 +91,9 @@ fn parse_pattern<'v>(pattern: UnpackList<Value<'v>>) -> Result<Vec<PatternToken>
 
 fn parse_pattern_token<'v>(value: Value<'v>) -> Result<PatternToken> {
     if let Some(s) = value.unpack_str() {
-        return Ok(PatternToken::Single(s.to_string()));
+        Ok(PatternToken::Single(s.to_string()))
     }
-
-    if let Some(list) = ListRef::from_value(value) {
+    else if let Some(list) = ListRef::from_value(value) {
         let tokens: Vec<String> = list
             .content()
             .iter()
@@ -129,17 +128,15 @@ fn parse_examples<'v>(examples: UnpackList<Value<'v>>) -> Result<Vec<Vec<String>
 
 fn parse_example<'v>(value: Value<'v>) -> Result<Vec<String>> {
     if let Some(raw) = value.unpack_str() {
-        return parse_string_example(raw);
+        parse_string_example(raw)
+    } else if let Some(list) = ListRef::from_value(value) {
+        parse_list_example(list)
+    } else {
+        Err(Error::InvalidExample(format!(
+            "example must be a string or list of strings (got {})",
+            value.get_type()
+        )))
     }
-
-    if let Some(list) = ListRef::from_value(value) {
-        return parse_list_example(list);
-    }
-
-    Err(Error::InvalidExample(format!(
-        "example must be a string or list of strings (got {})",
-        value.get_type()
-    )))
 }
 
 fn parse_string_example(raw: &str) -> Result<Vec<String>> {
