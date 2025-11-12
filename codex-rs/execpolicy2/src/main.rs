@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -13,7 +14,7 @@ enum Cli {
     /// Evaluate a command against a policy.
     Check {
         #[arg(short, long, value_name = "PATH")]
-        policy: String,
+        policy: PathBuf,
 
         /// Command tokens to check.
         #[arg(
@@ -33,7 +34,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn cmd_check(policy_path: String, args: Vec<String>) -> Result<()> {
+fn cmd_check(policy_path: PathBuf, args: Vec<String>) -> Result<()> {
     let policy = load_policy(&policy_path)?;
 
     let eval = policy.check(&args);
@@ -42,13 +43,10 @@ fn cmd_check(policy_path: String, args: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-fn load_policy(policy_path: &str) -> Result<codex_execpolicy2::Policy> {
-    let content = fs::read_to_string(policy_path).with_context(|| {
-        format!(
-            "failed to read policy at {}",
-            Path::new(policy_path).display()
-        )
-    })?;
-    let parser = PolicyParser::new(policy_path, &content);
+fn load_policy(policy_path: &Path) -> Result<codex_execpolicy2::Policy> {
+    let content = fs::read_to_string(policy_path)
+        .with_context(|| format!("failed to read policy at {}", policy_path.display()))?;
+    let policy_source = policy_path.to_string_lossy();
+    let parser = PolicyParser::new(policy_source.as_ref(), &content);
     Ok(parser.parse()?)
 }
