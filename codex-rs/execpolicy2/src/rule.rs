@@ -109,7 +109,7 @@ impl PrefixRule {
         for example in matches {
             if self.matches(example).is_none() {
                 return Err(Error::ExampleDidNotMatch {
-                    rule: self.description(),
+                    rule: format!("{self:?}"),
                     example: join_command(example),
                 });
             }
@@ -117,20 +117,12 @@ impl PrefixRule {
         for example in not_matches {
             if self.matches(example).is_some() {
                 return Err(Error::ExampleDidMatch {
-                    rule: self.description(),
+                    rule: format!("{self:?}"),
                     example: join_command(example),
                 });
             }
         }
         Ok(())
-    }
-
-    pub fn description(&self) -> String {
-        format!(
-            "prefix_rule(pattern = {pattern:?}, decision = {decision})",
-            pattern = self.pattern,
-            decision = self.decision
-        )
     }
 }
 
