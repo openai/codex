@@ -494,6 +494,8 @@ impl EventProcessor for EventProcessorWithJsonOutput {
                 handle_last_message(last_agent_message.as_deref(), output_file);
             }
             CodexStatus::InitiateShutdown
+        } else if matches!(msg, EventMsg::ShutdownComplete) {
+            CodexStatus::Shutdown
         } else {
             CodexStatus::Running
         }

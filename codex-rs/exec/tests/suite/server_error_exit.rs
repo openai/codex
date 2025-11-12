@@ -5,8 +5,8 @@ use core_test_support::responses;
 use core_test_support::test_codex_exec::test_codex_exec;
 use wiremock::matchers::any;
 
-/// Verify that when the server reports an error, `codex-exec` exits with a
-/// non-zero status code so automation can detect failures.
+/// Verify that server errors exit with code 1.
+/// Priority: interrupted > error > success
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exits_non_zero_when_server_reports_error() -> anyhow::Result<()> {
     let test = test_codex_exec();
@@ -14,6 +14,7 @@ async fn exits_non_zero_when_server_reports_error() -> anyhow::Result<()> {
     // Mock a simple Responses API SSE stream that immediately reports a
     // `response.failed` event with an error message.
     let server = responses::start_mock_server().await;
+
     let body = responses::sse(vec![serde_json::json!({
         "type": "response.failed",
         "response": {
