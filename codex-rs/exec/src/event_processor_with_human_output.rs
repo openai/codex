@@ -227,6 +227,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::TaskStarted(_) => {
                 // Ignore.
             }
+            EventMsg::ElicitationRequest(_) => {
+                // Currently unused in exec mode; ignore.
+            }
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
                 let last_message = last_agent_message.as_deref();
                 if let Some(output_file) = self.last_message_path.as_deref() {

@@ -16,6 +16,7 @@ use crate::key_hint::KeyBinding;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
+use codex_core::protocol::ElicitationDecision;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
@@ -25,6 +26,7 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use mcp_types::RequestId;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -47,6 +49,11 @@ pub(crate) enum ApprovalRequest {
         reason: Option<String>,
         cwd: PathBuf,
         changes: HashMap<PathBuf, FileChange>,
+    },
+    Elicitation {
+        server_name: String,
+        request_id: RequestId,
+        message: String,
     },
 }
 
@@ -105,6 +112,10 @@ impl ApprovalOverlay {
                 patch_options(),
                 "Would you like to make the following edits?".to_string(),
             ),
+            ApprovalVariant::Elicitation { server_name, .. } => (
+                elicitation_options(),
+                format!("{server_name} needs your approval."),
+            ),
         };
 
         let header = Box::new(ColumnRenderable::with([
@@ -149,13 +160,23 @@ impl ApprovalOverlay {
             return;
         };
         if let Some(variant) = self.current_variant.as_ref() {
-            match (&variant, option.decision) {
-                (ApprovalVariant::Exec { id, command }, decision) => {
-                    self.handle_exec_decision(id, command, decision);
+            match (&variant, &option.decision) {
+                (ApprovalVariant::Exec { id, command }, ApprovalDecision::Review(decision)) => {
+                    self.handle_exec_decision(id, command, *decision);
                 }
-                (ApprovalVariant::ApplyPatch { id, .. }, decision) => {
-                    self.handle_patch_decision(id, decision);
+                (ApprovalVariant::ApplyPatch { id, .. }, ApprovalDecision::Review(decision)) => {
+                    self.handle_patch_decision(id, *decision);
                 }
+                (
+                    ApprovalVariant::Elicitation {
+                        server_name,
+                        request_id,
+                    },
+                    ApprovalDecision::Elicitation(decision),
+                ) => {
+                    self.handle_elicitation_decision(server_name, request_id, *decision);
+                }
+                _ => {}
             }
         }
 
@@ -177,6 +198,20 @@ impl ApprovalOverlay {
             id: id.to_string(),
             decision,
         }));
+    }
+
+    fn handle_elicitation_decision(
+        &self,
+        server_name: &str,
+        request_id: &RequestId,
+        decision: ElicitationDecision,
+    ) {
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::ResolveElicitation {
+                server_name: server_name.to_string(),
+                request_id: request_id.clone(),
+                decision,
+            }));
     }
 
     fn advance_queue(&mut self) {
@@ -243,6 +278,16 @@ impl BottomPaneView for ApprovalOverlay {
                 }
                 ApprovalVariant::ApplyPatch { id, .. } => {
                     self.handle_patch_decision(id, ReviewDecision::Abort);
+                }
+                ApprovalVariant::Elicitation {
+                    server_name,
+                    request_id,
+                } => {
+                    self.handle_elicitation_decision(
+                        server_name,
+                        request_id,
+                        ElicitationDecision::Cancel,
+                    );
                 }
             }
         }
@@ -336,6 +381,28 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     header: Box::new(ColumnRenderable::with(header)),
                 }
             }
+            ApprovalRequest::Elicitation {
+                server_name,
+                request_id,
+                message,
+            } => {
+                let mut header: Vec<Box<dyn Renderable>> = Vec::new();
+                header.push(Box::new(Line::from(vec![
+                    "Server: ".into(),
+                    server_name.clone().bold(),
+                ])));
+                header.push(Box::new(Line::from("")));
+                header.push(Box::new(
+                    Paragraph::new(Line::from(message.clone())).wrap(Wrap { trim: false }),
+                ));
+                Self {
+                    variant: ApprovalVariant::Elicitation {
+                        server_name,
+                        request_id,
+                    },
+                    header: Box::new(ColumnRenderable::with(header)),
+                }
+            }
         }
     }
 }
@@ -364,14 +431,29 @@ fn render_risk_lines(risk: &SandboxCommandAssessment) -> Vec<Line<'static>> {
 
 #[derive(Clone)]
 enum ApprovalVariant {
-    Exec { id: String, command: Vec<String> },
-    ApplyPatch { id: String },
+    Exec {
+        id: String,
+        command: Vec<String>,
+    },
+    ApplyPatch {
+        id: String,
+    },
+    Elicitation {
+        server_name: String,
+        request_id: RequestId,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum ApprovalDecision {
+    Review(ReviewDecision),
+    Elicitation(ElicitationDecision),
 }
 
 #[derive(Clone)]
 struct ApprovalOption {
     label: String,
-    decision: ReviewDecision,
+    decision: ApprovalDecision,
     display_shortcut: Option<KeyBinding>,
     additional_shortcuts: Vec<KeyBinding>,
 }
@@ -388,19 +470,19 @@ fn exec_options() -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
             label: "Yes, proceed".to_string(),
-            decision: ReviewDecision::Approved,
+            decision: ApprovalDecision::Review(ReviewDecision::Approved),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
         },
         ApprovalOption {
             label: "Yes, and don't ask again for this command".to_string(),
-            decision: ReviewDecision::ApprovedForSession,
+            decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
         },
         ApprovalOption {
             label: "No, and tell Codex what to do differently".to_string(),
-            decision: ReviewDecision::Abort,
+            decision: ApprovalDecision::Review(ReviewDecision::Abort),
             display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
         },
@@ -411,15 +493,38 @@ fn patch_options() -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
             label: "Yes, proceed".to_string(),
-            decision: ReviewDecision::Approved,
+            decision: ApprovalDecision::Review(ReviewDecision::Approved),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
         },
         ApprovalOption {
             label: "No, and tell Codex what to do differently".to_string(),
-            decision: ReviewDecision::Abort,
+            decision: ApprovalDecision::Review(ReviewDecision::Abort),
             display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
+        },
+    ]
+}
+
+fn elicitation_options() -> Vec<ApprovalOption> {
+    vec![
+        ApprovalOption {
+            label: "Yes, provide the requested info".to_string(),
+            decision: ApprovalDecision::Elicitation(ElicitationDecision::Accept),
+            display_shortcut: None,
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
+        },
+        ApprovalOption {
+            label: "No, but continue without it".to_string(),
+            decision: ApprovalDecision::Elicitation(ElicitationDecision::Decline),
+            display_shortcut: None,
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
+        },
+        ApprovalOption {
+            label: "Cancel this request".to_string(),
+            decision: ApprovalDecision::Elicitation(ElicitationDecision::Cancel),
+            display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('c'))],
         },
     ]
 }

@@ -62,6 +62,14 @@ pub struct ElicitationRequestEvent {
     // pub requested_schema: ElicitRequestParamsRequestedSchema,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum ElicitationDecision {
+    Accept,
+    Decline,
+    Cancel,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ApplyPatchApprovalRequestEvent {
     /// Responses API call id for the associated patch apply call, if available.

@@ -208,6 +208,9 @@ async fn run_codex_tool_session_inner(
                     EventMsg::Warning(_) => {
                         continue;
                     }
+                    EventMsg::ElicitationRequest(_) => {
+                        continue;
+                    }
                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                         call_id,
                         reason,
