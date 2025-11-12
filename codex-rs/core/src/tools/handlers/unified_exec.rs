@@ -1,9 +1,7 @@
 use std::path::PathBuf;
 
-use async_trait::async_trait;
-use serde::Deserialize;
-
 use crate::function_tool::FunctionCallError;
+use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecOutputStream;
@@ -20,6 +18,8 @@ use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecResponse;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::unified_exec::WriteStdinRequest;
+use async_trait::async_trait;
+use serde::Deserialize;
 
 pub struct UnifiedExecHandler;
 
@@ -72,6 +72,19 @@ impl ToolHandler for UnifiedExecHandler {
             payload,
             ToolPayload::Function { .. } | ToolPayload::UnifiedExec { .. }
         )
+    }
+
+    fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
+        let (ToolPayload::Function { arguments } | ToolPayload::UnifiedExec { arguments }) =
+            &invocation.payload
+        else {
+            return true;
+        };
+
+        let Ok(params) = serde_json::from_str::<ExecCommandArgs>(arguments) else {
+            return true;
+        };
+        !is_known_safe_command(&["bash".to_string(), "-lc".to_string(), params.cmd])
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
