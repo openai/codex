@@ -192,7 +192,6 @@ impl ModelClient {
         let config = RoutedApiClientConfig {
             http_client,
             provider: self.provider.clone(),
-            model: self.config.model.clone(),
             conversation_id: self.conversation_id,
             auth_provider,
             otel_event_manager: self.otel_event_manager.clone(),

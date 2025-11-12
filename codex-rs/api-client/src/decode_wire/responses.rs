@@ -25,6 +25,36 @@ struct StreamEvent {
     delta: Option<String>,
 }
 
+#[derive(Default, Deserialize)]
+struct WireUsage {
+    #[serde(default)]
+    input_tokens: i64,
+    #[serde(default)]
+    cached_input_tokens: Option<i64>,
+    #[serde(default)]
+    output_tokens: i64,
+    #[serde(default)]
+    reasoning_output_tokens: Option<i64>,
+    #[serde(default)]
+    total_tokens: i64,
+    #[serde(default)]
+    input_tokens_details: Option<WireInputTokensDetails>,
+    #[serde(default)]
+    output_tokens_details: Option<WireOutputTokensDetails>,
+}
+
+#[derive(Default, Deserialize)]
+struct WireInputTokensDetails {
+    #[serde(default)]
+    cached_tokens: Option<i64>,
+}
+
+#[derive(Default, Deserialize)]
+struct WireOutputTokensDetails {
+    #[serde(default)]
+    reasoning_tokens: Option<i64>,
+}
+
 pub struct WireResponsesSseDecoder;
 
 #[async_trait]
@@ -122,45 +152,29 @@ impl WireResponseDecoder for WireResponsesSseDecoder {
 }
 
 fn parse_wire_usage(resp: &Value) -> Option<WireTokenUsage> {
-    let usage = resp.get("usage").cloned()?;
-    let input_tokens = usage
-        .get("input_tokens")
-        .and_then(serde_json::Value::as_i64)
-        .unwrap_or(0);
+    let usage: WireUsage = serde_json::from_value(resp.get("usage")?.clone()).ok()?;
     let cached_input_tokens = usage
-        .get("cached_input_tokens")
-        .and_then(serde_json::Value::as_i64)
+        .cached_input_tokens
         .or_else(|| {
             usage
-                .get("input_tokens_details")
-                .and_then(|d| d.get("cached_tokens"))
-                .and_then(serde_json::Value::as_i64)
+                .input_tokens_details
+                .and_then(|details| details.cached_tokens)
         })
-        .unwrap_or(0);
-    let output_tokens = usage
-        .get("output_tokens")
-        .and_then(serde_json::Value::as_i64)
         .unwrap_or(0);
     let reasoning_output_tokens = usage
-        .get("reasoning_output_tokens")
-        .and_then(serde_json::Value::as_i64)
+        .reasoning_output_tokens
         .or_else(|| {
             usage
-                .get("output_tokens_details")
-                .and_then(|d| d.get("reasoning_tokens"))
-                .and_then(serde_json::Value::as_i64)
+                .output_tokens_details
+                .and_then(|details| details.reasoning_tokens)
         })
-        .unwrap_or(0);
-    let total_tokens = usage
-        .get("total_tokens")
-        .and_then(serde_json::Value::as_i64)
         .unwrap_or(0);
 
     Some(WireTokenUsage {
-        input_tokens,
+        input_tokens: usage.input_tokens,
         cached_input_tokens,
-        output_tokens,
+        output_tokens: usage.output_tokens,
         reasoning_output_tokens,
-        total_tokens,
+        total_tokens: usage.total_tokens,
     })
 }

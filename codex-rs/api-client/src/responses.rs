@@ -20,14 +20,12 @@ use codex_provider_config::ModelProviderInfo;
 ///
 /// - `http_client`: Reqwest client used for HTTP requests.
 /// - `provider`: Provider configuration (base URL, headers, retries, etc.).
-/// - `model`: Model identifier to use.
 /// - `conversation_id`: Used to set conversation/session headers and cache keys.
 /// - `auth_provider`: Optional provider of auth context (e.g., ChatGPT login token).
 /// - `otel_event_manager`: Telemetry event manager for request/stream instrumentation.
 pub struct ResponsesApiClientConfig {
     pub http_client: reqwest::Client,
     pub provider: ModelProviderInfo,
-    pub model: String,
     pub conversation_id: ConversationId,
     pub auth_provider: Option<Arc<dyn AuthProvider>>,
     pub otel_event_manager: OtelEventManager,
@@ -46,11 +44,7 @@ impl ResponsesApiClient {
 }
 
 impl ResponsesApiClient {
-    pub async fn stream_payload_wire(
-        &self,
-        payload_json: &Value,
-        _session_source: Option<&codex_protocol::protocol::SessionSource>,
-    ) -> Result<WireResponseStream> {
+    pub async fn stream_payload_wire(&self, payload_json: &Value) -> Result<WireResponseStream> {
         if self.config.provider.wire_api != codex_provider_config::WireApi::Responses {
             return Err(Error::UnsupportedOperation(
                 "ResponsesApiClient requires a Responses provider".to_string(),

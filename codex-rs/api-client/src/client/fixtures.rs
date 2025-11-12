@@ -1,4 +1,3 @@
-use std::io::BufRead;
 use std::path::Path;
 
 use codex_otel::otel_event_manager::OtelEventManager;
@@ -17,18 +16,20 @@ pub async fn stream_from_fixture_wire(
 ) -> Result<crate::stream::WireResponseStream> {
     let (tx_event, rx_event) = mpsc::channel::<Result<crate::stream::WireEvent>>(1600);
     let display_path = path.as_ref().display().to_string();
-    let file = std::fs::File::open(path.as_ref())
-        .map_err(|err| Error::Other(format!("failed to open fixture {display_path}: {err}")))?;
-    let lines = std::io::BufReader::new(file).lines();
-
-    let mut content = String::new();
-    for line in lines {
-        let line = line
-            .map_err(|err| Error::Other(format!("failed to read fixture {display_path}: {err}")))?;
-        content.push_str(&line);
-        content.push('\n');
-        content.push('\n');
-    }
+    let content = std::fs::read_to_string(path.as_ref()).map_err(|err| {
+        Error::Other(format!(
+            "failed to read fixture text from {display_path}: {err}"
+        ))
+    })?;
+    let content = content
+        .lines()
+        .map(|line| {
+            let mut line_with_spacing = line.to_string();
+            line_with_spacing.push('\n');
+            line_with_spacing.push('\n');
+            line_with_spacing
+        })
+        .collect::<String>();
 
     let rdr = std::io::Cursor::new(content);
     let stream = ReaderStream::new(rdr).map_err(|err| Error::Other(err.to_string()));

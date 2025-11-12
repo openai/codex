@@ -19,7 +19,6 @@ use codex_provider_config::ModelProviderInfo;
 pub struct RoutedApiClientConfig {
     pub http_client: reqwest::Client,
     pub provider: ModelProviderInfo,
-    pub model: String,
     pub conversation_id: ConversationId,
     pub auth_provider: Option<Arc<dyn AuthProvider>>,
     pub otel_event_manager: OtelEventManager,
@@ -46,7 +45,6 @@ impl RoutedApiClient {
                 let cfg = ResponsesApiClientConfig {
                     http_client: self.config.http_client.clone(),
                     provider: self.config.provider.clone(),
-                    model: self.config.model.clone(),
                     conversation_id: self.config.conversation_id,
                     auth_provider: self.config.auth_provider.clone(),
                     otel_event_manager: self.config.otel_event_manager.clone(),
@@ -61,18 +59,17 @@ impl RoutedApiClient {
                     .await;
                 }
                 let client = ResponsesApiClient::new(cfg)?;
-                client.stream_payload_wire(payload_json, None).await
+                client.stream_payload_wire(payload_json).await
             }
             WireApi::Chat => {
                 let cfg = ChatCompletionsApiClientConfig {
                     http_client: self.config.http_client.clone(),
                     provider: self.config.provider.clone(),
-                    model: self.config.model.clone(),
                     otel_event_manager: self.config.otel_event_manager.clone(),
                     extra_headers: self.config.extra_headers.clone(),
                 };
                 let client = ChatCompletionsApiClient::new(cfg)?;
-                client.stream_payload_wire(payload_json, None).await
+                client.stream_payload_wire(payload_json).await
             }
         }
     }

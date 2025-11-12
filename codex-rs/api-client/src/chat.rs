@@ -10,13 +10,10 @@ use futures::TryStreamExt;
 ///
 /// - `http_client`: Reqwest client used for HTTP requests.
 /// - `provider`: Provider configuration (base URL, headers, retries, etc.).
-/// - `model`: Model identifier to use.
 /// - `otel_event_manager`: Telemetry event manager for request/stream instrumentation.
-/// - `session_source`: Session metadata, used to set subagent headers when applicable.
 pub struct ChatCompletionsApiClientConfig {
     pub http_client: reqwest::Client,
     pub provider: ModelProviderInfo,
-    pub model: String,
     pub otel_event_manager: OtelEventManager,
     pub extra_headers: Vec<(String, String)>,
 }
@@ -34,7 +31,6 @@ impl ChatCompletionsApiClient {
     pub async fn stream_payload_wire(
         &self,
         payload_json: &serde_json::Value,
-        _session_source: Option<&codex_protocol::protocol::SessionSource>,
     ) -> Result<WireResponseStream> {
         if self.config.provider.wire_api != codex_provider_config::WireApi::Chat {
             return Err(crate::error::Error::UnsupportedOperation(
@@ -42,7 +38,6 @@ impl ChatCompletionsApiClient {
             ));
         }
 
-        let auth = crate::client::http::resolve_auth(&None).await;
         let extra_headers: Vec<(&str, String)> = self
             .config
             .extra_headers
@@ -52,7 +47,7 @@ impl ChatCompletionsApiClient {
         let mut req_builder = crate::client::http::build_request(
             &self.config.http_client,
             &self.config.provider,
-            &auth,
+            &None,
             &extra_headers,
         )
         .await?;

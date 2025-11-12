@@ -17,6 +17,10 @@ pub fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapsho
         "x-codex-secondary-reset-at",
     );
 
+    if primary.is_none() && secondary.is_none() {
+        return None;
+    }
+
     Some(RateLimitSnapshot { primary, secondary })
 }
 
