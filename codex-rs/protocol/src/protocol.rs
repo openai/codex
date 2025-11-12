@@ -923,7 +923,9 @@ pub struct AgentReasoningRawContentDeltaEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct AgentReasoningSectionBreakEvent {}
+pub struct AgentReasoningSectionBreakEvent {
+    pub item_id: String,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct AgentReasoningDeltaEvent {

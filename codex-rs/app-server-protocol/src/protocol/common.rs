@@ -509,6 +509,7 @@ server_notification_definitions! {
     AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
     ReasoningDelta => "item/reasoning/delta" (v2::ReasoningDeltaNotification),
+    ReasoningSummaryPartAdded => "item/reasoning/summaryPartAdded" (v2::ReasoningSummaryPartAddedNotification),
 
     #[serde(rename = "account/login/completed")]
     #[ts(rename = "account/login/completed")]

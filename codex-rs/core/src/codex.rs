@@ -2216,9 +2216,15 @@ async fn try_run_turn(
                 }
             }
             ResponseEvent::ReasoningSummaryPartAdded => {
-                let event =
-                    EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {});
-                sess.send_event(&turn_context, event).await;
+                if let Some(active) = active_item.as_ref() {
+                    let event =
+                        EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
+                            item_id: active.id(),
+                        });
+                    sess.send_event(&turn_context, event).await;
+                } else {
+                    error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
+                }
             }
             ResponseEvent::ReasoningContentDelta(delta) => {
                 if let Some(active) = active_item.as_ref() {

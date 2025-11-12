@@ -64,6 +64,7 @@ use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::ReasoningDeltaNotification;
+use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::RequestId;
@@ -2592,6 +2593,16 @@ async fn apply_bespoke_event_handling(
             };
             outgoing
                 .send_server_notification(ServerNotification::ReasoningDelta(notification))
+                .await;
+        }
+        EventMsg::AgentReasoningSectionBreak(event) => {
+            let notification = ReasoningSummaryPartAddedNotification {
+                item_id: event.item_id,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ReasoningSummaryPartAdded(
+                    notification,
+                ))
                 .await;
         }
         EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {

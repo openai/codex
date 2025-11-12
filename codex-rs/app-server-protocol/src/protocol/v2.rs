@@ -699,6 +699,13 @@ pub struct ReasoningDeltaNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ReasoningSummaryPartAddedNotification {
+    pub item_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct CommandExecutionOutputDeltaNotification {
     pub item_id: String,
     pub delta: String,
