@@ -113,7 +113,8 @@ impl PrefixRule {
             if self.matches(example).is_some() {
                 return Err(Error::ExampleDidMatch {
                     rule: format!("{self:?}"),
-                    example: join_command(example),
+                    example: try_join(example.iter().map(String::as_str))
+                        .unwrap_or_else(|_| "unable to render example".to_string()),
                 });
             }
         }
@@ -151,9 +152,4 @@ impl Rule {
             Self::Prefix(rule) => rule.validate_not_matches(not_matches),
         }
     }
-}
-
-fn join_command(command: &[String]) -> String {
-    try_join(command.iter().map(String::as_str))
-        .unwrap_or_else(|_| "unable to render example".to_string())
 }
