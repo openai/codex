@@ -11,6 +11,7 @@ pub struct Policy {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Evaluation {
     NoMatch,
     Match {

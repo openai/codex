@@ -22,11 +22,11 @@ prefix_rule(
 - Match:
 ```json
 {
-  "Match": {
+  "match": {
     "decision": "allow|prompt|forbidden",
     "matched_rules": [
       {
-        "PrefixRuleMatch": {
+        "prefixRuleMatch": {
           "matched_prefix": ["<token>", "..."],
           "decision": "allow|prompt|forbidden"
         }
@@ -38,7 +38,7 @@ prefix_rule(
 
 - No match:
 ```json
-"NoMatch"
+"noMatch"
 ```
 
 - `matched_rules` lists every rule whose prefix matched the command; `matched_prefix` is the exact prefix that matched.
