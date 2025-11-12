@@ -294,10 +294,9 @@ impl ModelClient {
         let auth = auth_manager.as_ref().and_then(|m| m.auth());
 
         trace!(
-            "POST to {}: {:?}",
+            "POST to {}: {}",
             self.provider.get_full_url(&auth),
-            serde_json::to_string(payload_json)
-                .unwrap_or("<unable to serialize payload>".to_string())
+            payload_json.to_string()
         );
 
         let mut req_builder = self
