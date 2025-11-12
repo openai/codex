@@ -84,6 +84,11 @@ mod user_notification;
 mod user_shell_command;
 pub mod util;
 
+/// Shared jittered exponential backoff used across Codex retries.
+pub fn default_retry_backoff(attempt: u64) -> std::time::Duration {
+    util::backoff(attempt)
+}
+
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use command_safety::is_safe_command;
 pub use safety::get_platform_sandbox;

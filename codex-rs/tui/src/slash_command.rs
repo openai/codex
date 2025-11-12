@@ -15,6 +15,10 @@ pub enum SlashCommand {
     Model,
     Approvals,
     Review,
+    #[strum(serialize = "secreview")]
+    SecReview,
+    /// Validate high-risk findings from the last security review
+    Validate,
     New,
     Init,
     Compact,
@@ -28,6 +32,7 @@ pub enum SlashCommand {
     Exit,
     Feedback,
     Rollout,
+    #[cfg(debug_assertions)]
     TestApproval,
 }
 
@@ -40,7 +45,9 @@ impl SlashCommand {
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
-            SlashCommand::Undo => "ask Codex to undo a turn",
+            SlashCommand::SecReview => "run an AppSec security review over the repo",
+            SlashCommand::Validate => "validate high-risk findings (web + api)",
+            SlashCommand::Undo => "restore the workspace to the last Codex snapshot",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
@@ -50,6 +57,7 @@ impl SlashCommand {
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
+            #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "test approval request",
         }
     }
@@ -70,6 +78,8 @@ impl SlashCommand {
             | SlashCommand::Model
             | SlashCommand::Approvals
             | SlashCommand::Review
+            | SlashCommand::SecReview
+            | SlashCommand::Validate
             | SlashCommand::Logout => false,
             SlashCommand::Diff
             | SlashCommand::Mention
@@ -77,8 +87,10 @@ impl SlashCommand {
             | SlashCommand::Mcp
             | SlashCommand::Feedback
             | SlashCommand::Quit
-            | SlashCommand::Exit => true,
-            SlashCommand::Rollout => true,
+            | SlashCommand::Exit
+            | SlashCommand::Rollout => true,
+
+            #[cfg(debug_assertions)]
             SlashCommand::TestApproval => true,
         }
     }
@@ -93,8 +105,20 @@ impl SlashCommand {
 
 /// Return all built-in commands in a Vec paired with their command string.
 pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
+    let show_beta_features = beta_features_enabled();
+
     SlashCommand::iter()
-        .filter(|command| command.is_visible())
+        .filter(|cmd| {
+            if *cmd == SlashCommand::Undo {
+                show_beta_features
+            } else {
+                cmd.is_visible()
+            }
+        })
         .map(|c| (c.command(), c))
         .collect()
+}
+
+fn beta_features_enabled() -> bool {
+    std::env::var_os("BETA_FEATURE").is_some()
 }

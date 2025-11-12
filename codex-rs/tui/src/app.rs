@@ -559,6 +559,62 @@ impl App {
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
             }
+            AppEvent::OpenSecurityReviewPathPrompt(mode) => {
+                self.chat_widget.show_security_review_path_prompt(mode);
+            }
+            AppEvent::StartSecurityReview {
+                mode,
+                include_paths,
+                scope_prompt,
+                force_new,
+            } => {
+                self.chat_widget.start_security_review(
+                    mode,
+                    include_paths,
+                    scope_prompt,
+                    force_new,
+                );
+            }
+            AppEvent::ResumeSecurityReview {
+                output_root,
+                metadata,
+            } => {
+                self.chat_widget
+                    .resume_security_review(output_root, metadata);
+            }
+            AppEvent::SecurityReviewAutoScopeConfirm {
+                mode,
+                prompt,
+                selections,
+                responder,
+            } => {
+                self.chat_widget
+                    .show_security_review_scope_confirmation(mode, prompt, selections, responder);
+            }
+            AppEvent::SecurityReviewScopeResolved { paths } => {
+                self.chat_widget.on_security_review_scope_resolved(paths);
+            }
+            AppEvent::OpenRegistrationPrompt { url, responder } => {
+                self.chat_widget.show_registration_prompt(url, responder);
+            }
+            AppEvent::SecurityReviewCommandStatus {
+                id,
+                summary,
+                state,
+                preview,
+            } => {
+                self.chat_widget
+                    .on_security_review_command_status(id, summary, state, preview);
+            }
+            AppEvent::SecurityReviewLog(message) => {
+                self.chat_widget.on_security_review_log(message);
+            }
+            AppEvent::SecurityReviewComplete { result } => {
+                self.chat_widget.on_security_review_complete(result);
+            }
+            AppEvent::SecurityReviewFailed { error } => {
+                self.chat_widget.on_security_review_failed(error);
+            }
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
                     let _ = tui.enter_alt_screen();

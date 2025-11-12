@@ -278,12 +278,13 @@ fn make_chatwidget_manual() -> (
     let app_event_tx = AppEventSender::new(tx_raw);
     let (op_tx, op_rx) = unbounded_channel::<Op>();
     let cfg = test_config();
+    let placeholder = "Ask Codex to do anything".to_string();
     let bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
         frame_requester: FrameRequester::test_dummy(),
         has_input_focus: true,
         enhanced_keys_supported: false,
-        placeholder_text: "Ask Codex to do anything".to_string(),
+        placeholder_text: placeholder.clone(),
         disable_paste_burst: false,
     });
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
@@ -307,15 +308,23 @@ fn make_chatwidget_manual() -> (
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
         current_status_header: String::from("Working"),
+        status_progress: None,
+        status_thinking_lines: Vec::new(),
+        status_tool_calls: Vec::new(),
         retry_status_header: None,
         conversation_id: None,
         frame_requester: FrameRequester::test_dummy(),
+        default_placeholder: placeholder,
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
         suppress_session_configured_redraw: false,
         pending_notification: None,
         is_review_mode: false,
         needs_final_message_separator: false,
+        security_review_task: None,
+        security_review_context: None,
+        security_review_artifacts: None,
+        security_review_follow_up: None,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,

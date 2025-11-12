@@ -3,5 +3,5 @@ source: tui/src/chatwidget/tests.rs
 expression: terminal.backend()
 ---
 "                                        "
-"                                        "
-"                                        "
+"• Thinking - **Thinking** (0s • esc to i"
+"› Ask Codex to do anything              "

@@ -35,9 +35,12 @@ mod paste_burst;
 pub mod popup_consts;
 mod queued_user_messages;
 mod scroll_state;
+mod security_review_scope_confirm_view;
 mod selection_popup_common;
 mod textarea;
 pub(crate) use feedback_view::FeedbackNoteView;
+
+pub(crate) use security_review_scope_confirm_view::SecurityReviewScopeConfirmView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
@@ -50,6 +53,7 @@ pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
+pub(crate) use crate::status_indicator_widget::StatusSnapshot;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
 
@@ -74,6 +78,8 @@ pub(crate) struct BottomPane {
     status: Option<StatusIndicatorWidget>,
     /// Queued user messages to show above the composer while a turn is running.
     queued_user_messages: QueuedUserMessages,
+    /// Recent log messages shown beneath the status header.
+    status_logs: Vec<String>,
     context_window_percent: Option<i64>,
 }
 
@@ -105,6 +111,7 @@ impl BottomPane {
             ctrl_c_quit_hint: false,
             status: None,
             queued_user_messages: QueuedUserMessages::new(),
+            status_logs: Vec::new(),
             esc_backtrack_hint: false,
             context_window_percent: None,
         }
@@ -216,6 +223,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_placeholder_text(&mut self, text: String) {
+        self.composer.set_placeholder_text(text);
+        self.request_redraw();
+    }
+
     pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
         self.composer.clear_for_ctrl_c();
         self.request_redraw();
@@ -233,6 +245,22 @@ impl BottomPane {
         if let Some(status) = self.status.as_mut() {
             status.update_header(header);
             self.request_redraw();
+        }
+    }
+
+    pub(crate) fn update_status_snapshot(&mut self, snapshot: StatusSnapshot) {
+        self.status_logs = snapshot.logs.clone();
+        if let Some(status) = self.status.as_mut() {
+            status.update_snapshot(snapshot);
+        } else {
+            self.update_status_header(snapshot.header);
+        }
+    }
+
+    pub(crate) fn update_status_logs(&mut self, logs: Vec<String>) {
+        self.status_logs = logs.clone();
+        if let Some(status) = self.status.as_mut() {
+            status.set_logs(logs);
         }
     }
 
@@ -284,18 +312,21 @@ impl BottomPane {
 
         if running {
             if self.status.is_none() {
+                self.status_logs.clear();
                 self.status = Some(StatusIndicatorWidget::new(
                     self.app_event_tx.clone(),
                     self.frame_requester.clone(),
                 ));
             }
             if let Some(status) = self.status.as_mut() {
+                status.set_logs(self.status_logs.clone());
                 status.set_interrupt_hint_visible(true);
             }
             self.request_redraw();
         } else {
             // Hide the status indicator when a task completes, but keep other modal views.
             self.hide_status_indicator();
+            self.status_logs.clear();
         }
     }
 

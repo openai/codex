@@ -2,16 +2,34 @@ use std::path::PathBuf;
 
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::model_presets::ModelPreset;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
+use codex_core::protocol::SandboxPolicy;
+use codex_core::protocol_config_types::ReasoningEffort;
 use codex_file_search::FileMatch;
+use tokio::sync::oneshot;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::history_cell::HistoryCell;
+use crate::security_review::SecurityReviewFailure;
+use crate::security_review::SecurityReviewMetadata;
+use crate::security_review::SecurityReviewMode;
+use crate::security_review::SecurityReviewResult;
 
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol_config_types::ReasoningEffort;
+#[derive(Clone, Debug)]
+pub(crate) struct SecurityReviewAutoScopeSelection {
+    pub display_path: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SecurityReviewCommandState {
+    Running,
+    Matches,
+    NoMatches,
+    Error,
+}
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
@@ -138,7 +156,6 @@ pub(crate) enum AppEvent {
 
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
-
     /// Open the feedback note entry overlay after the user selects a category.
     OpenFeedbackNote {
         category: FeedbackCategory,
@@ -148,6 +165,64 @@ pub(crate) enum AppEvent {
     /// Open the upload consent popup for feedback after selecting a category.
     OpenFeedbackConsent {
         category: FeedbackCategory,
+    },
+
+    /// Open the scoped path input for security reviews.
+    OpenSecurityReviewPathPrompt(SecurityReviewMode),
+
+    /// Begin running a security review with the given mode and optional scoped paths.
+    StartSecurityReview {
+        mode: SecurityReviewMode,
+        include_paths: Vec<String>,
+        scope_prompt: Option<String>,
+        force_new: bool,
+    },
+
+    /// Resume a previously generated security review from disk.
+    ResumeSecurityReview {
+        output_root: PathBuf,
+        metadata: SecurityReviewMetadata,
+    },
+
+    /// Prompt the user to confirm auto-detected scope selections.
+    SecurityReviewAutoScopeConfirm {
+        mode: SecurityReviewMode,
+        prompt: String,
+        selections: Vec<SecurityReviewAutoScopeSelection>,
+        responder: oneshot::Sender<bool>,
+    },
+
+    /// Prompt the user to register at least two accounts and paste credentials.
+    /// The responder receives `Some(raw_input)` when the user submits text, or `None` if dismissed.
+    OpenRegistrationPrompt {
+        url: Option<String>,
+        responder: oneshot::Sender<Option<String>>,
+    },
+
+    /// Notify that the security review scope has been resolved to specific paths.
+    SecurityReviewScopeResolved {
+        paths: Vec<String>,
+    },
+
+    /// Update the command status display for running security review shell commands.
+    SecurityReviewCommandStatus {
+        id: u64,
+        summary: String,
+        state: SecurityReviewCommandState,
+        preview: Vec<String>,
+    },
+
+    /// Append a progress log emitted during the security review.
+    SecurityReviewLog(String),
+
+    /// Security review completed successfully.
+    SecurityReviewComplete {
+        result: SecurityReviewResult,
+    },
+
+    /// Security review failed prior to completion.
+    SecurityReviewFailed {
+        error: SecurityReviewFailure,
     },
 }
 
