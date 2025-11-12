@@ -385,7 +385,8 @@ fn format_exec_output_reports_omitted_lines_and_keeps_head_and_tail() {
     // With marker overhead (3 lines), available content lines = 256 - 3 = 253
     // Head: 126, Tail: 127, Omitted: 356 - 253 = 103
     const OMISSION_MARKER_LINES: usize = 3;
-    let available_content_lines = truncate::MODEL_FORMAT_MAX_LINES.saturating_sub(OMISSION_MARKER_LINES);
+    let available_content_lines =
+        truncate::MODEL_FORMAT_MAX_LINES.saturating_sub(OMISSION_MARKER_LINES);
     let omitted = total_lines - available_content_lines;
     let expected_marker = format!("[... omitted {omitted} of {total_lines} lines ...]");
 
@@ -418,7 +419,8 @@ fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
     // With marker overhead (3 lines), available content lines = 256 - 3 = 253
     // Omitted: 298 - 253 = 45
     const OMISSION_MARKER_LINES: usize = 3;
-    let available_content_lines = truncate::MODEL_FORMAT_MAX_LINES.saturating_sub(OMISSION_MARKER_LINES);
+    let available_content_lines =
+        truncate::MODEL_FORMAT_MAX_LINES.saturating_sub(OMISSION_MARKER_LINES);
     let omitted = total_lines - available_content_lines;
     let expected_marker = format!("[... omitted {omitted} of {total_lines} lines ...]");
 

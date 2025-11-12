@@ -236,10 +236,12 @@ async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<(
         .expect("command message recorded in request");
     let command_message = command_message.replace("\r\n", "\n");
 
-    let head = (1..=128).map(|i| format!("{i}\n")).collect::<String>();
-    let tail = (273..=400).map(|i| format!("{i}\n")).collect::<String>();
+    // With marker overhead (3 lines), available content lines = 256 - 3 = 253
+    // Head: 126, Tail: 127, Omitted: 400 - 253 = 147
+    let head = (1..=126).map(|i| format!("{i}\n")).collect::<String>();
+    let tail = (274..=400).map(|i| format!("{i}\n")).collect::<String>();
     let truncated_body =
-        format!("Total output lines: 400\n\n{head}\n[... omitted 144 of 400 lines ...]\n\n{tail}");
+        format!("Total output lines: 400\n\n{head}\n[... omitted 147 of 400 lines ...]\n\n{tail}");
     let escaped_command = escape(&command);
     let escaped_truncated_body = escape(&truncated_body);
     let expected_pattern = format!(
