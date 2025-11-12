@@ -43,7 +43,7 @@ Custom prompts turn your repeatable instructions into reusable slash commands, s
 
 ### Examples
 
-#### Example 1: Basic named arguments
+### Example 1: Basic named arguments
 
 **File:** `~/.codex/prompts/ticket.md`
 
@@ -69,7 +69,7 @@ Please write a concise commit message for ticket JIRA-1234: Fix login bug
 
 **Note:** Both `TICKET_ID` and `TICKET_TITLE` are required. If either is missing, Codex will show a validation error. Values with spaces must be double-quoted.
 
-#### Example 2: Mixed positional and named arguments
+### Example 2: Mixed positional and named arguments
 
 **File:** `~/.codex/prompts/review.md`
 
