@@ -412,6 +412,10 @@ impl UnifiedExecSessionManager {
     }
 
     fn format_interaction_command(command: &str, input: &str) -> String {
+        if input.is_empty() {
+            return format!("Waited for `{command}`");
+        }
+
         let preview = Self::summarize_interaction_input(input);
         format!("Interacted with `{command}`, sent `{preview}`")
     }

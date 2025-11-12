@@ -760,10 +760,7 @@ async fn unified_exec_emits_begin_event_for_write_stdin_requests() -> Result<()>
         .iter()
         .find(|ev| ev.call_id == poll_call_id)
         .expect("missing write_stdin begin");
-    assert_eq!(
-        poll_event.command[0],
-        "Interacted with `/bin/sh -c echo ready`, sent ``"
-    );
+    assert_eq!(poll_event.command[0], "Waited for `/bin/sh -c echo ready`");
     assert_eq!(poll_event.source, ExecCommandSource::UnifiedExecInteraction);
 
     Ok(())
