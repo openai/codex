@@ -574,7 +574,7 @@ jobs:
         with:
           version: ${{ needs.release.outputs.version }}
           windows_x64_sha256: ${{ needs.release.outputs.windows_x64_sha256 }}
-      windows_arm64_sha256: ${{ needs.release.outputs.windows_arm64_sha256 }}
+          windows_arm64_sha256: ${{ needs.release.outputs.windows_arm64_sha256 }}
 
   hash-manual:
     if: ${{ github.event_name == 'workflow_dispatch' }}
