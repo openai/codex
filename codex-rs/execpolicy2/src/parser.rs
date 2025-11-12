@@ -133,7 +133,7 @@ fn parse_example<'v>(value: Value<'v>) -> Result<Vec<String>> {
     }
 
     if let Some(list) = ListRef::from_value(value) {
-        return parse_list_example(&list);
+        return parse_list_example(list);
     }
 
     Err(Error::InvalidExample(format!(
