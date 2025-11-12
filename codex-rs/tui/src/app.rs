@@ -18,6 +18,7 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
+use codex_common::model_presets::builtin_model_presets;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
@@ -59,8 +60,12 @@ async fn handle_model_migration_prompt_if_needed(
     app_event_tx: &AppEventSender,
 ) -> Option<AppExitInfo> {
     let target_model = model_migration_target(&config.model);
-    let deprecated_models = ["gpt-5", "gpt-5-codex", "gpt-5-codex-mini"];
-    if !deprecated_models.contains(&config.model.as_str())
+    let deprecated_models = builtin_model_presets(None)
+        .iter()
+        .filter(|preset| preset.is_deprecated)
+        .map(|preset| preset.model)
+        .collect::<std::collections::HashSet<_>>();
+    if deprecated_models.contains(&config.model.as_str())
         || target_model == config.model
         || config.notices.hide_gpt5_1_migration_prompt.unwrap_or(false)
     {
