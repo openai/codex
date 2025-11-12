@@ -100,19 +100,13 @@ async fn process_sse_emits_failed_event_on_parse_error() {
 
     mount_sse_once(&server, "data: not-json\n\n".to_string()).await;
 
-<<<<<<< Updated upstream
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
         .unwrap();
-=======
-    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
->>>>>>> Stashed changes
 
     codex
         .submit(Op::UserInput {
@@ -145,19 +139,13 @@ async fn process_sse_records_failed_event_when_stream_closes_without_completed()
 
     mount_sse_once(&server, sse(vec![ev_assistant_message("id", "hi")])).await;
 
-<<<<<<< Updated upstream
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
         .unwrap();
-=======
-    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
->>>>>>> Stashed changes
 
     codex
         .submit(Op::UserInput {
@@ -210,19 +198,13 @@ async fn process_sse_failed_event_records_response_error_message() {
     )
     .await;
 
-<<<<<<< Updated upstream
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
         .unwrap();
-=======
-    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
->>>>>>> Stashed changes
 
     codex
         .submit(Op::UserInput {
@@ -264,18 +246,6 @@ async fn process_sse_failed_event_logs_parse_error() {
         })]),
     )
     .await;
-
-<<<<<<< Updated upstream
-    let TestCodex { codex, .. } = test_codex()
-        .with_config(move |config| {
-            config.features.disable(Feature::GhostCommit);
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
-        })
-        .build(&server)
-        .await
-        .unwrap();
-=======
     mount_sse_once(
         &server,
         sse(vec![
@@ -285,8 +255,13 @@ async fn process_sse_failed_event_logs_parse_error() {
     )
     .await;
 
-    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
->>>>>>> Stashed changes
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(move |config| {
+            config.features.disable(Feature::GhostCommit);
+        })
+        .build(&server)
+        .await
+        .unwrap();
 
     codex
         .submit(Op::UserInput {
@@ -324,19 +299,13 @@ async fn process_sse_failed_event_logs_missing_error() {
     )
     .await;
 
-<<<<<<< Updated upstream
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
         .unwrap();
-=======
-    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
->>>>>>> Stashed changes
 
     codex
         .submit(Op::UserInput {
@@ -374,17 +343,6 @@ async fn process_sse_failed_event_logs_response_completed_parse_error() {
     )
     .await;
 
-<<<<<<< Updated upstream
-    let TestCodex { codex, .. } = test_codex()
-        .with_config(move |config| {
-            config.features.disable(Feature::GhostCommit);
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
-        })
-        .build(&server)
-        .await
-        .unwrap();
-=======
     mount_sse_once(
         &server,
         sse(vec![
@@ -394,8 +352,13 @@ async fn process_sse_failed_event_logs_response_completed_parse_error() {
     )
     .await;
 
-    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
->>>>>>> Stashed changes
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(move |config| {
+            config.features.disable(Feature::GhostCommit);
+        })
+        .build(&server)
+        .await
+        .unwrap();
 
     codex
         .submit(Op::UserInput {
@@ -501,19 +464,13 @@ async fn handle_response_item_records_tool_result_for_custom_tool_call() {
     )
     .await;
 
-<<<<<<< Updated upstream
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
         .unwrap();
-=======
-    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
->>>>>>> Stashed changes
 
     codex
         .submit(Op::UserInput {
@@ -565,17 +522,6 @@ async fn handle_response_item_records_tool_result_for_function_call() {
     )
     .await;
 
-<<<<<<< Updated upstream
-    let TestCodex { codex, .. } = test_codex()
-        .with_config(move |config| {
-            config.features.disable(Feature::GhostCommit);
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
-        })
-        .build(&server)
-        .await
-        .unwrap();
-=======
     mount_sse_once(
         &server,
         sse(vec![
@@ -585,8 +531,13 @@ async fn handle_response_item_records_tool_result_for_function_call() {
     )
     .await;
 
-    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
->>>>>>> Stashed changes
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(move |config| {
+            config.features.disable(Feature::GhostCommit);
+        })
+        .build(&server)
+        .await
+        .unwrap();
 
     codex
         .submit(Op::UserInput {
@@ -648,17 +599,6 @@ async fn handle_response_item_records_tool_result_for_local_shell_missing_ids() 
     )
     .await;
 
-<<<<<<< Updated upstream
-    let TestCodex { codex, .. } = test_codex()
-        .with_config(move |config| {
-            config.features.disable(Feature::GhostCommit);
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
-        })
-        .build(&server)
-        .await
-        .unwrap();
-=======
     mount_sse_once(
         &server,
         sse(vec![
@@ -668,8 +608,13 @@ async fn handle_response_item_records_tool_result_for_local_shell_missing_ids() 
     )
     .await;
 
-    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
->>>>>>> Stashed changes
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(move |config| {
+            config.features.disable(Feature::GhostCommit);
+        })
+        .build(&server)
+        .await
+        .unwrap();
 
     codex
         .submit(Op::UserInput {
@@ -715,17 +660,6 @@ async fn handle_response_item_records_tool_result_for_local_shell_call() {
     )
     .await;
 
-<<<<<<< Updated upstream
-    let TestCodex { codex, .. } = test_codex()
-        .with_config(move |config| {
-            config.features.disable(Feature::GhostCommit);
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
-        })
-        .build(&server)
-        .await
-        .unwrap();
-=======
     mount_sse_once(
         &server,
         sse(vec![
@@ -735,8 +669,13 @@ async fn handle_response_item_records_tool_result_for_local_shell_call() {
     )
     .await;
 
-    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
->>>>>>> Stashed changes
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(move |config| {
+            config.features.disable(Feature::GhostCommit);
+        })
+        .build(&server)
+        .await
+        .unwrap();
 
     codex
         .submit(Op::UserInput {
