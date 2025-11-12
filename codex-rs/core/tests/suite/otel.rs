@@ -9,7 +9,6 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
-use core_test_support::responses::mount_sse;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -443,7 +442,7 @@ async fn process_sse_emits_completed_telemetry() {
 async fn handle_response_item_records_tool_result_for_custom_tool_call() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_custom_tool_call(
@@ -513,7 +512,7 @@ async fn handle_response_item_records_tool_result_for_custom_tool_call() {
 async fn handle_response_item_records_tool_result_for_function_call() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_function_call("function-call", "nonexistent", "{\"value\":1}"),
@@ -580,7 +579,7 @@ async fn handle_response_item_records_tool_result_for_function_call() {
 async fn handle_response_item_records_tool_result_for_local_shell_missing_ids() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             serde_json::json!({
@@ -651,7 +650,7 @@ async fn handle_response_item_records_tool_result_for_local_shell_missing_ids() 
 async fn handle_response_item_records_tool_result_for_local_shell_call() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_local_shell_call("shell-call", "completed", vec!["/bin/echo", "shell"]),
@@ -803,7 +802,7 @@ async fn handle_container_exec_autoapprove_from_config_records_tool_decision() {
 #[traced_test]
 async fn handle_container_exec_user_approved_records_tool_decision() {
     let server = start_mock_server().await;
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_local_shell_call("user_approved_call", "completed", vec!["/bin/date"]),
@@ -862,7 +861,7 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
 async fn handle_container_exec_user_approved_for_session_records_tool_decision() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_local_shell_call("user_approved_session_call", "completed", vec!["/bin/date"]),
@@ -920,7 +919,7 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
 async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_local_shell_call("sandbox_retry_call", "completed", vec!["/bin/date"]),
@@ -978,7 +977,7 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
 async fn handle_container_exec_user_denies_records_tool_decision() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_local_shell_call("user_denied_call", "completed", vec!["/bin/date"]),
@@ -1036,7 +1035,7 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
 async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_local_shell_call("sandbox_session_call", "completed", vec!["/bin/date"]),
@@ -1094,7 +1093,7 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
 async fn handle_sandbox_error_user_denies_records_tool_decision() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_local_shell_call("sandbox_deny_call", "completed", vec!["/bin/date"]),
