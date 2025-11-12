@@ -77,7 +77,20 @@ pub async fn process_sse_wire<S, D>(
                     }
                 }
             }
-            Ok(None) => return,
+            Ok(None) => {
+                // If the stream ended without a trailing blank line, flush any
+                // buffered JSON frame to the decoder before returning.
+                if !data_buffer.is_empty() {
+                    let json = std::mem::take(&mut data_buffer);
+                    if let Err(e) = decoder
+                        .on_frame(&json, &tx_event, &otel_event_manager)
+                        .await
+                    {
+                        let _ = tx_event.send(Err(e)).await;
+                    }
+                }
+                return;
+            }
         }
     }
 }
