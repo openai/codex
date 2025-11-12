@@ -63,6 +63,7 @@ use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
+use codex_app_server_protocol::ReasoningDeltaNotification;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::RequestId;
@@ -2582,6 +2583,15 @@ async fn apply_bespoke_event_handling(
             };
             outgoing
                 .send_server_notification(ServerNotification::AgentMessageDelta(notification))
+                .await;
+        }
+        EventMsg::ReasoningContentDelta(event) => {
+            let notification = ReasoningDeltaNotification {
+                item_id: event.item_id,
+                delta: event.delta,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ReasoningDelta(notification))
                 .await;
         }
         EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
