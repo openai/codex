@@ -143,6 +143,7 @@ impl EventProcessorWithJsonOutput {
                 message: ev.message.clone(),
             })],
             EventMsg::PlanUpdate(ev) => self.handle_plan_update(ev),
+            EventMsg::ExitedReviewMode(ev) => self.handle_exited_review_mode(ev),
             _ => Vec::new(),
         }
     }
@@ -182,6 +183,31 @@ impl EventProcessorWithJsonOutput {
         };
 
         vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
+    }
+
+    fn handle_exited_review_mode(
+        &self,
+        ev: &codex_core::protocol::ExitedReviewModeEvent,
+    ) -> Vec<ThreadEvent> {
+        // Convert review output into a synthetic agent message so JSONL clients
+        // can observe review results without bespoke item types for now.
+        if let Some(output) = &ev.review_output {
+            let text = if output.findings.is_empty() {
+                output.overall_explanation.clone()
+            } else {
+                codex_core::review_format::format_review_findings_block(&output.findings, None)
+            };
+            if text.is_empty() {
+                return Vec::new();
+            }
+            let item = ThreadItem {
+                id: self.get_next_item_id(),
+                details: ThreadItemDetails::AgentMessage(AgentMessageItem { text }),
+            };
+            vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
+        } else {
+            Vec::new()
+        }
     }
 
     fn handle_reasoning_event(&self, ev: &AgentReasoningEvent) -> Vec<ThreadEvent> {

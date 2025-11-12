@@ -81,6 +81,9 @@ pub struct Cli {
 pub enum Command {
     /// Resume a previous session by id or pick the most recent with --last.
     Resume(ResumeArgs),
+
+    /// Run a code review.
+    Review(ReviewArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -95,6 +98,33 @@ pub struct ResumeArgs {
     pub last: bool,
 
     /// Prompt to send after resuming the session. If `-` is used, read from stdin.
+    #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
+    pub prompt: Option<String>,
+}
+
+#[derive(Parser, Debug)]
+pub struct ReviewArgs {
+    /// Select uncommitted (staged, unstaged, untracked) changes.
+    #[arg(long = "uncommitted", default_value_t = false, conflicts_with_all = ["branch", "commit", "prompt"])]
+    pub uncommitted: bool,
+
+    /// Review against the given base branch (PR-style).
+    #[arg(long = "branch", value_name = "BRANCH", conflicts_with_all = ["commit", "uncommitted", "prompt"])]
+    pub branch: Option<String>,
+
+    /// Review a specific commit by SHA.
+    #[arg(long = "commit", value_name = "SHA", conflicts_with_all = ["branch", "uncommitted", "prompt"])]
+    pub commit: Option<String>,
+
+    /// Optional override for the user-facing hint recorded in history.
+    #[arg(long = "hint", value_name = "TEXT")]
+    pub hint: Option<String>,
+
+    /// Optional override for the review model (defaults to config.review_model).
+    #[arg(long = "review-model", value_name = "MODEL")]
+    pub review_model: Option<String>,
+
+    /// Custom review instructions. If `-` is used, read from stdin.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
     pub prompt: Option<String>,
 }

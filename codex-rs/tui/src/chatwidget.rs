@@ -2561,16 +2561,15 @@ impl ChatWidget {
 
         items.push(SelectionItem {
             name: "Review uncommitted changes".to_string(),
-            actions: vec![Box::new(
-                move |tx: &AppEventSender| {
-                    tx.send(AppEvent::CodexOp(Op::Review {
-                        review_request: ReviewRequest {
-                            prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
-                            user_facing_hint: "current changes".to_string(),
-                        },
-                    }));
-                },
-            )],
+            actions: vec![Box::new(move |tx: &AppEventSender| {
+                let (prompt, hint) = codex_core::review_prompts::review_uncommitted_prompt();
+                tx.send(AppEvent::CodexOp(Op::Review {
+                    review_request: ReviewRequest {
+                        prompt,
+                        user_facing_hint: hint,
+                    },
+                }));
+            })],
             dismiss_on_select: true,
             ..Default::default()
         });
@@ -2617,12 +2616,11 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: format!("{current_branch} -> {branch}"),
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
+                    let (prompt, hint) = codex_core::review_prompts::review_branch_prompt(&branch);
                     tx3.send(AppEvent::CodexOp(Op::Review {
                         review_request: ReviewRequest {
-                            prompt: format!(
-                                "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{{upstream}}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
-                            ),
-                            user_facing_hint: format!("changes against '{branch}'"),
+                            prompt,
+                            user_facing_hint: hint,
                         },
                     }));
                 })],
@@ -2649,16 +2647,13 @@ impl ChatWidget {
         for entry in commits {
             let subject = entry.subject.clone();
             let sha = entry.sha.clone();
-            let short = sha.chars().take(7).collect::<String>();
             let search_val = format!("{subject} {sha}");
 
             items.push(SelectionItem {
                 name: subject.clone(),
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
-                    let hint = format!("commit {short}");
-                    let prompt = format!(
-                        "Review the code changes introduced by commit {sha} (\"{subject}\"). Provide prioritized, actionable findings."
-                    );
+                    let (prompt, hint) =
+                        codex_core::review_prompts::review_commit_prompt(&sha, Some(&subject));
                     tx3.send(AppEvent::CodexOp(Op::Review {
                         review_request: ReviewRequest {
                             prompt,
@@ -2693,10 +2688,11 @@ impl ChatWidget {
                 if trimmed.is_empty() {
                     return;
                 }
+                let (prompt, hint) = codex_core::review_prompts::review_custom_prompt(&trimmed);
                 tx.send(AppEvent::CodexOp(Op::Review {
                     review_request: ReviewRequest {
-                        prompt: trimmed.clone(),
-                        user_facing_hint: trimmed,
+                        prompt,
+                        user_facing_hint: hint,
                     },
                 }));
             }),
