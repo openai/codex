@@ -565,10 +565,12 @@ jobs:
 
   winget:
     needs: release
-    uses: ./.github/workflows/winget-submit.yml
-    with:
-      version: ${{ needs.release.outputs.version }}
-      x64_sha256: ${{ needs.release.outputs.windows_x64_sha256 }}
-      arm64_sha256: ${{ needs.release.outputs.windows_arm64_sha256 }}
-    # secrets:
-    #   WINGET_PUBLISH_PAT: ${{ secrets.WINGET_PUBLISH_PAT }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate WinGet manifests
+        uses: ./.github/actions/winget-submit
+        with:
+          version: ${{ needs.release.outputs.version }}
+          x64_sha256: ${{ needs.release.outputs.windows_x64_sha256 }}
+          arm64_sha256: ${{ needs.release.outputs.windows_arm64_sha256 }}
