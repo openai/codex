@@ -78,23 +78,6 @@ prefix_rule(
 )
 
 prefix_rule(
-    pattern = ["rg"],
-    match = [
-        ["rg", "-n", "init"],
-        ["rg", "--files", "--max-depth", "2", "."],
-    ],
-)
-
-prefix_rule(
-    pattern = ["sed"],
-    decision = "prompt",
-    match = [
-        ["sed", "-n", "s/a/b/", "file.txt"],
-        ["sed", "s/foo/bar/g", "file.txt"],
-    ],
-)
-
-prefix_rule(
     pattern = ["which"],
     match = [
         ["which", "python3"],
