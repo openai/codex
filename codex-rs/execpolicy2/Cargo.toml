@@ -27,4 +27,4 @@ parking_lot = { workspace = true }
 shlex = { workspace = true }
 
 [dev-dependencies]
-expect-test = { workspace = true }
+pretty_assertions = { workspace = true }
