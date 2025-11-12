@@ -47,6 +47,5 @@ fn load_policy(policy_path: &Path) -> Result<codex_execpolicy2::Policy> {
     let content = fs::read_to_string(policy_path)
         .with_context(|| format!("failed to read policy at {}", policy_path.display()))?;
     let policy_source = policy_path.to_string_lossy();
-    let parser = PolicyParser::new(policy_source.as_ref(), &content);
-    Ok(parser.parse()?)
+    Ok(PolicyParser::parse(policy_source.as_ref(), &content)?)
 }

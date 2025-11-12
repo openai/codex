@@ -22,23 +22,14 @@ use crate::rule::PrefixPattern;
 use crate::rule::PrefixRule;
 use crate::rule::Rule;
 
-pub struct PolicyParser {
-    policy_source: String,
-    unparsed_policy: String,
-}
+// todo: support parsing multiple policies
+pub struct PolicyParser;
 
 impl PolicyParser {
-    pub fn new(policy_source: &str, unparsed_policy: &str) -> Self {
-        Self {
-            policy_source: policy_source.to_string(),
-            unparsed_policy: unparsed_policy.to_string(),
-        }
-    }
-
-    pub fn parse(&self) -> Result<crate::policy::Policy> {
+    pub fn parse(policy_source: &str, unparsed_policy: &str) -> Result<crate::policy::Policy> {
         let mut dialect = Dialect::Extended.clone();
         dialect.enable_f_strings = true;
-        let ast = AstModule::parse(&self.policy_source, self.unparsed_policy.clone(), &dialect)
+        let ast = AstModule::parse(policy_source, unparsed_policy.to_string(), &dialect)
             .map_err(|e| Error::Starlark(e.to_string()))?;
         let globals = GlobalsBuilder::standard().with(policy_builtins).build();
         let module = Module::new();
