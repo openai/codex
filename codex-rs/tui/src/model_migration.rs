@@ -13,7 +13,9 @@ use ratatui::prelude::Stylize as _;
 use ratatui::prelude::Widget;
 use ratatui::text::Line;
 use ratatui::widgets::Clear;
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Wrap;
 use tokio_stream::StreamExt;
 
 /// Optional target model slug for the migration prompt.
@@ -34,7 +36,6 @@ pub(crate) enum ModelMigrationOutcome {
 
 pub(crate) async fn run_model_migration_prompt(
     tui: &mut Tui,
-    current_model: &str,
     target_model: &str,
 ) -> ModelMigrationOutcome {
     // Render the prompt on the terminal's alternate screen so exiting or cancelling
@@ -57,8 +58,7 @@ pub(crate) async fn run_model_migration_prompt(
 
     let alt = AltScreenGuard::enter(tui);
 
-    let mut screen =
-        ModelMigrationScreen::new(alt.tui.frame_requester(), current_model, target_model);
+    let mut screen = ModelMigrationScreen::new(alt.tui.frame_requester(), target_model);
 
     let _ = alt.tui.draw(u16::MAX, |frame| {
         frame.render_widget_ref(&screen, frame.area());
@@ -90,18 +90,16 @@ pub(crate) async fn run_model_migration_prompt(
 struct ModelMigrationScreen {
     request_frame: FrameRequester,
     target_model: String,
-    current_model: String,
     done: bool,
     should_exit: bool,
     should_defer: bool,
 }
 
 impl ModelMigrationScreen {
-    fn new(request_frame: FrameRequester, current_model: &str, target_model: &str) -> Self {
+    fn new(request_frame: FrameRequester, target_model: &str) -> Self {
         Self {
             request_frame,
             target_model: target_model.to_string(),
-            current_model: current_model.to_string(),
             done: false,
             should_exit: false,
             should_defer: false,
@@ -187,22 +185,29 @@ impl WidgetRef for &ModelMigrationScreen {
 
         column.push("");
         column.push(Line::from(vec![
-            "  ☆ ".cyan().bold(),
-            "Introducing ".cyan().bold(),
-            primary_model.clone().cyan().bold(),
-            " and ".cyan().bold(),
-            mini_model.cyan().bold(),
+            "> ".into(),
+            "Introducing ".bold(),
+            primary_model.bold(),
+            " and ".bold(),
+            mini_model.bold(),
         ]));
         column.push(Line::from(""));
 
         column.push(
-            Line::from(vec![
-                "We’re releasing ".gray(),
-                primary_model.gray(),
-                ", a version of ".gray(),
-                self.current_model.clone().gray(),
-                " optimized for long-running, agentic coding tasks.".gray(),
-            ])
+            Paragraph::new(Line::from(
+                "We've upgraded our family of models supported in Codex to GPT-5.1, GPT-5.1-Codex and GPT-5.1-Codex-Mini."
+                    .gray(),
+            ))
+            .wrap(Wrap { trim: false })
+            .inset(Insets::tlbr(0, 2, 0, 0)),
+        );
+        column.push(Line::from(""));
+        column.push(
+            Paragraph::new(Line::from(
+                "You can continue using legacy models by specifying them directly with the -m option or in your config.toml."
+                    .gray(),
+            ))
+            .wrap(Wrap { trim: false })
             .inset(Insets::tlbr(0, 2, 0, 0)),
         );
         column.push(Line::from(""));
@@ -215,7 +220,7 @@ impl WidgetRef for &ModelMigrationScreen {
         );
         column.push(Line::from(""));
         column
-            .push(Line::from(vec!["Press Enter to try now".dim()]).inset(Insets::tlbr(0, 2, 0, 0)));
+            .push(Line::from(vec!["Press enter to try now".dim()]).inset(Insets::tlbr(0, 2, 0, 0)));
 
         column.render(area, buf);
     }
@@ -240,8 +245,7 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, width, height));
 
-        let screen =
-            ModelMigrationScreen::new(FrameRequester::test_dummy(), "gpt-5-codex", "gpt-5.1-codex");
+        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy(), "gpt-5.1-codex");
 
         {
             let mut frame = terminal.get_frame();
@@ -258,7 +262,7 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 65, 12));
 
-        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy(), "gpt-5", "gpt-5.1");
+        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy(), "gpt-5.1");
         {
             let mut frame = terminal.get_frame();
             frame.render_widget_ref(&screen, frame.area());
@@ -273,8 +277,7 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 60, 12));
 
-        let screen =
-            ModelMigrationScreen::new(FrameRequester::test_dummy(), "gpt-5-codex", "gpt-5.1-codex");
+        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy(), "gpt-5.1-codex");
         {
             let mut frame = terminal.get_frame();
             frame.render_widget_ref(&screen, frame.area());
@@ -289,11 +292,7 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 60, 12));
 
-        let screen = ModelMigrationScreen::new(
-            FrameRequester::test_dummy(),
-            "gpt-5-codex-mini",
-            "gpt-5.1-codex-mini",
-        );
+        let screen = ModelMigrationScreen::new(FrameRequester::test_dummy(), "gpt-5.1-codex-mini");
         {
             let mut frame = terminal.get_frame();
             frame.render_widget_ref(&screen, frame.area());
@@ -305,8 +304,7 @@ mod tests {
     #[test]
     fn escape_key_defers_prompt() {
         let screen_target = "gpt-5.1-codex";
-        let mut screen =
-            ModelMigrationScreen::new(FrameRequester::test_dummy(), "gpt-5-codex", screen_target);
+        let mut screen = ModelMigrationScreen::new(FrameRequester::test_dummy(), screen_target);
 
         // Simulate pressing Escape
         screen.handle_key(KeyEvent::new(
