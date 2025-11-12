@@ -17,6 +17,7 @@ use std::sync::Arc;
 use crate::decision::Decision;
 use crate::error::Error;
 use crate::error::Result;
+use crate::policy::validate_match_examples;
 use crate::rule::PatternToken;
 use crate::rule::PrefixPattern;
 use crate::rule::PrefixRule;
@@ -203,17 +204,28 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
 
         let rest: Arc<[PatternToken]> = remaining_tokens.to_vec().into();
 
-        for head in first_token.alternatives() {
-            let rule = Rule::Prefix(PrefixRule {
-                pattern: PrefixPattern {
-                    first: Arc::from(head.as_str()),
-                    rest: rest.clone(),
-                },
-                decision,
-            });
-            rule.validate_examples(&matches, &not_matches)?;
-            builder.add_rule(rule);
-        }
+        let rules: Vec<Rule> = first_token
+            .alternatives()
+            .iter()
+            .zip(std::iter::repeat(rest.clone()))
+            .map(|(head, rest)| {
+                Rule::Prefix(PrefixRule {
+                    pattern: PrefixPattern {
+                        first: Arc::from(head.as_str()),
+                        rest,
+                    },
+                    decision,
+                })
+            })
+            .collect();
+
+        rules
+            .iter()
+            .try_for_each(|rule| rule.validate_not_matches(&not_matches))?;
+
+        validate_match_examples(&rules, &matches)?;
+
+        rules.into_iter().for_each(|rule| builder.add_rule(rule));
         Ok(NoneType)
     }
 }
