@@ -10,7 +10,6 @@ on:
   push:
     tags:
       - "rust-v*.*.*"
-  workflow_dispatch: {}
 
 concurrency:
   group: ${{ github.workflow }}
@@ -575,46 +574,3 @@ jobs:
           version: ${{ needs.release.outputs.version }}
           windows_x64_sha256: ${{ needs.release.outputs.windows_x64_sha256 }}
           windows_arm64_sha256: ${{ needs.release.outputs.windows_arm64_sha256 }}
-
-  hash-manual:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      windows_x64_sha256: ${{ steps.hash.outputs.windows_x64_sha256 }}
-      windows_arm64_sha256: ${{ steps.hash.outputs.windows_arm64_sha256 }}
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v5
-      - name: Download Windows EXEs from release rust-v0.58.0-alpha.3
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          tag="rust-v0.58.0-alpha.3"
-          mkdir -p dist
-          gh release download "$tag" --repo "${GITHUB_REPOSITORY}" --pattern "codex-x86_64-pc-windows-msvc.exe" --dir dist
-          gh release download "$tag" --repo "${GITHUB_REPOSITORY}" --pattern "codex-aarch64-pc-windows-msvc.exe" --dir dist
-          ls -l dist
-      - name: Compute SHA256 (manual)
-        id: hash
-        run: |
-          set -euo pipefail
-          x64_sha=$(sha256sum "dist/codex-x86_64-pc-windows-msvc.exe" | awk '{print $1}')
-          arm_sha=$(sha256sum "dist/codex-aarch64-pc-windows-msvc.exe" | awk '{print $1}')
-          echo "windows_x64_sha256=${x64_sha}" >> "$GITHUB_OUTPUT"
-          echo "windows_arm64_sha256=${arm_sha}" >> "$GITHUB_OUTPUT"
-
-  winget-manual:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
-    needs: hash-manual
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Validate WinGet manifests (manual)
-        uses: ./.github/actions/winget-submit
-        with:
-          version: 0.58.0-alpha.3
-          windows_x64_sha256: ${{ needs.hash-manual.outputs.windows_x64_sha256 }}
-          windows_arm64_sha256: ${{ needs.hash-manual.outputs.windows_arm64_sha256 }}
