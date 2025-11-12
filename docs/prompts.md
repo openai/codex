@@ -14,16 +14,15 @@ Custom prompts turn your repeatable instructions into reusable slash commands, s
 
 - Body: The file contents are sent verbatim when you run the prompt (after placeholder expansion).
 - Frontmatter (optional): Add YAML-style metadata at the top of the file to improve the slash popup.
-  
+
   ```markdown
   ---
   description: Request a concise git diff review
   argument-hint: FILE=<path> [FOCUS=<section>]
   ---
   ```
-  
+
   - `description` shows under the entry in the popup.
-  
   - `argument-hint` (or `argument_hint`) lets you document expected inputs, though the current UI ignores this metadata.
 
 ### Placeholders and arguments
@@ -52,6 +51,7 @@ Custom prompts turn your repeatable instructions into reusable slash commands, s
 description: Generate a commit message for a ticket
 argument-hint: TICKET_ID=<id> TICKET_TITLE=<title>
 ---
+
 Please write a concise commit message for ticket $TICKET_ID: $TICKET_TITLE
 ```
 
@@ -78,6 +78,7 @@ Please write a concise commit message for ticket JIRA-1234: Fix login bug
 description: Review code in a specific file with focus area
 argument-hint: FILE=<path> [FOCUS=<section>]
 ---
+
 Review the code in $FILE. Pay special attention to $FOCUS.
 ```
 
@@ -93,4 +94,3 @@ Review the code in $FILE. Pay special attention to $FOCUS.
 Review the code in src/auth.js. Pay special attention to error handling.
 
 ```
-
