@@ -51,7 +51,7 @@ cargo run -p codex-execpolicy2 -- check git status
 ```
 - Use a specific policy file instead of the default:
 ```bash
-cargo run -p codex-execpolicy2 -- --policy path/to/policy.star check git status
+cargo run -p codex-execpolicy2 -- --policy path/to/policy.codexpolicy check git status
 ```
 - Example outcomes:
   - Match: `{"Match": { ... "decision": "allow" ... }}`
