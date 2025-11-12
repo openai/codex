@@ -19,6 +19,12 @@ pub enum Evaluation {
     },
 }
 
+impl Evaluation {
+    pub fn is_match(&self) -> bool {
+        matches!(self, Self::Match { .. })
+    }
+}
+
 impl Policy {
     pub fn new(rules_by_program: MultiMap<String, Rule>) -> Self {
         Self { rules_by_program }
