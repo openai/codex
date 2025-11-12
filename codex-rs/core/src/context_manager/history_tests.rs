@@ -308,8 +308,19 @@ fn assert_truncated_message_matches(message: &str, line: &str, total_lines: usiz
 }
 
 fn truncated_message_pattern(line: &str, total_lines: usize) -> String {
-    let head_take = truncate::MODEL_FORMAT_HEAD_LINES.min(total_lines);
-    let tail_take = truncate::MODEL_FORMAT_TAIL_LINES.min(total_lines.saturating_sub(head_take));
+    // The omission marker adds 3 lines, so we need to account for that when
+    // calculating how many content lines fit.
+    const OMISSION_MARKER_LINES: usize = 3;
+
+    let available_content_lines = if total_lines > truncate::MODEL_FORMAT_MAX_LINES {
+        truncate::MODEL_FORMAT_MAX_LINES.saturating_sub(OMISSION_MARKER_LINES)
+    } else {
+        truncate::MODEL_FORMAT_MAX_LINES
+    };
+
+    let head_take = (available_content_lines / 2).min(total_lines);
+    let tail_take =
+        (available_content_lines - head_take).min(total_lines.saturating_sub(head_take));
     let omitted = total_lines.saturating_sub(head_take + tail_take);
     let escaped_line = regex_lite::escape(line);
     if omitted == 0 {

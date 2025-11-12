@@ -86,7 +86,8 @@ async fn truncate_function_error_trims_respond_to_model() -> Result<()> {
         serde_json::from_str::<serde_json::Value>(&output).is_err(),
         "expected error output to be plain text",
     );
-    let truncated_pattern = r#"(?s)^Total output lines: 1\s+.*\[\.\.\. output truncated to fit 10240 bytes \.\.\.\]\s*$"#;
+    // The output should have: head + marker + tail
+    let truncated_pattern = r#"(?s)^Total output lines: 1\s+.*\[\.\.\. output truncated to fit 10240 bytes \.\.\.\].*$"#;
     assert_regex_match(truncated_pattern, &output);
     assert!(
         !output.contains("omitted"),
@@ -166,7 +167,7 @@ Output:
 5
 6
 .*
-\[\.{3} omitted 144 of 400 lines \.{3}\]
+\[\.{3} omitted 147 of 400 lines \.{3}\]
 
 .*
 396

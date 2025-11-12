@@ -5,8 +5,6 @@ use codex_utils_string::take_last_bytes_at_char_boundary;
 // Model-formatting limits: clients get full streams; only content sent to the model is truncated.
 pub(crate) const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
 pub(crate) const MODEL_FORMAT_MAX_LINES: usize = 256; // lines
-pub(crate) const MODEL_FORMAT_HEAD_LINES: usize = MODEL_FORMAT_MAX_LINES / 2;
-pub(crate) const MODEL_FORMAT_TAIL_LINES: usize = MODEL_FORMAT_MAX_LINES - MODEL_FORMAT_HEAD_LINES; // 128
 pub(crate) const MODEL_FORMAT_HEAD_BYTES: usize = MODEL_FORMAT_MAX_BYTES / 2;
 
 pub(crate) fn globally_truncate_function_output_items(
@@ -69,8 +67,57 @@ pub(crate) fn format_output_for_model_body(content: &str) -> String {
 
 fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
     let truncated_by_bytes = content.len() > MODEL_FORMAT_MAX_BYTES;
+    let truncated_by_lines = total_lines > MODEL_FORMAT_MAX_LINES;
 
-    // When byte truncation is needed, use byte-based head/tail slicing directly
+    // When BOTH byte and line truncation are needed, we need to apply line-based truncation
+    // first to get to the right number of lines, then ensure we stay within byte limits.
+    // This ensures the "omitted N of M lines" message is accurate and the line limit is enforced.
+    if truncated_by_bytes && truncated_by_lines {
+        // First, apply line truncation to get within line limits
+        let line_truncated = apply_line_truncation(content, total_lines);
+
+        // Then, if it still exceeds byte limits, truncate by bytes
+        if line_truncated.len() > MODEL_FORMAT_MAX_BYTES {
+            // Extract just the content portions (head and tail), preserving the omission marker
+            let segments: Vec<&str> = line_truncated.split_inclusive('\n').collect();
+
+            // Find the omission marker line (contains "[... omitted")
+            let marker_idx = segments
+                .iter()
+                .position(|s| s.contains("[... omitted"))
+                .unwrap_or(segments.len() / 2);
+
+            // Rebuild with byte constraints
+            let head_segments: Vec<&str> = segments.iter().take(marker_idx).copied().collect();
+            let tail_segments: Vec<&str> = segments.iter().skip(marker_idx + 1).copied().collect();
+
+            let marker_line = segments.get(marker_idx).copied().unwrap_or("");
+
+            let head_str: String = head_segments.concat();
+            let tail_str: String = tail_segments.concat();
+
+            let marker_len = marker_line.len();
+            let max_content_bytes = MODEL_FORMAT_MAX_BYTES.saturating_sub(marker_len);
+            let head_budget = (max_content_bytes / 2).min(head_str.len());
+            let tail_budget = max_content_bytes
+                .saturating_sub(head_budget)
+                .min(tail_str.len());
+
+            let head_part = take_bytes_at_char_boundary(&head_str, head_budget);
+            let tail_part = take_last_bytes_at_char_boundary(&tail_str, tail_budget);
+
+            let mut result = String::with_capacity(MODEL_FORMAT_MAX_BYTES);
+            result.push_str(head_part);
+            result.push_str(marker_line);
+            result.push_str(tail_part);
+
+            return result;
+        }
+
+        return line_truncated;
+    }
+
+    // When only byte truncation is needed, use byte-based head/tail slicing directly
     // to ensure both head and tail are preserved (important for error messages at the end)
     if truncated_by_bytes {
         let marker =
@@ -94,10 +141,27 @@ fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
         return result;
     }
 
+    apply_line_truncation(content, total_lines)
+}
+
+fn apply_line_truncation(content: &str, total_lines: usize) -> String {
     // Line-based truncation for cases where we exceed line limits but not byte limits
     let segments: Vec<&str> = content.split_inclusive('\n').collect();
-    let head_take = MODEL_FORMAT_HEAD_LINES.min(segments.len());
-    let tail_take = MODEL_FORMAT_TAIL_LINES.min(segments.len().saturating_sub(head_take));
+
+    // The omission marker "\n[... omitted N of M lines ...]\n\n" adds 3 lines.
+    // We need to account for this when calculating head/tail budgets to ensure
+    // the total output (head + marker + tail) doesn't exceed MODEL_FORMAT_MAX_LINES.
+    const OMISSION_MARKER_LINES: usize = 3;
+
+    let available_content_lines = if segments.len() > MODEL_FORMAT_MAX_LINES {
+        MODEL_FORMAT_MAX_LINES.saturating_sub(OMISSION_MARKER_LINES)
+    } else {
+        MODEL_FORMAT_MAX_LINES // No marker needed, use full budget
+    };
+
+    let head_take = (available_content_lines / 2).min(segments.len());
+    let tail_take =
+        (available_content_lines - head_take).min(segments.len().saturating_sub(head_take));
     let omitted = segments.len().saturating_sub(head_take + tail_take);
 
     let head_slice_end: usize = segments
@@ -216,5 +280,42 @@ mod tests {
         assert_eq!(result, content);
         assert!(!result.contains("truncated"));
         assert!(!result.contains("omitted"));
+    }
+
+    #[test]
+    fn test_byte_and_line_truncation_both_enforced() {
+        // Regression test for: when both byte and line limits are exceeded,
+        // ensure the output respects BOTH constraints.
+        // Example: 6000 lines of "a\n" = 12KB, exceeds both limits
+        let mut content = String::new();
+        for _ in 0..6000 {
+            content.push_str("a\n");
+        }
+
+        let total_lines = content.lines().count();
+        assert_eq!(total_lines, 6000);
+        assert!(content.len() > MODEL_FORMAT_MAX_BYTES); // 12KB > 10KB
+
+        let result = truncate_formatted_exec_output(&content, total_lines);
+
+        // Verify byte limit is enforced
+        assert!(
+            result.len() <= MODEL_FORMAT_MAX_BYTES,
+            "Result exceeded byte limit: {} > {}",
+            result.len(),
+            MODEL_FORMAT_MAX_BYTES
+        );
+
+        // Verify line limit is enforced (the key fix)
+        let result_lines = result.lines().count();
+        assert!(
+            result_lines <= MODEL_FORMAT_MAX_LINES,
+            "Result exceeded line limit: {result_lines} > {MODEL_FORMAT_MAX_LINES} (this is the regression we're testing for)"
+        );
+
+        // When both limits are exceeded, we apply line truncation first (showing "omitted" marker),
+        // then apply byte truncation if the result still exceeds byte limits
+        assert!(result.contains("omitted"));
+        assert!(result.contains("a\n")); // Should still contain some content
     }
 }
