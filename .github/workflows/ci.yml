@@ -32,6 +32,7 @@ jobs:
 
       - name: Stage npm package
         id: stage_npm_package
+        if: github.repository_owner == 'openai'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -47,6 +48,7 @@ jobs:
 
       - name: Upload staged npm package artifact
         uses: actions/upload-artifact@v5
+        if: github.repository_owner == 'openai'
         with:
           name: codex-npm-staging
           path: ${{ steps.stage_npm_package.outputs.pack_output }}
