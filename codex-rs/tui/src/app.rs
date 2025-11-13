@@ -222,7 +222,7 @@ impl App {
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
 
-        let chat_widget = match resume_selection {
+        let mut chat_widget = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
@@ -264,6 +264,8 @@ impl App {
                 )
             }
         };
+
+        chat_widget.maybe_prompt_windows_sandbox_enable();
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]

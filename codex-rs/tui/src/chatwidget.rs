@@ -2450,6 +2450,23 @@ impl ChatWidget {
     pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, _preset: ApprovalPreset) {}
 
     #[cfg(target_os = "windows")]
+    pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {
+        if self.config.forced_auto_mode_downgraded_on_windows
+            && codex_core::get_platform_sandbox().is_none()
+        {
+            if let Some(preset) = builtin_approval_presets()
+                .into_iter()
+                .find(|preset| preset.id == "auto")
+            {
+                self.open_windows_sandbox_enable_prompt(preset);
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {}
+
+    #[cfg(target_os = "windows")]
     pub(crate) fn clear_forced_auto_mode_downgrade(&mut self) {
         self.config.forced_auto_mode_downgraded_on_windows = false;
     }

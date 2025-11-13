@@ -1606,6 +1606,25 @@ fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
     );
 }
 
+#[cfg(target_os = "windows")]
+#[test]
+fn startup_prompts_for_windows_sandbox_when_auto_requested() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    set_windows_sandbox_enabled(false);
+    chat.config.forced_auto_mode_downgraded_on_windows = true;
+
+    chat.maybe_prompt_windows_sandbox_enable();
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("Turn on Windows sandbox and use Auto mode"),
+        "expected startup prompt to offer enabling the sandbox: {popup}"
+    );
+
+    set_windows_sandbox_enabled(true);
+}
+
 #[test]
 fn model_reasoning_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
