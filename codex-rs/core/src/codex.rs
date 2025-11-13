@@ -94,6 +94,7 @@ use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TurnDiffEvent;
+use crate::protocol::WarningEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::shell;
@@ -1753,6 +1754,11 @@ pub(crate) async fn run_task(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let mut auto_compact_recently_attempted = false;
+    // Maintain an index of the last successful input according to the API.
+    // If an `InvalidRequest` error is encountered, we can rollback to the last successful input.
+    let mut rollback_index: Option<usize> = None;
+    const MAX_ROLLBACK_RETRIES: u8 = 5;
+    let mut rollback_attempts_left: u8 = MAX_ROLLBACK_RETRIES;
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -1780,6 +1786,8 @@ pub(crate) async fn run_task(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
+
+        let turn_input_len = turn_input.len();
         match run_turn(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
@@ -1794,6 +1802,7 @@ pub(crate) async fn run_task(
                     processed_items,
                     total_token_usage,
                 } = turn_output;
+
                 let limit = turn_context
                     .client
                     .get_auto_compact_token_limit()
@@ -1806,6 +1815,10 @@ pub(crate) async fn run_task(
                     .unwrap_or(false);
                 let (responses, items_to_record_in_conversation_history) =
                     process_items(processed_items, &sess, &turn_context).await;
+
+                // Since the turn was successful, update the rollback index and reset retry counter.
+                rollback_index = Some(turn_input_len);
+                rollback_attempts_left = MAX_ROLLBACK_RETRIES;
 
                 if token_limit_reached {
                     if auto_compact_recently_attempted {
@@ -1844,6 +1857,43 @@ pub(crate) async fn run_task(
                 }
                 continue;
             }
+            Err(CodexErr::InvalidRequest(err)) => {
+                if let Some(successful_len) = rollback_index {
+                    if rollback_attempts_left == 0 {
+                        warn!(
+                            "Maximum rollback retries ({}) exceeded. Stopping conversation.",
+                            MAX_ROLLBACK_RETRIES
+                        );
+                        let event = EventMsg::Error(ErrorEvent {
+                            message: err.message,
+                        });
+                        sess.send_event(&turn_context, event).await;
+                        break;
+                    }
+
+                    rollback_attempts_left -= 1;
+
+                    match rollback_to_last_successful_input(
+                        Arc::clone(&sess),
+                        Arc::clone(&turn_context),
+                        err.message.clone(),
+                        successful_len,
+                    )
+                    .await
+                    {
+                        RollbackResult::Success => continue,
+                        RollbackResult::HistoryCompacted | RollbackResult::NoNewItems => {
+                            // Rollback failed, propagate error below
+                        }
+                    }
+                }
+
+                let event = EventMsg::Error(ErrorEvent {
+                    message: err.message,
+                });
+                sess.send_event(&turn_context, event).await;
+                break;
+            }
             Err(CodexErr::TurnAborted {
                 dangling_artifacts: processed_items,
             }) => {
@@ -1864,6 +1914,217 @@ pub(crate) async fn run_task(
     }
 
     last_agent_message
+}
+
+enum RollbackResult {
+    Success,
+    HistoryCompacted,
+    NoNewItems,
+}
+
+/// Rollback conversation to the last input accepted by the API.
+///
+/// When API returns 400, this removes items added since the last successful
+/// call and informs the model what failed so it can try a different approach.
+async fn rollback_to_last_successful_input(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    reason: String,
+    rollback_index: usize,
+) -> RollbackResult {
+    let mut state = sess.state.lock().await;
+    let current_history = state.clone_history().get_history();
+
+    if rollback_index > current_history.len() {
+        warn!(
+            "Cannot rollback: history was compacted ({} items expected, only {} available)",
+            rollback_index,
+            current_history.len()
+        );
+        return RollbackResult::HistoryCompacted;
+    }
+
+    let failed_items: Vec<ResponseItem> = current_history
+        .get(rollback_index..)
+        .unwrap_or(&[])
+        .to_vec();
+
+    if failed_items.is_empty() {
+        warn!(
+            "Cannot rollback: no new items added since last success. \
+             Previously-accepted content is now invalid."
+        );
+        return RollbackResult::NoNewItems;
+    }
+
+    let safe_history: Vec<ResponseItem> = current_history
+        .get(..rollback_index)
+        .unwrap_or(&current_history[..])
+        .to_vec();
+
+    let error_message = build_prompt_rejection_message(&reason, &failed_items);
+
+    let mut restored_history = safe_history;
+    restored_history.push(ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: error_message.clone(),
+        }],
+    });
+
+    state.replace_history(restored_history);
+
+    drop(state);
+
+    sess.notify_stream_error(
+        &turn_context,
+        "An unexpected error occurred during this conversation. Rolling back...".to_string(),
+    )
+    .await;
+
+    // Tell the user about the error that caused the conversation to be rolled back.
+    // Using a warning instead of an error, so the conversation continues.
+    sess.send_event(
+        &turn_context,
+        EventMsg::Warning(WarningEvent {
+            message: reason.clone(),
+        }),
+    )
+    .await;
+
+    warn!(
+        "API validation error: Rolled back {} item(s). Error: {}",
+        failed_items.len(),
+        reason.chars().take(100).collect::<String>()
+    );
+
+    RollbackResult::Success
+}
+
+/// Generate a preview string for a ResponseItem to show what failed.
+fn preview_response_item(item: &ResponseItem) -> String {
+    const MAX_PREVIEW_LENGTH: usize = 80;
+
+    fn truncate(s: &str) -> String {
+        let preview: String = s.chars().take(MAX_PREVIEW_LENGTH).collect();
+        if s.len() > MAX_PREVIEW_LENGTH {
+            format!("{preview}...")
+        } else {
+            preview
+        }
+    }
+
+    match item {
+        ResponseItem::Message { role, content, .. } => {
+            let content_info = if content.is_empty() {
+                "[empty]".to_string()
+            } else if content.len() > 1 {
+                format!("[{} items]", content.len())
+            } else {
+                match content.first() {
+                    Some(ContentItem::InputText { text })
+                    | Some(ContentItem::OutputText { text }) => {
+                        format!("\"{}\"", truncate(text))
+                    }
+                    Some(ContentItem::InputImage { image_url }) => {
+                        format!("[image: {}]", truncate(image_url))
+                    }
+                    None => "[empty]".to_string(),
+                }
+            };
+            format!("{role} message: {content_info}")
+        }
+        ResponseItem::Reasoning { summary, .. } => {
+            use codex_protocol::models::ReasoningItemReasoningSummary;
+            if let Some(ReasoningItemReasoningSummary::SummaryText { text }) = summary.first() {
+                format!("reasoning: \"{}\"", truncate(text))
+            } else {
+                "reasoning".to_string()
+            }
+        }
+        ResponseItem::FunctionCall {
+            name, arguments, ..
+        } => {
+            format!("function_call({name}): {}", truncate(arguments))
+        }
+        ResponseItem::FunctionCallOutput { call_id, output } => {
+            format!("function_output({call_id}): {}", truncate(&output.content))
+        }
+        ResponseItem::CustomToolCall { name, input, .. } => {
+            format!("tool_call({name}): {}", truncate(input))
+        }
+        ResponseItem::CustomToolCallOutput { call_id, output } => {
+            format!("tool_output({call_id}): {}", truncate(output))
+        }
+        ResponseItem::LocalShellCall { action, .. } => {
+            use codex_protocol::models::LocalShellAction;
+            match action {
+                LocalShellAction::Exec(exec) => {
+                    let command = exec.command.join(" ");
+                    format!("shell_call: {}", truncate(&command))
+                }
+            }
+        }
+        ResponseItem::WebSearchCall { action, .. } => {
+            use codex_protocol::models::WebSearchAction;
+            match action {
+                WebSearchAction::Search { query } => {
+                    format!("web_search: \"{}\"", truncate(query))
+                }
+                WebSearchAction::Other => "web_search".to_string(),
+            }
+        }
+        ResponseItem::GhostSnapshot { .. } => "ghost_snapshot".to_string(),
+        ResponseItem::Other => "unknown".to_string(),
+    }
+}
+
+/// Build a message explaining the API validation error to the model.
+fn build_prompt_rejection_message(reason: &str, failed_items: &[ResponseItem]) -> String {
+    const MAX_ERROR_LENGTH: usize = 512;
+    const MAX_FAILED_ITEMS_TO_PREVIEW: usize = 16;
+
+    let mut msg = String::from(
+        "SYSTEM ERROR: The API rejected your previous response due to invalid content.\n\n",
+    );
+
+    let error_preview: String = reason.chars().take(MAX_ERROR_LENGTH).collect();
+    if reason.chars().count() > MAX_ERROR_LENGTH {
+        msg.push_str(&format!("Error details: {error_preview}...\n\n"));
+    } else {
+        msg.push_str(&format!("Error details: {error_preview}\n\n"));
+    }
+
+    if !failed_items.is_empty() {
+        msg.push_str(&format!(
+            "The conversation was rolled back. {} item(s) removed:\n",
+            failed_items.len()
+        ));
+
+        for (i, item) in failed_items
+            .iter()
+            .take(MAX_FAILED_ITEMS_TO_PREVIEW)
+            .enumerate()
+        {
+            msg.push_str(&format!("  {}. {}\n", i + 1, preview_response_item(item)));
+        }
+
+        if failed_items.len() > MAX_FAILED_ITEMS_TO_PREVIEW {
+            msg.push_str(&format!(
+                "  ... and {} more\n",
+                failed_items.len() - MAX_FAILED_ITEMS_TO_PREVIEW
+            ));
+        }
+        msg.push('\n');
+    }
+
+    msg.push_str("ACTION REQUIRED:\n");
+    msg.push_str("- You MUST use a different approach to accomplish the user's request.\n");
+    msg.push_str("- You SHOULD avoid retrying the same approach that caused this error.\n");
+    msg.push_str("- You SHOULD attempt to troubleshoot yourself before asking the user for help.");
+
+    msg
 }
 
 async fn run_turn(
@@ -1929,6 +2190,7 @@ async fn run_turn(
             Err(CodexErr::UsageNotIncluded) => return Err(CodexErr::UsageNotIncluded),
             Err(e @ CodexErr::QuotaExceeded) => return Err(e),
             Err(e @ CodexErr::RefreshTokenFailed(_)) => return Err(e),
+            Err(e @ CodexErr::InvalidRequest(_)) => return Err(e),
             Err(e) => {
                 // Use the configured provider-specific stream retry budget.
                 let max_retries = turn_context.client.get_provider().stream_max_retries();
@@ -3142,5 +3404,35 @@ mod tests {
             "MCP client for `slow` timed out after 10 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",
             display
         );
+    }
+
+    #[test]
+    fn test_build_prompt_rejection_message() {
+        use codex_protocol::models::ContentItem;
+        use codex_protocol::models::ResponseItem;
+
+        let error = "Validation failed";
+        let failed_items = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "test".to_string(),
+                }],
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "test2".to_string(),
+                }],
+            },
+        ];
+        let msg = build_prompt_rejection_message(error, &failed_items);
+
+        assert!(msg.contains("SYSTEM ERROR"));
+        assert!(msg.contains("2 item(s) removed"));
+        assert!(msg.contains("Validation failed"));
+        assert!(msg.contains("ACTION REQUIRED:"));
     }
 }

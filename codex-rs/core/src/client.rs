@@ -45,6 +45,7 @@ use crate::default_client::CodexHttpClient;
 use crate::default_client::create_client;
 use crate::error::CodexErr;
 use crate::error::ConnectionFailedError;
+use crate::error::InvalidRequestError;
 use crate::error::ResponseStreamFailed;
 use crate::error::Result;
 use crate::error::RetryLimitReachedError;
@@ -414,7 +415,37 @@ impl ModelClient {
                     || status == StatusCode::UNAUTHORIZED
                     || status.is_server_error())
                 {
-                    // Surface the error body to callers. Use `unwrap_or_default` per Clippy.
+                    if status == StatusCode::BAD_REQUEST {
+                        match res.json::<ErrorResponse>().await {
+                            Ok(ErrorResponse { error })
+                                if error.r#type.as_deref() == Some("invalid_request_error") =>
+                            {
+                                return Err(StreamAttemptError::Fatal(CodexErr::InvalidRequest(
+                                    InvalidRequestError {
+                                        message: error
+                                            .message
+                                            .unwrap_or_else(|| "Invalid request".to_string()),
+                                        code: error.code,
+                                    },
+                                )));
+                            }
+                            result => {
+                                let body = result
+                                    .ok()
+                                    .and_then(|r| r.error.message)
+                                    .unwrap_or_else(|| "Bad Request".to_string());
+                                return Err(StreamAttemptError::Fatal(CodexErr::UnexpectedStatus(
+                                    UnexpectedResponseError {
+                                        status,
+                                        body,
+                                        request_id: None,
+                                    },
+                                )));
+                            }
+                        }
+                    }
+
+                    // For other non-retryable errors, surface the error body
                     let body = res.text().await.unwrap_or_default();
                     return Err(StreamAttemptError::Fatal(CodexErr::UnexpectedStatus(
                         UnexpectedResponseError {

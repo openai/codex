@@ -18,6 +18,8 @@ mod deprecation_notice;
 mod exec;
 mod fork_conversation;
 mod grep_files;
+mod invalid_prompt_rollback;
+mod invalid_prompt_e2e;
 mod items;
 mod json_result;
 mod list_dir;
