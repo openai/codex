@@ -174,6 +174,7 @@ const PRESETS: &[ModelPreset] = &[
 ];
 
 pub fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
+    // leave auth mode for later use
     PRESETS
         .iter()
         .filter(|preset| preset.recommended_upgrade_model.is_none())
