@@ -4034,43 +4034,284 @@ async fn generate_spec_for_location(
     let date = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| "unknown-date".to_string());
-    let prompt = build_spec_prompt_text(
+    let base_prompt = build_spec_prompt_text(
         &project_locations,
         &location_label,
         SPEC_GENERATION_MODEL,
         &date,
     );
 
-    let response = call_model(
-        client,
-        &provider,
-        &auth,
-        SPEC_GENERATION_MODEL,
-        SPEC_SYSTEM_PROMPT,
-        &prompt,
-        metrics.clone(),
-        0.1,
-    )
-    .await
-    .map_err(|err| SecurityReviewFailure {
-        message: format!("Specification generation failed for {location_label}: {err}"),
-        logs: Vec::new(),
-    })?;
-    if let Some(reasoning) = response.reasoning.as_ref() {
-        for line in reasoning
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-        {
-            let truncated = truncate_text(line, MODEL_REASONING_LOG_MAX_GRAPHEMES);
-            let msg = format!("Model reasoning: {truncated}");
-            if let Some(tx) = progress_sender.as_ref() {
-                tx.send(AppEvent::SecurityReviewLog(msg.clone()));
-            }
-            logs.push(msg);
+    let mut conversation: Vec<String> = Vec::new();
+    let mut seen_search_requests: HashSet<String> = HashSet::new();
+    let mut seen_read_requests: HashSet<String> = HashSet::new();
+    let mut tool_rounds = 0usize;
+    let mut command_error_count = 0usize;
+
+    let raw_spec = loop {
+        if tool_rounds > SPEC_COMBINE_MAX_TOOL_ROUNDS {
+            return Err(SecurityReviewFailure {
+                message: format!(
+                    "Spec generation for {location_label} exceeded {SPEC_COMBINE_MAX_TOOL_ROUNDS} tool rounds.",
+                ),
+                logs,
+            });
         }
-    }
-    let mut sanitized = fix_mermaid_blocks(&response.text);
+
+        let mut prompt = base_prompt.clone();
+        if !conversation.is_empty() {
+            prompt.push_str("\n\n# Conversation history\n");
+            prompt.push_str(&conversation.join("\n\n"));
+        }
+
+        let response = match call_model(
+            client,
+            &provider,
+            &auth,
+            SPEC_GENERATION_MODEL,
+            SPEC_SYSTEM_PROMPT,
+            &prompt,
+            metrics.clone(),
+            0.1,
+        )
+        .await
+        {
+            Ok(output) => output,
+            Err(err) => {
+                return Err(SecurityReviewFailure {
+                    message: format!("Specification generation failed for {location_label}: {err}"),
+                    logs,
+                });
+            }
+        };
+
+        if let Some(reasoning) = response.reasoning.as_ref() {
+            for line in reasoning
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+            {
+                let truncated = truncate_text(line, MODEL_REASONING_LOG_MAX_GRAPHEMES);
+                let msg = format!("Model reasoning: {truncated}");
+                if let Some(tx) = progress_sender.as_ref() {
+                    tx.send(AppEvent::SecurityReviewLog(msg.clone()));
+                }
+                logs.push(msg);
+            }
+        }
+
+        let assistant_reply = response.text.trim().to_string();
+        if assistant_reply.is_empty() {
+            conversation.push("Assistant:".to_string());
+        } else {
+            conversation.push(format!("Assistant:\n{assistant_reply}"));
+        }
+
+        let (after_read, read_requests) = extract_read_requests(&response.text);
+        let (cleaned_text, search_requests) = parse_search_requests(&after_read);
+
+        let mut executed_command = false;
+
+        for request in read_requests {
+            let key = request.dedupe_key();
+            if !seen_read_requests.insert(key) {
+                let msg = format!(
+                    "Spec READ `{}` skipped (already provided).",
+                    request.path.display()
+                );
+                if let Some(tx) = progress_sender.as_ref() {
+                    tx.send(AppEvent::SecurityReviewLog(msg.clone()));
+                }
+                logs.push(msg.clone());
+                conversation.push(format!(
+                    "Tool READ `{}` already provided earlier.",
+                    request.path.display()
+                ));
+                executed_command = true;
+                continue;
+            }
+
+            executed_command = true;
+            match execute_auto_scope_read(
+                &repo_root,
+                &request.path,
+                request.start,
+                request.end,
+                metrics.as_ref(),
+            )
+            .await
+            {
+                Ok(output) => {
+                    let msg = format!("Spec READ `{}` returned content.", request.path.display());
+                    if let Some(tx) = progress_sender.as_ref() {
+                        tx.send(AppEvent::SecurityReviewLog(msg.clone()));
+                    }
+                    logs.push(msg);
+                    conversation.push(format!(
+                        "Tool READ `{}`:\n{}",
+                        request.path.display(),
+                        output
+                    ));
+                }
+                Err(err) => {
+                    let msg = format!("Spec READ `{}` failed: {err}", request.path.display());
+                    if let Some(tx) = progress_sender.as_ref() {
+                        tx.send(AppEvent::SecurityReviewLog(msg.clone()));
+                    }
+                    logs.push(msg.clone());
+                    conversation.push(format!(
+                        "Tool READ `{}` error: {err}",
+                        request.path.display()
+                    ));
+                    command_error_count += 1;
+                }
+            }
+        }
+
+        for request in search_requests {
+            let key = request.dedupe_key();
+            if !seen_search_requests.insert(key) {
+                match &request {
+                    ToolRequest::Content { term, mode, .. } => {
+                        let display_term = summarize_search_term(term, 80);
+                        let msg = format!(
+                            "Spec SEARCH `{display_term}` ({}) skipped (already provided).",
+                            mode.as_str()
+                        );
+                        if let Some(tx) = progress_sender.as_ref() {
+                            tx.send(AppEvent::SecurityReviewLog(msg.clone()));
+                        }
+                        logs.push(msg.clone());
+                        conversation.push(format!(
+                            "Tool SEARCH `{display_term}` ({}) already provided earlier.",
+                            mode.as_str()
+                        ));
+                    }
+                    ToolRequest::GrepFiles { args, .. } => {
+                        let mut shown = serde_json::json!({ "pattern": args.pattern });
+                        if let Some(ref inc) = args.include {
+                            shown["include"] = serde_json::Value::String(inc.clone());
+                        }
+                        if let Some(ref path) = args.path {
+                            shown["path"] = serde_json::Value::String(path.clone());
+                        }
+                        if let Some(limit) = args.limit {
+                            shown["limit"] =
+                                serde_json::Value::Number(serde_json::Number::from(limit as u64));
+                        }
+                        let msg = format!("Spec GREP_FILES {shown} skipped (already provided).",);
+                        if let Some(tx) = progress_sender.as_ref() {
+                            tx.send(AppEvent::SecurityReviewLog(msg.clone()));
+                        }
+                        logs.push(msg.clone());
+                        conversation
+                            .push(format!("Tool GREP_FILES {shown} already provided earlier."));
+                    }
+                }
+                executed_command = true;
+                continue;
+            }
+
+            executed_command = true;
+            match request {
+                ToolRequest::Content { term, mode, .. } => {
+                    let display_term = summarize_search_term(&term, 80);
+                    let (log_line, output) =
+                        match run_content_search(&repo_root, &term, mode, &metrics).await {
+                            SearchResult::Matches(text) => (
+                                format!(
+                                    "Spec SEARCH `{display_term}` ({}) returned matches.",
+                                    mode.as_str()
+                                ),
+                                text,
+                            ),
+                            SearchResult::NoMatches => (
+                                format!(
+                                    "Spec SEARCH `{display_term}` ({}) returned no matches.",
+                                    mode.as_str()
+                                ),
+                                "No matches found.".to_string(),
+                            ),
+                            SearchResult::Error(err) => (
+                                format!(
+                                    "Spec SEARCH `{display_term}` ({}) failed: {err}",
+                                    mode.as_str()
+                                ),
+                                format!("Search error: {err}"),
+                            ),
+                        };
+                    if let Some(tx) = progress_sender.as_ref() {
+                        tx.send(AppEvent::SecurityReviewLog(log_line.clone()));
+                    }
+                    logs.push(log_line);
+                    conversation.push(format!(
+                        "Tool SEARCH `{display_term}` ({}) results:\n{}",
+                        mode.as_str(),
+                        output
+                    ));
+                }
+                ToolRequest::GrepFiles { args, .. } => {
+                    let mut shown = serde_json::json!({ "pattern": args.pattern });
+                    if let Some(ref inc) = args.include {
+                        shown["include"] = serde_json::Value::String(inc.clone());
+                    }
+                    if let Some(ref path) = args.path {
+                        shown["path"] = serde_json::Value::String(path.clone());
+                    }
+                    if let Some(limit) = args.limit {
+                        shown["limit"] =
+                            serde_json::Value::Number(serde_json::Number::from(limit as u64));
+                    }
+                    let (log_line, output) = match run_grep_files(&repo_root, &args, &metrics).await
+                    {
+                        SearchResult::Matches(text) => {
+                            (format!("Spec GREP_FILES {shown} returned results."), text)
+                        }
+                        SearchResult::NoMatches => (
+                            format!("Spec GREP_FILES {shown} returned no matches.",),
+                            "No matches found.".to_string(),
+                        ),
+                        SearchResult::Error(err) => (
+                            format!("Spec GREP_FILES {shown} failed: {err}"),
+                            format!("Search error: {err}"),
+                        ),
+                    };
+                    if let Some(tx) = progress_sender.as_ref() {
+                        tx.send(AppEvent::SecurityReviewLog(log_line.clone()));
+                    }
+                    logs.push(log_line);
+                    conversation.push(format!("Tool GREP_FILES {shown}:\n{output}"));
+                }
+            }
+        }
+
+        if command_error_count >= SPEC_COMBINE_MAX_COMMAND_ERRORS {
+            return Err(SecurityReviewFailure {
+                message: format!(
+                    "Spec generation for {location_label} hit {SPEC_COMBINE_MAX_COMMAND_ERRORS} tool errors.",
+                ),
+                logs,
+            });
+        }
+
+        if executed_command {
+            tool_rounds = tool_rounds.saturating_add(1);
+            continue;
+        }
+
+        let final_text = cleaned_text.trim();
+        if final_text.is_empty() {
+            return Err(SecurityReviewFailure {
+                message: format!(
+                    "Spec generation for {location_label} produced an empty response.",
+                ),
+                logs,
+            });
+        }
+
+        break final_text.to_string();
+    };
+
+    let mut sanitized = fix_mermaid_blocks(&raw_spec);
 
     if !sanitized.trim().is_empty() {
         let polish_message = format!("Polishing specification markdown for {location_label}.");
