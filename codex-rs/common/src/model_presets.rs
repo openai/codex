@@ -122,7 +122,7 @@ const PRESETS: &[ModelPreset] = &[
                 description: "Maximizes reasoning depth for complex or ambiguous problems",
             },
         ],
-        is_default: true,
+        is_default: false,
         recommended_upgrade_model: Some("gpt-5.1-codex"),
     },
     ModelPreset {
