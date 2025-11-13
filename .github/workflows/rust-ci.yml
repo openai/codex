@@ -411,14 +411,13 @@ jobs:
         env:
           RUST_BACKTRACE: 1
 
-      - name: Publish Test Report
-        uses: mikepenz/action-junit-report@v4
+      - name: Upload JUnit artifact
         if: always()
+        uses: actions/upload-artifact@v5
         with:
-          report_paths: '**/target/nextest/*/junit.xml'
-          check_name: 'Test Results (${{ matrix.target }})'
-          detailed_summary: true
-          include_passed: false
+          name: junit-${{ matrix.target }}.xml
+          path: codex-rs/target/nextest/ci-test/junit.xml
+          if-no-files-found: ignore
 
       - name: Save cargo home cache
         if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'
@@ -469,7 +468,65 @@ jobs:
     needs: [changed, general, cargo_shear, lint_build, tests]
     if: always()
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
+      - uses: actions/checkout@v5
+
+      - name: Download JUnit artifacts
+        if: always()
+        uses: actions/download-artifact@v5
+        with:
+          pattern: junit-*.xml
+          path: junit-results
+
+      - name: Deduplicate JUnit artifacts with Codex
+        if: |
+          always() &&
+          ( github.repository_owner == 'openai' || github.repository_owner == 'Electroid' )
+        id: dedupe-junit
+        uses: openai/codex-action@main
+        with:
+          openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
+          allow-users: "*"
+          model: gpt-5
+          prompt: |
+            You are an assistant that deduplicates JUnit artifacts across platforms.
+
+            You MUST read ALL of the following JUnit artifacts from the `junit-results` directory:
+            - `junit-{platform}.xml`: JUnit artifacts for each platform.
+
+            Output:
+              - JUnit XML file (strict! must be valid XML with no other text or formatting)
+
+            Instructions:
+            - Select AT MOST 10 test failures to keep.
+            - Order the test failures by severity, starting with the most severe.
+            - Group test failures by file and line number.
+            - If a test failed on multiple operating systems or architectures, add a note at the end of the error message indicating which platforms it failed on, examples:
+              + "Failed on macOS, Linux, and Windows"
+              + "Failed on Windows"
+              + "Failed on macOS aarch64 and Linux x64"
+            - If a test does not have a filename and line number in its XML entry, or that file or line is incorrect based on the error context, correct it.
+            - You MUST output a full JUnit XML structure, including the <testsuites> and <testsuite> tags.
+            - Aside from specifying the platform, do NOT edit or change the content of the errors or test cases.
+
+      - name: Save JUnit artifact
+        if: always() && steps.dedupe-junit.outputs.final-message != ''
+        shell: bash
+        run: |
+          echo "${{ steps.dedupe-junit.outputs.final-message }}" > junit-results/junit.xml
+
+      - name: Generate GitHub annotations
+        if: always() && steps.dedupe-junit.outputs.final-message != ''
+        uses: mikepenz/action-junit-report@v4
+        with:
+          report_paths: 'junit-results/junit.xml'
+          check_name: 'Tests'
+          detailed_summary: true
+          include_passed: false
+          fail_on_failure: false
+
       - name: Summarize
         shell: bash
         run: |

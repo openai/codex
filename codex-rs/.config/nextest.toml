@@ -5,3 +5,4 @@
 [profile.ci-test.junit]
 path = "junit.xml"
 store-failure-output = true
+store-success-output = false
