@@ -25,45 +25,44 @@ use crate::rule::RuleRef;
 use crate::rule::validate_match_examples;
 use crate::rule::validate_not_match_examples;
 
-pub struct PolicyParser;
+pub struct PolicyParser {
+    builder: RefCell<PolicyBuilder>,
+}
+
+impl Default for PolicyParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl PolicyParser {
-    /// Parses a policy, tagging parser errors with `policy_identifier` so failures include the
-    /// identifier alongside line numbers.
-    pub fn parse(
-        policy_identifier: &str,
-        policy_file_contents: &str,
-    ) -> Result<crate::policy::Policy> {
-        Self::parse_many([(policy_identifier, policy_file_contents)])
+    pub fn new() -> Self {
+        Self {
+            builder: RefCell::new(PolicyBuilder::new()),
+        }
     }
 
-    /// Parses multiple policy files and merges the resulting rules.
-    pub fn parse_many<Policies, Identifier, Contents>(
-        policies: Policies,
-    ) -> Result<crate::policy::Policy>
-    where
-        Policies: IntoIterator<Item = (Identifier, Contents)>,
-        Identifier: AsRef<str>,
-        Contents: AsRef<str>,
-    {
+    /// Parses a policy, tagging parser errors with `policy_identifier` so failures include the
+    /// identifier alongside line numbers.
+    pub fn parse(&mut self, policy_identifier: &str, policy_file_contents: &str) -> Result<()> {
         let mut dialect = Dialect::Extended.clone();
         dialect.enable_f_strings = true;
         let globals = GlobalsBuilder::standard().with(policy_builtins).build();
+        let ast = AstModule::parse(
+            policy_identifier,
+            policy_file_contents.to_string(),
+            &dialect,
+        )
+        .map_err(Error::Starlark)?;
+        let module = Module::new();
+        let mut eval = Evaluator::new(&module);
+        eval.extra = Some(&self.builder);
+        eval.eval_module(ast, &globals).map_err(Error::Starlark)?;
+        Ok(())
+    }
 
-        let builder = RefCell::new(PolicyBuilder::new());
-        for (policy_identifier, policy_file_contents) in policies {
-            let ast = AstModule::parse(
-                policy_identifier.as_ref(),
-                policy_file_contents.as_ref().to_string(),
-                &dialect,
-            )
-            .map_err(Error::Starlark)?;
-            let module = Module::new();
-            let mut eval = Evaluator::new(&module);
-            eval.extra = Some(&builder);
-            eval.eval_module(ast, &globals).map_err(Error::Starlark)?;
-        }
-        Ok(builder.into_inner().build())
+    pub fn build(self) -> crate::policy::Policy {
+        self.builder.into_inner().build()
     }
 }
 
