@@ -1856,7 +1856,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select Model and Effort".to_string()),
             subtitle: Some(
-                "Access legacy models by running codex -m <model_name> or in your config"
+                "Access legacy models by running codex -m <model_name> or in your config.toml"
                     .to_string(),
             ),
             footer_hint: Some("Press enter to select reasoning effort, or esc to dismiss.".into()),
