@@ -141,43 +141,25 @@ impl ModelMigrationScreen {
     }
 }
 
-fn display_model_name(slug: &str) -> String {
-    slug.split('-')
-        .map(|part| match part {
-            "gpt" => "GPT".to_string(),
-            other => {
-                let mut chars = other.chars();
-                match chars.next() {
-                    Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
-                    None => String::new(),
-                }
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("-")
-}
-
 impl WidgetRef for &ModelMigrationScreen {
     fn render_ref(&self, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
         Clear.render(area, buf);
 
         let mut column = ColumnRenderable::new();
 
-        let primary_model = display_model_name(&self.target_model);
-
         column.push("");
         column.push(Line::from(vec![
             "> ".into(),
             "Introducing ".bold(),
             "our ".bold(),
-            primary_model.bold(),
+            self.target_model.clone().bold(),
             " models".bold(),
         ]));
         column.push(Line::from(""));
 
         column.push(
             Paragraph::new(Line::from(
-                "We've upgraded our family of models supported in Codex to GPT-5.1, GPT-5.1-Codex and GPT-5.1-Codex-Mini.",
+                "We've upgraded our family of models supported in Codex to gpt-5.1, gpt-5.1-codex and gpt-5.1-codex-mini.",
             ))
             .wrap(Wrap { trim: false })
             .inset(Insets::tlbr(0, 2, 0, 0)),
@@ -195,12 +177,14 @@ impl WidgetRef for &ModelMigrationScreen {
             Line::from(vec![
                 "Learn more at ".into(),
                 "www.openai.com/index/gpt-5-1".cyan().underlined(),
+                ".".into(),
             ])
             .inset(Insets::tlbr(0, 2, 0, 0)),
         );
         column.push(Line::from(""));
-        column
-            .push(Line::from(vec!["Press enter to try now".dim()]).inset(Insets::tlbr(0, 2, 0, 0)));
+        column.push(
+            Line::from(vec!["Press enter to continue".dim()]).inset(Insets::tlbr(0, 2, 0, 0)),
+        );
 
         column.render(area, buf);
     }
