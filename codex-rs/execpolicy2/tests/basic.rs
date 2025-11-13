@@ -57,6 +57,79 @@ prefix_rule(
 }
 
 #[test]
+fn parses_multiple_policy_files() {
+    let first_policy = r#"
+prefix_rule(
+    pattern = ["git"],
+    decision = "prompt",
+)
+    "#;
+    let second_policy = r#"
+prefix_rule(
+    pattern = ["git", "commit"],
+    decision = "forbidden",
+)
+    "#;
+
+    let policy = PolicyParser::parse_many([
+        ("first.codexpolicy", first_policy),
+        ("second.codexpolicy", second_policy),
+    ])
+    .expect("parse policy");
+
+    let git_rules = rule_snapshots(policy.rules().get_vec("git").expect("git rules"));
+    assert_eq!(
+        vec![
+            RuleSnapshot::Prefix(PrefixRule {
+                pattern: PrefixPattern {
+                    first: Arc::from("git"),
+                    rest: Vec::<PatternToken>::new().into(),
+                },
+                decision: Decision::Prompt,
+            }),
+            RuleSnapshot::Prefix(PrefixRule {
+                pattern: PrefixPattern {
+                    first: Arc::from("git"),
+                    rest: vec![PatternToken::Single("commit".to_string())].into(),
+                },
+                decision: Decision::Forbidden,
+            }),
+        ],
+        git_rules
+    );
+
+    let status_eval = policy.check(&tokens(&["git", "status"]));
+    assert_eq!(
+        Evaluation::Match {
+            decision: Decision::Prompt,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: tokens(&["git"]),
+                decision: Decision::Prompt,
+            }],
+        },
+        status_eval
+    );
+
+    let commit_eval = policy.check(&tokens(&["git", "commit", "-m", "hi"]));
+    assert_eq!(
+        Evaluation::Match {
+            decision: Decision::Forbidden,
+            matched_rules: vec![
+                RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["git"]),
+                    decision: Decision::Prompt,
+                },
+                RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["git", "commit"]),
+                    decision: Decision::Forbidden,
+                },
+            ],
+        },
+        commit_eval
+    );
+}
+
+#[test]
 fn only_first_token_alias_expands_to_multiple_rules() {
     let policy_src = r#"
 prefix_rule(
