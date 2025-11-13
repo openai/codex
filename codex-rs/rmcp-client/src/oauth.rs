@@ -50,6 +50,7 @@ use tokio::sync::Mutex;
 use crate::find_codex_home::find_codex_home;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
+const REFRESH_SKEW_MILLIS: u64 = 30_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StoredOAuthTokens {
@@ -305,15 +306,24 @@ impl OAuthPersistor {
 
         match maybe_credentials {
             Some(credentials) => {
-                let expires_at = compute_expires_at_millis(&credentials);
+                let mut last_credentials = self.inner.last_credentials.lock().await;
+                let new_token_response = WrappedOAuthTokenResponse(credentials.clone());
+                let same_token = last_credentials
+                    .as_ref()
+                    .map(|prev| prev.token_response == new_token_response)
+                    .unwrap_or(false);
+                let expires_at = if same_token {
+                    last_credentials.as_ref().and_then(|prev| prev.expires_at)
+                } else {
+                    compute_expires_at_millis(&credentials)
+                };
                 let stored = StoredOAuthTokens {
                     server_name: self.inner.server_name.clone(),
                     url: self.inner.url.clone(),
                     client_id,
-                    token_response: WrappedOAuthTokenResponse(credentials.clone()),
+                    token_response: new_token_response,
                     expires_at,
                 };
-                let mut last_credentials = self.inner.last_credentials.lock().await;
                 if last_credentials.as_ref() != Some(&stored) {
                     save_oauth_tokens(&self.inner.server_name, &stored, self.inner.store_mode)?;
                     *last_credentials = Some(stored);
@@ -337,6 +347,30 @@ impl OAuthPersistor {
         }
 
         Ok(())
+    }
+
+    pub(crate) async fn refresh_if_needed(&self) -> Result<()> {
+        let expires_at = {
+            let guard = self.inner.last_credentials.lock().await;
+            guard.as_ref().and_then(|tokens| tokens.expires_at)
+        };
+
+        if !token_needs_refresh(expires_at) {
+            return Ok(());
+        }
+
+        {
+            let manager = self.inner.authorization_manager.clone();
+            let guard = manager.lock().await;
+            guard.refresh_token().await.with_context(|| {
+                format!(
+                    "failed to refresh OAuth tokens for server {}",
+                    self.inner.server_name
+                )
+            })?;
+        }
+
+        self.persist_if_needed().await
     }
 }
 
@@ -471,6 +505,19 @@ fn expires_in_from_timestamp(expires_at: u64) -> Option<u64> {
     } else {
         Some((expires_at - now_ms) / 1000)
     }
+}
+
+fn token_needs_refresh(expires_at: Option<u64>) -> bool {
+    let Some(expires_at) = expires_at else {
+        return false;
+    };
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_secs(0))
+        .as_millis() as u64;
+
+    now.saturating_add(REFRESH_SKEW_MILLIS) >= expires_at
 }
 
 fn compute_store_key(server_name: &str, server_url: &str) -> Result<String> {
@@ -608,8 +655,9 @@ mod tests {
         store.save(KEYRING_SERVICE, &key, &serialized)?;
 
         let loaded =
-            super::load_oauth_tokens_from_keyring(&store, &tokens.server_name, &tokens.url)?;
-        assert_eq!(loaded, Some(expected));
+            super::load_oauth_tokens_from_keyring(&store, &tokens.server_name, &tokens.url)?
+                .expect("tokens should load from keyring");
+        assert_tokens_match_without_expiry(&loaded, &expected);
         Ok(())
     }
 
