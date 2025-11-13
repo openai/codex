@@ -16,7 +16,6 @@ use eventsource_stream::Eventsource;
 use futures::prelude::*;
 use regex_lite::Regex;
 use reqwest::StatusCode;
-use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -33,6 +32,9 @@ use crate::client::ResponseEvent;
 use crate::client::ResponseStream;
 use crate::client::ResponsesApiRequest;
 use crate::client::create_text_param_for_request;
+use crate::client::rate_limits::parse_rate_limit_snapshot;
+use crate::client::retry::RetryableStreamError;
+use crate::client::retry::retry_stream;
 use crate::client_common::Prompt;
 use crate::config::Config;
 use crate::default_client::CodexHttpClient;
@@ -49,7 +51,6 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
 use crate::protocol::RateLimitSnapshot;
-use crate::protocol::RateLimitWindow;
 use crate::protocol::TokenUsage;
 use crate::token_data::PlanType;
 use crate::tools::spec::create_tools_json_for_responses_api;
@@ -260,30 +261,10 @@ impl ModelClient {
         }
 
         let max_attempts = self.provider.request_max_retries();
-        for attempt in 0..=max_attempts {
-            match self
-                .attempt_stream_responses(attempt, &payload_json, &auth_manager)
-                .await
-            {
-                Ok(stream) => {
-                    return Ok(stream);
-                }
-                Err(StreamAttemptError::Fatal(e)) => {
-                    return Err(e);
-                }
-                Err(retryable_attempt_error) => {
-                    if attempt == max_attempts {
-                        return Err(retryable_attempt_error.into_error());
-                    }
-
-                    if let Some(delay) = retryable_attempt_error.delay(attempt) {
-                        tokio::time::sleep(delay).await;
-                    }
-                }
-            }
-        }
-
-        unreachable!("stream_responses_attempt should always return");
+        retry_stream(max_attempts, |attempt| {
+            self.attempt_stream_responses(attempt, &payload_json, &auth_manager)
+        })
+        .await
     }
 
     /// Single attempt to start a streaming Responses API call.
@@ -506,88 +487,6 @@ impl ModelClient {
     }
 }
 
-fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
-    // Prefer codex-specific aggregate rate limit headers if present; fall back
-    // to raw OpenAI-style request headers otherwise.
-    parse_codex_rate_limits(headers).or_else(|| parse_openai_rate_limits(headers))
-}
-
-fn parse_codex_rate_limits(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
-    fn parse_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
-        headers
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<f64>().ok())
-    }
-
-    fn parse_i64(headers: &HeaderMap, name: &str) -> Option<i64> {
-        headers
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<i64>().ok())
-    }
-
-    let primary_used = parse_f64(headers, "x-codex-primary-used-percent");
-    let secondary_used = parse_f64(headers, "x-codex-secondary-used-percent");
-
-    if primary_used.is_none() && secondary_used.is_none() {
-        return None;
-    }
-
-    let primary = primary_used.map(|used_percent| RateLimitWindow {
-        used_percent,
-        window_minutes: parse_i64(headers, "x-codex-primary-window-minutes"),
-        resets_at: parse_i64(headers, "x-codex-primary-reset-at"),
-    });
-
-    let secondary = secondary_used.map(|used_percent| RateLimitWindow {
-        used_percent,
-        window_minutes: parse_i64(headers, "x-codex-secondary-window-minutes"),
-        resets_at: parse_i64(headers, "x-codex-secondary-reset-at"),
-    });
-
-    Some(RateLimitSnapshot { primary, secondary })
-}
-
-fn parse_openai_rate_limits(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
-    let limit = headers.get("x-ratelimit-limit-requests")?;
-    let remaining = headers.get("x-ratelimit-remaining-requests")?;
-    let reset_ms = headers.get("x-ratelimit-reset-requests")?;
-
-    let limit = limit.to_str().ok()?.parse::<f64>().ok()?;
-    let remaining = remaining.to_str().ok()?.parse::<f64>().ok()?;
-    let reset_ms = reset_ms.to_str().ok()?.parse::<i64>().ok()?;
-
-    if limit <= 0.0 {
-        return None;
-    }
-
-    let used = (limit - remaining).max(0.0);
-    let used_percent = (used / limit) * 100.0;
-
-    let window_minutes = if reset_ms <= 0 {
-        None
-    } else {
-        let seconds = reset_ms / 1000;
-        Some((seconds + 59) / 60)
-    };
-
-    let resets_at = if reset_ms > 0 {
-        Some(Utc::now().timestamp() + reset_ms / 1000)
-    } else {
-        None
-    };
-
-    Some(RateLimitSnapshot {
-        primary: Some(RateLimitWindow {
-            used_percent,
-            window_minutes,
-            resets_at,
-        }),
-        secondary: None,
-    })
-}
-
 /// For Azure Responses endpoints we must use `store: true` and preserve
 /// per-item identifiers on the input payload. The `ResponseItem` schema
 /// deliberately skips serializing these IDs by default, so we patch them
@@ -678,6 +577,16 @@ impl StreamAttemptError {
             }),
             StreamAttemptError::RetryableTransportError(e) => e,
         }
+    }
+}
+
+impl RetryableStreamError for StreamAttemptError {
+    fn delay(&self, attempt: u64) -> Option<Duration> {
+        self.delay(attempt)
+    }
+
+    fn into_error(self) -> CodexErr {
+        self.into_error()
     }
 }
 

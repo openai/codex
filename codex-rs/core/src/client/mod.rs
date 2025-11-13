@@ -1,11 +1,14 @@
+mod aggregation;
 mod chat_completions;
 pub mod http;
+mod rate_limits;
 mod responses;
+mod retry;
 mod sse;
 pub mod types;
 
-pub(crate) use chat_completions::AggregateStreamExt;
-pub(crate) use chat_completions::AggregatedChatStream;
+pub(crate) use aggregation::AggregateStreamExt;
+pub(crate) use aggregation::AggregatedChatStream;
 pub(crate) use chat_completions::stream_chat_completions;
 pub use responses::ModelClient;
 pub(crate) use types::FreeformTool;
