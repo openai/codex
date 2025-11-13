@@ -1,6 +1,9 @@
 use crate::decision::Decision;
+use crate::error::Error;
+use crate::error::Result;
 use serde::Deserialize;
 use serde::Serialize;
+use shlex::try_join;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -97,4 +100,47 @@ impl Rule for PrefixRule {
                 decision: self.decision,
             })
     }
+}
+
+/// Count how many rules match each provided example and error if any example is unmatched.
+pub(crate) fn validate_match_examples(rules: &[RuleRef], matches: &[Vec<String>]) -> Result<()> {
+    let mut unmatched_examples = Vec::new();
+
+    for example in matches {
+        if rules.iter().any(|rule| rule.matches(example).is_some()) {
+            continue;
+        }
+
+        unmatched_examples.push(
+            try_join(example.iter().map(String::as_str))
+                .unwrap_or_else(|_| "unable to render example".to_string()),
+        );
+    }
+
+    if unmatched_examples.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::ExampleDidNotMatch {
+            rules: rules.iter().map(|rule| format!("{rule:?}")).collect(),
+            examples: unmatched_examples,
+        })
+    }
+}
+
+/// Ensure that no rule matches any provided negative example.
+pub(crate) fn validate_not_match_examples(
+    rules: &[RuleRef],
+    not_matches: &[Vec<String>],
+) -> Result<()> {
+    for example in not_matches {
+        if let Some(rule) = rules.iter().find(|rule| rule.matches(example).is_some()) {
+            return Err(Error::ExampleDidMatch {
+                rule: format!("{rule:?}"),
+                example: try_join(example.iter().map(String::as_str))
+                    .unwrap_or_else(|_| "unable to render example".to_string()),
+            });
+        }
+    }
+
+    Ok(())
 }
