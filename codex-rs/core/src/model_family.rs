@@ -1,3 +1,5 @@
+use codex_protocol::config_types::Verbosity;
+
 use crate::config::types::ReasoningSummaryFormat;
 use crate::tools::handlers::apply_patch::ApplyPatchToolType;
 use crate::tools::spec::ConfigShellToolType;
@@ -5,7 +7,9 @@ use crate::tools::spec::ConfigShellToolType;
 /// The `instructions` field in the payload sent to a model should always start
 /// with this content.
 const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
+
 const GPT_5_CODEX_INSTRUCTIONS: &str = include_str!("../gpt_5_codex_prompt.md");
+const GPT_5_1_INSTRUCTIONS: &str = include_str!("../gpt_5_1_prompt.md");
 
 /// A model family is a group of models that share certain characteristics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -53,6 +57,9 @@ pub struct ModelFamily {
     /// If the model family supports setting the verbosity level when using Responses API.
     pub support_verbosity: bool,
 
+    // The default verbosity level for this model family when using Responses API.
+    pub default_verbosity: Option<Verbosity>,
+
     /// Preferred shell tool type for this model family when features do not override it.
     pub shell_type: ConfigShellToolType,
 }
@@ -76,7 +83,9 @@ macro_rules! model_family {
             effective_context_window_percent: 95,
             support_verbosity: false,
             shell_type: ConfigShellToolType::Default,
+            default_verbosity: None,
         };
+
         // apply overrides
         $(
             mf.$key = $value;
@@ -154,7 +163,10 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
         )
 
     // Production models.
-    } else if slug.starts_with("gpt-5-codex") || slug.starts_with("codex-") {
+    } else if slug.starts_with("gpt-5-codex")
+        || slug.starts_with("gpt-5.1-codex")
+        || slug.starts_with("codex-")
+    {
         model_family!(
             slug, slug,
             supports_reasoning_summaries: true,
@@ -162,6 +174,15 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             support_verbosity: false,
+        )
+    } else if slug.starts_with("gpt-5.1") {
+        model_family!(
+            slug, "gpt-5.1",
+            supports_reasoning_summaries: true,
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            support_verbosity: true,
+            default_verbosity: Some(Verbosity::Low),
+            base_instructions: GPT_5_1_INSTRUCTIONS.to_string(),
         )
     } else if slug.starts_with("gpt-5") {
         model_family!(
@@ -189,5 +210,6 @@ pub fn derive_default_model_family(model: &str) -> ModelFamily {
         effective_context_window_percent: 95,
         support_verbosity: false,
         shell_type: ConfigShellToolType::Default,
+        default_verbosity: None,
     }
 }

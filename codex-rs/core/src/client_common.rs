@@ -422,6 +422,10 @@ mod tests {
                 expects_apply_patch_instructions: true,
             },
             InstructionsTestCase {
+                slug: "gpt-5.1",
+                expects_apply_patch_instructions: false,
+            },
+            InstructionsTestCase {
                 slug: "codex-mini-latest",
                 expects_apply_patch_instructions: true,
             },
@@ -431,6 +435,10 @@ mod tests {
             },
             InstructionsTestCase {
                 slug: "gpt-5-codex",
+                expects_apply_patch_instructions: false,
+            },
+            InstructionsTestCase {
+                slug: "gpt-5.1-codex",
                 expects_apply_patch_instructions: false,
             },
         ];

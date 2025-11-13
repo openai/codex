@@ -215,7 +215,9 @@ impl ModelClient {
         let input_with_instructions = prompt.get_formatted_input();
 
         let verbosity = if self.config.model_family.support_verbosity {
-            self.config.model_verbosity
+            self.config
+                .model_verbosity
+                .or(self.config.model_family.default_verbosity)
         } else {
             if self.config.model_verbosity.is_some() {
                 warn!(
@@ -294,10 +296,9 @@ impl ModelClient {
         let auth = auth_manager.as_ref().and_then(|m| m.auth());
 
         trace!(
-            "POST to {}: {:?}",
+            "POST to {}: {}",
             self.provider.get_full_url(&auth),
-            serde_json::to_string(payload_json)
-                .unwrap_or("<unable to serialize payload>".to_string())
+            payload_json.to_string()
         );
 
         let mut req_builder = self

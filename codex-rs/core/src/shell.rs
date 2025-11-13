@@ -31,14 +31,35 @@ pub enum Shell {
 impl Shell {
     pub fn name(&self) -> Option<String> {
         match self {
-            Shell::Zsh(zsh) => std::path::Path::new(&zsh.shell_path)
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string()),
-            Shell::Bash(bash) => std::path::Path::new(&bash.shell_path)
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string()),
+            Shell::Zsh(ZshShell { shell_path, .. }) | Shell::Bash(BashShell { shell_path, .. }) => {
+                std::path::Path::new(shell_path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+            }
             Shell::PowerShell(ps) => Some(ps.exe.clone()),
             Shell::Unknown => None,
+        }
+    }
+
+    /// Takes a string of shell and returns the full list of command args to
+    /// use with `exec()` to run the shell command.
+    pub fn derive_exec_args(&self, command: &str, use_login_shell: bool) -> Vec<String> {
+        match self {
+            Shell::Zsh(ZshShell { shell_path, .. }) | Shell::Bash(BashShell { shell_path, .. }) => {
+                let arg = if use_login_shell { "-lc" } else { "-c" };
+                vec![shell_path.clone(), arg.to_string(), command.to_string()]
+            }
+            Shell::PowerShell(ps) => {
+                let mut args = vec![ps.exe.clone(), "-NoLogo".to_string()];
+                if !use_login_shell {
+                    args.push("-NoProfile".to_string());
+                }
+
+                args.push("-Command".to_string());
+                args.push(command.to_string());
+                args
+            }
+            Shell::Unknown => shlex::split(command).unwrap_or_else(|| vec![command.to_string()]),
         }
     }
 }

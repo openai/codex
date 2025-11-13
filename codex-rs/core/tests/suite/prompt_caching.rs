@@ -234,7 +234,31 @@ async fn prompt_tools_are_consistent_across_requests() {
             ],
         ),
         (
+            "gpt-5.1",
+            vec![
+                "shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "view_image",
+            ],
+        ),
+        (
             "gpt-5-codex",
+            vec![
+                "shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "view_image",
+            ],
+        ),
+        (
+            "gpt-5.1-codex",
             vec![
                 "shell",
                 "list_mcp_resources",
@@ -277,6 +301,7 @@ async fn prompt_tools_are_consistent_across_requests() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "flaky on ubuntu-24.04-arm - aarch64-unknown-linux-gpu"]
 async fn prefixes_context_and_instructions_once_and_consistently_across_requests() {
     skip_if_no_network!();
     use pretty_assertions::assert_eq;

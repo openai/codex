@@ -2,15 +2,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
-use codex_protocol::models::ResponseInputItem;
-use tracing::warn;
-
 use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use async_trait::async_trait;
+use codex_protocol::models::ResponseInputItem;
+use codex_utils_readiness::Readiness;
+use tracing::warn;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ToolKind {
@@ -28,6 +28,10 @@ pub trait ToolHandler: Send + Sync {
             (ToolKind::Function, ToolPayload::Function { .. })
                 | (ToolKind::Mcp, ToolPayload::Mcp { .. })
         )
+    }
+
+    fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
+        false
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError>;
@@ -106,6 +110,11 @@ impl ToolRegistry {
                     let output_cell = &output_cell;
                     let invocation = invocation;
                     async move {
+                        if handler.is_mutating(&invocation) {
+                            tracing::trace!("waiting for tool gate");
+                            invocation.turn.tool_call_gate.wait_ready().await;
+                            tracing::trace!("tool gate released");
+                        }
                         match handler.handle(invocation).await {
                             Ok(output) => {
                                 let preview = output.log_preview();

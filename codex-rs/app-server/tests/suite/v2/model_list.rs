@@ -46,9 +46,9 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
 
     let expected_models = vec![
         Model {
-            id: "gpt-5-codex".to_string(),
-            model: "gpt-5-codex".to_string(),
-            display_name: "gpt-5-codex".to_string(),
+            id: "gpt-5.1-codex".to_string(),
+            model: "gpt-5.1-codex".to_string(),
+            display_name: "gpt-5.1-codex".to_string(),
             description: "Optimized for codex.".to_string(),
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
@@ -69,9 +69,9 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             is_default: true,
         },
         Model {
-            id: "gpt-5".to_string(),
-            model: "gpt-5".to_string(),
-            display_name: "gpt-5".to_string(),
+            id: "gpt-5.1".to_string(),
+            model: "gpt-5.1".to_string(),
+            display_name: "gpt-5.1".to_string(),
             description: "Broad world knowledge with strong general reasoning.".to_string(),
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
@@ -132,7 +132,7 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(first_response)?;
 
     assert_eq!(first_items.len(), 1);
-    assert_eq!(first_items[0].id, "gpt-5-codex");
+    assert_eq!(first_items[0].id, "gpt-5.1-codex");
     let next_cursor = first_cursor.ok_or_else(|| anyhow!("cursor for second page"))?;
 
     let second_request = mcp
@@ -154,7 +154,7 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(second_response)?;
 
     assert_eq!(second_items.len(), 1);
-    assert_eq!(second_items[0].id, "gpt-5");
+    assert_eq!(second_items[0].id, "gpt-5.1");
     assert!(second_cursor.is_none());
     Ok(())
 }
