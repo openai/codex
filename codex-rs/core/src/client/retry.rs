@@ -71,7 +71,7 @@ mod tests {
             if self.fatal {
                 CodexErr::InternalServerError
             } else {
-                CodexErr::Io(std::io::Error::new(std::io::ErrorKind::Other, "retryable"))
+                CodexErr::Io(std::io::Error::other("retryable"))
             }
         }
     }

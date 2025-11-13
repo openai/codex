@@ -1,5 +1,5 @@
+use codex_core::client::http::create_client;
 use codex_core::config::Config;
-use codex_core::default_client::create_client;
 
 use crate::chatgpt_token::get_chatgpt_token_data;
 use crate::chatgpt_token::init_chatgpt_token_from_auth;

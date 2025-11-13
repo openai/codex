@@ -1114,10 +1114,10 @@ mod tests {
         provider: ModelProviderInfo,
         otel_event_manager: OtelEventManager,
     ) -> Vec<Result<ResponseEvent>> {
-        let owned_chunks: Vec<Vec<u8>> = chunks.iter().map(|chunk| (*chunk).to_vec()).collect();
-
         let stream = futures::stream::iter(
-            owned_chunks
+            chunks
+                .iter()
+                .map(|chunk| (*chunk).to_vec())
                 .into_iter()
                 .map(|bytes| Ok::<Bytes, CodexErr>(Bytes::from(bytes))),
         );
