@@ -216,11 +216,9 @@ impl StatusHistoryCell {
 
         for row in rows {
             let percent_remaining = (100.0 - row.percent_used).clamp(0.0, 100.0);
-            let value_spans = vec![
-                Span::from(render_status_limit_progress_bar(percent_remaining)),
-                Span::from(" "),
-                Span::from(format_status_limit_summary(percent_remaining)),
-            ];
+            let mut value_spans = render_status_limit_progress_bar(percent_remaining);
+            value_spans.push(Span::from(" "));
+            value_spans.push(Span::from(format_status_limit_summary(percent_remaining)));
             let base_spans = formatter.full_spans(row.label.as_str(), value_spans);
             let base_line = Line::from(base_spans.clone());
 

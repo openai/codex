@@ -7,6 +7,9 @@ use chrono::Local;
 use chrono::Utc;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::RateLimitWindow;
+use ratatui::style::Color;
+use ratatui::style::Stylize;
+use ratatui::text::Span;
 
 const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
 const STATUS_LIMIT_BAR_FILLED: &str = "█";
@@ -124,16 +127,21 @@ pub(crate) fn compose_rate_limit_data(
     }
 }
 
-pub(crate) fn render_status_limit_progress_bar(percent_remaining: f64) -> String {
+pub(crate) fn render_status_limit_progress_bar(percent_remaining: f64) -> Vec<Span<'static>> {
     let ratio = (percent_remaining / 100.0).clamp(0.0, 1.0);
     let filled = (ratio * STATUS_LIMIT_BAR_SEGMENTS as f64).round() as usize;
     let filled = filled.min(STATUS_LIMIT_BAR_SEGMENTS);
     let empty = STATUS_LIMIT_BAR_SEGMENTS.saturating_sub(filled);
-    format!(
-        "[{}{}]",
-        STATUS_LIMIT_BAR_FILLED.repeat(filled),
-        STATUS_LIMIT_BAR_EMPTY.repeat(empty)
-    )
+    let mut spans = Vec::with_capacity(2 + STATUS_LIMIT_BAR_SEGMENTS);
+    spans.push("[".into());
+    if filled > 0 {
+        spans.push(Span::from(STATUS_LIMIT_BAR_FILLED.repeat(filled)).fg(Color::Rgb(0, 128, 0)));
+    }
+    if empty > 0 {
+        spans.push(Span::from(STATUS_LIMIT_BAR_EMPTY.repeat(empty)));
+    }
+    spans.push("]".into());
+    spans
 }
 
 pub(crate) fn format_status_limit_summary(percent_remaining: f64) -> String {
