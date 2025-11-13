@@ -8,6 +8,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+codex-utils-cache = { workspace = true }
 thiserror = { workspace = true }
 tiktoken-rs = "0.7"
 

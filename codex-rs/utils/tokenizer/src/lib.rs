@@ -1,7 +1,9 @@
 use std::fmt;
+use std::num::NonZeroUsize;
+use std::sync::OnceLock;
 
-use anyhow::Context;
 use anyhow::Error as AnyhowError;
+use codex_utils_cache::BlockingLruCache;
 use thiserror::Error;
 use tiktoken_rs::CoreBPE;
 
@@ -37,6 +39,15 @@ pub enum TokenizerError {
     },
 }
 
+fn model_cache() -> &'static BlockingLruCache<String, CoreBPE> {
+    static MODEL_CACHE: OnceLock<BlockingLruCache<String, CoreBPE>> = OnceLock::new();
+    MODEL_CACHE.get_or_init(|| {
+        BlockingLruCache::new(
+            NonZeroUsize::new(64).expect("tokenizer model cache capacity must be non-zero"),
+        )
+    })
+}
+
 /// Thin wrapper around a `tiktoken_rs::CoreBPE` tokenizer.
 #[derive(Clone)]
 pub struct Tokenizer {
@@ -63,20 +74,13 @@ impl Tokenizer {
     /// Build a tokenizer using an `OpenAI` model name (maps to an encoding).
     /// Falls back to the `O200kBase` encoding when the model is unknown.
     pub fn for_model(model: &str) -> Result<Self, TokenizerError> {
-        match tiktoken_rs::get_bpe_from_model(model) {
-            Ok(inner) => Ok(Self { inner }),
-            Err(model_error) => {
-                let inner = tiktoken_rs::o200k_base()
-                    .with_context(|| {
-                        format!("fallback after model lookup failure for {model}: {model_error}")
-                    })
-                    .map_err(|source| TokenizerError::LoadEncoding {
-                        kind: EncodingKind::O200kBase,
-                        source,
-                    })?;
-                Ok(Self { inner })
+        let inner = model_cache().get_or_try_insert_with(model.to_owned(), || {
+            match tiktoken_rs::get_bpe_from_model(model) {
+                Ok(inner) => Ok(inner),
+                Err(_model_error) => Tokenizer::new(EncodingKind::O200kBase).map(|e| e.inner),
             }
-        }
+        })?;
+        Ok(Self { inner })
     }
 
     /// Encode text to token IDs. If `with_special_tokens` is true, special

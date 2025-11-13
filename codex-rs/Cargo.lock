@@ -1549,6 +1549,7 @@ name = "codex-utils-tokenizer"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-utils-cache",
  "pretty_assertions",
  "thiserror 2.0.17",
  "tiktoken-rs",
