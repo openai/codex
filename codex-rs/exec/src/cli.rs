@@ -30,7 +30,7 @@ pub struct Cli {
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
 
-    /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, --sandbox workspace-write).
+    /// Convenience alias for low-friction sandboxed automatic execution (-a on-request, --sandbox workspace-write).
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
 

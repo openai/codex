@@ -64,24 +64,32 @@ pub(crate) async fn spawn_child_async(
     // any child processes that were spawned as part of a `"shell"` tool call
     // to also be terminated.
 
-    // This relies on prctl(2), so it only works on Linux.
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     unsafe {
+        #[cfg(target_os = "linux")]
         let parent_pid = libc::getpid();
         cmd.pre_exec(move || {
-            // This prctl call effectively requests, "deliver SIGTERM when my
-            // current parent dies."
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+            if libc::setpgid(0, 0) == -1 {
                 return Err(std::io::Error::last_os_error());
             }
 
-            // Though if there was a race condition and this pre_exec() block is
-            // run _after_ the parent (i.e., the Codex process) has already
-            // exited, then parent will be the closest configured "subreaper"
-            // ancestor process, or PID 1 (init). If the Codex process has exited
-            // already, so should the child process.
-            if libc::getppid() != parent_pid {
-                libc::raise(libc::SIGTERM);
+            // This relies on prctl(2), so it only works on Linux.
+            #[cfg(target_os = "linux")]
+            {
+                // This prctl call effectively requests, "deliver SIGTERM when my
+                // current parent dies."
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+
+                // Though if there was a race condition and this pre_exec() block is
+                // run _after_ the parent (i.e., the Codex process) has already
+                // exited, then parent will be the closest configured "subreaper"
+                // ancestor process, or PID 1 (init). If the Codex process has exited
+                // already, so should the child process.
+                if libc::getppid() != parent_pid {
+                    libc::raise(libc::SIGTERM);
+                }
             }
             Ok(())
         });

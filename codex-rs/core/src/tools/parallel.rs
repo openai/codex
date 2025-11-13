@@ -16,7 +16,6 @@ use crate::tools::router::ToolCall;
 use crate::tools::router::ToolRouter;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
-use codex_utils_readiness::Readiness;
 
 pub(crate) struct ToolCallRuntime {
     router: Arc<ToolRouter>,
@@ -55,7 +54,6 @@ impl ToolCallRuntime {
         let tracker = Arc::clone(&self.tracker);
         let lock = Arc::clone(&self.parallel_execution);
         let started = Instant::now();
-        let readiness = self.turn_context.tool_call_gate.clone();
 
         let handle: AbortOnDropHandle<Result<ResponseInputItem, FunctionCallError>> =
             AbortOnDropHandle::new(tokio::spawn(async move {
@@ -65,9 +63,6 @@ impl ToolCallRuntime {
                         Ok(Self::aborted_response(&call, secs))
                     },
                     res = async {
-                        tracing::info!("waiting for tool gate");
-                        readiness.wait_ready().await;
-                        tracing::info!("tool gate released");
                         let _guard = if supports_parallel {
                             Either::Left(lock.read().await)
                         } else {

@@ -19,7 +19,7 @@ use tokio::time::timeout;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -46,10 +46,10 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
 
     let expected_models = vec![
         Model {
-            id: "gpt-5-codex".to_string(),
-            model: "gpt-5-codex".to_string(),
-            display_name: "gpt-5-codex".to_string(),
-            description: "Optimized for coding tasks with many tools.".to_string(),
+            id: "gpt-5.1-codex".to_string(),
+            model: "gpt-5.1-codex".to_string(),
+            display_name: "gpt-5.1-codex".to_string(),
+            description: "Optimized for codex.".to_string(),
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Low,
@@ -69,15 +69,30 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             is_default: true,
         },
         Model {
-            id: "gpt-5".to_string(),
-            model: "gpt-5".to_string(),
-            display_name: "gpt-5".to_string(),
-            description: "Broad world knowledge with strong general reasoning.".to_string(),
+            id: "gpt-5.1-codex-mini".to_string(),
+            model: "gpt-5.1-codex-mini".to_string(),
+            display_name: "gpt-5.1-codex-mini".to_string(),
+            description: "Optimized for codex. Cheaper, faster, but less capable.".to_string(),
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Minimal,
-                    description: "Fastest responses with little reasoning".to_string(),
+                    reasoning_effort: ReasoningEffort::Medium,
+                    description: "Dynamically adjusts reasoning based on the task".to_string(),
                 },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::High,
+                    description: "Maximizes reasoning depth for complex or ambiguous problems"
+                        .to_string(),
+                },
+            ],
+            default_reasoning_effort: ReasoningEffort::Medium,
+            is_default: false,
+        },
+        Model {
+            id: "gpt-5.1".to_string(),
+            model: "gpt-5.1".to_string(),
+            display_name: "gpt-5.1".to_string(),
+            description: "Broad world knowledge with strong general reasoning.".to_string(),
+            supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Low,
                     description: "Balances speed with some reasoning; useful for straightforward \
@@ -106,7 +121,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn list_models_pagination_works() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -132,7 +147,7 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(first_response)?;
 
     assert_eq!(first_items.len(), 1);
-    assert_eq!(first_items[0].id, "gpt-5-codex");
+    assert_eq!(first_items[0].id, "gpt-5.1-codex");
     let next_cursor = first_cursor.ok_or_else(|| anyhow!("cursor for second page"))?;
 
     let second_request = mcp
@@ -154,12 +169,34 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(second_response)?;
 
     assert_eq!(second_items.len(), 1);
-    assert_eq!(second_items[0].id, "gpt-5");
-    assert!(second_cursor.is_none());
+    assert_eq!(second_items[0].id, "gpt-5.1-codex-mini");
+    let third_cursor = second_cursor.ok_or_else(|| anyhow!("cursor for third page"))?;
+
+    let third_request = mcp
+        .send_list_models_request(ModelListParams {
+            limit: Some(1),
+            cursor: Some(third_cursor.clone()),
+        })
+        .await?;
+
+    let third_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(third_request)),
+    )
+    .await??;
+
+    let ModelListResponse {
+        data: third_items,
+        next_cursor: third_cursor,
+    } = to_response::<ModelListResponse>(third_response)?;
+
+    assert_eq!(third_items.len(), 1);
+    assert_eq!(third_items[0].id, "gpt-5.1");
+    assert!(third_cursor.is_none());
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn list_models_rejects_invalid_cursor() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;

@@ -338,7 +338,7 @@ pub(crate) async fn stream_chat_completions(
     debug!(
         "POST to {}: {}",
         provider.get_full_url(&None),
-        serde_json::to_string_pretty(&payload).unwrap_or_default()
+        payload.to_string()
     );
 
     let mut attempt = 0;

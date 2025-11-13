@@ -16,7 +16,7 @@ use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
 use crate::ui_consts::LIVE_PREFIX_COLS;
-use crate::updates::UpdateAction;
+use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
@@ -559,11 +559,28 @@ pub(crate) fn padded_emoji(emoji: &str) -> String {
     format!("{emoji}\u{200A}")
 }
 
+#[derive(Debug)]
+pub struct SessionInfoCell(CompositeHistoryCell);
+
+impl HistoryCell for SessionInfoCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.0.display_lines(width)
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.0.desired_height(width)
+    }
+
+    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.0.transcript_lines(width)
+    }
+}
+
 pub(crate) fn new_session_info(
     config: &Config,
     event: SessionConfiguredEvent,
     is_first_event: bool,
-) -> CompositeHistoryCell {
+) -> SessionInfoCell {
     let SessionConfiguredEvent {
         model,
         reasoning_effort,
@@ -573,7 +590,7 @@ pub(crate) fn new_session_info(
         initial_messages: _,
         rollout_path: _,
     } = event;
-    if is_first_event {
+    SessionInfoCell(if is_first_event {
         // Header box rendered as history (so it appears at the very top)
         let header = SessionHeaderHistoryCell::new(
             model,
@@ -632,7 +649,7 @@ pub(crate) fn new_session_info(
         CompositeHistoryCell {
             parts: vec![Box::new(PlainHistoryCell { lines })],
         }
-    }
+    })
 }
 
 pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
@@ -695,6 +712,7 @@ impl SessionHeaderHistoryCell {
             ReasoningEffortConfig::Low => "low",
             ReasoningEffortConfig::Medium => "medium",
             ReasoningEffortConfig::High => "high",
+            ReasoningEffortConfig::None => "none",
         })
     }
 }

@@ -5,6 +5,8 @@ use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
 use codex_common::approval_presets::builtin_approval_presets;
+use codex_common::model_presets::ModelPreset;
+use codex_common::model_presets::ReasoningEffortPreset;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
@@ -26,6 +28,7 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::ReviewCodeLocation;
 use codex_core::protocol::ReviewFinding;
 use codex_core::protocol::ReviewLineRange;
@@ -57,7 +60,7 @@ use tempfile::tempdir;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
 
-const TEST_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start new a new conversation when possible to keep conversations small and targeted.";
+const TEST_WARNING_MESSAGE: &str = "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.";
 
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
@@ -100,6 +103,17 @@ fn upgrade_event_payload_for_tests(mut payload: serde_json::Value) -> serde_json
         }
     }
     payload
+}
+
+fn snapshot(percent: f64) -> RateLimitSnapshot {
+    RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: percent,
+            window_minutes: Some(60),
+            resets_at: None,
+        }),
+        secondary: None,
+    }
 }
 
 #[test]
@@ -285,6 +299,7 @@ fn make_chatwidget_manual() -> (
         token_info: None,
         rate_limit_snapshot: None,
         rate_limit_warnings: RateLimitWarningState::default(),
+        rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
         stream_controller: None,
         running_commands: HashMap::new(),
         task_complete_pending: false,
@@ -391,6 +406,98 @@ fn test_rate_limit_warnings_monthly() {
         ),],
         "expected one warning per limit for the highest crossed threshold"
     );
+}
+
+#[test]
+fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
+    let (mut chat, _, _) = make_chatwidget_manual();
+    chat.auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.config.model = NUDGE_MODEL_SLUG.to_string();
+
+    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
+
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+}
+
+#[test]
+fn rate_limit_switch_prompt_shows_once_per_session() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let (mut chat, _, _) = make_chatwidget_manual();
+    chat.config.model = "gpt-5".to_string();
+    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+
+    chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
+    assert!(
+        chat.rate_limit_warnings.primary_index >= 1,
+        "warnings not emitted"
+    );
+    chat.maybe_show_pending_rate_limit_prompt();
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+
+    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+}
+
+#[test]
+fn rate_limit_switch_prompt_respects_hidden_notice() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let (mut chat, _, _) = make_chatwidget_manual();
+    chat.config.model = "gpt-5".to_string();
+    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+    chat.config.notices.hide_rate_limit_model_nudge = Some(true);
+
+    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
+
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+}
+
+#[test]
+fn rate_limit_switch_prompt_defers_until_task_complete() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let (mut chat, _, _) = make_chatwidget_manual();
+    chat.config.model = "gpt-5".to_string();
+    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+
+    chat.bottom_pane.set_task_running(true);
+    chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Pending
+    ));
+
+    chat.bottom_pane.set_task_running(false);
+    chat.maybe_show_pending_rate_limit_prompt();
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+}
+
+#[test]
+fn rate_limit_switch_prompt_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+    chat.auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.config.model = "gpt-5".to_string();
+
+    chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
+    chat.maybe_show_pending_rate_limit_prompt();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("rate_limit_switch_prompt_popup", popup);
 }
 
 // (removed experimental resize snapshot test)
@@ -1397,17 +1504,56 @@ fn windows_auto_mode_instructions_popup_lists_install_steps() {
 fn model_reasoning_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.config.model = "gpt-5-codex".to_string();
+    chat.config.model = "gpt-5.1-codex".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
 
     let preset = builtin_model_presets(None)
         .into_iter()
-        .find(|preset| preset.model == "gpt-5-codex")
-        .expect("gpt-5-codex preset");
+        .find(|preset| preset.model == "gpt-5.1-codex")
+        .expect("gpt-5.1-codex preset");
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_reasoning_selection_popup", popup);
+}
+
+#[test]
+fn single_reasoning_option_skips_selection() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    static SINGLE_EFFORT: [ReasoningEffortPreset; 1] = [ReasoningEffortPreset {
+        effort: ReasoningEffortConfig::High,
+        description: "Maximizes reasoning depth for complex or ambiguous problems",
+    }];
+    let preset = ModelPreset {
+        id: "model-with-single-reasoning",
+        model: "model-with-single-reasoning",
+        display_name: "model-with-single-reasoning",
+        description: "",
+        default_reasoning_effort: ReasoningEffortConfig::High,
+        supported_reasoning_efforts: &SINGLE_EFFORT,
+        is_default: false,
+        upgrade: None,
+    };
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !popup.contains("Select Reasoning Level"),
+        "expected reasoning selection popup to be skipped"
+    );
+
+    let mut events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        events.push(ev);
+    }
+
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, AppEvent::UpdateReasoningEffort(Some(effort)) if *effort == ReasoningEffortConfig::High)),
+        "expected reasoning effort to be applied automatically; events: {events:?}"
+    );
 }
 
 #[test]
@@ -1436,13 +1582,13 @@ fn feedback_upload_consent_popup_snapshot() {
 fn reasoning_popup_escape_returns_to_model_popup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.config.model = "gpt-5".to_string();
+    chat.config.model = "gpt-5.1".to_string();
     chat.open_model_popup();
 
     let presets = builtin_model_presets(None)
         .into_iter()
-        .find(|preset| preset.model == "gpt-5-codex")
-        .expect("gpt-5-codex preset");
+        .find(|preset| preset.model == "gpt-5.1-codex")
+        .expect("gpt-5.1-codex preset");
     chat.open_reasoning_popup(presets);
 
     let before_escape = render_bottom_popup(&chat, 80);

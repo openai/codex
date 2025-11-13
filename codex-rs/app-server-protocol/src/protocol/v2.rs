@@ -5,15 +5,19 @@ use crate::protocol::common::AuthMode;
 use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+use codex_protocol::items::TurnItem as CoreTurnItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
+use codex_protocol::user_input::UserInput as CoreUserInput;
 use mcp_types::ContentBlock as McpContentBlock;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use ts_rs::TS;
-use uuid::Uuid;
 
 // Macro to declare a camelCased API v2 enum mirroring a core enum which
 // tends to use kebab-case.
@@ -122,14 +126,11 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
 pub enum Account {
     #[serde(rename = "apiKey", rename_all = "camelCase")]
     #[ts(rename = "apiKey", rename_all = "camelCase")]
-    ApiKey { api_key: String },
+    ApiKey {},
 
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
-    ChatGpt {
-        email: Option<String>,
-        plan_type: PlanType,
-    },
+    Chatgpt { email: String, plan_type: PlanType },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -137,8 +138,8 @@ pub enum Account {
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum LoginAccountParams {
-    #[serde(rename = "apiKey")]
-    #[ts(rename = "apiKey")]
+    #[serde(rename = "apiKey", rename_all = "camelCase")]
+    #[ts(rename = "apiKey", rename_all = "camelCase")]
     ApiKey {
         #[serde(rename = "apiKey")]
         #[ts(rename = "apiKey")]
@@ -146,21 +147,39 @@ pub enum LoginAccountParams {
     },
     #[serde(rename = "chatgpt")]
     #[ts(rename = "chatgpt")]
-    ChatGpt,
+    Chatgpt,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum LoginAccountResponse {
+    #[serde(rename = "apiKey", rename_all = "camelCase")]
+    #[ts(rename = "apiKey", rename_all = "camelCase")]
+    ApiKey {},
+    #[serde(rename = "chatgpt", rename_all = "camelCase")]
+    #[ts(rename = "chatgpt", rename_all = "camelCase")]
+    Chatgpt {
+        // Use plain String for identifiers to avoid TS/JSON Schema quirks around uuid-specific types.
+        // Convert to/from UUIDs at the application layer as needed.
+        login_id: String,
+        /// URL the client should open in a browser to initiate the OAuth flow.
+        auth_url: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct LoginAccountResponse {
-    /// Only set if the login method is ChatGPT.
-    #[schemars(with = "String")]
-    pub login_id: Option<Uuid>,
-
-    /// URL the client should open in a browser to initiate the OAuth flow.
-    /// Only set if the login method is ChatGPT.
-    pub auth_url: Option<String>,
+pub struct CancelLoginAccountParams {
+    pub login_id: String,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CancelLoginAccountResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -177,8 +196,17 @@ pub struct GetAccountRateLimitsResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct GetAccountParams {
+    #[serde(default)]
+    pub refresh_token: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct GetAccountResponse {
-    pub account: Account,
+    pub account: Option<Account>,
+    pub requires_openai_auth: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
@@ -263,11 +291,39 @@ pub struct ThreadStartResponse {
     pub thread: Thread,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// There are three ways to resume a thread:
+/// 1. By thread_id: load the thread from disk by thread_id and resume it.
+/// 2. By history: instantiate the thread from memory and resume it.
+/// 3. By path: load the thread from disk by path and resume it.
+///
+/// The precedence is: history > path > thread_id.
+/// If using history or path, the thread_id param will be ignored.
+///
+/// Prefer using thread_id whenever possible.
 pub struct ThreadResumeParams {
     pub thread_id: String,
+
+    /// [UNSTABLE] FOR CODEX CLOUD - DO NOT USE.
+    /// If specified, the thread will be resumed with the provided history
+    /// instead of loaded from disk.
+    pub history: Option<Vec<ResponseItem>>,
+
+    /// [UNSTABLE] Specify the rollout path to resume from.
+    /// If specified, the thread_id param will be ignored.
+    pub path: Option<PathBuf>,
+
+    /// Configuration overrides for the resumed thread, if any.
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub cwd: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
+    pub sandbox: Option<SandboxMode>,
+    pub config: Option<HashMap<String, serde_json::Value>>,
+    pub base_instructions: Option<String>,
+    pub developer_instructions: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -329,13 +385,20 @@ pub struct ThreadCompactResponse {}
 #[ts(export_to = "v2/")]
 pub struct Thread {
     pub id: String,
+    /// Usually the first user message in the thread, if available.
+    pub preview: String,
+    pub model_provider: String,
+    /// Unix timestamp (in seconds) when the thread was created.
+    pub created_at: i64,
+    /// [UNSTABLE] Path to the thread on disk.
+    pub path: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AccountUpdatedNotification {
-    pub auth_method: Option<AuthMode>,
+    pub auth_mode: Option<AuthMode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -351,6 +414,13 @@ pub struct Turn {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct TurnError {
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub enum TurnStatus {
     Completed,
     Interrupted,
@@ -358,15 +428,51 @@ pub enum TurnStatus {
     InProgress,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+// Turn APIs
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct TurnError {
-    pub message: String,
+pub struct TurnStartParams {
+    pub thread_id: String,
+    pub input: Vec<UserInput>,
+    /// Override the working directory for this turn and subsequent turns.
+    pub cwd: Option<PathBuf>,
+    /// Override the approval policy for this turn and subsequent turns.
+    pub approval_policy: Option<AskForApproval>,
+    /// Override the sandbox policy for this turn and subsequent turns.
+    pub sandbox_policy: Option<SandboxPolicy>,
+    /// Override the model for this turn and subsequent turns.
+    pub model: Option<String>,
+    /// Override the reasoning effort for this turn and subsequent turns.
+    pub effort: Option<ReasoningEffort>,
+    /// Override the reasoning summary for this turn and subsequent turns.
+    pub summary: Option<ReasoningSummary>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnStartResponse {
+    pub turn: Turn,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnInterruptParams {
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnInterruptResponse {}
+
+// User input types
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum UserInput {
     Text { text: String },
@@ -374,8 +480,30 @@ pub enum UserInput {
     LocalImage { path: PathBuf },
 }
 
+impl UserInput {
+    pub fn into_core(self) -> CoreUserInput {
+        match self {
+            UserInput::Text { text } => CoreUserInput::Text { text },
+            UserInput::Image { url } => CoreUserInput::Image { image_url: url },
+            UserInput::LocalImage { path } => CoreUserInput::LocalImage { path },
+        }
+    }
+}
+
+impl From<CoreUserInput> for UserInput {
+    fn from(value: CoreUserInput) -> Self {
+        match value {
+            CoreUserInput::Text { text } => UserInput::Text { text },
+            CoreUserInput::Image { image_url } => UserInput::Image { url: image_url },
+            CoreUserInput::LocalImage { path } => UserInput::LocalImage { path },
+            _ => unreachable!("unsupported user input variant"),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum ThreadItem {
     UserMessage {
@@ -428,6 +556,42 @@ pub enum ThreadItem {
         id: String,
         review: String,
     },
+}
+
+impl From<CoreTurnItem> for ThreadItem {
+    fn from(value: CoreTurnItem) -> Self {
+        match value {
+            CoreTurnItem::UserMessage(user) => ThreadItem::UserMessage {
+                id: user.id,
+                content: user.content.into_iter().map(UserInput::from).collect(),
+            },
+            CoreTurnItem::AgentMessage(agent) => {
+                let text = agent
+                    .content
+                    .into_iter()
+                    .map(|entry| match entry {
+                        CoreAgentMessageContent::Text { text } => text,
+                    })
+                    .collect::<String>();
+                ThreadItem::AgentMessage { id: agent.id, text }
+            }
+            CoreTurnItem::Reasoning(reasoning) => {
+                let text = if !reasoning.summary_text.is_empty() {
+                    reasoning.summary_text.join("\n")
+                } else {
+                    reasoning.raw_content.join("\n")
+                };
+                ThreadItem::Reasoning {
+                    id: reasoning.id,
+                    text,
+                }
+            }
+            CoreTurnItem::WebSearch(search) => ThreadItem::WebSearch {
+                id: search.id,
+                query: search.query,
+            },
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -499,7 +663,7 @@ pub struct TodoItem {
 }
 
 // === Server Notifications ===
-
+// Thread/Turn lifecycle notifications and item progress events
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -528,6 +692,7 @@ pub struct Usage {
 #[ts(export_to = "v2/")]
 pub struct TurnCompletedNotification {
     pub turn: Turn,
+    // TODO: should usage be stored on the Turn object, and we return that instead?
     pub usage: Usage,
 }
 
@@ -545,6 +710,7 @@ pub struct ItemCompletedNotification {
     pub item: ThreadItem,
 }
 
+// Item-specific progress notifications
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -609,5 +775,113 @@ impl From<CoreRateLimitWindow> for RateLimitWindow {
             window_duration_mins: value.window_minutes,
             resets_at: value.resets_at,
         }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountLoginCompletedNotification {
+    // Use plain String for identifiers to avoid TS/JSON Schema quirks around uuid-specific types.
+    // Convert to/from UUIDs at the application layer as needed.
+    pub login_id: Option<String>,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::items::AgentMessageContent;
+    use codex_protocol::items::AgentMessageItem;
+    use codex_protocol::items::ReasoningItem;
+    use codex_protocol::items::TurnItem;
+    use codex_protocol::items::UserMessageItem;
+    use codex_protocol::items::WebSearchItem;
+    use codex_protocol::user_input::UserInput as CoreUserInput;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    #[test]
+    fn core_turn_item_into_thread_item_converts_supported_variants() {
+        let user_item = TurnItem::UserMessage(UserMessageItem {
+            id: "user-1".to_string(),
+            content: vec![
+                CoreUserInput::Text {
+                    text: "hello".to_string(),
+                },
+                CoreUserInput::Image {
+                    image_url: "https://example.com/image.png".to_string(),
+                },
+                CoreUserInput::LocalImage {
+                    path: PathBuf::from("local/image.png"),
+                },
+            ],
+        });
+
+        assert_eq!(
+            ThreadItem::from(user_item),
+            ThreadItem::UserMessage {
+                id: "user-1".to_string(),
+                content: vec![
+                    UserInput::Text {
+                        text: "hello".to_string(),
+                    },
+                    UserInput::Image {
+                        url: "https://example.com/image.png".to_string(),
+                    },
+                    UserInput::LocalImage {
+                        path: PathBuf::from("local/image.png"),
+                    },
+                ],
+            }
+        );
+
+        let agent_item = TurnItem::AgentMessage(AgentMessageItem {
+            id: "agent-1".to_string(),
+            content: vec![
+                AgentMessageContent::Text {
+                    text: "Hello ".to_string(),
+                },
+                AgentMessageContent::Text {
+                    text: "world".to_string(),
+                },
+            ],
+        });
+
+        assert_eq!(
+            ThreadItem::from(agent_item),
+            ThreadItem::AgentMessage {
+                id: "agent-1".to_string(),
+                text: "Hello world".to_string(),
+            }
+        );
+
+        let reasoning_item = TurnItem::Reasoning(ReasoningItem {
+            id: "reasoning-1".to_string(),
+            summary_text: vec!["line one".to_string(), "line two".to_string()],
+            raw_content: vec![],
+        });
+
+        assert_eq!(
+            ThreadItem::from(reasoning_item),
+            ThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                text: "line one\nline two".to_string(),
+            }
+        );
+
+        let search_item = TurnItem::WebSearch(WebSearchItem {
+            id: "search-1".to_string(),
+            query: "docs".to_string(),
+        });
+
+        assert_eq!(
+            ThreadItem::from(search_item),
+            ThreadItem::WebSearch {
+                id: "search-1".to_string(),
+                query: "docs".to_string(),
+            }
+        );
     }
 }

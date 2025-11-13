@@ -132,6 +132,8 @@ struct RunningCommand {
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
+const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
+const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
 
 #[derive(Default)]
 struct RateLimitWarningState {
@@ -230,6 +232,14 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) feedback: codex_feedback::CodexFeedback,
 }
 
+#[derive(Default)]
+enum RateLimitSwitchPromptState {
+    #[default]
+    Idle,
+    Pending,
+    Shown,
+}
+
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -242,6 +252,7 @@ pub(crate) struct ChatWidget {
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
     rate_limit_warnings: RateLimitWarningState,
+    rate_limit_switch_prompt: RateLimitSwitchPromptState,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
@@ -463,6 +474,8 @@ impl ChatWidget {
         self.notify(Notification::AgentTurnComplete {
             response: last_agent_message.unwrap_or_default(),
         });
+
+        self.maybe_show_pending_rate_limit_prompt();
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -497,6 +510,28 @@ impl ChatWidget {
                     .and_then(|window| window.window_minutes),
             );
 
+            let high_usage = snapshot
+                .secondary
+                .as_ref()
+                .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
+                .unwrap_or(false)
+                || snapshot
+                    .primary
+                    .as_ref()
+                    .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
+                    .unwrap_or(false);
+
+            if high_usage
+                && !self.rate_limit_switch_prompt_hidden()
+                && self.config.model != NUDGE_MODEL_SLUG
+                && !matches!(
+                    self.rate_limit_switch_prompt,
+                    RateLimitSwitchPromptState::Shown
+                )
+            {
+                self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
+            }
+
             let display = crate::status::rate_limit_snapshot_display(&snapshot, Local::now());
             self.rate_limit_snapshot = Some(display);
 
@@ -518,6 +553,7 @@ impl ChatWidget {
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
         self.stream_controller = None;
+        self.maybe_show_pending_rate_limit_prompt();
     }
 
     fn on_error(&mut self, message: String) {
@@ -1001,6 +1037,7 @@ impl ChatWidget {
             token_info: None,
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
+            rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -1067,6 +1104,7 @@ impl ChatWidget {
             token_info: None,
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
+            rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -1105,8 +1143,21 @@ impl ChatWidget {
                 kind: KeyEventKind::Press,
                 ..
             } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'v') => {
-                if let Ok((path, info)) = paste_image_to_temp_png() {
-                    self.attach_image(path, info.width, info.height, info.encoded_format.label());
+                match paste_image_to_temp_png() {
+                    Ok((path, info)) => {
+                        self.attach_image(
+                            path,
+                            info.width,
+                            info.height,
+                            info.encoded_format.label(),
+                        );
+                    }
+                    Err(err) => {
+                        tracing::warn!("failed to paste image: {err}");
+                        self.add_to_history(history_cell::new_error_event(format!(
+                            "Failed to paste image: {err}",
+                        )));
+                    }
                 }
                 return;
             }
@@ -1668,12 +1719,116 @@ impl ChatWidget {
         };
         self.add_to_history(crate::status::new_status_output(
             &self.config,
+            self.auth_manager.as_ref(),
             total_usage,
             context_usage,
             &self.conversation_id,
             self.rate_limit_snapshot.as_ref(),
             Local::now(),
         ));
+    }
+
+    fn lower_cost_preset(&self) -> Option<ModelPreset> {
+        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
+        builtin_model_presets(auth_mode)
+            .into_iter()
+            .find(|preset| preset.model == NUDGE_MODEL_SLUG)
+    }
+
+    fn rate_limit_switch_prompt_hidden(&self) -> bool {
+        self.config
+            .notices
+            .hide_rate_limit_model_nudge
+            .unwrap_or(false)
+    }
+
+    fn maybe_show_pending_rate_limit_prompt(&mut self) {
+        if self.rate_limit_switch_prompt_hidden() {
+            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
+            return;
+        }
+        if !matches!(
+            self.rate_limit_switch_prompt,
+            RateLimitSwitchPromptState::Pending
+        ) {
+            return;
+        }
+        if let Some(preset) = self.lower_cost_preset() {
+            self.open_rate_limit_switch_prompt(preset);
+            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Shown;
+        } else {
+            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
+        }
+    }
+
+    fn open_rate_limit_switch_prompt(&mut self, preset: ModelPreset) {
+        let switch_model = preset.model.to_string();
+        let display_name = preset.display_name.to_string();
+        let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
+
+        let switch_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                model: Some(switch_model.clone()),
+                effort: Some(Some(default_effort)),
+                summary: None,
+            }));
+            tx.send(AppEvent::UpdateModel(switch_model.clone()));
+            tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
+        })];
+
+        let keep_actions: Vec<SelectionAction> = Vec::new();
+        let never_actions: Vec<SelectionAction> = vec![Box::new(|tx| {
+            tx.send(AppEvent::UpdateRateLimitSwitchPromptHidden(true));
+            tx.send(AppEvent::PersistRateLimitSwitchPromptHidden);
+        })];
+        let description = if preset.description.is_empty() {
+            Some("Uses fewer credits for upcoming turns.".to_string())
+        } else {
+            Some(preset.description.to_string())
+        };
+
+        let items = vec![
+            SelectionItem {
+                name: format!("Switch to {display_name}"),
+                description,
+                selected_description: None,
+                is_current: false,
+                actions: switch_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Keep current model".to_string(),
+                description: None,
+                selected_description: None,
+                is_current: false,
+                actions: keep_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Keep current model (never show again)".to_string(),
+                description: Some(
+                    "Hide future rate limit reminders about switching models.".to_string(),
+                ),
+                selected_description: None,
+                is_current: false,
+                actions: never_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Approaching rate limits".to_string()),
+            subtitle: Some(format!("Switch to {display_name} for lower credit usage?")),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
     }
 
     /// Open a popup to choose the model (stage 1). After selecting a model,
@@ -1691,10 +1846,12 @@ impl ChatWidget {
                 Some(preset.description.to_string())
             };
             let is_current = preset.model == current_model;
-            let preset_for_action = preset;
+            let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
+            let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                let preset_for_event = preset_for_action.clone();
                 tx.send(AppEvent::OpenReasoningPopup {
-                    model: preset_for_action,
+                    model: preset_for_event,
                 });
             })];
             items.push(SelectionItem {
@@ -1702,14 +1859,17 @@ impl ChatWidget {
                 description,
                 is_current,
                 actions,
-                dismiss_on_select: false,
+                dismiss_on_select: single_supported_effort,
                 ..Default::default()
             });
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select Model and Effort".to_string()),
-            subtitle: Some("Switch the model for this and future Codex CLI sessions".to_string()),
+            subtitle: Some(
+                "Access legacy models by running codex -m <model_name> or in your config.toml"
+                    .to_string(),
+            ),
             footer_hint: Some("Press enter to select reasoning effort, or esc to dismiss.".into()),
             items,
             ..Default::default()
@@ -1739,6 +1899,15 @@ impl ChatWidget {
                 stored: Some(default_effort),
                 display: default_effort,
             });
+        }
+
+        if choices.len() == 1 {
+            if let Some(effort) = choices.first().and_then(|c| c.stored) {
+                self.apply_model_and_effort(preset.model.to_string(), Some(effort));
+            } else {
+                self.apply_model_and_effort(preset.model.to_string(), None);
+            }
+            return;
         }
 
         let default_choice: Option<ReasoningEffortConfig> = choices
@@ -1779,7 +1948,7 @@ impl ChatWidget {
 
             let warning = "⚠ High reasoning effort can quickly consume Plus plan rate limits.";
             let show_warning =
-                preset.model == "gpt-5-codex" && effort == ReasoningEffortConfig::High;
+                preset.model.starts_with("gpt-5.1-codex") && effort == ReasoningEffortConfig::High;
             let selected_description = show_warning.then(|| {
                 description
                     .as_ref()
@@ -1836,6 +2005,32 @@ impl ChatWidget {
         });
     }
 
+    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                model: Some(model.clone()),
+                effort: Some(effort),
+                summary: None,
+            }));
+        self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
+        self.app_event_tx
+            .send(AppEvent::UpdateReasoningEffort(effort));
+        self.app_event_tx.send(AppEvent::PersistModelSelection {
+            model: model.clone(),
+            effort,
+        });
+        tracing::info!(
+            "Selected model: {}, Selected effort: {}",
+            model,
+            effort
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "default".to_string())
+        );
+    }
+
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
     pub(crate) fn open_approvals_popup(&mut self) {
         let current_approval = self.config.approval_policy;
@@ -1890,13 +2085,73 @@ impl ChatWidget {
                         preset: preset_clone.clone(),
                     });
                 })]
-            } else if cfg!(target_os = "windows")
-                && preset.id == "auto"
-                && codex_core::get_platform_sandbox().is_none()
-            {
-                vec![Box::new(|tx| {
-                    tx.send(AppEvent::ShowWindowsAutoModeInstructions);
-                })]
+            } else if preset.id == "auto" {
+                #[cfg(target_os = "windows")]
+                {
+                    if codex_core::get_platform_sandbox().is_none() {
+                        vec![Box::new(|tx| {
+                            tx.send(AppEvent::ShowWindowsAutoModeInstructions);
+                        })]
+                    } else if !self
+                        .config
+                        .notices
+                        .hide_world_writable_warning
+                        .unwrap_or(false)
+                        && self.windows_world_writable_flagged()
+                    {
+                        let preset_clone = preset.clone();
+                        // Compute sample paths for the warning popup.
+                        let mut env_map: std::collections::HashMap<String, String> =
+                            std::collections::HashMap::new();
+                        for (k, v) in std::env::vars() {
+                            env_map.insert(k, v);
+                        }
+                        let (sample_paths, extra_count, failed_scan) =
+                            match codex_windows_sandbox::preflight_audit_everyone_writable(
+                                &self.config.cwd,
+                                &env_map,
+                                Some(self.config.codex_home.as_path()),
+                            ) {
+                                Ok(paths) if !paths.is_empty() => {
+                                    fn normalize_windows_path_for_display(
+                                        p: &std::path::Path,
+                                    ) -> String {
+                                        let canon = dunce::canonicalize(p)
+                                            .unwrap_or_else(|_| p.to_path_buf());
+                                        canon.display().to_string().replace('/', "\\")
+                                    }
+                                    let as_strings: Vec<String> = paths
+                                        .iter()
+                                        .map(|p| normalize_windows_path_for_display(p))
+                                        .collect();
+                                    let samples: Vec<String> =
+                                        as_strings.iter().take(3).cloned().collect();
+                                    let extra = if as_strings.len() > samples.len() {
+                                        as_strings.len() - samples.len()
+                                    } else {
+                                        0
+                                    };
+                                    (samples, extra, false)
+                                }
+                                Err(_) => (Vec::new(), 0, true),
+                                _ => (Vec::new(), 0, false),
+                            };
+                        vec![Box::new(move |tx| {
+                            tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
+                                preset: Some(preset_clone.clone()),
+                                sample_paths: sample_paths.clone(),
+                                extra_count,
+                                failed_scan,
+                            });
+                        })]
+                    } else {
+                        Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                }
             } else {
                 Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
             };
@@ -1936,6 +2191,23 @@ impl ChatWidget {
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
         })]
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_world_writable_flagged(&self) -> bool {
+        use std::collections::HashMap;
+        let mut env_map: HashMap<String, String> = HashMap::new();
+        for (k, v) in std::env::vars() {
+            env_map.insert(k, v);
+        }
+        match codex_windows_sandbox::preflight_audit_everyone_writable(
+            &self.config.cwd,
+            &env_map,
+            Some(self.config.codex_home.as_path()),
+        ) {
+            Ok(paths) => !paths.is_empty(),
+            Err(_) => true,
+        }
     }
 
     pub(crate) fn open_full_access_confirmation(&mut self, preset: ApprovalPreset) {
@@ -2003,6 +2275,118 @@ impl ChatWidget {
     }
 
     #[cfg(target_os = "windows")]
+    pub(crate) fn open_world_writable_warning_confirmation(
+        &mut self,
+        preset: Option<ApprovalPreset>,
+        sample_paths: Vec<String>,
+        extra_count: usize,
+        failed_scan: bool,
+    ) {
+        let (approval, sandbox) = match &preset {
+            Some(p) => (Some(p.approval), Some(p.sandbox.clone())),
+            None => (None, None),
+        };
+        let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
+        let mode_label = match self.config.sandbox_policy {
+            SandboxPolicy::WorkspaceWrite { .. } => "Auto mode",
+            SandboxPolicy::ReadOnly => "Read-Only mode",
+            _ => "Auto mode",
+        };
+        let title_line = Line::from("Unprotected directories found").bold();
+        let info_line = if failed_scan {
+            Line::from(vec![
+                "We couldn't complete the world-writable scan, so protections cannot be verified. "
+                    .into(),
+                format!("The Windows sandbox cannot guarantee protection in {mode_label}.")
+                    .fg(Color::Red),
+            ])
+        } else {
+            Line::from(vec![
+                "Some important directories on this system are world-writable. ".into(),
+                format!(
+                    "The Windows sandbox cannot protect writes to these locations in {mode_label}."
+                )
+                .fg(Color::Red),
+            ])
+        };
+        header_children.push(Box::new(title_line));
+        header_children.push(Box::new(
+            Paragraph::new(vec![info_line]).wrap(Wrap { trim: false }),
+        ));
+
+        if !sample_paths.is_empty() {
+            // Show up to three examples and optionally an "and X more" line.
+            let mut lines: Vec<Line> = Vec::new();
+            lines.push(Line::from("Examples:").bold());
+            for p in &sample_paths {
+                lines.push(Line::from(format!(" - {p}")));
+            }
+            if extra_count > 0 {
+                lines.push(Line::from(format!("and {extra_count} more")));
+            }
+            header_children.push(Box::new(Paragraph::new(lines).wrap(Wrap { trim: false })));
+        }
+        let header = ColumnRenderable::with(header_children);
+
+        // Build actions ensuring acknowledgement happens before applying the new sandbox policy,
+        // so downstream policy-change hooks don't re-trigger the warning.
+        let mut accept_actions: Vec<SelectionAction> = Vec::new();
+        // Suppress the immediate re-scan only when a preset will be applied (i.e., via /approvals),
+        // to avoid duplicate warnings from the ensuing policy change.
+        if preset.is_some() {
+            accept_actions.push(Box::new(|tx| {
+                tx.send(AppEvent::SkipNextWorldWritableScan);
+            }));
+        }
+        if let (Some(approval), Some(sandbox)) = (approval, sandbox.clone()) {
+            accept_actions.extend(Self::approval_preset_actions(approval, sandbox));
+        }
+
+        let mut accept_and_remember_actions: Vec<SelectionAction> = Vec::new();
+        accept_and_remember_actions.push(Box::new(|tx| {
+            tx.send(AppEvent::UpdateWorldWritableWarningAcknowledged(true));
+            tx.send(AppEvent::PersistWorldWritableWarningAcknowledged);
+        }));
+        if let (Some(approval), Some(sandbox)) = (approval, sandbox) {
+            accept_and_remember_actions.extend(Self::approval_preset_actions(approval, sandbox));
+        }
+
+        let items = vec![
+            SelectionItem {
+                name: "Continue".to_string(),
+                description: Some(format!("Apply {mode_label} for this session")),
+                actions: accept_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Continue and don't warn again".to_string(),
+                description: Some(format!("Enable {mode_label} and remember this choice")),
+                actions: accept_and_remember_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            header: Box::new(header),
+            ..Default::default()
+        });
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn open_world_writable_warning_confirmation(
+        &mut self,
+        _preset: Option<ApprovalPreset>,
+        _sample_paths: Vec<String>,
+        _extra_count: usize,
+        _failed_scan: bool,
+    ) {
+    }
+
+    #[cfg(target_os = "windows")]
     pub(crate) fn open_windows_auto_mode_instructions(&mut self) {
         use ratatui_macros::line;
 
@@ -2051,6 +2435,25 @@ impl ChatWidget {
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
         self.config.notices.hide_full_access_warning = Some(acknowledged);
+    }
+
+    pub(crate) fn set_world_writable_warning_acknowledged(&mut self, acknowledged: bool) {
+        self.config.notices.hide_world_writable_warning = Some(acknowledged);
+    }
+
+    pub(crate) fn set_rate_limit_switch_prompt_hidden(&mut self, hidden: bool) {
+        self.config.notices.hide_rate_limit_model_nudge = Some(hidden);
+        if hidden {
+            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
+        }
+    }
+
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn world_writable_warning_hidden(&self) -> bool {
+        self.config
+            .notices
+            .hide_world_writable_warning
+            .unwrap_or(false)
     }
 
     /// Set the reasoning effort in the widget's config copy.
