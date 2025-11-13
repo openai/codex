@@ -37,13 +37,14 @@ jobs:
             });
 
             for (const pr of prs) {
-              core.info(`PR: ${JSON.stringify(pr)}`);
               const lastUpdated = new Date(pr.updated_at);
               if (lastUpdated > cutoff) {
+                core.info(`PR ${pr.number} is fresh`);
                 continue;
               }
 
               if (!pr.user || pr.user.type !== "User") {
+                core.info(`PR ${pr.number} wasn't created by a user`);
                 continue;
               }
 
