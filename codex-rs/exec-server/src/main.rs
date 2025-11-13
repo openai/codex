@@ -449,58 +449,15 @@ impl ExecTool {
             justification,
         }): Parameters<ExecParams>,
     ) -> Result<CallToolResult, McpError> {
-        #[allow(clippy::expect_used)]
-        let escalate_socket = EscalateSocket::open().expect("failed to open escalate socket");
-
-        let client_fd = escalate_socket.client.as_raw_fd();
-        #[allow(clippy::expect_used)]
-        let escalate_task = tokio::spawn(escalate_task(escalate_socket.server));
-        let result = process_exec_tool_call(
-            codex_core::exec::ExecParams {
-                command: vec![
-                    "/users/nornagon/code/bash/bash".to_string(),
-                    "-lc".to_string(),
-                    command,
-                ],
-                cwd: PathBuf::from(&workdir),
-                timeout_ms,
-                env: {
-                    let mut env = HashMap::new();
-                    env.insert("CODEX_ESCALATE_SOCKET".to_string(), client_fd.to_string());
-                    let current_exe =
-                        std::env::current_exe().expect("failed to get current process path");
-                    env.insert(
-                        "BASH_EXEC_WRAPPER".to_string(),
-                        format!("{} escalate", current_exe.to_string_lossy()),
-                    );
-                    env
-                },
-                with_escalated_permissions,
-                justification,
-                arg0: None,
-            },
-            get_platform_sandbox().unwrap_or(SandboxType::None),
-            &SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![
-                    std::env::current_dir().expect("failed to get current directory"),
-                ],
-                network_access: false,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-            },
-            &PathBuf::from("/__NONEXISTENT__"), // This is ignored for ReadOnly
-            &None,
-            None,
-        )
+        let result = shell_exec(ExecParams {
+            command,
+            workdir,
+            timeout_ms,
+            with_escalated_permissions,
+            justification,
+        })
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        escalate_task.abort();
-        let result = ExecResult {
-            exit_code: result.exit_code,
-            output: result.aggregated_output.text,
-            duration: result.duration,
-            timed_out: result.timed_out,
-        };
         Ok(CallToolResult::success(vec![Content::json(result)?]))
     }
 }
@@ -554,6 +511,75 @@ struct EscalateArgs {
     argv: Vec<String>,
 }
 
+impl EscalateArgs {
+    fn run(&self) -> anyhow::Result<()> {
+        let EscalateArgs { file, argv } = self;
+        let client_fd = std::env::var("CODEX_ESCALATE_SOCKET")
+            .context("CODEX_ESCALATE_SOCKET is not set")?
+            .parse::<i32>()
+            .context("CODEX_ESCALATE_SOCKET is not a valid integer")?;
+        let client = unsafe { Socket::from_raw_fd(client_fd) };
+        let message = ClientMessage::EscalateRequest {
+            file: file.clone(),
+            argv: argv.clone(),
+            workdir: std::env::current_dir()
+                .context("failed to get current directory")?
+                .to_string_lossy()
+                .to_string(),
+        };
+        send_json_message(&client, &message, &[])?;
+        let (message, mut fds) = receive_json_message::<ServerMessage>(&client)?;
+        let ServerMessage::EscalateResponse(action) = message;
+        match action {
+            EscalateAction::Escalate => {
+                if fds.len() != 1 {
+                    bail!("expected 1 fd, got {}", fds.len());
+                }
+                let fd = fds.remove(0);
+                let escalate_socket = Socket::from(fd);
+                let all_fds = [
+                    io::stdin().as_raw_fd(),
+                    io::stdout().as_raw_fd(),
+                    io::stderr().as_raw_fd(),
+                ];
+                let fds: Vec<BorrowedFd> = all_fds
+                    .iter()
+                    .copied()
+                    .filter(|&fd| fd >= 0)
+                    .map(|fd| unsafe { BorrowedFd::borrow_raw(fd) })
+                    .collect();
+                let message = SuperExecMessage {
+                    fds: fds.iter().map(AsRawFd::as_raw_fd).collect(),
+                };
+                send_json_message(&escalate_socket, &message, &fds)?;
+                let (message, _) = receive_json_message::<SuperExecResult>(&escalate_socket)?;
+                let SuperExecResult { exit_code } = message;
+                std::process::exit(exit_code);
+            }
+            EscalateAction::RunInSandbox => {
+                use std::ffi::CString;
+                let file = CString::new(file.as_str()).context("NUL in file")?;
+
+                let argv_cstrs: Vec<CString> = argv
+                    .iter()
+                    .map(|s| CString::new(s.as_str()).context("NUL in argv"))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let mut argv: Vec<*const libc::c_char> =
+                    argv_cstrs.iter().map(|s| s.as_ptr()).collect();
+                argv.push(std::ptr::null());
+
+                unsafe {
+                    libc::execv(file.as_ptr(), argv.as_ptr());
+                    let err = std::io::Error::last_os_error();
+                    tracing::error!("failed to execute command: {err}");
+                    std::process::exit(127);
+                }
+            }
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 struct ShellExecArgs {
     command: String,
@@ -571,71 +597,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(subcommand) = cli.subcommand {
         match subcommand {
             Commands::Escalate(args) => {
-                let client_fd = std::env::var("CODEX_ESCALATE_SOCKET")
-                    .context("CODEX_ESCALATE_SOCKET is not set")?
-                    .parse::<i32>()
-                    .context("CODEX_ESCALATE_SOCKET is not a valid integer")?;
-                let client = unsafe { Socket::from_raw_fd(client_fd) };
-                let message = ClientMessage::EscalateRequest {
-                    file: args.file.clone(),
-                    argv: args.argv.clone(),
-                    workdir: std::env::current_dir()
-                        .context("failed to get current directory")?
-                        .to_string_lossy()
-                        .to_string(),
-                };
-                send_json_message(&client, &message, &[])?;
-                let (message, mut fds) = receive_json_message::<ServerMessage>(&client)?;
-                let ServerMessage::EscalateResponse(action) = message;
-                match action {
-                    EscalateAction::Escalate => {
-                        if fds.len() != 1 {
-                            bail!("expected 1 fd, got {}", fds.len());
-                        }
-                        let fd = fds.remove(0);
-                        let escalate_socket = Socket::from(fd);
-                        let all_fds = [
-                            io::stdin().as_raw_fd(),
-                            io::stdout().as_raw_fd(),
-                            io::stderr().as_raw_fd(),
-                        ];
-                        let fds: Vec<BorrowedFd> = all_fds
-                            .iter()
-                            .copied()
-                            .filter(|&fd| fd >= 0)
-                            .map(|fd| unsafe { BorrowedFd::borrow_raw(fd) })
-                            .collect();
-                        let message = SuperExecMessage {
-                            fds: fds.iter().map(AsRawFd::as_raw_fd).collect(),
-                        };
-                        send_json_message(&escalate_socket, &message, &fds)?;
-                        let (message, _) =
-                            receive_json_message::<SuperExecResult>(&escalate_socket)?;
-                        let SuperExecResult { exit_code } = message;
-                        std::process::exit(exit_code);
-                    }
-                    EscalateAction::RunInSandbox => {
-                        use std::ffi::CString;
-                        let file = CString::new(args.file.as_str()).context("NUL in file")?;
-
-                        let argv_cstrs: Vec<CString> = args
-                            .argv
-                            .iter()
-                            .map(|s| CString::new(s.as_str()).context("NUL in argv"))
-                            .collect::<Result<Vec<_>, _>>()?;
-
-                        let mut argv: Vec<*const libc::c_char> =
-                            argv_cstrs.iter().map(|s| s.as_ptr()).collect();
-                        argv.push(std::ptr::null());
-
-                        unsafe {
-                            libc::execv(file.as_ptr(), argv.as_ptr());
-                            let err = std::io::Error::last_os_error();
-                            tracing::error!("failed to execute command: {err}");
-                            std::process::exit(127);
-                        }
-                    }
-                }
+                args.run()?;
             }
             Commands::ShellExec(args) => {
                 let result = shell_exec(ExecParams {
