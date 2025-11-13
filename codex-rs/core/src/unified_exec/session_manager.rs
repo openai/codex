@@ -116,7 +116,7 @@ impl UnifiedExecSessionManager {
             } else {
                 "-Command"
             };
-            return vec![shell.to_string(), flag.to_string(), command.to_string()];
+            vec![shell.to_string(), flag.to_string(), command.to_string()]
         }
 
         #[cfg(not(target_os = "windows"))]

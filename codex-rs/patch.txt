@@ -1,0 +1,12 @@
+*** Begin Patch
+*** Update File: core\tests\suite\unified_exec.rs
+@@
+ fn current_dir_command() -> String {
+     if cfg!(target_os = "windows") {
+-        "[Environment]::CurrentDirectory".to_string()
++        "cd".to_string()
+     } else {
+         "pwd".to_string()
+     }
+ }
+*** End Patch

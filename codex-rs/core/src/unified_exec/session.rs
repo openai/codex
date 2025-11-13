@@ -130,51 +130,58 @@ impl UnifiedExecSession {
         self.session.exit_code()
     }
 
-    async fn snapshot_output(&self) -> Vec<Vec<u8>> {
-        let guard = self.output_buffer.lock().await;
-        guard.snapshot()
-    }
-
     fn sandbox_type(&self) -> SandboxType {
         self.sandbox_type
     }
 
-    pub(super) async fn check_for_sandbox_denial(&self) -> Result<(), UnifiedExecError> {
-        if self.sandbox_type() == SandboxType::None || !self.has_exited() {
-            return Ok(());
-        }
+    pub(super) fn check_for_sandbox_denial(
+        &self,
+    ) -> impl std::future::Future<Output = Result<(), UnifiedExecError>> + Send {
+        let sandbox_type = self.sandbox_type();
+        let has_exited = self.has_exited();
+        let output_notify = Arc::clone(&self.output_notify);
+        let output_buffer = Arc::clone(&self.output_buffer);
+        let exit_code = self.exit_code();
 
-        let _ =
-            tokio::time::timeout(Duration::from_millis(20), self.output_notify.notified()).await;
+        async move {
+            if sandbox_type == SandboxType::None || !has_exited {
+                return Ok(());
+            }
 
-        let collected_chunks = self.snapshot_output().await;
-        let mut aggregated: Vec<u8> = Vec::new();
-        for chunk in collected_chunks {
-            aggregated.extend_from_slice(&chunk);
-        }
-        let aggregated_text = String::from_utf8_lossy(&aggregated).to_string();
-        let exit_code = self.exit_code().unwrap_or(-1);
+            let _ = tokio::time::timeout(Duration::from_millis(20), output_notify.notified()).await;
 
-        let exec_output = ExecToolCallOutput {
-            exit_code,
-            stdout: StreamOutput::new(aggregated_text.clone()),
-            stderr: StreamOutput::new(String::new()),
-            aggregated_output: StreamOutput::new(aggregated_text.clone()),
-            duration: Duration::ZERO,
-            timed_out: false,
-        };
-
-        if is_likely_sandbox_denied(self.sandbox_type(), &exec_output) {
-            let (snippet, _) = truncate_middle(&aggregated_text, UNIFIED_EXEC_OUTPUT_MAX_BYTES);
-            let message = if snippet.is_empty() {
-                format!("exit code {exit_code}")
-            } else {
-                snippet
+            let collected_chunks = {
+                let guard = output_buffer.lock().await;
+                guard.snapshot()
             };
-            return Err(UnifiedExecError::sandbox_denied(message, exec_output));
-        }
+            let mut aggregated: Vec<u8> = Vec::new();
+            for chunk in collected_chunks {
+                aggregated.extend_from_slice(&chunk);
+            }
+            let aggregated_text = String::from_utf8_lossy(&aggregated).to_string();
+            let exit_code = exit_code.unwrap_or(-1);
 
-        Ok(())
+            let exec_output = ExecToolCallOutput {
+                exit_code,
+                stdout: StreamOutput::new(aggregated_text.clone()),
+                stderr: StreamOutput::new(String::new()),
+                aggregated_output: StreamOutput::new(aggregated_text.clone()),
+                duration: Duration::ZERO,
+                timed_out: false,
+            };
+
+            if is_likely_sandbox_denied(sandbox_type, &exec_output) {
+                let (snippet, _) = truncate_middle(&aggregated_text, UNIFIED_EXEC_OUTPUT_MAX_BYTES);
+                let message = if snippet.is_empty() {
+                    format!("exit code {exit_code}")
+                } else {
+                    snippet
+                };
+                return Err(UnifiedExecError::sandbox_denied(message, exec_output));
+            }
+
+            Ok(())
+        }
     }
 
     pub(super) async fn from_spawned(

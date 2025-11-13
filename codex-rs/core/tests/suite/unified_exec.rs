@@ -310,10 +310,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     .await;
 
     let expected_command = vec![echo_command("hello unified exec")];
-    assert_eq!(
-        begin_event.command,
-        expected_command
-    );
+    assert_eq!(begin_event.command, expected_command);
     assert_eq!(begin_event.cwd, cwd.path());
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
@@ -348,11 +345,11 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
         "yield_time_ms": 250,
         "workdir": workdir.to_string_lossy().to_string(),
     });
-    if cfg!(target_os = "windows") {
-        if let Some(obj) = args.as_object_mut() {
-            obj.insert("shell".to_string(), json!("cmd.exe"));
-            obj.insert("login".to_string(), json!(false));
-        }
+    if cfg!(target_os = "windows")
+        && let Some(obj) = args.as_object_mut()
+    {
+        obj.insert("shell".to_string(), json!("cmd.exe"));
+        obj.insert("login".to_string(), json!(false));
     }
 
     let responses = vec![

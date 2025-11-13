@@ -30,6 +30,7 @@ use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
+const MAX_EXEC_TIMEOUT_MS: u64 = 120_000;
 
 // Hardcode these since it does not seem worth including the libc crate just
 // for these.
@@ -59,7 +60,9 @@ pub struct ExecParams {
 
 impl ExecParams {
     pub fn timeout_duration(&self) -> Duration {
-        Duration::from_millis(self.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS))
+        let raw_timeout_ms = self.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
+        let clamped_timeout_ms = raw_timeout_ms.min(MAX_EXEC_TIMEOUT_MS);
+        Duration::from_millis(clamped_timeout_ms)
     }
 }
 
@@ -181,6 +184,8 @@ async fn exec_windows_sandbox(
         timeout_ms,
         ..
     } = params;
+
+    let timeout_ms = timeout_ms.map(|value| value.min(MAX_EXEC_TIMEOUT_MS));
 
     let policy_str = match sandbox_policy {
         SandboxPolicy::DangerFullAccess => "workspace-write",

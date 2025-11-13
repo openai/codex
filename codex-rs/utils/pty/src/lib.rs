@@ -278,7 +278,8 @@ mod tests {
             "SystemRoot={:?} ComSpec={:?} PATH={:?}",
             env.get("SystemRoot"),
             env.get("ComSpec"),
-            env.get("PATH").map(|p| p.split(';').take(3).collect::<Vec<_>>())
+            env.get("PATH")
+                .map(|p| p.split(';').take(3).collect::<Vec<_>>())
         );
 
         let comspec = std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string());
@@ -327,10 +328,7 @@ mod tests {
         cmd.arg("/C");
         cmd.arg("exit 0");
 
-        let mut child = pair
-            .slave
-            .spawn_command(cmd)
-            .expect("spawn blocking cmd");
+        let mut child = pair.slave.spawn_command(cmd).expect("spawn blocking cmd");
         drop(pair.slave);
 
         // Explicitly close stdin so the child can exit cleanly.

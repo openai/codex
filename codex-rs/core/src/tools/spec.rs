@@ -277,7 +277,10 @@ fn create_shell_tool() -> ToolSpec {
     properties.insert(
         "timeout_ms".to_string(),
         JsonSchema::Number {
-            description: Some("The timeout for the command in milliseconds".to_string()),
+            description: Some(
+                "The timeout for the command in milliseconds (clamped to a maximum of 120000 ms / 2 minutes)."
+                    .to_string(),
+            ),
         },
     );
 
@@ -325,7 +328,10 @@ fn create_shell_command_tool() -> ToolSpec {
     properties.insert(
         "timeout_ms".to_string(),
         JsonSchema::Number {
-            description: Some("The timeout for the command in milliseconds".to_string()),
+            description: Some(
+                "The timeout for the command in milliseconds (clamped to a maximum of 120000 ms / 2 minutes)."
+                    .to_string(),
+            ),
         },
     );
     properties.insert(
