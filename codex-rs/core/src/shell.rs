@@ -307,7 +307,6 @@ mod tests {
 #[cfg(windows)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[tokio::test]
     async fn detects_powershell_as_default() {

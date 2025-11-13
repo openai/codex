@@ -137,7 +137,7 @@ fn collect_tool_outputs(bodies: &[Value]) -> Result<HashMap<String, ParsedUnifie
                     let content = extract_output_text(item)
                         .ok_or_else(|| anyhow::anyhow!("missing tool output content"))?;
                     let trimmed = content.trim();
-                if trimmed.is_empty() {
+                    if trimmed.is_empty() {
                         continue;
                     }
                     let parsed = parse_unified_exec_output(content).with_context(|| {
