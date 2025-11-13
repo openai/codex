@@ -22,6 +22,7 @@ jobs:
         # This action has a "lock-pullrequest-aftermerge" option that can be set to false,
         # but that would unconditionally skip locking even in cases where the PR was merged.
         if: |
+          github.repository_owner == 'openai' &&
           (
             github.event_name == 'pull_request_target' &&
             (
