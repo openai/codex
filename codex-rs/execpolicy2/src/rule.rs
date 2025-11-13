@@ -1,9 +1,6 @@
 use crate::decision::Decision;
-use crate::error::Error;
-use crate::error::Result;
 use serde::Deserialize;
 use serde::Serialize;
-use shlex::try_join;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -83,27 +80,6 @@ pub trait Rule: Any + Debug + Send + Sync {
     fn program(&self) -> &str;
 
     fn matches(&self, cmd: &[String]) -> Option<RuleMatch>;
-
-    /// Return a boolean for each example indicating whether this rule matches it.
-    fn validate_matches(&self, matches: &[Vec<String>]) -> Vec<bool> {
-        matches
-            .iter()
-            .map(|example| self.matches(example).is_some())
-            .collect()
-    }
-
-    fn validate_not_matches(&self, not_matches: &[Vec<String>]) -> Result<()> {
-        for example in not_matches {
-            if self.matches(example).is_some() {
-                return Err(Error::ExampleDidMatch {
-                    rule: format!("{self:?}"),
-                    example: try_join(example.iter().map(String::as_str))
-                        .unwrap_or_else(|_| "unable to render example".to_string()),
-                });
-            }
-        }
-        Ok(())
-    }
 }
 
 pub type RuleRef = Arc<dyn Rule>;

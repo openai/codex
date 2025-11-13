@@ -61,28 +61,18 @@ impl Evaluation {
 
 /// Count how many rules match each provided example and error if any example is unmatched.
 pub(crate) fn validate_match_examples(rules: &[RuleRef], matches: &[Vec<String>]) -> Result<()> {
-    let match_counts = rules.iter().fold(vec![0; matches.len()], |counts, rule| {
-        counts
-            .iter()
-            .zip(rule.validate_matches(matches))
-            .map(|(count, matched)| if matched { count + 1 } else { *count })
-            .collect()
-    });
+    let mut unmatched_examples = Vec::new();
 
-    let unmatched_examples: Vec<String> = matches
-        .iter()
-        .zip(&match_counts)
-        .filter_map(|(example, count)| {
-            if *count == 0 {
-                Some(
-                    try_join(example.iter().map(String::as_str))
-                        .unwrap_or_else(|_| "unable to render example".to_string()),
-                )
-            } else {
-                None
-            }
-        })
-        .collect();
+    for example in matches {
+        if rules.iter().any(|rule| rule.matches(example).is_some()) {
+            continue;
+        }
+
+        unmatched_examples.push(
+            try_join(example.iter().map(String::as_str))
+                .unwrap_or_else(|_| "unable to render example".to_string()),
+        );
+    }
 
     if unmatched_examples.is_empty() {
         Ok(())
@@ -92,4 +82,22 @@ pub(crate) fn validate_match_examples(rules: &[RuleRef], matches: &[Vec<String>]
             examples: unmatched_examples,
         })
     }
+}
+
+/// Ensure that no rule matches any provided negative example.
+pub(crate) fn validate_not_match_examples(
+    rules: &[RuleRef],
+    not_matches: &[Vec<String>],
+) -> Result<()> {
+    for example in not_matches {
+        if let Some(rule) = rules.iter().find(|rule| rule.matches(example).is_some()) {
+            return Err(Error::ExampleDidMatch {
+                rule: format!("{rule:?}"),
+                example: try_join(example.iter().map(String::as_str))
+                    .unwrap_or_else(|_| "unable to render example".to_string()),
+            });
+        }
+    }
+
+    Ok(())
 }
