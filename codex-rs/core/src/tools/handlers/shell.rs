@@ -324,11 +324,8 @@ impl ShellHandler {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use crate::is_safe_command::is_known_safe_command;
     use crate::shell::BashShell;
-    use crate::shell::PowerShellConfig;
     use crate::shell::Shell;
     use crate::shell::ZshShell;
 
@@ -338,19 +335,27 @@ mod tests {
     #[test]
     fn commands_generated_by_shell_command_handler_can_be_matched_by_is_known_safe_command() {
         let bash_shell = Shell::Bash(BashShell {
-            shell_path: PathBuf::from("/bin/bash"),
+            shell_path: "/bin/bash".to_string(),
+            bashrc_path: "/home/user/.bashrc".to_string(),
         });
         assert_safe(&bash_shell, "ls -la");
 
         let zsh_shell = Shell::Zsh(ZshShell {
-            shell_path: PathBuf::from("/bin/zsh"),
+            shell_path: "/bin/zsh".to_string(),
+            zshrc_path: "/home/user/.zshrc".to_string(),
         });
         assert_safe(&zsh_shell, "ls -la");
 
-        let powershell = Shell::PowerShell(PowerShellConfig {
-            shell_path: PathBuf::from("pwsh.exe"),
-        });
-        assert_safe(&powershell, "ls -Name");
+        #[cfg(target_os = "windows")]
+        {
+            use crate::shell::PowerShellConfig;
+
+            let powershell = Shell::PowerShell(PowerShellConfig {
+                exe: "pwsh.exe".to_string(),
+                bash_exe_fallback: None,
+            });
+            assert_safe(&powershell, "ls -Name");
+        }
     }
 
     fn assert_safe(shell: &Shell, command: &str) {

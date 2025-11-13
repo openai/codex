@@ -1,12 +1,7 @@
-use std::path::PathBuf;
-
 use tree_sitter::Node;
 use tree_sitter::Parser;
 use tree_sitter::Tree;
 use tree_sitter_bash::LANGUAGE as BASH;
-
-use crate::shell::ShellType;
-use crate::shell::detect_shell_type;
 
 /// Parse the provided bash source using tree-sitter-bash, returning a Tree on
 /// success or None if parsing failed.
@@ -93,16 +88,23 @@ pub fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<V
     Some(commands)
 }
 
+pub fn is_well_known_sh_shell(shell: &str) -> bool {
+    if shell == "bash" || shell == "zsh" {
+        return true;
+    }
+
+    let shell_name = std::path::Path::new(shell)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(shell);
+    matches!(shell_name, "bash" | "zsh")
+}
+
 pub fn extract_bash_command(command: &[String]) -> Option<(&str, &str)> {
     let [shell, flag, script] = command else {
         return None;
     };
-    if !matches!(flag.as_str(), "-lc" | "-c")
-        || !matches!(
-            detect_shell_type(&PathBuf::from(shell)),
-            Some(ShellType::Zsh) | Some(ShellType::Bash)
-        )
-    {
+    if !matches!(flag.as_str(), "-lc" | "-c") || !is_well_known_sh_shell(shell) {
         return None;
     }
     Some((shell, script))
