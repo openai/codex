@@ -7,6 +7,8 @@ use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
+use crate::model_migration::ModelMigrationOutcome;
+use crate::model_migration::run_model_migration_prompt;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
@@ -15,6 +17,7 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
+use codex_common::model_presets::all_model_presets;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
@@ -48,6 +51,64 @@ pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub conversation_id: Option<ConversationId>,
     pub update_action: Option<UpdateAction>,
+}
+
+fn should_show_model_migration_prompt(
+    current_model: &str,
+    target_model: &str,
+    hide_prompt_flag: Option<bool>,
+) -> bool {
+    if target_model == current_model || hide_prompt_flag.unwrap_or(false) {
+        return false;
+    }
+
+    all_model_presets()
+        .iter()
+        .filter(|preset| preset.recommended_upgrade_model.is_some())
+        .any(|preset| preset.model == current_model)
+}
+
+async fn handle_model_migration_prompt_if_needed(
+    tui: &mut tui::Tui,
+    config: &mut Config,
+    app_event_tx: &AppEventSender,
+) -> Option<AppExitInfo> {
+    let target_model = all_model_presets()
+        .iter()
+        .find(|preset| preset.model == config.model)
+        .and_then(|preset| preset.recommended_upgrade_model)
+        .unwrap_or(&config.model)
+        .to_string();
+    let hide_prompt_flag = config.notices.hide_gpt5_1_migration_prompt;
+    if !should_show_model_migration_prompt(&config.model, &target_model, hide_prompt_flag) {
+        return None;
+    }
+
+    match run_model_migration_prompt(tui, &target_model).await {
+        ModelMigrationOutcome::Accepted => {
+            app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
+                migration_config: "hide_gpt5_1_migration_prompt".to_string(),
+            });
+            config.model = target_model.clone();
+            if let Some(family) = find_family_for_model(&target_model) {
+                config.model_family = family;
+            }
+            app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
+            app_event_tx.send(AppEvent::PersistModelSelection {
+                model: target_model,
+                effort: config.model_reasoning_effort,
+            });
+        }
+        ModelMigrationOutcome::Exit => {
+            return Some(AppExitInfo {
+                token_usage: TokenUsage::default(),
+                conversation_id: None,
+                update_action: None,
+            });
+        }
+    }
+
+    None
 }
 
 pub(crate) struct App {
@@ -89,7 +150,7 @@ impl App {
     pub async fn run(
         tui: &mut tui::Tui,
         auth_manager: Arc<AuthManager>,
-        config: Config,
+        mut config: Config,
         active_profile: Option<String>,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
@@ -99,6 +160,12 @@ impl App {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
+
+        let exit_info =
+            handle_model_migration_prompt_if_needed(tui, &mut config, &app_event_tx).await;
+        if let Some(exit_info) = exit_info {
+            return Ok(exit_info);
+        }
 
         let conversation_manager = Arc::new(ConversationManager::new(
             auth_manager.clone(),
@@ -547,6 +614,18 @@ impl App {
                     ));
                 }
             }
+            AppEvent::PersistModelMigrationPromptAcknowledged { migration_config } => {
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_hide_model_migration_prompt(&migration_config, true)
+                    .apply()
+                    .await
+                {
+                    tracing::error!(error = %err, "failed to persist model migration prompt acknowledgement");
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save model migration prompt preference: {err}"
+                    ));
+                }
+            }
             AppEvent::OpenApprovalsPopup => {
                 self.chat_widget.open_approvals_popup();
             }
@@ -755,6 +834,38 @@ mod tests {
             pending_update_action: None,
             skip_world_writable_scan_once: false,
         }
+    }
+
+    #[test]
+    fn model_migration_prompt_only_shows_for_deprecated_models() {
+        assert!(should_show_model_migration_prompt("gpt-5", "gpt-5.1", None));
+        assert!(should_show_model_migration_prompt(
+            "gpt-5-codex",
+            "gpt-5.1-codex",
+            None
+        ));
+        assert!(should_show_model_migration_prompt(
+            "gpt-5-codex-mini",
+            "gpt-5.1-codex-mini",
+            None
+        ));
+        assert!(!should_show_model_migration_prompt(
+            "gpt-5.1-codex",
+            "gpt-5.1-codex",
+            None
+        ));
+    }
+
+    #[test]
+    fn model_migration_prompt_respects_hide_flag_and_self_target() {
+        assert!(!should_show_model_migration_prompt(
+            "gpt-5",
+            "gpt-5.1",
+            Some(true)
+        ));
+        assert!(!should_show_model_migration_prompt(
+            "gpt-5.1", "gpt-5.1", None
+        ));
     }
 
     #[test]

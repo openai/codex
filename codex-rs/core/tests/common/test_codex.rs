@@ -11,6 +11,7 @@ use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::features::Feature;
+use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -39,6 +40,14 @@ impl TestCodexBuilder {
     {
         self.config_mutators.push(Box::new(mutator));
         self
+    }
+
+    pub fn with_model(self, model: &str) -> Self {
+        let new_model = model.to_string();
+        self.with_config(move |config| {
+            config.model = new_model.clone();
+            config.model_family = find_family_for_model(&new_model).expect("model family");
+        })
     }
 
     pub async fn build(&mut self, server: &wiremock::MockServer) -> anyhow::Result<TestCodex> {

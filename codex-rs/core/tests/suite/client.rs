@@ -21,6 +21,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
+use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::WebSearchAction;
@@ -622,6 +623,122 @@ async fn includes_user_instructions_message_in_request() {
     assert_message_role(&request_body["input"][1], "user");
     assert_message_starts_with(&request_body["input"][1], "<environment_context>");
     assert_message_ends_with(&request_body["input"][1], "</environment_context>");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_default_verbosity_in_request() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock =
+        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
+            .await;
+    let TestCodex { codex, .. } = test_codex().with_model("gpt-5.1").build(&server).await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert_eq!(
+        request_body
+            .get("text")
+            .and_then(|t| t.get("verbosity"))
+            .and_then(|v| v.as_str()),
+        Some("low")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configured_verbosity_not_sent_for_models_without_support() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock =
+        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
+            .await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_model("gpt-5-codex")
+        .with_config(|config| {
+            config.model_verbosity = Some(Verbosity::High);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert!(
+        request_body
+            .get("text")
+            .and_then(|t| t.get("verbosity"))
+            .is_none()
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configured_verbosity_is_sent() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock =
+        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
+            .await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_model("gpt-5")
+        .with_config(|config| {
+            config.model_verbosity = Some(Verbosity::High);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert_eq!(
+        request_body
+            .get("text")
+            .and_then(|t| t.get("verbosity"))
+            .and_then(|v| v.as_str()),
+        Some("high")
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

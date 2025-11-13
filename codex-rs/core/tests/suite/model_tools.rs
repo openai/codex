@@ -140,10 +140,10 @@ async fn model_selects_expected_tools() {
             "update_plan".to_string(),
             "apply_patch".to_string()
         ],
-        "gpt-5-codex should expose the apply_patch tool",
+        "gpt-5.1-codex should expose the apply_patch tool",
     );
 
-    let gpt51_tools = collect_tool_identifiers_for_model("gpt-5-codex").await;
+    let gpt51_tools = collect_tool_identifiers_for_model("gpt-5.1").await;
     assert_eq!(
         gpt51_tools,
         vec![
@@ -154,6 +154,6 @@ async fn model_selects_expected_tools() {
             "update_plan".to_string(),
             "apply_patch".to_string()
         ],
-        "gpt-5-codex should expose the apply_patch tool",
+        "gpt-5.1 should expose the apply_patch tool",
     );
 }
