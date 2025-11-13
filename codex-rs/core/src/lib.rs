@@ -8,8 +8,7 @@
 mod apply_patch;
 pub mod auth;
 pub mod bash;
-mod chat_completions;
-mod client;
+pub mod client;
 mod client_common;
 pub mod codex;
 mod codex_conversation;
@@ -96,10 +95,10 @@ pub use codex_protocol::protocol;
 pub use codex_protocol::config_types as protocol_config_types;
 
 pub use client::ModelClient;
+pub use client::ResponseEvent;
+pub use client::ResponseStream;
 pub use client_common::Prompt;
 pub use client_common::REVIEW_PROMPT;
-pub use client_common::ResponseEvent;
-pub use client_common::ResponseStream;
 pub use codex_protocol::models::ContentItem;
 pub use codex_protocol::models::LocalShellAction;
 pub use codex_protocol::models::LocalShellExecAction;

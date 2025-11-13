@@ -1,15 +1,14 @@
 use std::time::Duration;
 
 use crate::ModelProviderInfo;
+use crate::client::ResponseEvent;
+use crate::client::ResponseStream;
+use crate::client::http::CodexHttpClient;
 use crate::client_common::Prompt;
-use crate::client_common::ResponseEvent;
-use crate::client_common::ResponseStream;
-use crate::default_client::CodexHttpClient;
 use crate::error::CodexErr;
 use crate::error::ConnectionFailedError;
 use crate::error::ResponseStreamFailed;
 use crate::error::Result;
-use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
 use crate::model_family::ModelFamily;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
@@ -55,7 +54,7 @@ pub(crate) async fn stream_chat_completions(
     let mut messages = Vec::<serde_json::Value>::new();
 
     let full_instructions = prompt.get_full_instructions(model_family);
-    messages.push(json!({"role": "system", "content": full_instructions}));
+    messages.push(json!({ "role": "system", "content": full_instructions }));
 
     let input = prompt.get_formatted_input();
 
@@ -128,99 +127,73 @@ pub(crate) async fn stream_chat_completions(
                 {
                     reasoning_by_anchor_index
                         .entry(idx - 1)
-                        .and_modify(|v| v.push_str(&text))
+                        .and_modify(|existing| existing.push_str(text.as_str()))
                         .or_insert(text.clone());
                     attached = true;
                 }
 
-                // Otherwise, attach to immediate next assistant anchor (tool-calls or assistant message)
-                if !attached && idx + 1 < input.len() {
-                    match &input[idx + 1] {
-                        ResponseItem::FunctionCall { .. } | ResponseItem::LocalShellCall { .. } => {
-                            reasoning_by_anchor_index
-                                .entry(idx + 1)
-                                .and_modify(|v| v.push_str(&text))
-                                .or_insert(text.clone());
+                // Otherwise, attach to the first future assistant anchor.
+                if !attached {
+                    for anchor_idx in idx + 1..input.len() {
+                        match &input[anchor_idx] {
+                            ResponseItem::Message { role, .. } if role == "assistant" => {
+                                reasoning_by_anchor_index
+                                    .entry(anchor_idx)
+                                    .and_modify(|existing| existing.push_str(text.as_str()))
+                                    .or_insert(text.clone());
+                                attached = true;
+                                break;
+                            }
+                            ResponseItem::FunctionCall { .. }
+                            | ResponseItem::LocalShellCall { .. }
+                            | ResponseItem::FunctionCallOutput { .. } => {
+                                continue;
+                            }
+                            _ => break,
                         }
-                        ResponseItem::Message { role, .. } if role == "assistant" => {
-                            reasoning_by_anchor_index
-                                .entry(idx + 1)
-                                .and_modify(|v| v.push_str(&text))
-                                .or_insert(text.clone());
-                        }
-                        _ => {}
                     }
                 }
+
+                // Either attached or dropped, move on.
             }
         }
     }
 
-    // Track last assistant text we emitted to avoid duplicate assistant messages
-    // in the outbound Chat Completions payload (can happen if a final
-    // aggregated assistant message was recorded alongside an earlier partial).
-    let mut last_assistant_text: Option<String> = None;
-
-    for (idx, item) in input.iter().enumerate() {
+    for (index, item) in input.iter().enumerate() {
         match item {
             ResponseItem::Message { role, content, .. } => {
-                // Build content either as a plain string (typical for assistant text)
-                // or as an array of content items when images are present (user/tool multimodal).
-                let mut text = String::new();
-                let mut items: Vec<serde_json::Value> = Vec::new();
-                let mut saw_image = false;
-
-                for c in content {
-                    match c {
-                        ContentItem::InputText { text: t }
-                        | ContentItem::OutputText { text: t } => {
-                            text.push_str(t);
-                            items.push(json!({"type":"text","text": t}));
+                let mut content_text = String::new();
+                for item in content {
+                    match item {
+                        ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                            content_text.push_str(text)
                         }
-                        ContentItem::InputImage { image_url } => {
-                            saw_image = true;
-                            items.push(json!({"type":"image_url","image_url": {"url": image_url}}));
-                        }
+                        ContentItem::InputImage { .. } => {}
                     }
                 }
-
-                // Skip exact-duplicate assistant messages.
-                if role == "assistant" {
-                    if let Some(prev) = &last_assistant_text
-                        && prev == &text
-                    {
-                        continue;
-                    }
-                    last_assistant_text = Some(text.clone());
+                if content_text.trim().is_empty() {
+                    continue;
                 }
 
-                // For assistant messages, always send a plain string for compatibility.
-                // For user messages, if an image is present, send an array of content items.
-                let content_value = if role == "assistant" {
-                    json!(text)
-                } else if saw_image {
-                    json!(items)
-                } else {
-                    json!(text)
-                };
-
-                let mut msg = json!({"role": role, "content": content_value});
-                if role == "assistant"
-                    && let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
-                    && let Some(obj) = msg.as_object_mut()
-                {
-                    obj.insert("reasoning".to_string(), json!(reasoning));
+                // Append reasoning when mapped to this anchor.
+                if let Some(reasoning) = reasoning_by_anchor_index.remove(&index) {
+                    content_text.push_str(reasoning.as_str());
                 }
-                messages.push(msg);
+
+                messages.push(json!({
+                    "role": role,
+                    "content": content_text,
+                }));
             }
+
             ResponseItem::FunctionCall {
                 name,
                 arguments,
                 call_id,
                 ..
             } => {
-                let mut msg = json!({
+                messages.push(json!({
                     "role": "assistant",
-                    "content": null,
                     "tool_calls": [{
                         "id": call_id,
                         "type": "function",
@@ -228,39 +201,10 @@ pub(crate) async fn stream_chat_completions(
                             "name": name,
                             "arguments": arguments,
                         }
-                    }]
-                });
-                if let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
-                    && let Some(obj) = msg.as_object_mut()
-                {
-                    obj.insert("reasoning".to_string(), json!(reasoning));
-                }
-                messages.push(msg);
+                    }],
+                }));
             }
-            ResponseItem::LocalShellCall {
-                id,
-                call_id: _,
-                status,
-                action,
-            } => {
-                // Confirm with API team.
-                let mut msg = json!({
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [{
-                        "id": id.clone().unwrap_or_else(|| "".to_string()),
-                        "type": "local_shell_call",
-                        "status": status,
-                        "action": action,
-                    }]
-                });
-                if let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
-                    && let Some(obj) = msg.as_object_mut()
-                {
-                    obj.insert("reasoning".to_string(), json!(reasoning));
-                }
-                messages.push(msg);
-            }
+
             ResponseItem::FunctionCallOutput { call_id, output } => {
                 // Prefer structured content items when available (e.g., images)
                 // otherwise fall back to the legacy plain-string content.
@@ -286,27 +230,43 @@ pub(crate) async fn stream_chat_completions(
                     "tool_call_id": call_id,
                     "content": content_value,
                 }));
+
+                if let Some(reasoning) = reasoning_by_anchor_index.remove(&index) {
+                    messages.push(json!({
+                        "role": "assistant",
+                        "content": reasoning,
+                    }));
+                }
             }
-            ResponseItem::CustomToolCall {
-                id,
-                call_id: _,
-                name,
-                input,
-                status: _,
-            } => {
+
+            ResponseItem::LocalShellCall { call_id, .. } => {
                 messages.push(json!({
                     "role": "assistant",
-                    "content": null,
                     "tool_calls": [{
-                        "id": id,
-                        "type": "custom",
-                        "custom": {
-                            "name": name,
-                            "input": input,
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": "shell",
+                            "arguments": "{}", // arguments are defined via `input` only.
                         }
-                    }]
+                    }],
                 }));
             }
+
+            ResponseItem::CustomToolCall { call_id, name, .. } => {
+                messages.push(json!({
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": "{}", // arguments are defined via `input` only.
+                        }
+                    }],
+                }));
+            }
+
             ResponseItem::CustomToolCallOutput { call_id, output } => {
                 messages.push(json!({
                     "role": "tool",
@@ -314,118 +274,159 @@ pub(crate) async fn stream_chat_completions(
                     "content": output,
                 }));
             }
-            ResponseItem::GhostSnapshot { .. } => {
-                // Ghost snapshots annotate history but are not sent to the model.
-                continue;
+
+            ResponseItem::Reasoning { .. } => {
+                // Reasoning is mapped onto adjacent assistant anchors above.
             }
-            ResponseItem::Reasoning { .. }
-            | ResponseItem::WebSearchCall { .. }
-            | ResponseItem::Other => {
-                // Omit these items from the conversation history.
-                continue;
-            }
+
+            ResponseItem::WebSearchCall { .. } => {}
+
+            ResponseItem::Other { .. } => {}
+
+            ResponseItem::GhostSnapshot { .. } => {}
+        }
+    }
+
+    // Attach any reasoning still not mapped (e.g., if the last input items are Reasoning).
+    if messages.len() == 1 {
+        if let Some(text) = reasoning_by_anchor_index.remove(&0) {
+            messages.push(json!({
+                "role": "assistant",
+                "content": text,
+            }));
         }
     }
 
     let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
-    let payload = json!({
+
+    let mut body = json!({
         "model": model_family.slug,
         "messages": messages,
         "stream": true,
-        "tools": tools_json,
+        "stream_options": {
+            "include_usage": true,
+        },
     });
 
-    debug!(
+    if !tools_json.is_empty() {
+        body["tools"] = json!(tools_json);
+        body["tool_choice"] = json!("auto");
+    }
+
+    if let SessionSource::SubAgent(sub) = session_source {
+        let subagent = if let SubAgentSource::Other(label) = sub {
+            label.clone()
+        } else {
+            serde_json::to_value(sub)
+                .ok()
+                .and_then(|v| v.as_str().map(std::string::ToString::to_string))
+                .unwrap_or_else(|| "other".to_string())
+        };
+        body["metadata"] = json!({
+            "x-openai-subagent": subagent,
+        });
+    }
+
+    let max_attempts = provider.request_max_retries();
+    let mut last_error = None;
+    for attempt in 0..=max_attempts {
+        match stream_single_chat_completion(
+            attempt,
+            client,
+            provider,
+            otel_event_manager,
+            body.clone(),
+        )
+        .await
+        {
+            Ok(stream) => return Ok(stream),
+            Err(e) => {
+                last_error = Some(e);
+                if attempt != max_attempts {
+                    tokio::time::sleep(backoff(attempt)).await;
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or(CodexErr::InternalServerError))
+}
+
+async fn stream_single_chat_completion(
+    attempt: u64,
+    client: &CodexHttpClient,
+    provider: &ModelProviderInfo,
+    otel_event_manager: &OtelEventManager,
+    body: serde_json::Value,
+) -> Result<ResponseStream> {
+    trace!(
         "POST to {}: {}",
         provider.get_full_url(&None),
-        payload.to_string()
+        body.to_string()
     );
 
-    let mut attempt = 0;
-    let max_retries = provider.request_max_retries();
-    loop {
-        attempt += 1;
+    let mut req_builder = provider.create_request_builder(client, &None).await?;
+    req_builder = req_builder
+        .header(reqwest::header::ACCEPT, "text/event-stream")
+        .json(&body);
 
-        let mut req_builder = provider.create_request_builder(client, &None).await?;
+    let res = otel_event_manager
+        .log_request(attempt, || req_builder.send())
+        .await;
 
-        // Include subagent header only for subagent sessions.
-        if let SessionSource::SubAgent(sub) = session_source.clone() {
-            let subagent = if let SubAgentSource::Other(label) = sub {
-                label
-            } else {
-                serde_json::to_value(&sub)
-                    .ok()
-                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
-                    .unwrap_or_else(|| "other".to_string())
-            };
-            req_builder = req_builder.header("x-openai-subagent", subagent);
+    let mut request_id = None;
+    if let Ok(resp) = &res {
+        request_id = resp
+            .headers()
+            .get("cf-ray")
+            .map(|v| v.to_str().unwrap_or_default().to_string());
+    }
+
+    match res {
+        Ok(resp) if resp.status().is_success() => {
+            let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
+
+            // spawn task to process SSE
+            let stream = resp.bytes_stream().map_err(move |e| {
+                CodexErr::ResponseStreamFailed(ResponseStreamFailed {
+                    source: e,
+                    request_id: request_id.clone(),
+                })
+            });
+            tokio::spawn(process_chat_sse(
+                stream,
+                tx_event,
+                provider.stream_idle_timeout(),
+                otel_event_manager.clone(),
+            ));
+
+            Ok(ResponseStream { rx_event })
         }
+        Ok(res) => {
+            let status = res.status();
 
-        let res = otel_event_manager
-            .log_request(attempt, || {
-                req_builder
-                    .header(reqwest::header::ACCEPT, "text/event-stream")
-                    .json(&payload)
-                    .send()
-            })
-            .await;
-
-        match res {
-            Ok(resp) if resp.status().is_success() => {
-                let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
-                let stream = resp.bytes_stream().map_err(|e| {
-                    CodexErr::ResponseStreamFailed(ResponseStreamFailed {
-                        source: e,
-                        request_id: None,
-                    })
-                });
-                tokio::spawn(process_chat_sse(
-                    stream,
-                    tx_event,
-                    provider.stream_idle_timeout(),
-                    otel_event_manager.clone(),
-                ));
-                return Ok(ResponseStream { rx_event });
+            if !(status == StatusCode::TOO_MANY_REQUESTS
+                || status == StatusCode::UNAUTHORIZED
+                || status.is_server_error())
+            {
+                // Surface the error body to callers. Use `unwrap_or_default` per Clippy.
+                let body = res.text().await.unwrap_or_default();
+                return Err(CodexErr::UnexpectedStatus(UnexpectedResponseError {
+                    status,
+                    body,
+                    request_id: None,
+                }));
             }
-            Ok(res) => {
-                let status = res.status();
-                if !(status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()) {
-                    let body = (res.text().await).unwrap_or_default();
-                    return Err(CodexErr::UnexpectedStatus(UnexpectedResponseError {
-                        status,
-                        body,
-                        request_id: None,
-                    }));
-                }
 
-                if attempt > max_retries {
-                    return Err(CodexErr::RetryLimit(RetryLimitReachedError {
-                        status,
-                        request_id: None,
-                    }));
-                }
-
-                let retry_after_secs = res
-                    .headers()
-                    .get(reqwest::header::RETRY_AFTER)
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|s| s.parse::<u64>().ok());
-
-                let delay = retry_after_secs
-                    .map(|s| Duration::from_millis(s * 1_000))
-                    .unwrap_or_else(|| backoff(attempt));
-                tokio::time::sleep(delay).await;
-            }
-            Err(e) => {
-                if attempt > max_retries {
-                    return Err(CodexErr::ConnectionFailed(ConnectionFailedError {
-                        source: e,
-                    }));
-                }
-                let delay = backoff(attempt);
-                tokio::time::sleep(delay).await;
-            }
+            Err(CodexErr::UnexpectedStatus(UnexpectedResponseError {
+                status,
+                body: String::new(),
+                request_id,
+            }))
         }
+        Err(e) => Err(CodexErr::ConnectionFailed(ConnectionFailedError {
+            source: e,
+        })),
     }
 }
 
@@ -484,9 +485,7 @@ async fn append_reasoning_text(
             .await;
     }
 }
-/// Lightweight SSE processor for the Chat Completions streaming format. The
-/// output is mapped onto Codex's internal [`ResponseEvent`] so that the rest
-/// of the pipeline can stay agnostic of the underlying wire format.
+
 async fn process_chat_sse<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
@@ -719,33 +718,28 @@ async fn process_chat_sse<S>(
     }
 }
 
-/// Optional client-side aggregation helper
-///
-/// Stream adapter that merges the incremental `OutputItemDone` chunks coming from
-/// [`process_chat_sse`] into a *running* assistant message, **suppressing the
-/// per-token deltas**.  The stream stays silent while the model is thinking
-/// and only emits two events per turn:
-///
-///   1. `ResponseEvent::OutputItemDone` with the *complete* assistant message
-///      (fully concatenated).
-///   2. The original `ResponseEvent::Completed` right after it.
-///
-/// This mirrors the behaviour the TypeScript CLI exposes to its higher layers.
-///
-/// The adapter is intentionally *lossless*: callers who do **not** opt in via
-/// [`AggregateStreamExt::aggregate()`] keep receiving the original unmodified
-/// events.
-#[derive(Copy, Clone, Eq, PartialEq)]
-enum AggregateMode {
-    AggregatedOnly,
-    Streaming,
-}
-pub(crate) struct AggregatedChatStream<S> {
+/// Adapter that aggregates Chat Completions SSE output into the final assistant
+/// message plus optional reasoning, mirroring the Responses API contract.
+pub(crate) struct AggregatedChatStream<S>
+where
+    S: Stream<Item = Result<ResponseEvent>> + Unpin,
+{
     inner: S,
-    cumulative: String,
-    cumulative_reasoning: String,
     pending: std::collections::VecDeque<ResponseEvent>,
-    mode: AggregateMode,
+    finished: bool,
+}
+
+impl<S> AggregatedChatStream<S>
+where
+    S: Stream<Item = Result<ResponseEvent>> + Unpin,
+{
+    pub fn streaming_mode(inner: S) -> Self {
+        Self {
+            inner,
+            pending: std::collections::VecDeque::new(),
+            finished: false,
+        }
+    }
 }
 
 impl<S> Stream for AggregatedChatStream<S>
@@ -757,165 +751,44 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
 
-        // First, flush any buffered events from the previous call.
-        if let Some(ev) = this.pending.pop_front() {
-            return Poll::Ready(Some(Ok(ev)));
+        if let Some(event) = this.pending.pop_front() {
+            return Poll::Ready(Some(Ok(event)));
+        }
+
+        if this.finished {
+            return Poll::Ready(None);
         }
 
         loop {
             match Pin::new(&mut this.inner).poll_next(cx) {
                 Poll::Pending => return Poll::Pending,
-                Poll::Ready(None) => return Poll::Ready(None),
-                Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
                 Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item)))) => {
-                    // If this is an incremental assistant message chunk, accumulate but
-                    // do NOT emit yet. Forward any other item (e.g. FunctionCall) right
-                    // away so downstream consumers see it.
-
-                    let is_assistant_message = matches!(
-                        &item,
-                        codex_protocol::models::ResponseItem::Message { role, .. } if role == "assistant"
-                    );
-
-                    if is_assistant_message {
-                        match this.mode {
-                            AggregateMode::AggregatedOnly => {
-                                // Only use the final assistant message if we have not
-                                // seen any deltas; otherwise, deltas already built the
-                                // cumulative text and this would duplicate it.
-                                if this.cumulative.is_empty()
-                                    && let codex_protocol::models::ResponseItem::Message {
-                                        content,
-                                        ..
-                                    } = &item
-                                    && let Some(text) = content.iter().find_map(|c| match c {
-                                        codex_protocol::models::ContentItem::OutputText {
-                                            text,
-                                        } => Some(text),
-                                        _ => None,
-                                    })
-                                {
-                                    this.cumulative.push_str(text);
-                                }
-                                // Swallow assistant message here; emit on Completed.
-                                continue;
-                            }
-                            AggregateMode::Streaming => {
-                                // In streaming mode, if we have not seen any deltas, forward
-                                // the final assistant message directly. If deltas were seen,
-                                // suppress the final message to avoid duplication.
-                                if this.cumulative.is_empty() {
-                                    return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(
-                                        item,
-                                    ))));
-                                } else {
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-
-                    // Not an assistant message – forward immediately.
-                    return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item))));
+                    this.pending.push_back(ResponseEvent::OutputItemDone(item));
+                    continue;
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot)))) => {
-                    return Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot))));
+                    this.pending.push_back(ResponseEvent::RateLimits(snapshot));
+                    continue;
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::Completed {
                     response_id,
                     token_usage,
                 }))) => {
-                    // Build any aggregated items in the correct order: Reasoning first, then Message.
-                    let mut emitted_any = false;
-
-                    if !this.cumulative_reasoning.is_empty()
-                        && matches!(this.mode, AggregateMode::AggregatedOnly)
-                    {
-                        let aggregated_reasoning =
-                            codex_protocol::models::ResponseItem::Reasoning {
-                                id: String::new(),
-                                summary: Vec::new(),
-                                content: Some(vec![
-                                    codex_protocol::models::ReasoningItemContent::ReasoningText {
-                                        text: std::mem::take(&mut this.cumulative_reasoning),
-                                    },
-                                ]),
-                                encrypted_content: None,
-                            };
-                        this.pending
-                            .push_back(ResponseEvent::OutputItemDone(aggregated_reasoning));
-                        emitted_any = true;
-                    }
-
-                    // Always emit the final aggregated assistant message when any
-                    // content deltas have been observed. In AggregatedOnly mode this
-                    // is the sole assistant output; in Streaming mode this finalizes
-                    // the streamed deltas into a terminal OutputItemDone so callers
-                    // can persist/render the message once per turn.
-                    if !this.cumulative.is_empty() {
-                        let aggregated_message = codex_protocol::models::ResponseItem::Message {
-                            id: None,
-                            role: "assistant".to_string(),
-                            content: vec![codex_protocol::models::ContentItem::OutputText {
-                                text: std::mem::take(&mut this.cumulative),
-                            }],
-                        };
-                        this.pending
-                            .push_back(ResponseEvent::OutputItemDone(aggregated_message));
-                        emitted_any = true;
-                    }
-
-                    // Always emit Completed last when anything was aggregated.
-                    if emitted_any {
-                        this.pending.push_back(ResponseEvent::Completed {
-                            response_id: response_id.clone(),
-                            token_usage: token_usage.clone(),
-                        });
-                        // Return the first pending event now.
-                        if let Some(ev) = this.pending.pop_front() {
-                            return Poll::Ready(Some(Ok(ev)));
-                        }
-                    }
-
-                    // Nothing aggregated – forward Completed directly.
-                    return Poll::Ready(Some(Ok(ResponseEvent::Completed {
+                    this.pending.push_back(ResponseEvent::Completed {
                         response_id,
                         token_usage,
-                    })));
+                    });
+                    this.finished = true;
+                    return Poll::Ready(this.pending.pop_front().map(Ok));
                 }
-                Poll::Ready(Some(Ok(ResponseEvent::Created))) => {
-                    // These events are exclusive to the Responses API and
-                    // will never appear in a Chat Completions stream.
+                Poll::Ready(Some(Ok(other))) => {
+                    this.pending.push_back(other);
                     continue;
                 }
-                Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(delta)))) => {
-                    // Always accumulate deltas so we can emit a final OutputItemDone at Completed.
-                    this.cumulative.push_str(&delta);
-                    if matches!(this.mode, AggregateMode::Streaming) {
-                        // In streaming mode, also forward the delta immediately.
-                        return Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(delta))));
-                    } else {
-                        continue;
-                    }
-                }
-                Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta(delta)))) => {
-                    // Always accumulate reasoning deltas so we can emit a final Reasoning item at Completed.
-                    this.cumulative_reasoning.push_str(&delta);
-                    if matches!(this.mode, AggregateMode::Streaming) {
-                        // In streaming mode, also forward the delta immediately.
-                        return Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta(delta))));
-                    } else {
-                        continue;
-                    }
-                }
-                Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(_)))) => {
-                    continue;
-                }
-                Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryPartAdded))) => {
-                    continue;
-                }
-                Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(item)))) => {
-                    return Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(item))));
+                Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
+                Poll::Ready(None) => {
+                    this.finished = true;
+                    return Poll::Ready(None);
                 }
             }
         }
@@ -923,45 +796,12 @@ where
 }
 
 /// Extension trait that activates aggregation on any stream of [`ResponseEvent`].
-pub(crate) trait AggregateStreamExt: Stream<Item = Result<ResponseEvent>> + Sized {
-    /// Returns a new stream that emits **only** the final assistant message
-    /// per turn instead of every incremental delta.  The produced
-    /// `ResponseEvent` sequence for a typical text turn looks like:
-    ///
-    /// ```ignore
-    ///     OutputItemDone(<full message>)
-    ///     Completed
-    /// ```
-    ///
-    /// No other `OutputItemDone` events will be seen by the caller.
-    ///
-    /// Usage:
-    ///
-    /// ```ignore
-    /// let agg_stream = client.stream(&prompt).await?.aggregate();
-    /// while let Some(event) = agg_stream.next().await {
-    ///     // event now contains cumulative text
-    /// }
-    /// ```
+pub(crate) trait AggregateStreamExt:
+    Stream<Item = Result<ResponseEvent>> + Sized + Unpin
+{
     fn aggregate(self) -> AggregatedChatStream<Self> {
-        AggregatedChatStream::new(self, AggregateMode::AggregatedOnly)
+        AggregatedChatStream::streaming_mode(self)
     }
 }
 
-impl<T> AggregateStreamExt for T where T: Stream<Item = Result<ResponseEvent>> + Sized {}
-
-impl<S> AggregatedChatStream<S> {
-    fn new(inner: S, mode: AggregateMode) -> Self {
-        AggregatedChatStream {
-            inner,
-            cumulative: String::new(),
-            cumulative_reasoning: String::new(),
-            pending: std::collections::VecDeque::new(),
-            mode,
-        }
-    }
-
-    pub(crate) fn streaming_mode(inner: S) -> Self {
-        Self::new(inner, AggregateMode::Streaming)
-    }
-}
+impl<T> AggregateStreamExt for T where T: Stream<Item = Result<ResponseEvent>> + Sized + Unpin {}

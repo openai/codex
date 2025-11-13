@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
+use crate::ResponseEvent;
 use crate::client_common::REVIEW_PROMPT;
 use crate::compact;
 use crate::features::Feature;
@@ -55,7 +56,6 @@ use tracing::warn;
 use crate::ModelProviderInfo;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
-use crate::client_common::ResponseEvent;
 use crate::config::Config;
 use crate::config::types::McpServerTransportConfig;
 use crate::config::types::ShellEnvironmentPolicy;

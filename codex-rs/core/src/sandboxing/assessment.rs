@@ -6,9 +6,9 @@ use std::time::Instant;
 
 use crate::AuthManager;
 use crate::ModelProviderInfo;
+use crate::ResponseEvent;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
-use crate::client_common::ResponseEvent;
 use crate::config::Config;
 use crate::protocol::SandboxPolicy;
 use askama::Template;
