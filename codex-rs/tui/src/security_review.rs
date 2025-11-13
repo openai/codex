@@ -2424,7 +2424,7 @@ async fn triage_files_for_bug_analysis(
     for _ in 0..concurrency {
         if let Some(request) = remaining.next() {
             in_flight.push(triage_chunk(
-				client,
+                client,
                 provider.clone(),
                 auth.clone(),
                 triage_model.to_string(),
@@ -2456,7 +2456,7 @@ async fn triage_files_for_bug_analysis(
                 }
                 if let Some(next_request) = remaining.next() {
                     in_flight.push(triage_chunk(
-					client,
+                        client,
                         provider.clone(),
                         auth.clone(),
                         triage_model.to_string(),

@@ -443,6 +443,10 @@ lazy_static! {
     static ref HEADER_RE: Regex =
         Regex::new(r"(?i)^\s*(flowchart|graph|sequenceDiagram|classDiagram|erDiagram|gantt)\b")
             .expect("valid regex");
+    static ref HEADER_TITLE_SAME_LINE_RE: Regex = Regex::new(
+        r"(?im)^(?P<indent>\s*)(?P<keyword>flowchart|graph)\s+(?P<dir>TB|TD|LR|RL|BT)\s+title\s+(?P<title>.+)$",
+    )
+    .expect("valid regex");
 }
 
 fn sanitize_node_id(value: &str) -> String {
@@ -526,8 +530,24 @@ fn is_within_double_quotes(line: &str, start: usize, end: usize) -> bool {
     spans.iter().any(|(a, b)| start >= *a && end <= *b)
 }
 
+fn normalize_header_titles(source: &str) -> String {
+    HEADER_TITLE_SAME_LINE_RE
+        .replace_all(source, |caps: &Captures| {
+            let indent = caps.name("indent").map(|m| m.as_str()).unwrap_or("");
+            let keyword = caps
+                .name("keyword")
+                .map(|m| m.as_str())
+                .unwrap_or("flowchart");
+            let dir = caps.name("dir").map(|m| m.as_str()).unwrap_or("TD");
+            let title = caps.name("title").map(|m| m.as_str()).unwrap_or("");
+            format!("{indent}{keyword} {dir}\n{indent}  title {title}")
+        })
+        .into_owned()
+}
+
 fn lint_and_wrap(code: &str) -> String {
-    let mut linter = MermaidLinter::new(code);
+    let normalized = normalize_header_titles(code);
+    let mut linter = MermaidLinter::new(&normalized);
     let issues = linter.lint();
     linter.apply_fixes(issues);
     let fixed = if linter.lines.is_empty() {
@@ -782,6 +802,19 @@ sequenceDiagram
         assert!(fixed.contains("ClientApp->>APIServer: POST /api/calpico/rooms/{id}/messages"));
         assert!(fixed.contains("APIServer->>MessageWriter: validate membership, persist message"));
         assert!(fixed.contains("MessageWriter-->>APIServer: message record"));
+    }
+
+    #[test]
+    fn header_title_on_same_line_is_split() {
+        let raw = "```mermaid\nflowchart TD title Component request flow - end-to-end platform\n  Client[\"Tenant client / automation workflow\"] --> ChatService[\"packages/chat-service\"]\n```";
+        let fixed = fix_mermaid_blocks(raw);
+        // Ensure we no longer have a single line with both the direction and title.
+        assert!(!fixed.contains("flowchart TD  title"));
+
+        // We expect a header line followed by a separate title directive line.
+        assert!(
+            fixed.contains("flowchart TD\n  title Component request flow - end-to-end platform")
+        );
     }
 
     #[test]
