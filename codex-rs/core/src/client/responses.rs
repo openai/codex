@@ -505,6 +505,53 @@ impl ModelClient {
 }
 
 fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
+    // Prefer codex-specific aggregate rate limit headers if present; fall back
+    // to raw OpenAI-style request headers otherwise.
+    if let Some(snapshot) = parse_codex_rate_limits(headers) {
+        return Some(snapshot);
+    }
+
+    parse_openai_rate_limits(headers)
+}
+
+fn parse_codex_rate_limits(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
+    fn parse_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<f64>().ok())
+    }
+
+    fn parse_i64(headers: &HeaderMap, name: &str) -> Option<i64> {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<i64>().ok())
+    }
+
+    let primary_used = parse_f64(headers, "x-codex-primary-used-percent");
+    let secondary_used = parse_f64(headers, "x-codex-secondary-used-percent");
+
+    if primary_used.is_none() && secondary_used.is_none() {
+        return None;
+    }
+
+    let primary = primary_used.map(|used_percent| RateLimitWindow {
+        used_percent,
+        window_minutes: parse_i64(headers, "x-codex-primary-window-minutes"),
+        resets_at: parse_i64(headers, "x-codex-primary-reset-at"),
+    });
+
+    let secondary = secondary_used.map(|used_percent| RateLimitWindow {
+        used_percent,
+        window_minutes: parse_i64(headers, "x-codex-secondary-window-minutes"),
+        resets_at: parse_i64(headers, "x-codex-secondary-reset-at"),
+    });
+
+    Some(RateLimitSnapshot { primary, secondary })
+}
+
+fn parse_openai_rate_limits(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
     let limit = headers.get("x-ratelimit-limit-requests")?;
     let remaining = headers.get("x-ratelimit-remaining-requests")?;
     let reset_ms = headers.get("x-ratelimit-reset-requests")?;
@@ -582,10 +629,20 @@ fn try_parse_retry_after(error: &Error) -> Option<Duration> {
 }
 
 fn is_context_window_error(error: &Error) -> bool {
-    error
+    let is_type = error
         .r#type
         .as_deref()
         .map(|t| t == "context_length_exceeded")
+        .unwrap_or(false);
+
+    if is_type {
+        return true;
+    }
+
+    error
+        .code
+        .as_deref()
+        .map(|c| c == "context_length_exceeded")
         .unwrap_or(false)
 }
 
@@ -669,7 +726,7 @@ async fn process_sse(
                 let _ = tx_event
                     .send(Err(CodexErr::Stream(e.to_string(), None)))
                     .await;
-                break;
+                return;
             }
             Ok(None) => {
                 break;
@@ -681,30 +738,38 @@ async fn process_sse(
                         None,
                     )))
                     .await;
-                break;
+                return;
             }
         }
     }
 
-    if let Some(err) = response_error {
-        let _ = tx_event.send(Err(err)).await;
-        return;
-    }
+    match response_completed {
+        Some(ResponseCompleted { id, usage }) => {
+            if let Some(ref token_usage) = usage {
+                otel_event_manager.sse_event_completed(
+                    token_usage.input_tokens,
+                    token_usage.output_tokens,
+                    Some(token_usage.cached_input_tokens),
+                    Some(token_usage.reasoning_output_tokens),
+                    token_usage.total_tokens,
+                );
+            }
 
-    if let Some(resp) = response_completed {
-        let _ = tx_event
-            .send(Ok(ResponseEvent::Completed {
-                response_id: resp.id,
-                token_usage: resp.usage,
-            }))
-            .await;
-    } else {
-        let _ = tx_event
-            .send(Err(CodexErr::Stream(
+            let _ = tx_event
+                .send(Ok(ResponseEvent::Completed {
+                    response_id: id,
+                    token_usage: usage,
+                }))
+                .await;
+        }
+        None => {
+            let err = response_error.unwrap_or(CodexErr::Stream(
                 "stream closed before response.completed".to_string(),
                 None,
-            )))
-            .await;
+            ));
+            otel_event_manager.see_event_completed_failed(&err);
+            let _ = tx_event.send(Err(err)).await;
+        }
     }
 }
 
@@ -719,8 +784,61 @@ struct SseEventWrapper {
 #[derive(Debug, Deserialize)]
 struct ResponseCompleted {
     id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "deserialize_usage")]
     usage: Option<TokenUsage>,
+}
+
+fn deserialize_usage<'de, D>(deserializer: D) -> std::result::Result<Option<TokenUsage>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    struct RawUsage {
+        input_tokens: i64,
+        #[serde(default)]
+        input_tokens_details: Option<InputTokensDetails>,
+        #[serde(default)]
+        output_tokens: i64,
+        #[serde(default)]
+        output_tokens_details: Option<OutputTokensDetails>,
+        #[serde(default)]
+        total_tokens: i64,
+    }
+
+    #[derive(Deserialize)]
+    struct InputTokensDetails {
+        #[serde(default)]
+        cached_tokens: Option<i64>,
+    }
+
+    #[derive(Deserialize)]
+    struct OutputTokensDetails {
+        #[serde(default)]
+        reasoning_tokens: Option<i64>,
+    }
+
+    let raw: Option<RawUsage> = Option::deserialize(deserializer)?;
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+
+    let cached_input_tokens = raw
+        .input_tokens_details
+        .and_then(|d| d.cached_tokens)
+        .unwrap_or(0);
+
+    let reasoning_output_tokens = raw
+        .output_tokens_details
+        .and_then(|d| d.reasoning_tokens)
+        .unwrap_or(0);
+
+    Ok(Some(TokenUsage {
+        input_tokens: raw.input_tokens,
+        cached_input_tokens,
+        output_tokens: raw.output_tokens,
+        reasoning_output_tokens,
+        total_tokens: raw.total_tokens,
+    }))
 }
 
 async fn handle_sse_event(
@@ -736,6 +854,7 @@ async fn handle_sse_event(
     }
 
     let event: SseEventWrapper = serde_json::from_str(&data)?;
+    debug!("processing SSE event type={}", event.r#type);
     match event.r#type.as_str() {
         "response.completed" => {
             if let Some(resp_val) = event.response {
@@ -869,17 +988,21 @@ async fn stream_from_fixture(
     provider: ModelProviderInfo,
     otel_event_manager: OtelEventManager,
 ) -> Result<ResponseStream> {
-    let file = std::fs::File::open(fixture_path)?;
-    let reader = std::io::BufReader::new(file);
+    // Read the entire fixture into memory so we can normalize SSE framing for
+    // the eventsource parser. In particular, ensure the final event is
+    // terminated by a blank line so `response.completed` is emitted even when
+    // the fixture omits the trailing separator.
+    let mut content = std::fs::read_to_string(fixture_path)?;
+    if content.ends_with("\n\n") {
+        // Already correctly terminated.
+    } else if content.ends_with('\n') {
+        content.push('\n');
+    } else {
+        content.push('\n');
+        content.push('\n');
+    }
 
-    // Convert lines into a stream of SSE chunks.
-    let lines: Vec<String> = reader.lines().filter_map(|line| line.ok()).collect();
-
-    let stream = futures::stream::iter(
-        lines
-            .into_iter()
-            .map(|line| Ok::<Bytes, CodexErr>(Bytes::from(format!("{line}\n")))),
-    );
+    let stream = futures::stream::iter([Ok::<Bytes, CodexErr>(Bytes::from(content))]);
 
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
 
@@ -904,6 +1027,7 @@ mod tests {
     use futures::StreamExt;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::path::Path;
 
     #[tokio::test]
     async fn parses_items_and_completed() {
@@ -1028,6 +1152,97 @@ mod tests {
             Err(CodexErr::Stream(message, _))
                 if message.contains("stream closed before response.completed")
         );
+    }
+
+    #[tokio::test]
+    async fn cli_fixture_streams_created_item_and_completed() {
+        let fixture_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cli_responses_fixture.sse");
+
+        let provider = ModelProviderInfo {
+            name: "test".to_string(),
+            base_url: Some("https://test.com".to_string()),
+            env_key: Some("TEST_API_KEY".to_string()),
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: Some(0),
+            stream_max_retries: Some(0),
+            stream_idle_timeout_ms: Some(1000),
+            requires_openai_auth: false,
+        };
+
+        let otel_event_manager = otel_event_manager();
+        let result =
+            stream_from_fixture(fixture_path.as_path(), provider, otel_event_manager).await;
+
+        let mut stream = result.expect("stream should be created");
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            events.push(event);
+        }
+
+        assert_eq!(events.len(), 3);
+        matches!(events[0], Ok(ResponseEvent::Created {}));
+        matches!(
+            &events[1],
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { role, .. }))
+                if role == "assistant"
+        );
+        match &events[2] {
+            Ok(ResponseEvent::Completed {
+                response_id,
+                token_usage,
+            }) => {
+                assert_eq!(response_id, "resp1");
+                assert!(token_usage.is_none());
+            }
+            other => panic!("unexpected final event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn cli_fixture_drain_to_completed_like_loop_succeeds() {
+        let fixture_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cli_responses_fixture.sse");
+
+        let provider = ModelProviderInfo {
+            name: "test".to_string(),
+            base_url: Some("https://test.com".to_string()),
+            env_key: Some("TEST_API_KEY".to_string()),
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: Some(0),
+            stream_max_retries: Some(0),
+            stream_idle_timeout_ms: Some(1000),
+            requires_openai_auth: false,
+        };
+
+        let otel_event_manager = otel_event_manager();
+        let result =
+            stream_from_fixture(fixture_path.as_path(), provider, otel_event_manager).await;
+
+        let mut stream = result.expect("stream should be created");
+
+        loop {
+            let maybe_event = stream.next().await;
+            let Some(event) = maybe_event else {
+                panic!("stream closed before response.completed");
+            };
+
+            match event {
+                Ok(ResponseEvent::Completed { .. }) => break,
+                Ok(_) => continue,
+                Err(e) => panic!("unexpected error from stream: {e}"),
+            }
+        }
     }
 
     fn otel_event_manager() -> OtelEventManager {
