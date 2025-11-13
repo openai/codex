@@ -7,13 +7,12 @@ use chrono::Local;
 use chrono::Utc;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::RateLimitWindow;
-use ratatui::style::Color;
 use ratatui::style::Stylize;
 use ratatui::text::Span;
 
 const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
 const STATUS_LIMIT_BAR_FILLED: &str = "█";
-const STATUS_LIMIT_BAR_EMPTY: &str = "░";
+const STATUS_LIMIT_BAR_EMPTY: &str = " ";
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatusRateLimitRow {
@@ -135,7 +134,11 @@ pub(crate) fn render_status_limit_progress_bar(percent_remaining: f64) -> Vec<Sp
     let mut spans = Vec::with_capacity(2 + STATUS_LIMIT_BAR_SEGMENTS);
     spans.push("[".into());
     if filled > 0 {
-        spans.push(Span::from(STATUS_LIMIT_BAR_FILLED.repeat(filled)).fg(Color::Rgb(0, 128, 0)));
+        spans.push(
+            Span::from(STATUS_LIMIT_BAR_FILLED.repeat(filled))
+                .green()
+                .dim(),
+        );
     }
     if empty > 0 {
         spans.push(Span::from(STATUS_LIMIT_BAR_EMPTY.repeat(empty)));
