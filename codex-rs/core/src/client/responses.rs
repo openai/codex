@@ -352,7 +352,17 @@ impl ModelClient {
             Ok(resp) if resp.status().is_success() => {
                 let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
 
-                if let Some(snapshot) = parse_rate_limit_snapshot(resp.headers())
+                // Always emit a RateLimits event at the start of a successful
+                // stream so downstream consumers (Session) can surface an
+                // initial TokenCount snapshot, even when the provider does not
+                // send explicit rate limit headers.
+                let snapshot = parse_rate_limit_snapshot(resp.headers()).or_else(|| {
+                    Some(RateLimitSnapshot {
+                        primary: None,
+                        secondary: None,
+                    })
+                });
+                if let Some(snapshot) = snapshot
                     && tx_event
                         .send(Ok(ResponseEvent::RateLimits(snapshot)))
                         .await
