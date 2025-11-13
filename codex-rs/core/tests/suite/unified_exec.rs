@@ -215,7 +215,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     assert_eq!(
         begin_event.command,
         vec![
-            "bash".to_string(),
+            "/bin/bash".to_string(),
             "-lc".to_string(),
             "/bin/echo hello unified exec".to_string()
         ]
