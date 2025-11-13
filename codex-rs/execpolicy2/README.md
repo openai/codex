@@ -47,7 +47,7 @@ prefix_rule(
 ## CLI
 - Provide a policy file (for example `src/default.codexpolicy`) to check a command:
 ```bash
-cargo run -p codex-execpolicy2 -- --policy path/to/policy.codexpolicy check git status
+cargo run -p codex-execpolicy2 -- check --policy path/to/policy.codexpolicy git status
 ```
 - Example outcomes:
   - Match: `{"match": { ... "decision": "allow" ... }}`
