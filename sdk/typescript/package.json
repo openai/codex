@@ -28,7 +28,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "vendor"
   ],
   "sideEffects": false,
   "scripts": {

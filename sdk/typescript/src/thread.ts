@@ -89,7 +89,7 @@ export class Thread {
       networkAccessEnabled: options?.networkAccessEnabled,
       webSearchEnabled: options?.webSearchEnabled,
       approvalPolicy: options?.approvalPolicy,
-      writeableRoots: options?.writeableRoots,
+      additionalDirectories: options?.additionalDirectories,
     });
     try {
       for await (const item of generator) {

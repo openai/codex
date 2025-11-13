@@ -347,7 +347,7 @@ describe("Codex", () => {
     }
   });
 
-  it("passes writeableRoots as repeated flags", async () => {
+  it("passes additionalDirectories as repeated flags", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,
       responseBodies: [
@@ -365,7 +365,7 @@ describe("Codex", () => {
       const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const thread = client.startThread({
-        writeableRoots: ["../backend", "/tmp/shared"],
+        additionalDirectories: ["../backend", "/tmp/shared"],
       });
       await thread.run("test additional dirs");
 
@@ -375,19 +375,14 @@ describe("Codex", () => {
         throw new Error("Command args missing");
       }
 
-      // Find the --config flag with sandbox_workspace_write.writable_roots
-      let foundConfig = false;
+      // Find the --add-dir flags
+      const addDirArgs: string[] = [];
       for (let i = 0; i < commandArgs.length; i += 1) {
-        if (commandArgs[i] === "--config") {
-          const configValue = commandArgs[i + 1];
-          if (typeof configValue === "string" && configValue.includes("sandbox_workspace_write.writable_roots")) {
-            expect(configValue).toBe('sandbox_workspace_write.writable_roots=["../backend", "/tmp/shared"]');
-            foundConfig = true;
-            break;
-          }
+        if (commandArgs[i] === "--add-dir") {
+          addDirArgs.push(commandArgs[i + 1] ?? "");
         }
       }
-      expect(foundConfig).toBe(true);
+      expect(addDirArgs).toEqual(["../backend", "/tmp/shared"]);
     } finally {
       restore();
       await close();
