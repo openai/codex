@@ -1114,10 +1114,11 @@ mod tests {
         provider: ModelProviderInfo,
         otel_event_manager: OtelEventManager,
     ) -> Vec<Result<ResponseEvent>> {
+        #[allow(clippy::needless_collect)] // Avoid useless lifetime specifiers.
+        let owned_chunks: Vec<Vec<u8>> = chunks.iter().map(|chunk| (*chunk).to_vec()).collect();
+
         let stream = futures::stream::iter(
-            chunks
-                .iter()
-                .map(|chunk| (*chunk).to_vec())
+            owned_chunks
                 .into_iter()
                 .map(|bytes| Ok::<Bytes, CodexErr>(Bytes::from(bytes))),
         );

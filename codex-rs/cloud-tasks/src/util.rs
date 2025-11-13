@@ -7,7 +7,7 @@ use codex_core::config::ConfigOverrides;
 use codex_login::AuthManager;
 
 pub fn set_user_agent_suffix(suffix: &str) {
-    if let Ok(mut guard) = codex_core::default_client::USER_AGENT_SUFFIX.lock() {
+    if let Ok(mut guard) = codex_core::client::http::USER_AGENT_SUFFIX.lock() {
         guard.replace(suffix.to_string());
     }
 }
@@ -79,7 +79,7 @@ pub async fn build_chatgpt_headers() -> HeaderMap {
     use reqwest::header::USER_AGENT;
 
     set_user_agent_suffix("codex_cloud_tasks_tui");
-    let ua = codex_core::default_client::get_codex_user_agent();
+    let ua = codex_core::client::http::get_codex_user_agent();
     let mut headers = HeaderMap::new();
     headers.insert(
         USER_AGENT,
