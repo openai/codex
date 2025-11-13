@@ -173,14 +173,10 @@ const PRESETS: &[ModelPreset] = &[
     },
 ];
 
-pub fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
-    let allow_codex_mini = matches!(auth_mode, Some(AuthMode::ChatGPT));
+pub fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
     PRESETS
         .iter()
-        .filter(|preset| {
-            (allow_codex_mini || preset.id != "gpt-5.1-codex-mini")
-                && preset.recommended_upgrade_model.is_none()
-        })
+        .filter(|preset| preset.recommended_upgrade_model.is_none())
         .copied()
         .collect()
 }
