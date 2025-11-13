@@ -2,7 +2,7 @@
 source: tui/src/model_migration.rs
 expression: terminal.backend()
 ---
-> Introducing our gpt-5.1-codex models
+> Introducing our gpt-5.1 models
 
   We've upgraded our family of models supported in Codex to
   gpt-5.1, gpt-5.1-codex and gpt-5.1-codex-mini.

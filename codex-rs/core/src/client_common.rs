@@ -342,21 +342,6 @@ pub(crate) mod tools {
     }
 }
 
-pub(crate) fn create_reasoning_param_for_request(
-    model_family: &ModelFamily,
-    effort: Option<ReasoningEffortConfig>,
-    summary: ReasoningSummaryConfig,
-) -> Option<Reasoning> {
-    if !model_family.supports_reasoning_summaries {
-        return None;
-    }
-
-    Some(Reasoning {
-        effort,
-        summary: Some(summary),
-    })
-}
-
 pub(crate) fn create_text_param_for_request(
     verbosity: Option<VerbosityConfig>,
     output_schema: &Option<Value>,

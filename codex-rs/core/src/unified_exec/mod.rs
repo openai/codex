@@ -64,10 +64,8 @@ impl UnifiedExecContext {
 }
 
 #[derive(Debug)]
-pub(crate) struct ExecCommandRequest<'a> {
-    pub command: &'a str,
-    pub shell: &'a str,
-    pub login: bool,
+pub(crate) struct ExecCommandRequest {
+    pub command: Vec<String>,
     pub yield_time_ms: Option<u64>,
     pub max_output_tokens: Option<usize>,
     pub workdir: Option<PathBuf>,
@@ -105,7 +103,7 @@ struct SessionEntry {
     session_ref: Arc<Session>,
     turn_ref: Arc<TurnContext>,
     call_id: String,
-    command: String,
+    command: Vec<String>,
     cwd: PathBuf,
     started_at: tokio::time::Instant,
 }
@@ -197,9 +195,7 @@ mod tests {
             .unified_exec_manager
             .exec_command(
                 ExecCommandRequest {
-                    command: cmd,
-                    shell: "/bin/bash",
-                    login: true,
+                    command: vec!["bash".to_string(), "-lc".to_string(), cmd.to_string()],
                     yield_time_ms,
                     max_output_tokens: None,
                     workdir: None,
