@@ -1258,9 +1258,47 @@ mod tests {
     }
 
     #[test]
+    fn test_build_specs_gpt51_codex_default() {
+        assert_model_tools(
+            "gpt-5.1-codex",
+            &Features::with_defaults(),
+            &[
+                "shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
     fn test_build_specs_gpt5_codex_unified_exec_web_search() {
         assert_model_tools(
             "gpt-5-codex",
+            Features::with_defaults()
+                .enable(Feature::UnifiedExec)
+                .enable(Feature::WebSearchRequest),
+            &[
+                "exec_command",
+                "write_stdin",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "web_search",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_build_specs_gpt51_codex_unified_exec_web_search() {
+        assert_model_tools(
+            "gpt-5.1-codex",
             Features::with_defaults()
                 .enable(Feature::UnifiedExec)
                 .enable(Feature::WebSearchRequest),
