@@ -373,20 +373,14 @@ async fn manual_compact_emits_estimated_token_usage_event() {
 
     let server = start_mock_server().await;
 
-    // First turn: normal user input and reply with non-zero usage.
-    let sse_user = sse(vec![
-        ev_assistant_message("m1", FIRST_REPLY),
-        ev_completed_with_tokens("r1", 1_000),
-    ]);
-
-    // Second turn: compact run where the API reports zero tokens in usage.
-    // Our local estimator should still compute a non-zero context size.
+    // Compact run where the API reports zero tokens in usage. Our local
+    // estimator should still compute a non-zero context size for the compacted
+    // history.
     let sse_compact = sse(vec![
-        ev_assistant_message("m2", SUMMARY_TEXT),
-        ev_completed_with_tokens("r2", 0),
+        ev_assistant_message("m1", SUMMARY_TEXT),
+        ev_completed_with_tokens("r1", 0),
     ]);
-
-    let _request_log = mount_sse_sequence(&server, vec![sse_user, sse_compact]).await;
+    mount_sse_once(&server, sse_compact).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -402,19 +396,6 @@ async fn manual_compact_emits_estimated_token_usage_event() {
         conversation: codex,
         ..
     } = conversation_manager.new_conversation(config).await.unwrap();
-
-    // Seed history with a user turn.
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello world".into(),
-            }],
-        })
-        .await
-        .unwrap();
-
-    // Drain events until the first TaskComplete so the stream is at a clean point.
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // Trigger manual compact and collect TokenCount events for the compact turn.
     codex.submit(Op::Compact).await.unwrap();
