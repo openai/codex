@@ -28,8 +28,8 @@ fn make_random_cap_sid_string() -> String {
 
 pub fn load_or_create_cap_sids(policy_cwd: &Path) -> CapSids {
     let path = cap_sid_file(policy_cwd);
-    if path.exists() {
-        if let Ok(txt) = fs::read_to_string(&path) {
+    if path.exists()
+        && let Ok(txt) = fs::read_to_string(&path) {
             let t = txt.trim();
             if t.starts_with('{') && t.ends_with('}') {
                 if let Ok(obj) = serde_json::from_str::<CapSids>(t) {
@@ -42,7 +42,6 @@ pub fn load_or_create_cap_sids(policy_cwd: &Path) -> CapSids {
                 };
             }
         }
-    }
     CapSids {
         workspace: make_random_cap_sid_string(),
         readonly: make_random_cap_sid_string(),

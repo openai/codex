@@ -5,8 +5,7 @@ use tracing::info;
 
 use crate::GpuStats;
 
-pub mod kernel_driver;
-pub mod kernel_driver_ffi;
+// kernel_driver and kernel_driver_ffi are declared in lib.rs at crate root
 
 /// Check if Windows AI is available
 pub fn check_windows_ai_available() -> bool {
@@ -32,7 +31,7 @@ fn get_windows_build_number() -> Result<u32> {
 }
 
 /// Check NPU availability via registry
-/// 
+///
 /// NOTE: Windows Registry API not available in current windows crate version (0.58)
 /// This function is disabled until windows crate is updated with Registry API support
 #[allow(dead_code)]

@@ -115,69 +115,81 @@ impl CudaRuntime {
     }
 
     /// Copy data to device
-    pub fn copy_to_device<T: Clone>(&self, _data: &[T]) -> Result<DeviceBuffer<T>> {
-        #[cfg(feature = "cuda")]
-        {
-            self.inner.copy_to_device(_data)
-        }
+    /// 
+    /// NOTE: Requires `DeviceCopy` trait from cust crate
+    #[cfg(feature = "cuda")]
+    pub fn copy_to_device<T: cust::memory::DeviceCopy>(&self, _data: &[T]) -> Result<DeviceBuffer<T>> {
+        let buffer_impl = self.inner.copy_to_device(_data)?;
+        Ok(DeviceBuffer {
+            inner: buffer_impl,
+        })
+    }
 
-        #[cfg(not(feature = "cuda"))]
-        {
-            anyhow::bail!("CUDA not available")
-        }
+    #[cfg(not(feature = "cuda"))]
+    pub fn copy_to_device<T>(&self, _data: &[T]) -> Result<DeviceBuffer<T>> {
+        anyhow::bail!("CUDA not available")
     }
 
     /// Copy data from device
-    pub fn copy_from_device<T: Clone>(&self, _buffer: &DeviceBuffer<T>) -> Result<Vec<T>> {
-        #[cfg(feature = "cuda")]
-        {
-            self.inner.copy_from_device(_buffer)
-        }
+    /// 
+    /// NOTE: Requires `DeviceCopy`, `Clone`, and `Default` traits
+    #[cfg(feature = "cuda")]
+    pub fn copy_from_device<T: cust::memory::DeviceCopy + Clone + Default>(&self, _buffer: &DeviceBuffer<T>) -> Result<Vec<T>> {
+        self.inner.copy_from_device(&_buffer.inner)
+    }
 
-        #[cfg(not(feature = "cuda"))]
-        {
-            anyhow::bail!("CUDA not available")
-        }
+    #[cfg(not(feature = "cuda"))]
+    pub fn copy_from_device<T>(&self, _buffer: &DeviceBuffer<T>) -> Result<Vec<T>> {
+        anyhow::bail!("CUDA not available")
     }
 
     /// Allocate device memory
-    pub fn allocate<T: Clone>(&self, _size: usize) -> Result<DeviceBuffer<T>> {
-        #[cfg(feature = "cuda")]
-        {
-            self.inner.allocate(_size)
-        }
+    /// 
+    /// NOTE: Requires `DeviceCopy` and `Default` traits
+    #[cfg(feature = "cuda")]
+    pub fn allocate<T: cust::memory::DeviceCopy + Default>(&self, _size: usize) -> Result<DeviceBuffer<T>> {
+        let buffer_impl = self.inner.allocate(_size)?;
+        Ok(DeviceBuffer {
+            inner: buffer_impl,
+        })
+    }
 
-        #[cfg(not(feature = "cuda"))]
-        {
-            anyhow::bail!("CUDA not available")
-        }
+    #[cfg(not(feature = "cuda"))]
+    pub fn allocate<T>(&self, _size: usize) -> Result<DeviceBuffer<T>> {
+        anyhow::bail!("CUDA not available")
     }
 }
 
 /// Device buffer (GPU memory)
-pub struct DeviceBuffer<T> {
+/// 
+/// NOTE: T must implement DeviceCopy trait (required by cust::memory::DeviceBuffer)
+pub struct DeviceBuffer<T: cust::memory::DeviceCopy> {
     #[cfg(feature = "cuda")]
     inner: cuda_impl::DeviceBufferImpl<T>,
     #[cfg(not(feature = "cuda"))]
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T> DeviceBuffer<T> {
+impl<T: cust::memory::DeviceCopy> DeviceBuffer<T> {
     /// Get size in elements
+    #[cfg(feature = "cuda")]
     pub fn len(&self) -> usize {
-        #[cfg(feature = "cuda")]
-        {
-            self.inner.len()
-        }
+        self.inner.len()
+    }
 
-        #[cfg(not(feature = "cuda"))]
-        {
-            0
-        }
+    #[cfg(not(feature = "cuda"))]
+    pub fn len(&self) -> usize {
+        0
     }
 
     /// Check if empty
+    #[cfg(feature = "cuda")]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    pub fn is_empty(&self) -> bool {
+        true
     }
 }

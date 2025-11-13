@@ -24,13 +24,11 @@ fn log_file_path(base_dir: &Path) -> Option<PathBuf> {
 }
 
 fn append_line(line: &str, base_dir: Option<&Path>) {
-    if let Some(dir) = base_dir {
-        if let Some(path) = log_file_path(dir) {
-            if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
+    if let Some(dir) = base_dir
+        && let Some(path) = log_file_path(dir)
+            && let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
                 let _ = writeln!(f, "{}", line);
             }
-        }
-    }
 }
 
 pub fn log_start(command: &[String], base_dir: Option<&Path>) {

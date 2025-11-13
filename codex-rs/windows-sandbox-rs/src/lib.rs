@@ -222,8 +222,8 @@ mod windows_impl {
         };
 
         unsafe {
-            if matches!(policy.0, SandboxMode::WorkspaceWrite) {
-                if let Ok(base) = super::token::get_current_token_for_restriction() {
+            if matches!(policy.0, SandboxMode::WorkspaceWrite)
+                && let Ok(base) = super::token::get_current_token_for_restriction() {
                     if let Ok(bytes) = super::token::get_logon_sid_bytes(base) {
                         let mut tmp = bytes.clone();
                         let psid2 = tmp.as_mut_ptr() as *mut c_void;
@@ -231,7 +231,6 @@ mod windows_impl {
                     }
                     windows_sys::Win32::Foundation::CloseHandle(base);
                 }
-            }
         }
 
         let persist_aces = matches!(policy.0, SandboxMode::WorkspaceWrite);
@@ -239,8 +238,8 @@ mod windows_impl {
         let mut guards: Vec<(PathBuf, *mut c_void)> = Vec::new();
         unsafe {
             for p in &allow {
-                if let Ok(added) = add_allow_ace(p, psid_to_use) {
-                    if added {
+                if let Ok(added) = add_allow_ace(p, psid_to_use)
+                    && added {
                         if persist_aces {
                             if p.is_dir() {
                                 // best-effort seeding omitted intentionally
@@ -249,7 +248,6 @@ mod windows_impl {
                             guards.push((p.clone(), psid_to_use));
                         }
                     }
-                }
             }
             allow_null_device(psid_to_use);
         }

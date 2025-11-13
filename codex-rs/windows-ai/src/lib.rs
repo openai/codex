@@ -29,6 +29,11 @@ use anyhow::Result;
 mod windows_impl;
 
 #[cfg(target_os = "windows")]
+mod kernel_driver;
+#[cfg(target_os = "windows")]
+mod kernel_driver_ffi;
+
+#[cfg(target_os = "windows")]
 pub use windows_impl::*;
 
 #[cfg(not(target_os = "windows"))]
@@ -95,42 +100,7 @@ impl WindowsAiRuntime {
 }
 
 /// Kernel Driver integration
+/// 
+/// Re-export kernel_driver module (defined at line 32)
 #[cfg(target_os = "windows")]
-pub mod kernel_driver {
-    pub use crate::windows_impl::kernel_driver::*;
-}
-
-#[cfg(not(target_os = "windows"))]
-pub mod kernel_driver {
-    use super::*;
-
-    /// Kernel Driver Bridge
-    pub struct KernelBridge {
-        _placeholder: (),
-    }
-
-    impl KernelBridge {
-        /// Open connection to AI kernel driver
-        pub fn open() -> Result<Self> {
-            #[cfg(target_os = "windows")]
-            {
-                // TODO: Implement actual Windows API call when API is available
-                // For now, return error to avoid compilation issues
-                anyhow::bail!("Kernel driver integration requires windows crate update")
-            }
-
-            #[cfg(not(target_os = "windows"))]
-            {
-                anyhow::bail!("Kernel driver is only available on Windows")
-            }
-        }
-
-        /// Get GPU stats from kernel driver
-        pub fn get_gpu_stats(&self) -> Result<GpuStats> {
-            // TODO: Implement when windows crate API is available
-            anyhow::bail!("Kernel driver GPU stats requires windows crate update")
-        }
-    }
-
-    // Drop implementation not needed for placeholder
-}
+pub use kernel_driver::*;

@@ -54,11 +54,10 @@ fn normalize_path_key(p: &Path) -> String {
 }
 
 fn unique_push(set: &mut HashSet<PathBuf>, out: &mut Vec<PathBuf>, p: PathBuf) {
-    if let Ok(abs) = p.canonicalize() {
-        if set.insert(abs.clone()) {
+    if let Ok(abs) = p.canonicalize()
+        && set.insert(abs.clone()) {
             out.push(abs);
         }
-    }
 }
 
 fn gather_candidates(cwd: &Path, env: &std::collections::HashMap<String, String>) -> Vec<PathBuf> {

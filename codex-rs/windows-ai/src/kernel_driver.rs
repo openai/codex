@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use crate::GpuStats;
-use crate::windows_impl::kernel_driver_ffi::{AiDriverHandle, MemoryPoolStatsC, SchedulerStatsC};
+use crate::kernel_driver_ffi::{AiDriverHandle, MemoryPoolStatsC, SchedulerStatsC};
 
 /// Kernel Driver Bridge for GPU optimization
 ///
