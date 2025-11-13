@@ -79,7 +79,7 @@ pub(crate) async fn run_model_migration_prompt(
                 }
             }
         } else {
-            screen.defer();
+            screen.accept();
             break;
         }
     }
@@ -92,7 +92,6 @@ struct ModelMigrationScreen {
     target_model: String,
     done: bool,
     should_exit: bool,
-    should_defer: bool,
 }
 
 impl ModelMigrationScreen {
@@ -102,8 +101,12 @@ impl ModelMigrationScreen {
             target_model: target_model.to_string(),
             done: false,
             should_exit: false,
-            should_defer: false,
         }
+    }
+
+    fn accept(&mut self) {
+        self.done = true;
+        self.request_frame.schedule_frame();
     }
 
     fn handle_key(&mut self, key_event: KeyEvent) {
@@ -120,14 +123,8 @@ impl ModelMigrationScreen {
             return;
         }
 
-        if matches!(key_event.code, KeyCode::Esc) {
-            self.defer();
-            return;
-        }
-
-        if matches!(key_event.code, KeyCode::Enter) {
-            self.done = true;
-            self.request_frame.schedule_frame();
+        if matches!(key_event.code, KeyCode::Esc | KeyCode::Enter) {
+            self.accept();
         }
     }
 
@@ -141,12 +138,6 @@ impl ModelMigrationScreen {
         } else {
             ModelMigrationOutcome::Accepted
         }
-    }
-
-    fn defer(&mut self) {
-        self.should_defer = true;
-        self.done = true;
-        self.request_frame.schedule_frame();
     }
 }
 
@@ -291,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn escape_key_defers_prompt() {
+    fn escape_key_accepts_prompt() {
         let screen_target = "gpt-5.1-codex";
         let mut screen = ModelMigrationScreen::new(FrameRequester::test_dummy(), screen_target);
 
@@ -301,7 +292,7 @@ mod tests {
             crossterm::event::KeyModifiers::NONE,
         ));
         assert!(screen.is_done());
-        // Esc should not be treated as Exit – it defers instead.
+        // Esc should not be treated as Exit – it accepts like Enter.
         assert!(matches!(
             screen.outcome(),
             super::ModelMigrationOutcome::Accepted
