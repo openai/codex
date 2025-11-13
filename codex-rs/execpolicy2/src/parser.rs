@@ -25,7 +25,6 @@ use crate::rule::RuleRef;
 use crate::rule::validate_match_examples;
 use crate::rule::validate_not_match_examples;
 
-// todo: support parsing multiple policies
 pub struct PolicyParser;
 
 impl PolicyParser {
@@ -35,19 +34,31 @@ impl PolicyParser {
         policy_identifier: &str,
         policy_file_contents: &str,
     ) -> Result<crate::policy::Policy> {
+        Self::parse_many([(policy_identifier, policy_file_contents)])
+    }
+
+    /// Parses multiple policy files and merges the resulting rules.
+    pub fn parse_many<Policies, Identifier, Contents>(
+        policies: Policies,
+    ) -> Result<crate::policy::Policy>
+    where
+        Policies: IntoIterator<Item = (Identifier, Contents)>,
+        Identifier: AsRef<str>,
+        Contents: AsRef<str>,
+    {
         let mut dialect = Dialect::Extended.clone();
         dialect.enable_f_strings = true;
-        let ast = AstModule::parse(
-            policy_identifier,
-            policy_file_contents.to_string(),
-            &dialect,
-        )
-        .map_err(Error::Starlark)?;
         let globals = GlobalsBuilder::standard().with(policy_builtins).build();
-        let module = Module::new();
 
         let builder = RefCell::new(PolicyBuilder::new());
-        {
+        for (policy_identifier, policy_file_contents) in policies {
+            let ast = AstModule::parse(
+                policy_identifier.as_ref(),
+                policy_file_contents.as_ref().to_string(),
+                &dialect,
+            )
+            .map_err(Error::Starlark)?;
+            let module = Module::new();
             let mut eval = Evaluator::new(&module);
             eval.extra = Some(&builder);
             eval.eval_module(ast, &globals).map_err(Error::Starlark)?;
