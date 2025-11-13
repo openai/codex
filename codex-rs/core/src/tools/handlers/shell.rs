@@ -10,6 +10,7 @@ use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
+use crate::is_safe_command::is_known_safe_command;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -75,6 +76,18 @@ impl ToolHandler for ShellHandler {
             payload,
             ToolPayload::Function { .. } | ToolPayload::LocalShell { .. }
         )
+    }
+
+    fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
+        match &invocation.payload {
+            ToolPayload::Function { arguments } => {
+                serde_json::from_str::<ShellToolCallParams>(arguments)
+                    .map(|params| !is_known_safe_command(&params.command))
+                    .unwrap_or(true)
+            }
+            ToolPayload::LocalShell { params } => !is_known_safe_command(&params.command),
+            _ => true, // unknown payloads => assume mutating
+        }
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {

@@ -19,7 +19,6 @@ use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
 
 use super::ExecCommandRequest;
-use super::MIN_YIELD_TIME_MS;
 use super::SessionEntry;
 use super::UnifiedExecContext;
 use super::UnifiedExecError;
@@ -61,8 +60,7 @@ impl UnifiedExecSessionManager {
             .await?;
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
-        let yield_time_ms =
-            clamp_yield_time(Some(request.yield_time_ms.unwrap_or(MIN_YIELD_TIME_MS)));
+        let yield_time_ms = clamp_yield_time(request.yield_time_ms);
 
         let start = Instant::now();
         let (output_buffer, output_notify) = session.output_handles();
