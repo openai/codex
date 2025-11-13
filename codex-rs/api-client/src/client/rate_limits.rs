@@ -30,21 +30,14 @@ fn parse_rate_limit_window(
     window_minutes_header: &str,
     resets_at_header: &str,
 ) -> Option<RateLimitWindow> {
-    let used_percent: Option<f64> = parse_header_f64(headers, used_percent_header);
+    let used_percent: f64 = parse_header_f64(headers, used_percent_header)?;
+    let window_minutes = parse_header_i64(headers, window_minutes_header);
+    let resets_at = parse_header_i64(headers, resets_at_header);
 
-    used_percent.and_then(|used_percent| {
-        let window_minutes = parse_header_i64(headers, window_minutes_header);
-        let resets_at = parse_header_i64(headers, resets_at_header);
-
-        let has_data = used_percent != 0.0
-            || window_minutes.is_some_and(|minutes| minutes != 0)
-            || resets_at.is_some();
-
-        has_data.then_some(RateLimitWindow {
-            used_percent,
-            window_minutes,
-            resets_at,
-        })
+    Some(RateLimitWindow {
+        used_percent,
+        window_minutes,
+        resets_at,
     })
 }
 
@@ -61,4 +54,27 @@ fn parse_header_i64(headers: &HeaderMap, name: &str) -> Option<i64> {
 
 fn parse_header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name)?.to_str().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::header::HeaderValue;
+
+    #[test]
+    fn snapshot_includes_zero_percent_values() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-codex-primary-used-percent",
+            HeaderValue::from_static("0.0"),
+        );
+        let snapshot = parse_rate_limit_snapshot(&headers).expect("snapshot should exist");
+        assert_eq!(snapshot.primary.unwrap().used_percent, 0.0);
+    }
+
+    #[test]
+    fn missing_headers_return_none() {
+        let headers = HeaderMap::new();
+        assert!(parse_rate_limit_snapshot(&headers).is_none());
+    }
 }
