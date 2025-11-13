@@ -340,3 +340,72 @@ pub fn build_chat_payload(prompt: &Prompt, model: &str, instructions: String) ->
         .unwrap_or_else(|_| Vec::<Value>::new());
     json!({ "model": model, "messages": messages, "stream": true, "tools": tools_json })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client_common::Prompt;
+    use codex_protocol::ConversationId;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ReasoningItemReasoningSummary;
+    use codex_protocol::models::ResponseItem;
+
+    fn prompt_with_items(items: Vec<ResponseItem>) -> Prompt {
+        Prompt {
+            input: items,
+            tools: Vec::new(),
+            parallel_tool_calls: false,
+            base_instructions_override: None,
+            output_schema: None,
+        }
+    }
+
+    #[test]
+    fn azure_payload_includes_existing_item_ids() {
+        let prompt = prompt_with_items(vec![
+            ResponseItem::Message {
+                id: Some("msg-1".to_string()),
+                role: "assistant".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "hello".to_string(),
+                }],
+            },
+            ResponseItem::Reasoning {
+                id: "reason-1".to_string(),
+                summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                    text: "thinking".to_string(),
+                }],
+                content: None,
+                encrypted_content: None,
+            },
+        ]);
+
+        let payload = build_responses_payload(
+            &prompt,
+            "gpt-5",
+            ConversationId::new(),
+            true,
+            None,
+            None,
+            "instructions".to_string(),
+        );
+
+        assert_eq!(payload.get("store").and_then(Value::as_bool), Some(true));
+        let input = payload
+            .get("input")
+            .and_then(Value::as_array)
+            .expect("input array present");
+        let ids: Vec<_> = input
+            .iter()
+            .map(|item| {
+                item.get("id")
+                    .and_then(Value::as_str)
+                    .map(std::string::ToString::to_string)
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            vec![Some("msg-1".to_string()), Some("reason-1".to_string())]
+        );
+    }
+}

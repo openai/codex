@@ -24,6 +24,10 @@ pub enum Error {
         resets_at: Option<i64>,
         rate_limits: Option<RateLimitSnapshot>,
     },
+    #[error("usage not included")]
+    UsageNotIncluded,
+    #[error("quota exceeded")]
+    QuotaExceeded,
     #[error("unexpected status {status}: {body}")]
     UnexpectedStatus { status: StatusCode, body: String },
     #[error("retry limit reached {status:?} request_id={request_id:?}")]

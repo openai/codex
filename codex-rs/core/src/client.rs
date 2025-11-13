@@ -339,6 +339,8 @@ fn map_api_error(err: codex_api_client::Error) -> CodexErr {
                 rate_limits,
             })
         }
+        codex_api_client::Error::UsageNotIncluded => CodexErr::UsageNotIncluded,
+        codex_api_client::Error::QuotaExceeded => CodexErr::QuotaExceeded,
         codex_api_client::Error::UnexpectedStatus { status, body } => {
             CodexErr::UnexpectedStatus(UnexpectedResponseError {
                 status,
