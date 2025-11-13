@@ -196,13 +196,11 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
     ]
 });
 
-pub fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
-    let allow_codex_mini = matches!(auth_mode, Some(AuthMode::ChatGPT));
+pub fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
+    // leave auth mode for later use
     PRESETS
         .iter()
-        .filter(|preset| {
-            (allow_codex_mini || preset.id != "gpt-5.1-codex-mini") && preset.upgrade.is_none()
-        })
+        .filter(|preset| preset.upgrade.is_none())
         .cloned()
         .collect()
 }
