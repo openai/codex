@@ -1338,14 +1338,12 @@ mod tests {
             "gpt-5.1-codex-mini",
             &Features::with_defaults(),
             &[
-                "exec_command",
-                "write_stdin",
+                "shell",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
-                "web_search",
                 "view_image",
             ],
         );
@@ -1357,12 +1355,12 @@ mod tests {
             "gpt-5.1",
             &Features::with_defaults(),
             &[
-                "exec_command",
-                "write_stdin",
+                "shell",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "apply_patch",
                 "view_image",
             ],
         );
