@@ -1411,8 +1411,7 @@ pub struct SessionConfiguredEvent {
 #[derive(
     Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Display, JsonSchema, TS,
 )]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[ts(tag = "type")]
+#[serde(rename_all = "snake_case")]
 pub enum ReviewDecision {
     /// User has approved this command and the agent should execute it.
     Approved,
